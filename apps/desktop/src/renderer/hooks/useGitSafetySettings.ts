@@ -1,9 +1,10 @@
 import { useAppSettingsRevision } from './useAppSettingsRevision';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   getGitSafetyMode,
   getGitSafetyAutoSnapshotEnabled,
+  mirrorGitSafetyMode,
   persistLegacyGitSafetyOptOut,
   setGitSafetyMode,
   subscribeGitSafetyAutoSnapshotEnabled,
@@ -93,14 +94,22 @@ export function useGitSafetySettings(): {
   const [mode, setModeState] = useState<GitSafetyMode>(getGitSafetyMode);
   const [autoSnapshotEnabled, setEnabledState] = useState<boolean>(getGitSafetyAutoSnapshotEnabled);
   const [isCustomized, setIsCustomized] = useState(false);
+  const lastCustomization = useRef<boolean | undefined>(undefined);
 
-  const refresh = useCallback(async (isCancelled: () => boolean = () => false) => {
+  const applySettings = useCallback((nextMode: GitSafetyMode, customized: boolean) => {
+    setModeState(nextMode);
+    setEnabledState(nextMode !== 'off');
+    lastCustomization.current = customized;
+    setIsCustomized(customized);
+  }, []);
+
+  const refresh = useCallback(async (
+    isCancelled: () => boolean,
+    source: 'initial' | 'main-notice' | 'storage',
+  ) => {
     try {
-      if (await persistLegacyGitSafetyOptOut()) {
-        if (isCancelled()) return;
-        setModeState('off');
-        setEnabledState(false);
-        setIsCustomized(true);
+      if (source !== 'storage' && await persistLegacyGitSafetyOptOut()) {
+        if (!isCancelled()) applySettings('off', true);
         return;
       }
     } catch {
@@ -109,20 +118,20 @@ export function useGitSafetySettings(): {
     const settings = await window.electronAPI.maker.gitSafetyGet();
     if (isCancelled()) return;
     const nextMode = modeFromWire(settings);
-    setGitSafetyMode(nextMode);
-    setModeState(nextMode);
-    setEnabledState(nextMode !== 'off');
-    setIsCustomized(settings.isCustomized);
-  }, []);
+    if (source === 'main-notice' && lastCustomization.current !== settings.isCustomized) {
+      setGitSafetyMode(nextMode);
+    } else if (source !== 'storage') {
+      mirrorGitSafetyMode(nextMode);
+    }
+    applySettings(nextMode, settings.isCustomized);
+  }, [applySettings]);
 
   const setMode = useCallback(async (next: GitSafetyMode) => {
     const settings = await window.electronAPI.maker.gitSafetySet(next);
     const nextMode = modeFromWire(settings);
     setGitSafetyMode(nextMode);
-    setModeState(nextMode);
-    setEnabledState(nextMode !== 'off');
-    setIsCustomized(settings.isCustomized);
-  }, []);
+    applySettings(nextMode, settings.isCustomized);
+  }, [applySettings]);
 
   const setAutoSnapshotEnabled = useCallback(
     (next: boolean) => setMode(next ? 'all-projects' : 'off'),
@@ -133,14 +142,13 @@ export function useGitSafetySettings(): {
     const settings = await window.electronAPI.maker.gitSafetyReset();
     const nextMode = modeFromWire(settings);
     setGitSafetyMode(nextMode);
-    setModeState(nextMode);
-    setEnabledState(nextMode !== 'off');
-    setIsCustomized(settings.isCustomized);
-  }, []);
+    applySettings(nextMode, settings.isCustomized);
+  }, [applySettings]);
 
   useEffect(() => {
     let cancelled = false;
-    void refresh(() => cancelled).catch(() => undefined);
+    const source = settingsRevision === 0 ? 'initial' : 'main-notice';
+    void refresh(() => cancelled, source).catch(() => undefined);
     const unsubscribe = subscribeGitSafetyAutoSnapshotEnabled((next) => {
       if (!cancelled) setEnabledState(next);
     });
@@ -148,9 +156,8 @@ export function useGitSafetySettings(): {
       if (!cancelled) {
         setModeState(next);
         setEnabledState(next !== 'off');
-        // The mode mirror cannot carry isCustomized. Refresh main's complete
-        // wire state so Settings windows also converge on override/reset changes.
-        if (source === 'storage') void refresh(() => cancelled).catch(() => undefined);
+        // Read isCustomized from main without sending a reply to the other window.
+        if (source === 'storage') void refresh(() => cancelled, source).catch(() => undefined);
       }
     });
     return () => {
