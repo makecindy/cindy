@@ -23737,10 +23737,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "Diese Verbindung erhält keine neuen Aufgaben aus der Gruppe. Laufende Aufgaben bleiben auf dieser Verbindung.",
-    "mergeDescription": "Über {{target}} gestartete neue Aufgaben können beide Anbieter nutzen. Anmeldungen, Schlüssel und bestehende Aufgaben bleiben am bisherigen Ort. Vor der Verknüpfung testet Cindy den API-Schlüssel von {{apiKey}}.",
+    "mergeDescription": "Über {{target}} gestartete neue Aufgaben werden den verfügbaren Mitgliedern zugeteilt. Anmeldungen, Schlüssel und bestehende Aufgaben bleiben am bisherigen Ort. Cindy testet den API-Schlüssel von {{apiKey}}. Fehlendes Guthaben oder ein Abrechnungslimit verhindern das Hinzufügen nicht, aber bis zur Wiederherstellung der Verfügbarkeit werden keine Aufgaben automatisch zugeteilt.",
     "modelUnavailable": "Diese Verbindung kann das ausgewählte Testmodell nicht verwenden. Ein erneuter Test kann ein anderes Modell ausprobieren.",
     "noTestModel": "Kein konfiguriertes Modell ist zum Testen verfügbar. Prüfe, welche Modelle dein OpenAI-Projekt nutzen darf, und aktualisiere die Modellliste dieser Verbindung.",
-    "billingPaused": "Die Zuteilung ist wegen fehlenden Guthabens oder eines Abrechnungslimits pausiert.",
+    "billingPaused": "Die automatische Zuteilung ist wegen fehlenden Guthabens oder eines Abrechnungslimits pausiert.",
     "title": "Kontogruppe",
     "testPassed": "Test erfolgreich",
     "refresh": "Kontingent aktualisieren"

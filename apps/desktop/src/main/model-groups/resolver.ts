@@ -87,7 +87,9 @@ export interface ModelGroupResolverDeps {
    * 本机多账号订阅池里单个账号此刻的事实（由拆平后的扁平候选使用）：
    * 是否可用（已登录、未暂停、支持此模型）以及给用户看的账号显示名。
    */
-  localAccount?(providerId: string, accountId: string, model: string): ModelGroupLocalAccountFact | null;
+  localAccount?(providerId: string, accountId: string, model: string, agent: AgentKind): ModelGroupLocalAccountFact | null;
+  /** Unqualified local sources use their own connection's current health. */
+  localCandidateAvailable?(view: ProviderView, agent: AgentKind): boolean;
   /**
    * 本机来源背后是电脑组或几个账号时，内层按它自己的选法下一个会接任务的那一个的额度事实(pick.ts 的
    * ModelGroupInnerQuota)；仅用于未拆平的按模型手工路由。拆平后的账号候选与供应商路由不再走内层。
@@ -397,7 +399,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       const model = view?.models[agent]?.find((item) => item.id === candidate.model);
       const modelName = model?.name ?? candidate.model;
       const accountFact = !agentDeviceId && candidate.accountId && deps.localAccount
-        ? deps.localAccount(candidate.providerId, candidate.accountId, candidate.model)
+        ? deps.localAccount(candidate.providerId, candidate.accountId, candidate.model, agent)
         : null;
       const windows = quota.get(modelGroupQuotaKey(agentDeviceId, candidate.providerId, candidate.accountId))
         // 只对某个模型生效的窗口，只在候选就是那个模型时参与。
@@ -411,7 +413,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       const sshAllowed = !sshHostId
         ? true
         : !agentDeviceId && (!deps.sshFilter || await Promise.resolve(deps.sshFilter(sshHostId, candidate, view)).catch(() => false));
-      const baseAvailable = sshAllowed && (!!agentDeviceId || !heldProviders.has(candidate.providerId)) && (agentDeviceId
+      const baseAvailable = sshAllowed
+        && (!view || !!agentDeviceId || useSshCodex || !!candidate.accountId || deps.localCandidateAvailable?.(view, agent) !== false)
+        && (!!agentDeviceId || !heldProviders.has(candidate.providerId)) && (agentDeviceId
         // 与插件卡片里的远程模型同一判断：位置此刻能选，模型也在那里允许远程调用的目录里。
         ? !!locations && !!remoteViews && await isGhostCardModelRouteAvailable({ ...exact, agentDeviceId }, {
             localViews: async () => views,

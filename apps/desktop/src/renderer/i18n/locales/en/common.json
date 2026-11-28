@@ -23737,10 +23737,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "This connection will stop receiving new tasks from the group. Tasks already running will stay on this connection.",
-    "mergeDescription": "New tasks started through {{target}} can use both providers. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}} before adding the scheduling connection.",
+    "mergeDescription": "New tasks started through {{target}} will be assigned to available members. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}}. Insufficient balance or a billing limit will not prevent adding it, but it will not receive automatic assignments until available again.",
     "modelUnavailable": "This connection cannot use the model chosen for the test. Test again to try another candidate.",
     "noTestModel": "No configured model is available for testing. Check which models your OpenAI project can use, then refresh or update this connection’s model list.",
-    "billingPaused": "Group assignment paused due to insufficient balance or a billing limit.",
+    "billingPaused": "Automatic assignment paused due to insufficient balance or a billing limit.",
     "title": "Account group",
     "testPassed": "Test passed",
     "refresh": "Refresh quota"

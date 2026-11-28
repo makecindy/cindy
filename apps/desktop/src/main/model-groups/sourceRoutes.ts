@@ -52,7 +52,7 @@ export function providerFamily(view: ProviderView): string | null {
   return FAMILY_OF[kind] ?? kind;
 }
 
-const usable = (view: ProviderView) => view.connected && !view.suspended && !view.removed;
+const usable = (view: ProviderView) => view.connected && !view.suspended && !view.removed && !view.subscriptionPoolAlias;
 
 const usableLocalPluginEngine = (engine: PluginEngineView) => !engine.suspended && engine.availability.state !== 'unavailable';
 const usableRemotePluginEngine = (engine: PluginEngineView) => isPluginEngineOfferedRemotely(engine);
@@ -290,10 +290,11 @@ export function buildAutoSourceRoutes(
   /** 只要只剩一个能用成员的那几家(见 effectiveModelGroupsConfig 的 forSelected)。 */
   single = false,
 ): ModelGroupSourceRoute[] {
-  const others = [...(catalog.remote ?? [])].map(([deviceId, providers]) => ({ deviceId, providers }));
+  const views = catalog.views.filter(view => !view.subscriptionPoolAlias);
+  const others = [...(catalog.remote ?? [])].map(([deviceId, providers]) => ({ deviceId, providers: providers.filter(view => !view.subscriptionPoolAlias) }));
   // 去重只在自己的电脑之间做(同一个登录在两台电脑上算一个)。别人分享来的各是各的账号，即使供应商同名也都算成员，
   // 与选择器一致：分享不参与这条合并规则。
-  const folds = listedSourceFolds({ base: catalog.views, others: others.filter((other) => !isProviderShareAgentDeviceId(other.deviceId)) });
+  const folds = listedSourceFolds({ base: views, others: others.filter((other) => !isProviderShareAgentDeviceId(other.deviceId)) });
   const families = new Map<string, FamilyMember[]>();
   const add = (view: ProviderView, agentDeviceId?: string) => {
     const family = usable(view) ? providerFamily(view) : null;
@@ -320,7 +321,7 @@ export function buildAutoSourceRoutes(
     const family = ok && hasModels ? pluginEngineFamily(engine) : null;
     if (family) families.set(family, [...(families.get(family) ?? []), { id: engine.providerId, name: engine.name, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
   };
-  for (const view of catalog.views) if (!folds.hiddenBase.has(view.id)) add(view);
+  for (const view of views) if (!folds.hiddenBase.has(view.id)) add(view);
   for (const { deviceId, providers } of others) {
     for (const view of providers) if (!folds.hiddenOther.get(deviceId)?.has(view.id)) add(view, deviceId);
   }
