@@ -5,12 +5,15 @@ export type PersonalizationCallerScope = 'owner' | 'scoped';
 
 /** Capture the personal instructions before project and role context is assembled. */
 export async function captureHostPersonalization(
-  opts: Pick<CreateSessionOptions, 'userPrompt' | 'hostStartupPreferences' | 'makerMemoryEnabled' | 'displayReasoning'>,
+  opts: Pick<CreateSessionOptions, 'userPrompt' | 'hostStartupPreferences' | 'makerMemoryEnabled' | 'displayReasoning' | 'reviewMode'>,
   scope?: PersonalizationCallerScope,
   capturedUserPrompt?: string,
+  sharedTask = false,
 ): Promise<void> {
   let userPrompt = opts.userPrompt;
-  if (scope === 'scoped') userPrompt = undefined;
+  if (opts.reviewMode) userPrompt = undefined;
+  else if (sharedTask) userPrompt = await windowUserPrompt();
+  else if (scope === 'scoped') userPrompt = undefined;
   else if (capturedUserPrompt !== undefined) userPrompt = capturedUserPrompt;
   else if (scope === 'owner' || isManagedCloudInstance()) userPrompt = await windowUserPrompt();
   opts.userPrompt = userPrompt;

@@ -97,10 +97,15 @@ describe('personal instructions at the next user send', () => {
     expect(deps.rebuild).not.toHaveBeenCalled();
   });
 
-  it('keeps the original handle when native Codex cannot replace the instructions reliably', async () => {
-    const { original, deps, send } = fixture('codex');
-    await expect(send()).rejects.toThrow('while preserving the current history');
-    expect(deps.getSession()).toBe(original);
+  // Refresh must yield to sending when native Codex cannot replace its prompt
+  // or a prewarmed Claude session has not materialized its history yet (unit).
+  it.each([
+    ['codex', 'native-history'],
+    ['claude-code', '<pending>'],
+  ] as const)('keeps the live %s handle usable with history %s', async (kind, history) => {
+    const { original, deps, send } = fixture(kind);
+    original.sdkSessionId = history;
+    expect(await send()).toBe(original);
     expect(deps.rebuild).not.toHaveBeenCalled();
   });
 

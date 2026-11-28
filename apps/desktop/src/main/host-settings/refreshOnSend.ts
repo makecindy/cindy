@@ -44,9 +44,11 @@ export function createPersonalizationRefresh<Owner extends object, Live extends 
       if (previous && !live) throw new Error('Retry the user message to resume the original Agent history.');
       return live;
     }
-    // ACP negotiates personal instructions when opening its session. Keep the
-    // existing handle usable until a normal lifecycle event opens it again.
-    if (live?.agentKind === 'acp') return live;
+    // Preserve live sessions that cannot safely replace their startup instructions.
+    // Normal reopening can pick up the saved value once their history is available.
+    if (live && (live.agentKind === 'acp' ||
+        (live.agentKind === 'codex' && !live.codexUsesProxyInstructions) ||
+        !live.sdkSessionId || live.sdkSessionId === '<pending>')) return live;
     if (!previous && (!live?.hostStartupPreferences || live.remoteHostId || live.agentDeviceId ||
         live.getStatus() !== 'active')) return live;
 
@@ -70,9 +72,6 @@ export function createPersonalizationRefresh<Owner extends object, Live extends 
       return live;
     }
     if (live?.hasPendingHostOperation()) return live;
-    if (live && live.agentKind !== 'claude-code' && live.agentKind !== 'pi' && !live.codexUsesProxyInstructions) {
-      throw new Error('This engine cannot apply changed personal instructions while preserving the current history.');
-    }
     const saved = await deps.readCreateOpts(sessionId);
     assertCanReplace();
     const nativeId = previous?.nativeId ?? live?.sdkSessionId;

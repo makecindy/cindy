@@ -9534,19 +9534,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await applyPersistedReviewMode(o);
     assertAccess?.();
     const queued = queuedPersonalization.getStore();
-    const scoped = o.reviewMode === true || (!!o.id && isSessionSharedTaskActive(o.id));
+    const shared = !!o.id && isSessionSharedTaskActive(o.id);
     const callerScope = queued && queued.sessionId === o.id ? queued.scope : readDeviceLinkModelSelectionOrigin();
-    if (personalizationRefresh && (scoped || agentOnOtherDevice || o.remoteHostId)) {
+    if (personalizationRefresh && (o.reviewMode || shared || agentOnOtherDevice || o.remoteHostId)) {
       throw new Error('Task access changed before updating personal instructions.');
     }
-    await captureHostPersonalization(o, scoped ? 'scoped' : callerScope, personalizationRefresh?.userPrompt);
+    // A shared task keeps the host owner's settings regardless of who initiated this turn.
+    await captureHostPersonalization(o, callerScope, personalizationRefresh?.userPrompt, shared);
     assertAccess?.();
     creationSignal?.throwIfAborted();
-    // A share may have opened while the main window was answering.
-    if (!scoped && o.id && isSessionSharedTaskActive(o.id)) {
-      await captureHostPersonalization(o, 'scoped');
-      assertAccess?.();
-    }
     const didInjectOrcaInstructions = o.reviewMode === true ? false : await applyOrcaInstructions(o);
     // Plugin engines do not receive collaboration instructions as system text. Collaboration
     // Lead and Worker role instructions travel ahead of the first message; ordinary local owner

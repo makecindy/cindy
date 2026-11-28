@@ -179,7 +179,7 @@ describe('真实 Host 领域保存到脱敏快照的集成', () => {
   });
 
   // Launch preference capture already covers cloud starts above. The missing regression
-  // is a desktop owner request with a legacy controller copy, and a share with a private host value.
+  // is a desktop owner request with a legacy controller copy, and a shared task opened on behalf of a guest.
   // These run in the existing test tier with the window IPC mocked.
   it.each([
     { managed: false, scope: 'owner', saved: '执行端指令', supplied: '旧桌面控制端指令', expected: '执行端指令' },
@@ -198,6 +198,23 @@ describe('真实 Host 领域保存到脱敏快照的集成', () => {
     await captureHostPersonalization(opts, scope);
     expect(opts.userPrompt).toBe(expected);
     expect(opts.hostStartupPreferences?.userPrompt).toBe(expected);
+  });
+
+  it.each([undefined, 'owner', 'scoped'] as const)(
+    'uses the task owner’s saved instructions when opening a shared task (%s caller)',
+    async scope => {
+      appWindow.userPrompt = '机主指令';
+      const opts: Parameters<typeof captureHostPersonalization>[0] = { userPrompt: '请求附带的指令' };
+      await captureHostPersonalization(opts, scope, undefined, true);
+      expect(opts.hostStartupPreferences?.userPrompt).toBe('机主指令');
+    },
+  );
+
+  it('keeps private instructions out of a read-only review even on the owner host', async () => {
+    appWindow.answers = false;
+    const opts: Parameters<typeof captureHostPersonalization>[0] = { userPrompt: '请求附带的指令', reviewMode: true };
+    await captureHostPersonalization(opts, 'owner', '冻结值', true);
+    expect(opts.hostStartupPreferences?.userPrompt).toBeUndefined();
   });
 
   it('窗口一直不应答时阻止启动，不偷偷使用默认值或控制端副本', async () => {
