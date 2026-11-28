@@ -73,6 +73,9 @@ vi.mock('../../../maker-host/session-provider-store', () => ({
 }));
 vi.mock('../../defaultSessionSettings', () => ({
   getImDefaultEffortFor: vi.fn(() => 'high'),
+  // openChannelSession 现在会先问「最终模型接不接受这个渠道默认档位」；本文件用它构造的是
+  // 合法路由，因此放行即可（判定细节在 defaultSessionSettings / openChannelSession 自己的测试里）。
+  isImEffortAcceptedByModel: vi.fn(() => true),
   resolveImSessionDefaults: vi.fn(async () => ({
     agentKind: 'claude-code',
     model: 'claude-opus-4-8',
