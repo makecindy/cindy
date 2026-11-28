@@ -2724,7 +2724,7 @@ function CCAgentSessionContent({
         : null;
   // A third computer viewing a task with a borrowed engine cannot identify itself as its owner.
   const borrowedPluginEngine = usageAccount.kind === 'device' && !remoteDeviceId;
-  const pluginUsageSessionId = usageAccount.kind === 'device' && remoteDeviceId ? undefined : sessionId;
+  const pluginUsageSessionId = usageAccount.kind === 'task' || borrowedPluginEngine ? sessionId : undefined;
   const usageCatalogue = taskAccountDeviceId
     ? (taskAccountDeviceId === pluginEngineAgentDeviceId && agentDevicePluginEngines !== undefined
       ? agentDevicePluginEngines

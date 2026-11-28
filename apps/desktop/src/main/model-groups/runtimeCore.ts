@@ -50,6 +50,7 @@ export interface ModelGroupRuntimePorts {
   localAccounts?(views: readonly ProviderView[]): ReadonlyMap<string, readonly SourceCatalogAccount[]>;
   warmLocalAccounts?(views: readonly ProviderView[]): Promise<void>;
   localAccount?: ModelGroupResolverDeps['localAccount'];
+  localCandidateAvailable?: ModelGroupResolverDeps['localCandidateAvailable'];
   /** 任务在本机账号池里实际绑定的账号(订阅账号池的任务绑定)。 */
   taskAccount?(sessionId: string, providerId: string): string | undefined;
   pluginEngines?(): readonly PluginEngineView[];
@@ -236,7 +237,8 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     agents: () => ports.localAgents(),
     harnessInstalled: (agent, agentDeviceId) => ports.harnessInstalled(agent, agentDeviceId),
     quotaWindows: (options) => ports.quotaWindows(options),
-    localAccount: ports.localAccount ? (providerId, accountId, model) => ports.localAccount!(providerId, accountId, model) : undefined,
+    localCandidateAvailable: ports.localCandidateAvailable ? (view, agent) => ports.localCandidateAvailable!(view, agent) : undefined,
+    localAccount: ports.localAccount ? (providerId, accountId, model, agent) => ports.localAccount!(providerId, accountId, model, agent) : undefined,
     innerQuota: ports.innerQuota ? (source) => ports.innerQuota!(source) : undefined,
     usageProfile: ports.usageProfile ? (options) => ports.usageProfile!(options) : undefined,
     runningSourceCounts: () => {

@@ -3184,7 +3184,8 @@
           "gatewayKey": "Requires your AI gateway to support this realtime ASR route",
           "codexLogin": "Uses your Codex sign-in",
           "elevenlabsKey": "Uses your ElevenLabs key (environment variable)",
-          "codexRealtimeUnsupported": "Unavailable: Codex sign-in is not an OpenAI API Realtime credential"
+          "codexRealtimeUnsupported": "Unavailable: Codex sign-in is not an OpenAI API Realtime credential",
+          "localOffline": "Runs offline on this device (no account or API key required)"
         },
         "credentialError": {
           "gatewayMissing": "No AI gateway key found; this model is unavailable.",
@@ -3192,10 +3193,24 @@
           "elevenlabsMissing": "No ElevenLabs key configured (environment variable); this model is unavailable.",
           "customAsrConfigMissing": "Complete and save the realtime ASR service settings before starting voice input.",
           "customAsrKeyMissing": "Add and save an API key for the custom realtime ASR service.",
-          "codexRealtimeUnsupported": "Codex sign-in cannot be used for realtime speech recognition. Choose a supported ASR service."
+          "codexRealtimeUnsupported": "Codex sign-in cannot be used for realtime speech recognition. Choose a supported ASR service.",
+          "localAsrModelMissing": "Select a local sherpa-onnx ASR model folder before starting offline voice input.",
+          "localAsrUnsupported": "Local offline speech recognition is not supported on this computer architecture."
         },
         "manageProviders": "Open model providers",
-        "reset": "Reset to default"
+        "reset": "Reset to default",
+        "localAsr": {
+          "optionLabel": "Local offline ASR (sherpa-onnx)",
+          "optionDescription": "On-device ONNX recognition; works completely offline without an account or API key",
+          "notice": "Choose a local sherpa-onnx offline model folder (SenseVoice, Paraformer, Whisper, or Transducer containing tokens.txt and .onnx weights). Audio stays on this computer.",
+          "modelDirLabel": "Local model folder",
+          "readyStatus": "Ready · {{kind}} ({{folder}})",
+          "unsupportedStatus": "Not supported on this platform",
+          "notConfiguredStatus": "No model folder selected yet",
+          "clearFolder": "Clear",
+          "chooseFolder": "Choose model folder",
+          "invalidFolder": "That folder does not contain a supported sherpa-onnx model (tokens.txt and .onnx files)."
+        }
       },
       "historyToggle": {
         "show": "Show recent history",
@@ -3343,7 +3358,9 @@
           "filters": {
             "all": "All",
             "automatic": "Auto-added",
-            "manual": "Manual"
+            "manual": "Manual",
+            "candidates": "Candidates",
+            "suppressed": "Suppressed"
           },
           "sources": {
             "automatic": "Auto",
@@ -3356,6 +3373,28 @@
             "automaticAddedMultiple": "Auto-added {{count}} terms, including {{term}}",
             "delete": "Delete",
             "deleteAriaLabel": "Delete auto-added term: {{term}}"
+          },
+          "export": {
+            "csv": "Export CSV",
+            "json": "Export JSON",
+            "successCsv": "Exported dictionary as CSV",
+            "successJson": "Exported dictionary as JSON"
+          },
+          "candidates": {
+            "hint": "Terms observed from your manual edits but not yet auto-promoted. Promote a term immediately or remove it.",
+            "evidenceCount": "Observed {{count}}×",
+            "promote": "Promote",
+            "promoteTooltip": "Promote candidate to active dictionary immediately",
+            "promotedToast": "Promoted “{{term}}” to dictionary",
+            "empty": "No candidate terms yet."
+          },
+          "suppressed": {
+            "hint": "Deleted auto-learned terms are suppressed so they will not be re-added automatically. Restore a term to allow learning again or add it back.",
+            "restore": "Allow learning",
+            "addToDictionary": "Add back",
+            "restoredToast": "Restored “{{term}}” for automatic learning",
+            "addedToast": "Added “{{term}}” back to dictionary",
+            "empty": "No suppressed terms."
           }
         }
       },
@@ -3400,7 +3439,15 @@
         "toast": {
           "copied": "Copied",
           "copyFailed": "Copy failed"
-        }
+        },
+        "searchAriaLabel": "Search voice history",
+        "searchPlaceholder": "Search transcripts or raw recognition…",
+        "showRawComparison": "Compare raw vs refined",
+        "hideRawComparison": "Hide comparison",
+        "rawLabel": "Raw ASR",
+        "refinedLabel": "Refined",
+        "loadMore": "Load more ({{count}} remaining)",
+        "noSearchResults": "No matching transcripts."
       },
       "speakerFilter": {
         "label": "Recognize my voice",
@@ -15452,7 +15499,11 @@
           "description": "Allow microphone access, then click voice input again.",
           "confirm": "Grant permission",
           "cancel": "Cancel"
-        }
+        },
+        "rewriteSelected": "Voice rewrite",
+        "rewriteSelectedTooltip": "Speak an instruction to rewrite the selected text (original text is kept on failure)",
+        "rewriteSelectedAria": "Voice rewrite selected text",
+        "rewriteFailed": "Voice rewrite did not complete; your selected text was kept unchanged."
       },
       "remoteSwitchFailed": "Remote setting change failed; not applied",
       "switchFailed": "Setting change failed; not applied",
@@ -20969,6 +21020,8 @@
     },
     "errors": {
       "piStartupCloudFile": "A cloud-only instruction file may be delaying Pi startup: {{path}}. Download this file in Finder, wait until it is available locally, then retry. The timeout may have another cause.",
+      "remoteEngineMissing": "The remote computer has no available engine. Install an engine on that computer, restart Cindy, and try again.",
+      "remoteCapabilityUnavailable": "The current server or computer does not support this action yet.",
       "hostProfileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
       "hostProfileInUseByDesktopAtStart": "This data is in use by the Cindy desktop app running on its own, so the Cindy background service did not start. Quit that app, restart the Cindy background service, then reopen this Cindy window.",
       "hostProfileInUseByDesktopRetry": "This data is in use by the Cindy desktop app running on its own, so this can’t be changed right now. Quit that app, then try again.",
@@ -23684,10 +23737,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "This connection will stop receiving new tasks from the group. Tasks already running will stay on this connection.",
-    "mergeDescription": "New tasks started through {{target}} can use both providers. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}} before adding the scheduling connection.",
+    "mergeDescription": "New tasks started through {{target}} will be assigned to available members. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}}. Insufficient balance or a billing limit will not prevent adding it, but it will not receive automatic assignments until available again.",
     "modelUnavailable": "This connection cannot use the model chosen for the test. Test again to try another candidate.",
     "noTestModel": "No configured model is available for testing. Check which models your OpenAI project can use, then refresh or update this connection’s model list.",
-    "billingPaused": "Group assignment paused due to insufficient balance or a billing limit.",
+    "billingPaused": "Automatic assignment paused due to insufficient balance or a billing limit.",
     "title": "Account group",
     "testPassed": "Test passed",
     "refresh": "Refresh quota"

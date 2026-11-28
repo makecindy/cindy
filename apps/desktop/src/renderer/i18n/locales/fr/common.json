@@ -3222,7 +3222,8 @@
           "gatewayKey": "Nécessite que votre passerelle IA prenne en charge cette route ASR en temps réel",
           "codexLogin": "Utilise votre connexion Codex",
           "elevenlabsKey": "Utilise votre clé ElevenLabs (variable d'environnement)",
-          "codexRealtimeUnsupported": "Indisponible : la connexion Codex n'est pas un identifiant OpenAI API Realtime"
+          "codexRealtimeUnsupported": "Indisponible : la connexion Codex n'est pas un identifiant OpenAI API Realtime",
+          "localOffline": "Exécution hors ligne sur cet appareil (sans compte ni clé API)"
         },
         "credentialError": {
           "gatewayMissing": "Aucune clé de passerelle IA trouvée ; ce modèle est indisponible.",
@@ -3230,10 +3231,24 @@
           "elevenlabsMissing": "Aucune clé ElevenLabs configurée (variable d'environnement) ; ce modèle est indisponible.",
           "customAsrConfigMissing": "Complétez et enregistrez les paramètres du service ASR en temps réel avant de lancer la saisie vocale.",
           "customAsrKeyMissing": "Ajoutez et enregistrez une clé API pour le service ASR en temps réel personnalisé.",
-          "codexRealtimeUnsupported": "La connexion Codex ne peut pas être utilisée pour la reconnaissance vocale en temps réel. Choisissez un service ASR pris en charge."
+          "codexRealtimeUnsupported": "La connexion Codex ne peut pas être utilisée pour la reconnaissance vocale en temps réel. Choisissez un service ASR pris en charge.",
+          "localAsrModelMissing": "Sélectionnez un dossier de modèle ASR sherpa-onnx local avant de démarrer la dictée hors ligne.",
+          "localAsrUnsupported": "La reconnaissance vocale hors ligne locale n'est pas prise en charge sur cette architecture."
         },
         "manageProviders": "Ouvrir les fournisseurs de modèles",
-        "reset": "Réinitialiser"
+        "reset": "Réinitialiser",
+        "localAsr": {
+          "optionLabel": "Reconnaissance vocale hors ligne (sherpa-onnx)",
+          "optionDescription": "Reconnaissance ONNX locale, 100 % hors ligne sans compte ni clé API",
+          "notice": "Choisissez un dossier de modèle hors ligne sherpa-onnx (SenseVoice, Paraformer, Whisper ou Transducer contenant tokens.txt et les poids .onnx). L’audio reste sur cet ordinateur.",
+          "modelDirLabel": "Dossier du modèle local",
+          "readyStatus": "Prêt · {{kind}} ({{folder}})",
+          "unsupportedStatus": "Non pris en charge sur cette plateforme",
+          "notConfiguredStatus": "Aucun dossier de modèle sélectionné",
+          "clearFolder": "Effacer",
+          "chooseFolder": "Choisir le dossier du modèle",
+          "invalidFolder": "Ce dossier ne contient pas de modèle sherpa-onnx pris en charge (tokens.txt et fichiers .onnx)."
+        }
       },
       "historyToggle": {
         "show": "Afficher l'historique récent",
@@ -3381,7 +3396,9 @@
           "filters": {
             "all": "Tous",
             "automatic": "Automatiques",
-            "manual": "Manuels"
+            "manual": "Manuels",
+            "candidates": "Candidats",
+            "suppressed": "Masqués"
           },
           "sources": {
             "automatic": "Auto",
@@ -3394,6 +3411,28 @@
             "automaticAddedMultiple": "{{count}} termes ajoutés automatiquement, dont {{term}}",
             "delete": "Supprimer",
             "deleteAriaLabel": "Supprimer le terme ajouté automatiquement : {{term}}"
+          },
+          "export": {
+            "csv": "Exporter CSV",
+            "json": "Exporter JSON",
+            "successCsv": "Dictionnaire exporté en CSV",
+            "successJson": "Dictionnaire exporté en JSON"
+          },
+          "candidates": {
+            "hint": "Termes observés lors de vos corrections manuelles, pas encore promus automatiquement. Ajoutez-les ou supprimez-les.",
+            "evidenceCount": "Observé {{count}}×",
+            "promote": "Promouvoir",
+            "promoteTooltip": "Ajouter immédiatement ce candidat au dictionnaire",
+            "promotedToast": "« {{term}} » ajouté au dictionnaire",
+            "empty": "Aucun terme candidat pour le moment."
+          },
+          "suppressed": {
+            "hint": "Les termes supprimés ne sont plus réajoutés automatiquement. Restaurez l’apprentissage ou rajoutez-les.",
+            "restore": "Réautoriser",
+            "addToDictionary": "Rajouter",
+            "restoredToast": "Apprentissage automatique rétabli pour « {{term}} »",
+            "addedToast": "« {{term}} » remis dans le dictionnaire",
+            "empty": "Aucun terme masqué."
           }
         }
       },
@@ -3438,7 +3477,15 @@
         "toast": {
           "copied": "Copié",
           "copyFailed": "Échec de la copie"
-        }
+        },
+        "searchAriaLabel": "Rechercher dans l’historique vocal",
+        "searchPlaceholder": "Rechercher une transcription ou un texte brut…",
+        "showRawComparison": "Comparer brut / affiné",
+        "hideRawComparison": "Masquer la comparaison",
+        "rawLabel": "Reconnaissance brute",
+        "refinedLabel": "Affiné",
+        "loadMore": "Charger plus ({{count}} restants)",
+        "noSearchResults": "Aucune transcription correspondante."
       },
       "speakerFilter": {
         "label": "Reconnaître ma voix",
@@ -15578,7 +15625,11 @@
           "description": "Autorisez l'accès au micro, puis cliquez à nouveau sur la saisie vocale.",
           "confirm": "Accorder l'autorisation",
           "cancel": "Annuler"
-        }
+        },
+        "rewriteSelected": "Réécriture vocale",
+        "rewriteSelectedTooltip": "Dictez une consigne pour réécrire le texte sélectionné (le texte original est conservé en cas d’échec)",
+        "rewriteSelectedAria": "Réécrire le texte sélectionné par la voix",
+        "rewriteFailed": "La réécriture vocale n’a pas abouti ; votre texte sélectionné a été conservé."
       },
       "remoteSwitchFailed": "Échec de la modification du paramètre distant ; non appliquée",
       "switchFailed": "Échec de la modification du paramètre ; non appliquée",
@@ -21179,6 +21230,8 @@
     },
     "errors": {
       "piStartupCloudFile": "Un fichier d’instructions uniquement dans le cloud peut retarder le démarrage de Pi : {{path}}. Téléchargez ce fichier dans le Finder, attendez qu’il soit disponible en local, puis réessayez. Le délai dépassé peut avoir une autre cause.",
+      "remoteEngineMissing": "Aucun moteur n’est disponible sur l’ordinateur distant. Installez un moteur sur cet ordinateur, redémarrez Cindy, puis réessayez.",
+      "remoteCapabilityUnavailable": "Le serveur ou l'ordinateur actuel ne prend pas encore en charge cette action.",
       "hostProfileInUseByDesktop": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule. Quittez-la, puis renvoyez le message.",
       "hostProfileInUseByDesktopAtStart": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; le service d’arrière-plan Cindy n’a donc pas démarré. Quittez-la, redémarrez le service d’arrière-plan Cindy, puis rouvrez cette fenêtre Cindy.",
       "hostProfileInUseByDesktopRetry": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; cette modification n’est donc pas possible pour le moment. Quittez-la, puis réessayez.",
@@ -23923,10 +23976,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "Cette connexion ne recevra plus de nouvelles tâches du groupe. Les tâches en cours resteront sur cette connexion.",
-    "mergeDescription": "Les nouvelles tâches lancées via {{target}} pourront utiliser les deux fournisseurs. Les connexions, les clés et les tâches existantes restent en place. Cindy testera la clé API de {{apiKey}} avant de relier les fournisseurs.",
+    "mergeDescription": "Les nouvelles tâches lancées via {{target}} seront attribuées aux membres disponibles. Les connexions, les clés et les tâches existantes restent en place. Cindy testera la clé API de {{apiKey}}. Un solde insuffisant ou une limite de facturation n’empêche pas son ajout, mais aucune tâche ne lui sera attribuée automatiquement avant qu’elle soit de nouveau disponible.",
     "modelUnavailable": "Cette connexion ne peut pas utiliser le modèle choisi pour le test. Un nouveau test peut essayer un autre modèle.",
     "noTestModel": "Aucun modèle configuré n’est disponible pour le test. Vérifiez les modèles autorisés dans votre projet OpenAI, puis actualisez ou modifiez la liste de modèles de cette connexion.",
-    "billingPaused": "Attribution suspendue en raison d’un solde insuffisant ou d’une limite de facturation.",
+    "billingPaused": "Attribution automatique suspendue en raison d’un solde insuffisant ou d’une limite de facturation.",
     "title": "Groupe de comptes",
     "testPassed": "Test réussi",
     "refresh": "Actualiser le quota"

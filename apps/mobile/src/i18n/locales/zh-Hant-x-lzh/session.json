@@ -504,7 +504,8 @@
     "worktreeUnsupported": "電腦端今之 Cindy 不能安全建立 worktree，請闔 worktree 再續，或更新機上之 Cindy。",
     "worktreeCreateFailed": "worktree 未能立：{{message}}",
     "worktreeRecoveryStateFailed": "worktree 復原之狀未能存，請再試。",
-    "worktreeCleanupPending": "前次之 worktree 尚待回收，請重連裝置後再試。"
+    "worktreeCleanupPending": "前次之 worktree 尚待回收，請重連裝置後再試。",
+    "createRejectedResend": "所書已歸，可修之而再發。"
   },
   "menu": {
     "moveToProject": "移差事",

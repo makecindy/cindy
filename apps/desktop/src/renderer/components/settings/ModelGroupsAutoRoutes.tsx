@@ -379,7 +379,7 @@ export interface SourceOption {
 }
 
 const optionKey = (source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId' | 'accountId'>) => modelGroupSourceKey(source);
-const usableProvider = (provider: Provider) => provider.connected && !provider.suspended && !provider.removed;
+const usableProvider = (provider: Provider) => provider.connected && !provider.suspended && !provider.removed && !provider.subscriptionPoolAlias;
 const usableLocalPluginEngine = (engine: PluginEngineView) =>
   !engine.suspended && isPluginEngineSelectable(engine) && (engine.models.length > 0 || engine.defaultModelAllowed !== false);
 const usableRemotePluginEngine = (engine: PluginEngineView) =>
@@ -408,7 +408,7 @@ export function useSourceOptions(): SourceOption[] {
 
   // 读取本机多账号订阅池的账号列表，把每个账号平铺成独立来源选项，彻底消除两层自动。
   const poolProviderKey = useMemo(() => providers
-    .filter((provider) => !provider.removed && ((provider.subscriptionAccountKeys?.length ?? 0) >= 2 || Boolean(provider.subscriptionPool) || Boolean(provider.subscriptionAccountPool)))
+    .filter((provider) => !provider.removed && !provider.subscriptionPoolAlias && ((provider.subscriptionAccountKeys?.length ?? 0) >= 2 || Boolean(provider.subscriptionPool) || Boolean(provider.subscriptionAccountPool)))
     .map((provider) => provider.id)
     .sort()
     .join('\n'), [providers]);
@@ -443,7 +443,9 @@ export function useSourceOptions(): SourceOption[] {
 
   return useMemo(() => [
     ...providers.filter((provider) => !provider.removed).flatMap((provider): SourceOption[] => {
-      const pool = poolViews[provider.id];
+      // A detached Key may still have a cached pool view, but no longer owns it.
+      const pool = !provider.subscriptionPoolAlias && (provider.subscriptionPool || provider.subscriptionAccountPool || (provider.subscriptionAccountKeys?.length ?? 0) >= 2)
+        ? poolViews[provider.id] : undefined;
       // 与主进程拆平口径一致：按账号数决定是否拆开，只列未暂停的账号。
       const activeAccounts = pool?.accounts.filter((account) => !account.paused) ?? [];
       if ((pool?.accounts.length ?? 0) >= 2 && activeAccounts.length > 0) {

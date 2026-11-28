@@ -13,6 +13,7 @@ import path from 'node:path';
 import { CodexAgent, type AgentDeps, type AgentEvent, type InteractionRequest, type Logger } from '@cindy/maker-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { collectPersonalConfig } from '../controller/projectFiles';
 import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
@@ -29,7 +30,7 @@ const noopLogger: Logger = {
   child: () => noopLogger,
 };
 
-type Step = { kind: 'exec'; cmd: string } | { kind: 'patch'; patch: string };
+type Step = { kind: 'exec'; cmd: string | (() => string) } | { kind: 'patch'; patch: string };
 
 describe.skipIf(!available)('remote agent with a real Codex', () => {
   let server: Server;
@@ -59,7 +60,7 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
         const step = steps[done];
         const id = `resp_${bodies.length}`;
         const item = step?.kind === 'exec'
-          ? { type: 'function_call', id: `fc_${done}`, call_id: `call_${done}`, name: 'exec_command', arguments: JSON.stringify({ cmd: step.cmd }), status: 'completed' }
+          ? { type: 'function_call', id: `fc_${done}`, call_id: `call_${done}`, name: 'exec_command', arguments: JSON.stringify({ cmd: typeof step.cmd === 'function' ? step.cmd() : step.cmd }), status: 'completed' }
           : step?.kind === 'patch'
             ? { type: 'custom_tool_call', id: `ctc_${done}`, call_id: `call_${done}`, name: 'apply_patch', input: step.patch, status: 'completed' }
             : { type: 'message', id: `msg_${done}`, role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'DONE', annotations: [] }] };
@@ -202,6 +203,97 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
     } finally {
       agent.dispose?.();
     }
+  });
+
+  it('lists the Skills this computer manages, once each, and reads them from here', { timeout: 180_000 }, async () => {
+    const skill = (dir: string, name: string, description: string) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n\n${description}-BODY\n`);
+      return dir;
+    };
+    // 这台电脑(任务所在)的 Cindy 托管 Skill：GitHub 插件的 pr 与内置的 learn。
+    const ownPr = skill(path.join(root, 'controller-plugins', 'github', 'pr'), 'pr', 'CONTROLLER-PR');
+    const ownLearn = skill(path.join(root, 'controller-builtin', 'learn'), 'learn', 'CONTROLLER-LEARN');
+    // Agent 所在电脑自己装的同名 pr：共用的 CODEX_HOME 里有，对这个任务停用。
+    const runnerPr = skill(path.join(root, 'runner-plugins', 'github', 'pr'), 'pr', 'RUNNER-PR');
+    const runnerHome = path.join(root, 'codex-home-managed-skills');
+    fs.mkdirSync(path.join(runnerHome, 'skills'), { recursive: true });
+    fs.symlinkSync(runnerPr, path.join(runnerHome, 'skills', 'cindy-cindy-plugin-cindy-github%3Apr'));
+    const project = path.join(root, 'project-managed-skills');
+    const hostRoot = path.join(root, 'host-managed-skills');
+    // 项目自己的 Skill 照常列出。
+    skill(path.join(project, '.agents', 'skills', 'release-notes'), 'release-notes', 'PROJECT-SKILL');
+    const deps = codexDeps(runnerHome);
+    deps.getManagedSkills = async () => [{
+      kind: 'agent-skill', name: 'pr', source: 'skill', scope: 'user', enabled: true,
+      path: fs.realpathSync(path.join(runnerPr, 'SKILL.md')), claudeCommandName: 'cindy-plugin-cindy-github:pr',
+    }];
+    const agent = new CodexAgent(deps);
+    const host = createRemoteAgentHost({
+      isAgentAvailable: (kind) => kind === 'codex',
+      startHosted: (input) => agent.startSession(hostedStartOptions(input)),
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    // 模型照首轮清单里的位置读 pr 的 SKILL.md(命令在这台电脑执行)。
+    const skillFile = () => {
+      const roots = [...bodies[0].matchAll(/- `(r\d+)` = `([^`]+)`/g)].map((match) => ({ alias: match[1], dir: match[2] }));
+      const listed = /- pr: CONTROLLER-PR \(file: (r\d+)\/([^)]+)\)/.exec(bodies[0]);
+      const dir = roots.find((item) => item.alias === listed?.[1])?.dir;
+      return `cat '${dir}/${listed?.[2]}'`;
+    };
+    steps = [{ kind: 'exec', cmd: skillFile }];
+    bodies.length = 0;
+    const handle = await startRemoteAgentSession('codex', {
+      sessionId: 'codex-hosted-managed-skills', workingDir: project, model: 'gpt-5.5', permissionMode: 'default',
+    }, {
+      invoke: async (args) => JSON.parse(JSON.stringify(await host.handle('controller-1', JSON.parse(JSON.stringify(args[0]))) ?? null)),
+      rgPath: RG,
+      codexPath: () => CODEX,
+      prepareMcp: async () => ({ servers: new Map(), dispose() {} }),
+      collectProjectFiles: async () => [],
+      collectPersonal: (kind, files, caps) => collectPersonalConfig(kind, files, {
+        home: path.join(root, 'controller-home'),
+        env: { CODEX_HOME: path.join(root, 'controller-home', 'codex') },
+        managedSkills: [{ command: 'cindy-plugin-cindy-github:pr', dir: ownPr }, { command: 'cindy:learn', dir: ownLearn }],
+        ...(caps?.managedSkillDigests ? { agentDigests: caps.managedSkillDigests } : {}),
+      }),
+      isGitRepo: async () => false,
+      newId: randomUUID,
+    });
+    const asked: InteractionRequest[] = [];
+    handle.setInteractionResolver(async (request) => {
+      asked.push(request);
+      return { kind: 'permission', behavior: 'allow' };
+    });
+    const done = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'error' && (event.data as { isTerminal?: boolean }).isTerminal !== false) throw new Error(JSON.stringify(event.data));
+        if (event.type === 'done') return;
+      }
+    })();
+    await handle.send({ type: 'user', content: '/pr' }, { throwOnStartFailure: true });
+    await done;
+    await handle.close({ reason: 'navigation' });
+    agent.dispose?.();
+    host.dispose();
+
+    const first = bodies[0];
+    const listed = first.slice(first.indexOf('### Available skills'), first.indexOf('### How to use skills'));
+    expect((listed.match(/- pr: /g) ?? []).length).toBe(1);
+    expect((listed.match(/- learn: /g) ?? []).length).toBe(1);
+    expect(listed).toContain('- pr: CONTROLLER-PR');
+    expect(listed).toContain('- learn: CONTROLLER-LEARN');
+    expect(listed).toContain('- release-notes: PROJECT-SKILL');
+    expect(first).not.toContain('RUNNER-PR');
+    // 清单里的位置在对方的影子目录里，不是这台电脑的路径。
+    const managedRoot = /- `r\d+` = `([^`]+\/\.agents\/skills)`/.exec(first)?.[1] ?? '';
+    expect(managedRoot.startsWith(hostRoot) || managedRoot.startsWith(fs.realpathSync(hostRoot))).toBe(true);
+    // 读到的是这台电脑上 GitHub 插件的那份，读取不要本机确认。
+    expect(bodies.at(-1)).toContain('CONTROLLER-PR-BODY');
+    expect(asked).toEqual([]);
   });
 
   it('asks on this computer before Codex runs a risky command, and runs only what was approved', { timeout: 180_000 }, async () => {

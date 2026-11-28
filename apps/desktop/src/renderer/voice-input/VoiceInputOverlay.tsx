@@ -1593,7 +1593,8 @@ export function VoiceInputOverlay() {
           }
           if (historyEntryIdRef.current) {
             const historyEntryId = historyEntryIdRef.current;
-            window.setTimeout(() => updateVoiceInputHistoryEntry(historyEntryId, event.text), 0);
+            const rawTranscript = rawTranscriptTextRef.current || undefined;
+            window.setTimeout(() => updateVoiceInputHistoryEntry(historyEntryId, event.text, rawTranscript), 0);
           }
           break;
         case 'error': {

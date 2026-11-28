@@ -11,7 +11,7 @@ import {
   DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, MACHINE_STATUS_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   REMOTE_AGENT_PLUGIN_ENGINE_KIND, SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT,
   DeviceLinkClient, RoutedDeviceLinkClient, isProviderSharePeer, isScopedPeer, resolveRemoteInvokeTimeoutMs,
-  type DeviceInfo, type DeviceLinkClientOptions, type LinkAcceptPayload, type MachineStatus,
+  type DeviceInfo, type DeviceLinkClientOptions, type DeviceLinkPeerRouteStateChanged, type LinkAcceptPayload, type MachineStatus,
 } from '@cindy/device-link';
 import type { Maker } from '@cindy/maker-core';
 import { createRemoteAgentHost, type RemoteAgentHost } from '../../desktop/src/main/remote-agent/host/runHost.js';
@@ -142,6 +142,7 @@ export const HOST_DISPATCH_PORTS_WHILE_HELD = Object.freeze({
   setTelegramRemoteOnline: 'unbound',
   adviseAndRecordVoiceInputDictionaryLearning: 'unbound',
   buildMobileDictionarySnapshot: 'unbound',
+  mutateMobileDictionary: 'unbound',
   setBroadcastTapListener: 'read',
   broadcastTap: 'read',
   RECOVERY_CHECKPOINT_MARKER: 'read',
@@ -1105,12 +1106,45 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     }) ?? null;
   }
   const unbind = dispatch.wireInboundDispatch(client);
+  const offlineControllers = new Map<string, { connection: PeerLinks; connectionEpoch: number; linkGeneration: number }>();
+  function noteControllerOffline(deviceId: string, change?: DeviceLinkPeerRouteStateChanged) {
+    const connection = client.connectionFor(deviceId);
+    const connectionEpoch = connection.getConnectionEpoch();
+    const linkGeneration = connection.getPeerLinkGeneration(deviceId);
+    if (change && (change.connectionEpoch !== connectionEpoch || change.linkGeneration !== linkGeneration)) return;
+    // An owner boundary forbids recording an outbox gate for the next owner,
+    // but does not defer cleanup of the controller that just went offline.
+    if (current()) offlineControllers.set(deviceId, { connection, connectionEpoch, linkGeneration });
+    setControllerPlatform(deviceId, null);
+    releaseAppsInBackground([deviceId]);
+    dispatch.handleControllerOffline(deviceId, change);
+  }
+  // Presence is incremental. An offline observation only applies to the
+  // connection and peer link that supplied it. The shared dispatcher keeps
+  // the peer's outbox and uses a directed flush when it opens a new link.
+  dispatch.setDispatchPresenceOfflineCheck(deviceId => {
+    const offline = offlineControllers.get(deviceId);
+    if (!offline || !current()) return false;
+    const connection = client.connectionFor(deviceId);
+    if (offline.connection !== connection || offline.connectionEpoch !== connection.getConnectionEpoch()
+      || offline.linkGeneration !== connection.getPeerLinkGeneration(deviceId)) {
+      offlineControllers.delete(deviceId);
+      return false;
+    }
+    return !client.hasOfflineDirectPath(deviceId);
+  });
+  const offPeerRoute = client.onPeerRouteStateChanged(change => {
+    if (change.state === 'offline') noteControllerOffline(change.deviceId, change);
+  });
   const offStatus = client.onStatusChange(status => {
     if (status !== 'online') {
       // Like the Desktop: while Agent-Net is on, controllers carried by another connection (phones and older Desktops on the
       // Device Link relay, cross-account peers on their own) are outside the main connection's fault; 2026-11-17 review: an
       // Agent-Net drop logged every phone out of this Host. Off, every controller as before.
       const keepController = agentNet?.active() ? (id: string) => client.connectionFor(id) !== client : undefined;
+      for (const id of offlineControllers.keys()) {
+        if (!keepController?.(id)) offlineControllers.delete(id);
+      }
       releaseAppsInBackground(keepController ? [...appCallers].filter(id => !keepController(id)) : undefined);
       dispatch.deactivateAllControllers('relay-disconnected', 'all', keepController);
       clearControllerPlatforms();
@@ -1143,12 +1177,11 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   });
   const offPresence = client.onPresenceChanged(value => {
     if (value.online) {
+      offlineControllers.delete(value.deviceId);
       setControllerPlatform(value.deviceId, value.platform ?? null);
       if (value.deviceName) dispatch.setControllerDisplayName(value.deviceId, value.deviceName);
     } else {
-      setControllerPlatform(value.deviceId, null);
-      releaseAppsInBackground([value.deviceId]);
-      dispatch.handleControllerOffline(value.deviceId);
+      noteControllerOffline(value.deviceId);
     }
   });
   const offEvents = deps.subscribe(event => {
@@ -1331,7 +1364,8 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       closed = true; cancelPluginOauth();
       offRemoteAgentAccess?.(); offRemoteAgentAccess = null;
       dispatch.setRemoteAgentHandler(null);
-      clearInterval(poll); offSettings(); offEvents(); offPresence(); offIssue(); offCompatibilityIssue?.(); offStatus(); unbind();
+      clearInterval(poll); offSettings(); offEvents(); offPresence(); offPeerRoute(); offIssue(); offCompatibilityIssue?.(); offStatus(); unbind();
+      offlineControllers.clear(); dispatch.setDispatchPresenceOfflineCheck(null);
       dispatch.setSessionsSubscribedListener(null); dispatch.setHistoryToolNameReader(() => ''); activityTracker.dispose();
       dispatch.dropAllControllers(client, 'shutdown'); client.stop(); agentNet?.close(); registry.clear(); clearControllerPlatforms();
       await Promise.allSettled([releaseApps(), remoteAgentHost?.dispose()]);

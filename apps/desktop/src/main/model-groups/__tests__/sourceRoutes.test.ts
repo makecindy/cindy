@@ -556,3 +556,23 @@ describe('provider routes', () => {
     ]);
   });
 });
+
+// Unit: current placement must not add old connection names alongside the
+// real slots. Preserve the per-account controls introduced by #13658.
+it.each(['subscription', 'mixed'] as const)('lists each real %s account once and restores a detached connection', kind => {
+  const aliases = [view('old-openai', 'Old subscription', 'codex', ['gpt-6-luna'], { logoKind: 'openai', subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai' }),
+    ...(kind === 'mixed' ? [view('old-key', 'Old Key', 'codex', ['gpt-6-luna'], { logoKind: 'openai', subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai' })] : [])];
+  const accounts = [{ id: 'default', label: 'Native A', usable: true }, { id: 'second', label: 'Native B', usable: true },
+    ...(kind === 'mixed' ? [{ id: 'key-member', label: 'Key', usable: true }] : [])];
+  const selected = accounts.map((account, index) => ({ providerId: 'openai', accountId: account.id, ...(index ? { weight: 7 } : { off: true as const }) }));
+  const stored: ModelGroupsConfig = { routes: [], autoSources: { 'auto:openai': [...selected, ...aliases.map(alias => ({ providerId: alias.id }))] } };
+  const read = (old: ProviderView[], local = accounts) => effectiveModelGroupsConfig(stored, {
+    views: [SUBSCRIPTION, ...old], agents: AGENTS, available: () => true, localAccounts: new Map([['openai', local]]),
+  });
+  const merged = read(aliases);
+  expect(merged.sourceRoutes?.find(route => route.auto)?.sources).toEqual(selected);
+  const shared = childrenOf(merged, 'auto:openai').find(route => route.name === 'GPT-6-LUNA')!;
+  expect(shared.candidates.map(({ providerId, accountId, off, weight }) => ({ providerId, accountId, ...(off ? { off } : {}), ...(weight ? { weight } : {}) }))).toEqual(selected);
+  const split = read(aliases.map(alias => ({ ...alias, subscriptionPoolAlias: undefined, subscriptionPoolTarget: undefined })), accounts.slice(0, 1));
+  expect(split.sourceRoutes?.find(route => route.auto)?.sources.some(source => source.providerId === aliases[0].id)).toBe(true);
+});

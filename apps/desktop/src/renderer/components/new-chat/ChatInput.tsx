@@ -19,7 +19,7 @@ import { isScopedPeer, isSharedTaskPeer } from '@cindy/device-link';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useNavigate } from 'react-router-dom';
 import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
-import { Folder, MessageSquarePlus, TriangleAlert, X } from 'lucide-react';
+import { Folder, MessageSquarePlus, Sparkles, TriangleAlert, X } from 'lucide-react';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
@@ -3607,12 +3607,46 @@ export function ChatInput({
       voiceConversationButtonRef.current?.focus();
     wasVoiceConversationActive.current = voiceConversationActive;
   }, [voiceConversationActive, onStartVoiceConversation]);
+  const [hasSelectedTextForVoiceRewrite, setHasSelectedTextForVoiceRewrite] = useState(false);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) {
+      setHasSelectedTextForVoiceRewrite(false);
+      return;
+    }
+    const updateSelectionFlag = () => {
+      if (editor.isDestroyed) {
+        setHasSelectedTextForVoiceRewrite(false);
+        return;
+      }
+      const { from, to, empty } = editor.state.selection;
+      const hasText = !empty && editor.state.doc.textBetween(from, to, '\n').trim().length > 0;
+      setHasSelectedTextForVoiceRewrite(hasText);
+    };
+    updateSelectionFlag();
+    editor.on('selectionUpdate', updateSelectionFlag);
+    editor.on('transaction', updateSelectionFlag);
+    return () => {
+      editor.off('selectionUpdate', updateSelectionFlag);
+      editor.off('transaction', updateSelectionFlag);
+    };
+  }, [editor]);
+
   const handleVoiceInputStart = useCallback((): boolean => {
     // 同步 claim 录音后立刻返回是否占用；授权确认（beforeStart）与启动提示音
     // 由 useVoiceInput 的后台启动流程继续处理。
     onComposerTypingRef.current?.();
     return voiceInput.start({
       startedAt: performance.now(),
+      beforeStart: onBeforeVoiceInputStart,
+      onStartFeedback: voiceInputSettings.playInteractionSound ? playVoiceInputStartCue : undefined,
+    });
+  }, [onBeforeVoiceInputStart, voiceInput.start, voiceInputSettings.playInteractionSound]);
+
+  const handleVoiceRewriteStart = useCallback((): boolean => {
+    onComposerTypingRef.current?.();
+    return voiceInput.start({
+      startedAt: performance.now(),
+      mode: 'rewrite',
       beforeStart: onBeforeVoiceInputStart,
       onStartFeedback: voiceInputSettings.playInteractionSound ? playVoiceInputStartCue : undefined,
     });
@@ -10535,6 +10569,34 @@ export function ChatInput({
                       </button>
                     </Tip>
                   )}
+                  {!queueEditActive &&
+                    hasSelectedTextForVoiceRewrite &&
+                    !voiceInput.isBusy &&
+                    !composerEditorLocked &&
+                    editor && (
+                      <Tip text={t('newChat.chatInput.voiceInput.rewriteSelectedTooltip')} side="top">
+                        <button
+                          type="button"
+                          onMouseDown={(event) => {
+                            // Keep the user's editor text selection intact when clicking rewrite.
+                            event.preventDefault();
+                          }}
+                          onClick={() => {
+                            handleVoiceRewriteStart();
+                          }}
+                          className={cn(
+                            'flex h-[30px] shrink-0 items-center gap-1 rounded-full px-2.5 text-12 font-medium',
+                            'border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--composer-pill-icon)]',
+                            'transition-colors hover:bg-[var(--model-trigger-hover)] focus-visible:outline-none',
+                            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                          )}
+                          aria-label={t('newChat.chatInput.voiceInput.rewriteSelectedAria')}
+                        >
+                          <Sparkles size={13} strokeWidth={2} aria-hidden />
+                          <span>{t('newChat.chatInput.voiceInput.rewriteSelected')}</span>
+                        </button>
+                      </Tip>
+                    )}
                   {!queueEditActive && (
                     <VoiceInputButton
                       samplesRef={recordingSamplesRef}

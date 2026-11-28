@@ -8,14 +8,21 @@ export type VoiceInputReadinessRecovery = {
     | 'settings.voiceInput.serviceSource.credentialError.gatewayMissing'
     | 'settings.voiceInput.serviceSource.credentialError.customAsrConfigMissing'
     | 'settings.voiceInput.serviceSource.credentialError.customAsrKeyMissing'
-    | 'settings.voiceInput.serviceSource.credentialError.codexRealtimeUnsupported';
+    | 'settings.voiceInput.serviceSource.credentialError.codexRealtimeUnsupported'
+    | 'settings.voiceInput.serviceSource.credentialError.localAsrModelMissing'
+    | 'settings.voiceInput.serviceSource.credentialError.localAsrUnsupported';
   settingsTab: VoiceInputRecoverySettingsTab;
 };
 
 type VoiceInputReadinessLike = {
-  auth: 'api-key' | 'codex';
+  auth: 'api-key' | 'codex' | 'local';
   provider: string;
-  failureReason?: 'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
+  failureReason?:
+    | 'custom-asr-config-missing'
+    | 'custom-asr-key-missing'
+    | 'codex-realtime-unsupported'
+    | 'local-asr-model-missing'
+    | 'local-asr-unsupported';
 };
 
 /**
@@ -42,6 +49,24 @@ export function resolveVoiceInputReadinessRecovery(
   if (readiness.failureReason === 'custom-asr-key-missing') {
     return {
       messageKey: 'settings.voiceInput.serviceSource.credentialError.customAsrKeyMissing',
+      settingsTab: 'voice-input',
+    };
+  }
+  if (readiness.failureReason === 'local-asr-model-missing') {
+    return {
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.localAsrModelMissing',
+      settingsTab: 'voice-input',
+    };
+  }
+  if (readiness.failureReason === 'local-asr-unsupported') {
+    return {
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.localAsrUnsupported',
+      settingsTab: 'voice-input',
+    };
+  }
+  if (readiness.auth === 'local') {
+    return {
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.localAsrModelMissing',
       settingsTab: 'voice-input',
     };
   }

@@ -430,7 +430,7 @@ import {
   buildHostModelGroupRouteNote,
   resolveHostModelGroup,
   useHostModelGroupPickerOptions,
-  useHostModelGroupsPayload,
+  useHostModelGroupsState,
   type HostModelGroupResult,
 } from '@/session/hostModelGroups';
 import { implicitMobileSourceRouteSelection } from '@/session/sourceRouteProviders';
@@ -784,7 +784,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 开启协同时同样给新建的 Lead 选路。旧电脑读不到模式时整段不出现。
   const [modelGroupChoice, setModelGroupChoice] = useState<{ controlledDeviceId: string; id: string } | null>(null);
   const [attachedSourceRouteChoice, setAttachedSourceRouteChoice] = useState<{ controlledDeviceId: string; id: string } | null>(null);
-  const hostModelGroupsPayload = useHostModelGroupsPayload(selectedDeviceId, maker, pluginEngineDraftEligible);
+  const { payload: hostModelGroupsPayload, unsupported: hostModelGroupsUnsupported } =
+    useHostModelGroupsState(selectedDeviceId, maker, pluginEngineDraftEligible);
   const hostModelGroups = hostModelGroupsPayload?.groups ?? null;
   const activeHostModelGroup = useMemo(
     () => (modelGroupChoice && modelGroupChoice.controlledDeviceId === selectedDeviceId
@@ -2757,9 +2758,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   }, [selectedDeviceId]);
   const draftModelGroupExtra = useMemo(() => ({
     sourceRoutesPayload: hostModelGroupsPayload,
+    unsupported: hostModelGroupsUnsupported,
     activeRouteId: activeDraftSourceRouteId,
     onAttach: attachSourceRouteForDraft,
-  }), [hostModelGroupsPayload, activeDraftSourceRouteId, attachSourceRouteForDraft]);
+  }), [hostModelGroupsPayload, hostModelGroupsUnsupported, activeDraftSourceRouteId, attachSourceRouteForDraft]);
   const draftModelGroupOptions = useHostModelGroupPickerOptions(
     hostModelGroups, activeHostModelGroup?.id ?? null, selectModelGroupForDraft, t, draftModelGroupExtra,
   );
