@@ -19,6 +19,9 @@ vi.mock('../../maker-ipc/orcaTurnErrorQuery.js', () => ({ readLatestWorkerTurnEr
 vi.mock('../../maker-ipc/sessionLastExchange.js', () => ({ lastExchange: () => ({}), readSessionLastExchange: async () => ({ lastUserAsk: 'go', lastAssistantLine: null }) }));
 vi.mock('../remoteChatHistory.js', () => ({ readChatHistoryMessages: async () => ({ ok: false }) }));
 import { createTaskDigestReader } from '../taskDigest.js';
+import { createSessionControlService, type SessionControlServiceDeps } from '../../maker-ipc/sessionControlService.js';
+import { createSessionActivityReader } from '../../maker-ipc/sessionActivityProjection.js';
+vi.mock('../../agent-island/service.js', () => ({ getAgentIslandService: () => null }));
 import { createDesktopTaskDigestDeps, type DesktopTaskDigestHost } from '../taskDigestHost.js';
 import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.desktop.js';
@@ -125,6 +128,31 @@ describe('desktop task digest route identity', () => {
 });
 
 describe('desktop task digest error sources', () => {
+  // #13394, unit: previous tests supplied a final phase, hiding the conflict
+  // between an unclosed durable turn and the next turn executing a tool.
+  it('reports a restarted turn during tool execution without an island snapshot', async () => {
+    const { host, deps, read } = setup();
+    const snapshot = createSessionActivityReader({
+      getLiveSnapshot: () => null,
+      getPersistedFacts: async () => ({
+        status: 'active', title: 'task', startedAt: 100, endedAt: 50, clearedAt: null,
+      }),
+      getLatestTerminal: async () => undefined,
+    });
+    const control = { active: true, activeToolCount: 1, pendingInteractionCount: 0,
+      turnGeneration: 2, gracefulStopState: 'none' };
+    const service = createSessionControlService({
+      getLiveSession: () => ({ getTurnControlSnapshot: () => control }),
+      getSessionActivitySnapshot: snapshot,
+      getSessionRuntimeDetails: async () => ({}),
+    } as unknown as SessionControlServiceDeps);
+    vi.mocked(host.getSessionRuntime).mockImplementation(targetSessionId => service.getSessionRuntime({ targetSessionId }));
+    const suggest = vi.spyOn(deps.local, 'suggestRoute');
+    expect(await read({ sessionId: 'task' })).toMatchObject({
+      ok: true, digest: { phase: 'running', error: null, suggested_route: null },
+    });
+    expect(suggest).not.toHaveBeenCalled();
+  });
   it.each([502, 403])('returns HTTP %s from runtime even without a caller or watcher', async (status) => {
     const { read } = setup('error', status);
     expect(await read({ sessionId: 'task' })).toMatchObject({ ok: true, digest: { phase: 'errored', error: expect.stringContaining(`HTTP ${status}`) } });
