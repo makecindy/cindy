@@ -58,8 +58,6 @@ function SegmentedRow<T extends string>(props: {
         value={props.value}
         onValueChange={props.onChange}
         fullWidth
-        height={36}
-        optionHeight={30}
         options={props.options.map((option) => ({
           value: option,
           label: props.optionLabel(option),
@@ -632,8 +630,6 @@ export function TelegramGroupActivationSettingsView({
               aria-label={`${group.chatName || group.chatId} · ${t(`${root}.groups.title`)}`}
               value={group.activation}
               onValueChange={(mode) => setMode(group.chatId, mode)}
-              height={34}
-              optionHeight={28}
               optionClassName="text-11"
               options={(['mention', 'always'] as const).map((mode) => ({
                 value: mode,

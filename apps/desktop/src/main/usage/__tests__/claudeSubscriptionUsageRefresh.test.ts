@@ -196,4 +196,81 @@ describe('createClaudeSubscriptionUsageReader', () => {
     expect(deps.fetchSnapshot).toHaveBeenCalledTimes(2);
     expect(state.cached).toMatchObject({ accountFingerprint: 'acct-b' });
   });
+
+  it('默认策略:空闲轮询 30m 节流,真实活动/fresh 恢复走 3m,跨 resetsAt 提前重查一次不死循环', async () => {
+    let now = 1_000_000;
+    const resetSec = Math.floor((now + 10 * 60_000) / 1000);
+    let cached: ClaudeSubscriptionUsageSnapshot | null = null;
+    const deps = {
+      readAccount: vi.fn(() => 'acct-a'),
+      fetchSnapshot: vi.fn(async (): Promise<ClaudeSubscriptionUsageSnapshot> => ({
+        ...SNAPSHOT,
+        fiveHour: { utilization: 40, resetsAt: resetSec },
+        sevenDay: { utilization: 10, resetsAt: resetSec + 86_400 },
+      })),
+      recordSnapshot: vi.fn(async (snap: ClaudeSubscriptionUsageSnapshot) => { cached = snap; }),
+      clearSnapshot: vi.fn(async () => { cached = null; }),
+      readCachedSnapshot: vi.fn(async () => cached),
+      now: () => now,
+      onRefreshError: vi.fn(),
+    };
+    const reader = createClaudeSubscriptionUsageReader(deps);
+
+    await reader.read();
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(1);
+
+    // 被动轮询(activity: false)不标活跃,8 分钟时仍在 30m 空闲窗内。
+    now += 8 * 60_000;
+    reader.triggerRefresh({ activity: false });
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(1);
+
+    // 跨过 fiveHour.resetsAt (+10m, 距上次刷新 >= 3m) 触发一次重查。
+    now += 2 * 60_000;
+    await reader.read();
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(2);
+
+    // 同一陈旧 resetsAt 不死循环;无新活动时 20m 内不重查。
+    now += 20 * 60_000;
+    await reader.read();
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(2);
+
+    // 限额恢复 fresh 读取按活跃档 (3m) 放行,不被 30m 空闲缓存卡住。
+    await reader.read({ fresh: true });
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(3);
+
+    // markActivity (如 SDK rate_limit_event) 切回 3m 活跃档。
+    reader.markActivity();
+    now += 2 * 60_000;
+    await reader.read();
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(3);
+    now += 60_000;
+    await reader.read();
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(4);
+
+    // 之后无新活动,需等满 30m 才再次刷新。
+    now += 29 * 60_000;
+    await reader.read();
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(4);
+    now += 60_000;
+    await reader.read();
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(5);
+
+    // 手动刷新在 15s 冷却内被抑制,超过 15s 即使处于 30m 空闲窗内也会立即刷新。
+    now += 10_000;
+    reader.triggerRefresh({ manual: true });
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(5);
+    now += 5_000;
+    reader.triggerRefresh({ manual: true });
+    await flush();
+    expect(deps.fetchSnapshot).toHaveBeenCalledTimes(6);
+  });
 });

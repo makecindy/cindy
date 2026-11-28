@@ -49,6 +49,7 @@ beforeEach(() => {
       if (body.name !== undefined) snapshot.room.name = body.name;
       if (body.description !== undefined) snapshot.room.description = body.description;
       if (body.allowMemberInvites !== undefined) snapshot.room.allow_member_invites = body.allowMemberInvites;
+      if (body.allowMemberMentionAll !== undefined) snapshot.room.allow_member_mention_all = body.allowMemberMentionAll;
       snapshot.room.revision++;
       return { revision: snapshot.room.revision };
     }
@@ -67,9 +68,9 @@ it('reads and saves cloud settings and offers offline companions without any hos
   expect(result.group).toMatchObject({ description: 'Original', singleSpeaker: true });
   expect(result.group?.members.find(member => member.actorId === id(3))?.homeDeviceId).toBe('pc');
   expect(candidates.rows.map(row => row.id)).toEqual([id(4)]);
-  await act(async () => { await result.act('update', { name: 'Renamed', description: 'Shared background', replyMode: 'mentioned', organizerBotId: id(3), allowMemberInvites: true }); });
-  expect(writes()[0]).toEqual([`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, name: 'Renamed', description: 'Shared background', responseMode: 'mentioned', organizerId: id(3), allowMemberInvites: true }, id(2)]);
-  expect(result.group).toMatchObject({ name: 'Renamed', description: 'Shared background', revision: 5, allowMemberInvites: true });
+  await act(async () => { await result.act('update', { name: 'Renamed', description: 'Shared background', replyMode: 'mentioned', organizerBotId: id(3), allowMemberInvites: true, allowMemberMentionAll: false }); });
+  expect(writes()[0]).toEqual([`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, name: 'Renamed', description: 'Shared background', responseMode: 'mentioned', organizerId: id(3), allowMemberInvites: true, allowMemberMentionAll: false }, id(2)]);
+  expect(result.group).toMatchObject({ name: 'Renamed', description: 'Shared background', revision: 5, allowMemberInvites: true, allowMemberMentionAll: false });
   await act(async () => { await result.act('add-member', { botId: id(4) }); await result.act('set-member-role', { actorId: id(3), role: 'admin' }); await result.act('remove-member', { actorId: id(3) }); });
   expect(writes().slice(1).map(call => call[2])).toEqual([
     { operationId: 'operation-2', actorId: id(4), action: 'invite' },
@@ -89,6 +90,26 @@ it.each(['member', 'guest'] as const)('keeps %s read-only based on account membe
     [`/conversations/${id(1)}/nickname`, { operationId: 'operation-1', actorId: id(2), nickname: 'Nana' }, undefined],
     [`/conversations/${id(1)}/members`, { operationId: 'operation-2', actorId: id(4), action: 'invite' }, undefined],
   ]);
+});
+
+it('sets the execution computer for a phone-joined member without assuming a device', async () => {
+  snapshot.members[0].role = 'member';
+  snapshot.assistantComputers = [{ id: 'studio', name: 'Mac Studio' }];
+  snapshot.room.assistant_device_id = null;
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (path, method, body, actor) => {
+    if (path.endsWith('/assistant-device') && method === 'POST') {
+      expect(actor).toBeUndefined();
+      snapshot.room.assistant_device_id = body.deviceId;
+      return { deviceId: body.deviceId };
+    }
+    return original(path, method, body, actor);
+  });
+  await render();
+  expect(result.group?.assistantDeviceId).toBeNull();
+  await act(async () => { await result.act('assistantDevice', { deviceId: 'studio' }); });
+  expect(result.group?.assistantDeviceId).toBe('studio');
+  expect(writes()).toHaveLength(1);
 });
 
 it('lets an ordinary member save notifications without a manager or online computer, and refreshes personal changes', async () => {

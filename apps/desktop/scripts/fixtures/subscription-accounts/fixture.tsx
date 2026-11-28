@@ -175,6 +175,17 @@ void mountPage({
       };
     if (ctx.case === 'expiry-past')
       view.accounts[1].loginExpiresAt = new Date(now - 86_400_000).toISOString();
+    // Two accounts moved onto a long-lived token: one checked with its ordinary sign-in still
+    // active, one nearing the token's end after the ordinary sign-in has gone.
+    if (ctx.case.startsWith('long-lived-token')) {
+      view.accounts[0].longLivedToken = {
+        expiresAt: new Date(now + 300 * 86_400_000).toISOString(), storedLogin: true, verification: 'verified',
+      };
+      view.accounts[1].loginExpiresAt = undefined;
+      view.accounts[1].longLivedToken = {
+        expiresAt: new Date(now + 20 * 86_400_000).toISOString(), storedLogin: false, verification: 'pending',
+      };
+    }
     // Nothing signed in yet: the host lists only the unbound CLI default slot.
     if (ctx.case === 'empty')
       view = {

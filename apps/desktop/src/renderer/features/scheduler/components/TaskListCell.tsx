@@ -165,7 +165,8 @@ export function TaskListCell({
   } else if (s.status === 'paused') {
     subtitle = t('scheduler.cell.subtitlePaused');
   } else if (s.manual) {
-    subtitle = lastText ?? (prRule ? t(`scheduler.prTrigger.${prRule.change}`) : s.webhookTrigger ? t('scheduler.webhook.title') : t('scheduler.cell.subtitleManual'));
+    subtitle = lastText ?? (prRule ? t(`scheduler.prTrigger.${prRule.change}`) : s.webhookTrigger
+      ? t(s.webhookTrigger.source?.preset === 'plugin' ? 'scheduler.webhook.pluginTitle' : 'scheduler.webhook.title') : t('scheduler.cell.subtitleManual'));
   } else if (!s.recurring) {
     subtitle = lastText ?? t('scheduler.cell.subtitleOnce');
   } else if (lastText && nextText) {
@@ -376,7 +377,7 @@ export function TaskListCell({
         )}
         {!isEditing && (prRule || s.webhookTrigger || s.manual || !s.recurring) && (
           <Badge tone="outline" className="translate-x-[2px]">
-            {prRule ? (prRule.url.includes('/-/merge_requests/') ? 'MR' : 'PR') : s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
+            {prRule ? (prRule.url.includes('/-/merge_requests/') ? 'MR' : 'PR') : s.webhookTrigger ? t(s.webhookTrigger.source?.preset === 'plugin' ? 'scheduler.cell.tagPluginEvent' : 'scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
           </Badge>
         )}
       </div>

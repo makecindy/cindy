@@ -22,8 +22,11 @@
 | 邮件卡的收件人与编辑、发送确认、深浅色、已读标记与头像权限 | [邮件卡](mail-card.md) |
 | 目标运行、补充消息、停止与手机 `/goal` | [目标模式](goal-mode.md) |
 | 自动任务与目标任务的生命线：归档后恢复、归档前确认、失败后手动继续 | [归档与自动化](archive-pauses-automations.md) |
+| 自动化被 Webhook、GitHub App 事件叫醒：接收地址、发送方、合并与可靠性 | [Webhook 触发](schedule-webhook-trigger.md) |
+| 插件提供的事件（消息、邮件等）叫醒自动化，不需要账号或地址 | [插件事件触发](plugin-event-triggers.md) |
 | 用量上限、重置时刻与自动继续 | [用量上限](usage-limit-auto-continue.md) |
 | 任务模型、来源、推理强度与 Fast | [运行时控制](session-runtime-control.md) |
+| 插件执行引擎（ACP）、插件路由模型与插件任务选模的边界与能力台账 | [插件引擎与插件模型](plugin-engines-and-models.md) |
 | 共享任务、跨账号访客与成员权限 | [共享任务](shared-task-mode.md) |
 | 伙伴身份、生命周期、fallback、伙伴项目、Skill / MCP 与开任务 | [伙伴运行时](cindy-bots-runtime.md) |
 | 伙伴的工作方式属于伙伴：专属工具盘点、通用化方向与待裁决条款 | [伙伴专属能力台账](teammate-capability-ledger.md) |

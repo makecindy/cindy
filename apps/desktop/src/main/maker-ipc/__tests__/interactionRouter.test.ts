@@ -122,7 +122,7 @@ describe('session interaction router', () => {
         if (ending === 'release') lease.release();
         if (ending === 'abort') abort.abort();
         if (ending === 'timeout') await vi.advanceTimersByTimeAsync(51);
-        await expect(pending).resolves.toMatchObject({ answers: {} });
+        await expect(pending).resolves.toEqual({ kind: 'ask_user_question', answers: {}, dismissed: true });
         expect(cancel).toHaveBeenCalledOnce();
         controls.answer({ kind: 'ask_user_question', answers: { Which: 'late' } });
         expect(decide).not.toHaveBeenCalled();
@@ -415,13 +415,37 @@ describe('session interaction router', () => {
     await expect(decision).resolves.toEqual({
       kind: 'ask_user_question',
       answers: {},
+      dismissed: true,
     });
     expect(onCancel).toHaveBeenCalledWith('ask-1', {
       kind: 'ask_user_question',
       answers: {},
+      dismissed: true,
     });
     expect(states).toEqual(['waiting', 'cancelled']);
     keepPending();
+  });
+
+  // Regression: safeDecision omitted dismissed:true for ask_user_question when no route was
+  // attached or the signal was already aborted, making Claude Code treat empty answers as allow.
+  it('marks ask_user_question safe fallbacks as dismissed when no route is attached or aborted', async () => {
+    const harness = makeSession();
+    await expect(
+      requestHostInteraction(harness.session, ask('no-route'), new AbortController().signal),
+    ).resolves.toEqual({
+      kind: 'ask_user_question',
+      answers: {},
+      dismissed: true,
+    });
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(
+      requestHostInteraction(harness.session, ask('pre-aborted'), aborted.signal),
+    ).resolves.toEqual({
+      kind: 'ask_user_question',
+      answers: {},
+      dismissed: true,
+    });
   });
 
   it('notifies lifecycle observer on resolve, timeout, release, and handler throw', async () => {

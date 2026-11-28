@@ -793,7 +793,7 @@ describe('interaction shared model', () => {
     ]);
   });
 
-  it('normalizes issue confirmation and builds bridge-compatible decisions', () => {
+  it.each(['Claude Code', 'ACP'])('normalizes issue confirmation for %s and builds bridge-compatible decisions', (harness) => {
     const payload = normalizeIssueConfirm({
       kind: 'issue_confirm',
       requestId: 'i1',
@@ -802,7 +802,7 @@ describe('interaction shared model', () => {
         appVersion: '0.1.0',
         platform: 'darwin',
         arch: 'arm64',
-        harness: 'Claude Code',
+        harness,
         modelId: ' custom\nmodel ',
       },
     });
@@ -813,7 +813,7 @@ describe('interaction shared model', () => {
         appVersion: '0.1.0',
         platform: 'darwin',
         arch: 'arm64',
-        harness: 'Claude Code',
+        harness,
         modelId: 'custom model',
       },
     });

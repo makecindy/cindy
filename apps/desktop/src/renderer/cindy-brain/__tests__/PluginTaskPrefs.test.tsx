@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   save: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: vi.fn() },
   useTranslation: () => ({
     t: (key: string, values?: Record<string, string>) =>
       values?.model ? `${key}:${values.model}` : key,
@@ -37,6 +38,9 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({ ModelSelector: (props: a
     providerId: 'openai', modelId: 'chosen', effort: 'high', fast: false,
     agentDevice: { deviceId: props.remoteAgent.devices[0].deviceId, name: 'Shared' } })}>remote</button> : null}
   <button data-testid="fast" onClick={() => props.onFastModeChange(true)}>Fast</button>
+  {props.pluginEngines ? <button data-testid="acp-engine" onClick={() => props.pluginEngines.onSelect({
+    providerId: 'acp-plugin:antigravity:agy', modelId: 'gemini-4-neon', effort: 'high',
+  })}>acp</button> : null}
   <span data-testid="trigger-catalog">{props.deviceId ?? 'local'}</span>
   </>
 ) }));
@@ -179,4 +183,23 @@ it('shows actionable host validation errors and restores the saved selection', a
   await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('修复连接'));
   expect(screen.getByTestId('model').textContent).toBe('settings.ghosts.detail.errandPrefs.followAuxiliary:Grok 4.6');
   expect((screen.getByTestId('model') as HTMLButtonElement).disabled).toBe(false);
+});
+it('saves a plugin-engine (acp) selection with fastMode false for task-capable plugins', async () => {
+  state.config = {
+    agentKind: 'acp',
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    effort: 'low',
+    fastMode: false,
+  };
+  render(<PluginTaskPrefs ghostId="plugin" />);
+  fireEvent.click(screen.getByTestId('acp-engine'));
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith('plugin', {
+    agentKind: 'acp',
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    agentDeviceId: null,
+    effort: 'high',
+    fastMode: false,
+  }));
 });

@@ -549,5 +549,14 @@
   },
   "navigation": {
     "unavailable": "未能開啟彼機設定。請驗其在線且已允遠控；版本舊則先更新 Cindy。"
+  },
+  "qrLogin": {
+    "scanTitle": "掃碼登門",
+    "hintLogin": "掃電腦上 Cindy 所示之碼",
+    "hintLoginDetail": "電腦上：側欄頭像旁手機之標 →「遠端控制 Cindy」",
+    "cameraNeeded": "須用相機以掃碼",
+    "grantCamera": "許用相機",
+    "openSettings": "啟系統設定",
+    "wrongCode": "此非 Cindy 登門之碼"
   }
 }

@@ -8,6 +8,19 @@
       "selected": "Seleccionado"
     }
   },
+  "voiceCall": {
+    "title": "Llamada de voz",
+    "saved": "Registro guardado",
+    "you": "Tú",
+    "companion": "Amigo",
+    "sendFailed": "No se pudo enviar. Se conservó lo que dijiste.",
+    "handoff": {
+      "sending": "Transfiriendo…",
+      "accepted": "Transferido a tu amigo",
+      "failed": "No se pudo transferir. Se conservó lo que dijiste.",
+      "completed": "Resultado recibido"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Enviado por la aplicación local “{{name}}”",
     "sourceLocalAppId": "ID de la aplicación: {{id}}",
@@ -185,7 +198,8 @@
     "groupSent": "Enviado desde un grupo",
     "sourceGroupId": "ID de grupo: {{id}}",
     "selectText": "Seleccionar texto",
-    "you": "Tú"
+    "you": "Tú",
+    "recentActivity": "Actividad reciente"
   },
   "actions": {
     "attachmentsPrefix": "Adjuntos: {{names}}",
@@ -250,6 +264,7 @@
     "edit": "Editar",
     "steer": "Intervenir",
     "steerQueued": "Aún no entregado. Tu mensaje todavía está en cola.",
+    "steerUnsupportedNotice": "Este motor no admite incorporar mensajes. Los mensajes en cola se enviarán cuando termine el turno actual.",
     "moveUp": "Mover antes",
     "moveDown": "Mover después",
     "cancelSend": "Cancelar envío",
@@ -263,6 +278,8 @@
     "delete": "Eliminar",
     "retry": "Reintentar",
     "notSent": "No enviado",
+    "deliveryUnconfirmed": "Envío sin confirmar",
+    "recheckDelivery": "Volver a comprobar",
     "imagesNotUploaded_one": "No se subió {{count}} imagen",
     "imagesNotUploaded_other": "No se subieron {{count}} imágenes",
     "waitingForNamedComputer": "Se enviará automáticamente cuando se conecte {{name}}",
@@ -308,6 +325,7 @@
       "neutral": "Reconectar",
       "usageReset": "Uso restablecido; se reanudó automáticamente",
       "pending": "Reconectando…",
+      "continuingWithProgress": "Continuando automáticamente ({{attempt}}/{{total}})…",
       "pendingWithProgress": "Reconectando {{attempt}}/{{total}}…",
       "groupSwitchPending": "Cambiando a otra computadora…",
       "details": "Intento {{attempt}}/{{total}} · {{count}} reconexiones en esta sesión",
@@ -442,6 +460,9 @@
     "send": "Enviar mensaje",
     "sending": "Enviando…",
     "sent": "Enviado",
+    "sendTooManyArguments": "Este mensaje usa más de {{limit}} elementos en un solo paso. Pide al asistente que los divida en grupos más pequeños.",
+    "sendValueUnavailable": "Un valor que usa este mensaje no está disponible. Pide al asistente que revise los campos del formulario.",
+    "sendTextUnavailable": "No se pudo preparar el mensaje para enviarlo.",
     "sendFailed": "El mensaje no fue enviado. Tus entradas todavía están aquí.",
     "playVideo": "Reproducir vídeo",
     "downloadVideo": "Descargar vídeo",

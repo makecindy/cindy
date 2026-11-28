@@ -54,6 +54,8 @@ export async function listPluginTargetCandidates(
     for (const row of rows) counts.set(row.id, (counts.get(row.id) ?? 0) + 1);
     result = rows.filter((row) => counts.get(row.id) === 1);
   } else {
+    // A task whose Agent runs on another computer or a shared provider (agentDeviceId) still keeps
+    // its record, files and permissions on this computer, so it is a local task here. SSH tasks are not.
     const rows = await db
       .select({ id: sessions.id, label: sessions.title, detail: sessions.workingDir })
       .from(sessions)
@@ -62,7 +64,6 @@ export async function listPluginTargetCandidates(
         and(
           eq(sessions.status, 'active'),
           isNull(sessions.remoteHostId),
-          isNull(sessions.agentDeviceId),
           isNull(sessions.hiddenAt),
           isNull(botSessionLinks.id),
           ne(sessions.source, 'bot'),

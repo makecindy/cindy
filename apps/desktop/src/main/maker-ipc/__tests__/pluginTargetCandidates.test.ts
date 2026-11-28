@@ -85,7 +85,6 @@ it.each([
   "UPDATE sessions SET status = 'archived'",
   'UPDATE sessions SET hidden_at = 1',
   "UPDATE sessions SET remote_host_id = 'ssh'",
-  "UPDATE sessions SET agent_device_id = 'other'",
   "UPDATE sessions SET orca_role = 'worker'",
   "UPDATE sessions SET source = 'review'",
   "UPDATE sessions SET source = 'bot'",
@@ -93,4 +92,19 @@ it.each([
   session('ordinary');
   db.exec(change);
   await expect(resolve('ordinary')).rejects.toThrow('TARGET_UNAVAILABLE');
+});
+
+// Unit, through PluginTargetSlot and the real candidate SQL. A task whose Agent runs on a shared
+// provider or another computer (sessions.agent_device_id) keeps its record, files and permissions here,
+// so it is a local task (plugin-task-api-implementation.md 通用投递目标). Before 2026-11-27, resolve,
+// list and send (which re-checks the same candidates) returned TARGET_UNAVAILABLE for it.
+// Minimal failing input: agent_device_id = 'share:s1'.
+it.each(['share:s1', 'other-device'])('keeps a local task whose Agent runs elsewhere (%s) as a target', async agentDeviceId => {
+  session('ordinary');
+  db.prepare("UPDATE sessions SET agent_device_id = ?, working_dir = '/repo' WHERE id = 'ordinary'").run(agentDeviceId);
+  const view = { kind: 'task', id: 'ordinary', label: 'Title ordinary', detail: '/repo' };
+  expect(await resolve('ordinary')).toEqual(view);
+  expect(await slot.handle('plugin', { kind: 'resolve', target: { kind: 'task', id: 'ordinary' } }, () => {})).toEqual(view);
+  expect(await slot.handle('plugin', { kind: 'list', targetKind: 'task' }, () => {})).toEqual({ targets: [view] });
+  expect(await resolvePluginTargetSession('task', 'ordinary')).toBe('ordinary');
 });

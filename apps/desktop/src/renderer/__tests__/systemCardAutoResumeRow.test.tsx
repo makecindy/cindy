@@ -96,17 +96,20 @@ describe('SystemCard auto-resume 行', () => {
   // 一次中断的"进行中"跨两种载体:退避那几秒是 ephemeral 行,续跑发出后交棒给落库的这一行。
   // 交棒之后任务确实在跑(只是还没吐出第一个可见字符),此时必须继续显示成重连中 —— 否则用户
   // 看到一个静止的「重新连接」不知道是不是还在跑(实测截图)。
-  it('未回填 + 正在飞 → 「重新连接中 N/5」,文案与退避那段连续', () => {
+  it.each([
+    { reason: undefined, label: 'chat.systemCard.autoResumePending.labelWithProgress' },
+    { reason: 'codex_reconnect_stalled', label: 'chat.systemCard.autoResumePending.continuingWithProgress' },
+  ])('未回填 + 正在飞 → 显示当前重连或续跑次数 ($reason)', ({ reason, label }) => {
     render(
       <SystemCard
         cardType="auto-resume"
-        data={{ error: 'API Error: Connection closed mid-response.', attempt: 1, maxAttempts: 5 }}
+        data={{ reason, error: 'Connection timed out.', attempt: 1, maxAttempts: 5 }}
         autoResumeInFlight
       />,
     );
     expect(
       screen.getByText(
-        'chat.systemCard.autoResumePending.labelWithProgress({"attempt":1,"total":5})',
+        `${label}({"attempt":1,"total":5})`,
       ),
     ).toBeTruthy();
     expect(

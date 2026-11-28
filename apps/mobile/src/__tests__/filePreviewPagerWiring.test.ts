@@ -63,7 +63,7 @@ describe('remote file preview pager wiring', () => {
     expect(source).toMatch(/scrollEnabled=\{[^}]*!\(current.previewKind === 'pdf' && PDF_PREVIEWS_INLINE\) && htmlPanPageKey !== current.key && markdownPagerPageKey !== current.key\}/);
     const markdownReader = readSource('src/session/MarkdownFileReader.tsx');
     expect(markdownReader).toContain('injectedJavaScript={onPageSwipe ? MARKDOWN_FILE_PAGER_SCRIPT : undefined}');
-    expect(markdownReader).toContain('onMessage={onPageSwipe ? handleMessage : undefined}');
+    expect(markdownReader).toContain('onMessage={onPageSwipe || onImagePress ? handleMessage : undefined}');
     // 让路状态按页 key 存,不存布尔:翻页时新旧两页的上报先后顺序不能决定结果。
     expect(source).toContain('setHtmlPanPageKey((prev) => (wants ? key : (prev === key ? null : prev)))');
     // 只有真的挂着 WebView 的那种组合才要横滑(资源还在取 → 页面是 spinner → 不禁滑);

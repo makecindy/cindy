@@ -12,49 +12,28 @@
  *     swap the <img> for a compact "can't load" card that shows the raw src
  *     so the user can spot typos.
  *
- * Recognized forms (v1) — the block must contain NOTHING but images:
+ * Recognized forms — the block must contain NOTHING but images:
  *   1. Markdown image alone on its line:
  *        `![alt](path)`, `![alt](<path with spaces>)`, `![alt](path "title")`
  *   2. HTML <img> alone on its line (README-style, GitHub-flavored):
  *        `<img src="doc/images/x.webp" alt="..." width="720" />`
  *   3. Single-line <p>-wrapped form:
  *        `<p align="center"><img src="..." /></p>`
- *   4. Multi-line <p> block — opener, 1..n <img> lines, closer:
- *        `<p align="center">`
- *        `  <img src="..." width="720" />`
- *        `</p>`
- *   `align="center"` on the <p> centers the rendered images; `width` /
- *   `height` attributes are applied (still capped at container width).
+ *   4. Multi-line <p> block — opener, 1..n <img> lines, closer
  *   5. Obsidian wiki-link image embed, alone on its line:
  *        `![[image.png]]`, `![[subfolder/image.png]]`, `![[image.png|300]]`,
  *        `![[image.png|300x200]]`
- *      The path may contain spaces and doesn't need angle brackets; `|300`
- *      sets width (px), `|300x200` sets width x height. Plain `[[note]]`
- *      (no leading `!`) is an Obsidian *note link*, not an image embed, and
- *      is intentionally left as raw source — only `![[...]]` renders. A
- *      non-numeric `|` suffix (Obsidian's alt-text alias form) is also left
- *      as raw source; out of scope for this module. `![[...]]` is also
- *      Obsidian's generic embed syntax for notes/PDFs/etc — the target is
- *      only treated as an image (and thus rendered) when its extension is
- *      one this app already recognizes as an image (`isLightboxImagePath`,
- *      shared with the workdir file tree); anything else stays raw source
- *      instead of being replaced by a broken-image card.
- *
- *   Inline images mid-paragraph, images inside blockquotes / list items, and
- *   mixed image+text lines stay as raw source — replacing those needs inline
- *   (non-block) widgets with cursor-reveal, which is exactly the
- *   selection-driven rebuild the mermaid module dropped for height-map
- *   stability. Editing an image block = select the widget (click / arrows)
- *   and delete, then retype; same affordance as deleting any atomic block.
+ *   6. Image-only ````carousel / ~~~~carousel fenced blocks whose slides are
+ *      separated by `<!-- slide -->`.
  *
  * Path resolution (local files go through the privileged `xdt-file://`
  * protocol — Chromium blocks plain file:// loads from the app origin):
- *   - data: / http(s):// / xdt-image:// / xdt-file://  → pass through
- *   - file://...                                       → strip + re-route
- *   - absolute (C:\..., /abs/...)                      → xdt-file://
- *   - relative                                         → joined against
- *     `imageBaseDirFacet` (the previewed file's own directory, fed by the
- *     host) then xdt-file://. No base dir → unresolvable card.
+ *   - data: / http(s):// / cindy-remote-media:// → pass through
+ *   - xdt-image:// / cindy-media:// / xdt-file:// → pass through locally, or
+ *     rewrite via `imageRemoteOriginFacet` in remote sessions
+ *   - file://... / absolute / relative (against `imageBaseDirFacet`) →
+ *     xdt-file:// locally, or `cindy-remote-media://` in remote sessions
+ *     (SSH fails closed for paths outside the remote workdir).
  *
  * Security note: HTML <img> handling parses out ONLY the src/alt/title/
  * width/height attributes and builds the element via DOM APIs — the raw
@@ -75,9 +54,20 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import i18n from 'i18next';
+import { isCarouselFenceLanguage, splitCarouselSlides } from '@cindy/maker-shared/markdown-carousel';
 
 import { isLightboxImagePath } from '@/features/cc-agent/workdir-browse/lib/imageExt';
-import { resolveLocalPath, toLocalFileUrl } from '@/lib/localPathResolver';
+import {
+  isFileUrlHostHref,
+  normalizeResolvedPathSegments,
+  resolveLocalPath,
+  toLocalFileUrl,
+} from '@/lib/localPathResolver';
+import {
+  isSshRewritableMediaUrl,
+  rewriteToRemoteMediaOrigin,
+  type RemoteMediaOrigin,
+} from '../../../shared/remoteMediaUrl';
 
 // ─── Facets ─────────────────────────────────────────────────────────────────
 //
@@ -90,12 +80,28 @@ export const imageBaseDirFacet = Facet.define<string, string>({
   combine: (values) => values[0] ?? '',
 });
 
+// Remote session origin (device-link / SSH) for rewriting resolved local image
+// URLs to `cindy-remote-media://`. Null = local workspace.
+export const imageRemoteOriginFacet = Facet.define<RemoteMediaOrigin | null, RemoteMediaOrigin | null>({
+  combine: (values) => values[0] ?? null,
+});
+
 // Same contract as `mermaidLocaleFacet`: widget reads i18n.t(...) at toDOM
 // time, so hosts feed the live locale through a Compartment and the
 // StateField rebuilds widgets when it flips.
 export const imageLocaleFacet = Facet.define<string, string>({
   combine: (values) => values[0] ?? 'default',
 });
+
+function remoteOriginsEqual(a: RemoteMediaOrigin | null, b: RemoteMediaOrigin | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === 'device' && b.kind === 'device') return a.deviceId === b.deviceId;
+  if (a.kind === 'ssh' && b.kind === 'ssh') {
+    return a.remoteHostId === b.remoteHostId && a.workdir === b.workdir;
+  }
+  return false;
+}
 
 // ─── Detection ──────────────────────────────────────────────────────────────
 //
@@ -106,19 +112,9 @@ export const imageLocaleFacet = Facet.define<string, string>({
 const MD_IMAGE_LINE_RE =
   /^ {0,3}!\[([^\]]*)\]\(\s*(<[^<>]*>|[^)\s]+)(?:\s+("[^"]*"|'[^']*'))?\s*\)\s*$/;
 
-// Obsidian wiki-link *embed* syntax (`![[target]]`) covers notes, PDFs and
-// images alike — this regex only isolates the target/size text; the caller
-// (matchSingleLineImage) still has to check the extension via
-// isLightboxImagePath before treating it as an image. Path excludes `]` and
-// `|` (so it stops at the size suffix or the closing `]]`); size suffix is
-// `|width` or `|widthxheight`, digits only. A non-numeric `|` suffix
-// (Obsidian's alt-text alias) fails to match here and the line stays raw
-// source.
 const WIKI_IMAGE_LINE_RE =
   /^ {0,3}!\[\[([^\]|]+)(?:\|(\d+)(?:x(\d+))?)?\]\]\s*$/;
 
-// HTML forms. `[^>]*?` keeps attribute scanning inside the tag; an attr
-// value containing a literal `>` is out of scope (stays raw source).
 const HTML_BARE_IMG_LINE_RE = /^ {0,3}<img\b([^>]*?)\/?\s*>\s*$/i;
 const HTML_P_WRAPPED_LINE_RE =
   /^ {0,3}<p\b([^>]*)>\s*<img\b([^>]*?)\/?\s*>\s*<\/p>\s*$/i;
@@ -126,11 +122,7 @@ const HTML_P_OPEN_LINE_RE = /^ {0,3}<p\b([^>]*)>\s*$/i;
 const HTML_IMG_ONLY_LINE_RE = /^\s*<img\b([^>]*?)\/?\s*>\s*$/i;
 const HTML_P_CLOSE_LINE_RE = /^\s*<\/p>\s*$/i;
 
-// Fence tracking mirrors the mermaid module's simplified CommonMark rules:
-// opener = 3+ backticks/tildes with ≤3 spaces indent, closer = same char,
-// same-or-longer run. Image examples inside any fenced block (```markdown
-// docs etc.) must stay raw source.
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 function buildFenceCloseRe(opener: string): RegExp {
   const ch = opener[0] === '`' ? '`' : '~';
@@ -156,7 +148,9 @@ export interface ImageTarget {
   to: number;
   /** 'center' when the wrapping <p> declares align="center", else null. */
   align: 'center' | null;
-  /** 1..n images (n > 1 only for the multi-line <p> block form). */
+  /** True when the block comes from an image-only ````carousel fence. */
+  carousel?: boolean;
+  /** 1..n images (n > 1 for multi-line <p> blocks or ````carousel blocks). */
   images: ImageSpec[];
 }
 
@@ -173,8 +167,6 @@ function readAttr(attrText: string, name: string): string | null {
 function readDimensionAttr(attrText: string, name: string): number | null {
   const raw = readAttr(attrText, name);
   if (raw === null) return null;
-  // Accept plain integers and "720px"; percentages / other CSS units are
-  // ignored (the CSS max-width cap governs anyway).
   const m = /^(\d+)(?:px)?$/.exec(raw.trim());
   return m ? Number(m[1]) : null;
 }
@@ -196,6 +188,39 @@ function parseAlign(pAttrText: string): 'center' | null {
   return readAttr(pAttrText, 'align')?.toLowerCase() === 'center' ? 'center' : null;
 }
 
+function parseImageOnlyCarousel(body: string): ImageSpec[] | null {
+  const slides = splitCarouselSlides(body);
+  if (slides.length === 0) return null;
+  const images: ImageSpec[] = [];
+  for (const slide of slides) {
+    const slideLines = slide.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (slideLines.length === 0) return null;
+    if (slideLines.length === 1) {
+      const matched = matchSingleLineImage(slideLines[0]);
+      if (!matched) return null;
+      images.push(matched.spec);
+      continue;
+    }
+    if (
+      HTML_P_OPEN_LINE_RE.test(slideLines[0]) &&
+      HTML_P_CLOSE_LINE_RE.test(slideLines[slideLines.length - 1])
+    ) {
+      const inner = slideLines.slice(1, -1);
+      if (inner.length === 0) return null;
+      for (const innerLine of inner) {
+        const m = HTML_IMG_ONLY_LINE_RE.exec(innerLine);
+        if (!m) return null;
+        const spec = parseImgAttrs(m[1]);
+        if (!spec) return null;
+        images.push(spec);
+      }
+      continue;
+    }
+    return null;
+  }
+  return images.length > 0 ? images : null;
+}
+
 export function findImageTargets(doc: CodeMirrorText): ImageTarget[] {
   const targets: ImageTarget[] = [];
   let lineNum = 1;
@@ -212,10 +237,23 @@ export function findImageTargets(doc: CodeMirrorText): ImageTarget[] {
           break;
         }
       }
-      // Open-ended fence → stop scanning entirely (conservative, mirrors the
-      // mermaid scanner): while the user is mid-typing a fence, everything
-      // below is potentially fenced content.
       if (closeLine === -1) break;
+      if (isCarouselFenceLanguage(fence[2])) {
+        const bodyLines: string[] = [];
+        for (let j = lineNum + 1; j < closeLine; j++) {
+          bodyLines.push(doc.line(j).text);
+        }
+        const carouselImages = parseImageOnlyCarousel(bodyLines.join('\n'));
+        if (carouselImages) {
+          targets.push({
+            from: line.from,
+            to: doc.line(closeLine).to,
+            align: 'center',
+            carousel: true,
+            images: carouselImages,
+          });
+        }
+      }
       lineNum = closeLine + 1;
       continue;
     }
@@ -243,11 +281,6 @@ export function findImageTargets(doc: CodeMirrorText): ImageTarget[] {
         lineNum = j + 1;
         continue;
       }
-      // Not a well-formed image-only <p> block (mixed content / missing
-      // closer) → the whole prefix INCLUDING any collected <img> lines stays
-      // raw source. Resume scanning at the line that broke the pattern so a
-      // stray `<img>` mid-broken-block doesn't render standalone while its
-      // wrapper is visibly half-typed.
       lineNum = j;
       continue;
     }
@@ -287,9 +320,6 @@ function matchSingleLineImage(
   const wiki = WIKI_IMAGE_LINE_RE.exec(text);
   if (wiki) {
     const rawSrc = wiki[1].trim();
-    // `![[...]]` is Obsidian's generic embed syntax (notes, PDFs, images);
-    // only render it here when the target is actually an image extension —
-    // otherwise a note/PDF embed would get replaced by a broken-image card.
     if (!rawSrc || !isLightboxImagePath(rawSrc)) return null;
     return {
       spec: {
@@ -317,11 +347,6 @@ function matchSingleLineImage(
 
 // ─── Src → loadable URL ─────────────────────────────────────────────────────
 
-/**
- * Percent-decode a markdown-authored path (`a%20b.png` → `a b.png`) without
- * blowing up on literal `%` in filenames (`100% done.png` → decodeURIComponent
- * throws URIError → keep the raw string).
- */
 function safeDecodePath(value: string): string {
   if (!value.includes('%')) return value;
   try {
@@ -333,34 +358,58 @@ function safeDecodePath(value: string): string {
 
 const WIN_ABS_RE = /^[A-Za-z]:[\\/]/;
 
+function applyRemoteOriginToLocalMediaUrl(
+  url: string,
+  remoteOrigin: RemoteMediaOrigin | null,
+): string | null {
+  if (!remoteOrigin) return url;
+  if (remoteOrigin.kind === 'device') {
+    return rewriteToRemoteMediaOrigin(url, remoteOrigin);
+  }
+  return isSshRewritableMediaUrl(url, remoteOrigin.workdir)
+    ? rewriteToRemoteMediaOrigin(url, remoteOrigin)
+    : null;
+}
+
 /**
  * Resolve a raw markdown src into a URL the renderer's <img> can load, or
- * null when it can't be resolved (empty, or relative with no base dir).
- * Exported for unit tests.
+ * null when it can't be resolved (empty, relative with no base dir, or
+ * outside an SSH remote workdir). Exported for unit tests.
  */
-export function resolveImageSrcToUrl(src: string, baseDir: string): string | null {
+export function resolveImageSrcToUrl(
+  src: string,
+  baseDir: string,
+  remoteOrigin: RemoteMediaOrigin | null = null,
+): string | null {
   if (!src) return null;
   if (
     src.startsWith('data:') ||
     src.startsWith('http://') ||
     src.startsWith('https://') ||
+    src.startsWith('cindy-remote-media://')
+  ) {
+    return src;
+  }
+  if (
     src.startsWith('xdt-image://') ||
     src.startsWith('cindy-media://') ||
     src.startsWith('xdt-file://')
   ) {
-    return src;
+    return applyRemoteOriginToLocalMediaUrl(src, remoteOrigin);
   }
   if (src.startsWith('file://')) {
-    // resolveLocalPath already strips the scheme + decodes + fixes the
-    // Windows leading-slash form; baseDir is irrelevant for absolute URLs.
-    return toLocalFileUrl(resolveLocalPath(src, baseDir || '/'));
+    if (remoteOrigin && isFileUrlHostHref(src, baseDir || '/')) return null;
+    const absPath = normalizeResolvedPathSegments(resolveLocalPath(src, baseDir || '/'));
+    return applyRemoteOriginToLocalMediaUrl(toLocalFileUrl(absPath), remoteOrigin);
   }
   const decoded = safeDecodePath(src);
   if (decoded.startsWith('/') || WIN_ABS_RE.test(decoded)) {
-    return toLocalFileUrl(decoded);
+    const absPath = normalizeResolvedPathSegments(decoded);
+    return applyRemoteOriginToLocalMediaUrl(toLocalFileUrl(absPath), remoteOrigin);
   }
   if (!baseDir) return null;
-  return toLocalFileUrl(resolveLocalPath(decoded, baseDir));
+  const absPath = normalizeResolvedPathSegments(resolveLocalPath(decoded, baseDir));
+  return applyRemoteOriginToLocalMediaUrl(toLocalFileUrl(absPath), remoteOrigin);
 }
 
 // ─── Lightbox event protocol ────────────────────────────────────────────────
@@ -370,8 +419,15 @@ export function resolveImageSrcToUrl(src: string, baseDir: string): string | nul
 // Same bridge pattern as MERMAID_LIGHTBOX_EVENT.
 export const MD_IMAGE_LIGHTBOX_EVENT = 'xdt-open-md-image-lightbox';
 
+export interface MdImageLightboxGalleryEntry {
+  src: string;
+  galleryId: string;
+}
+
 export interface MdImageLightboxOpenDetail {
   src: string;
+  gallery?: readonly MdImageLightboxGalleryEntry[];
+  galleryId?: string;
 }
 
 // ─── Widget ─────────────────────────────────────────────────────────────────
@@ -379,6 +435,8 @@ export interface MdImageLightboxOpenDetail {
 interface ResolvedImageItem extends ImageSpec {
   /** Resolved loadable URL, or null when unresolvable. */
   url: string | null;
+  /** Stable id within the document's gallery when url is resolvable. */
+  galleryId: string | null;
 }
 
 class MarkdownImageWidget extends WidgetType {
@@ -386,22 +444,28 @@ class MarkdownImageWidget extends WidgetType {
     private readonly items: ResolvedImageItem[],
     private readonly align: 'center' | null,
     private readonly locale: string,
+    private readonly carousel: boolean,
+    private readonly docGallery: readonly MdImageLightboxGalleryEntry[],
+    private readonly docGalleryKey: string,
   ) {
     super();
   }
 
   eq(other: MarkdownImageWidget): boolean {
-    // `url` folds in the base dir, so a facet flip that changes resolution
-    // produces a non-equal widget → fresh toDOM. `locale` is part of equality
-    // for the same reason as the mermaid widget: i18n strings are read at
-    // toDOM time. Position is intentionally NOT compared — typing elsewhere
-    // must reuse the loaded <img> DOM instead of re-fetching it.
-    if (other.align !== this.align || other.locale !== this.locale) return false;
+    if (
+      other.align !== this.align ||
+      other.locale !== this.locale ||
+      other.carousel !== this.carousel ||
+      other.docGalleryKey !== this.docGalleryKey
+    ) {
+      return false;
+    }
     if (other.items.length !== this.items.length) return false;
     return this.items.every((a, i) => {
       const b = other.items[i];
       return (
         a.url === b.url &&
+        a.galleryId === b.galleryId &&
         a.src === b.src &&
         a.alt === b.alt &&
         a.title === b.title &&
@@ -417,10 +481,133 @@ class MarkdownImageWidget extends WidgetType {
     if (this.align === 'center') root.classList.add('cm-md-image-center');
     root.setAttribute('contenteditable', 'false');
 
+    if (this.carousel) {
+      root.appendChild(this.buildCarousel());
+      return root;
+    }
+
     for (const item of this.items) {
       root.appendChild(this.buildItem(item));
     }
     return root;
+  }
+
+  private buildCarousel(): HTMLElement {
+    const card = document.createElement('div');
+    card.className = 'cm-md-carousel-card';
+    card.setAttribute('data-cm-md-carousel', '');
+
+    const stage = document.createElement('div');
+    stage.className = 'cm-md-carousel-stage';
+    card.appendChild(stage);
+
+    let activeIndex = 0;
+    const total = this.items.length;
+
+    const caption = document.createElement('div');
+    caption.className = 'cm-md-carousel-caption';
+
+    const counter = document.createElement('span');
+    counter.className = 'cm-md-carousel-counter';
+
+    const dotButtons: HTMLButtonElement[] = [];
+
+    const renderActive = () => {
+      const current = this.items[activeIndex];
+      stage.replaceChildren(this.buildItem(current));
+      if (current.alt) {
+        caption.textContent = current.alt;
+        caption.style.display = '';
+      } else {
+        caption.textContent = '';
+        caption.style.display = 'none';
+      }
+      counter.textContent = `${activeIndex + 1} / ${total}`;
+      dotButtons.forEach((btn, idx) => {
+        const selected = idx === activeIndex;
+        btn.classList.toggle('cm-md-carousel-dot-active', selected);
+        btn.setAttribute('aria-selected', selected ? 'true' : 'false');
+      });
+    };
+
+    const step = (delta: number) => {
+      if (total <= 1) return;
+      activeIndex = (activeIndex + delta + total) % total;
+      renderActive();
+    };
+
+    card.appendChild(caption);
+
+    if (total > 1) {
+      const bar = document.createElement('div');
+      bar.className = 'cm-md-carousel-bar';
+
+      const prevBtn = document.createElement('button');
+      prevBtn.type = 'button';
+      prevBtn.className = 'cm-md-carousel-btn';
+      prevBtn.textContent = '‹';
+      prevBtn.setAttribute('aria-label', i18n.t('chat.media.prevImage'));
+      prevBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        step(-1);
+      });
+
+      const center = document.createElement('div');
+      center.className = 'cm-md-carousel-meta';
+
+      if (total <= 12) {
+        const dots = document.createElement('div');
+        dots.className = 'cm-md-carousel-dots';
+        dots.setAttribute('role', 'tablist');
+        for (let i = 0; i < total; i++) {
+          const dot = document.createElement('button');
+          dot.type = 'button';
+          dot.className = 'cm-md-carousel-dot';
+          dot.setAttribute('role', 'tab');
+          dot.setAttribute('aria-label', `${i + 1} / ${total}`);
+          dot.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            activeIndex = i;
+            renderActive();
+          });
+          dotButtons.push(dot);
+          dots.appendChild(dot);
+        }
+        center.appendChild(dots);
+      }
+      center.appendChild(counter);
+
+      const nextBtn = document.createElement('button');
+      nextBtn.type = 'button';
+      nextBtn.className = 'cm-md-carousel-btn';
+      nextBtn.textContent = '›';
+      nextBtn.setAttribute('aria-label', i18n.t('chat.media.nextImage'));
+      nextBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        step(1);
+      });
+
+      bar.append(prevBtn, center, nextBtn);
+      card.appendChild(bar);
+
+      card.addEventListener('keydown', (ev) => {
+        if (ev.key === 'ArrowLeft') {
+          ev.preventDefault();
+          ev.stopPropagation();
+          step(-1);
+        } else if (ev.key === 'ArrowRight') {
+          ev.preventDefault();
+          ev.stopPropagation();
+          step(1);
+        }
+      });
+    }
+
+    renderActive();
+    return card;
   }
 
   private buildItem(item: ResolvedImageItem): HTMLElement {
@@ -432,20 +619,15 @@ class MarkdownImageWidget extends WidgetType {
       return holder;
     }
     const url = item.url;
+    const galleryId = item.galleryId ?? undefined;
 
     const img = document.createElement('img');
     img.src = url;
     img.alt = item.alt;
     if (item.title) img.title = item.title;
-    // Honor authored dimensions (README `width="720"` etc.); the theme's
-    // max-width:100% cap still prevents overflow on narrow panes.
     if (item.width !== null) img.style.width = `${item.width}px`;
     if (item.height !== null) img.style.height = `${item.height}px`;
     img.draggable = false;
-    // Native lazy loading keeps offscreen images from stampeding disk reads
-    // when a doc has dozens of them; CM's own mutation observer picks up the
-    // height change on load, no requestMeasure needed (mermaid learned this
-    // the hard way).
     img.loading = 'lazy';
 
     let loaded = false;
@@ -473,7 +655,10 @@ class MarkdownImageWidget extends WidgetType {
       ev.stopPropagation();
       window.dispatchEvent(
         new CustomEvent<MdImageLightboxOpenDetail>(MD_IMAGE_LIGHTBOX_EVENT, {
-          detail: { src: url },
+          detail: {
+            src: url,
+            ...(this.docGallery.length > 0 ? { gallery: this.docGallery, galleryId } : {}),
+          },
         }),
       );
     };
@@ -503,13 +688,14 @@ class MarkdownImageWidget extends WidgetType {
   }
 }
 
-// ─── StateField: scan whole doc on docChange / baseDir / locale flip ───────
+// ─── StateField: scan whole doc on docChange / baseDir / origin / locale flip
 export const markdownImageDecorationField = StateField.define<DecorationSet>({
   create(state) {
     return buildDecorations(
       state.doc,
       state.facet(imageBaseDirFacet),
       state.facet(imageLocaleFacet),
+      state.facet(imageRemoteOriginFacet),
     );
   },
   update(value, tr) {
@@ -517,10 +703,17 @@ export const markdownImageDecorationField = StateField.define<DecorationSet>({
     const nextBase = tr.state.facet(imageBaseDirFacet);
     const prevLocale = tr.startState.facet(imageLocaleFacet);
     const nextLocale = tr.state.facet(imageLocaleFacet);
-    if (!tr.docChanged && prevBase === nextBase && prevLocale === nextLocale) {
+    const prevOrigin = tr.startState.facet(imageRemoteOriginFacet);
+    const nextOrigin = tr.state.facet(imageRemoteOriginFacet);
+    if (
+      !tr.docChanged &&
+      prevBase === nextBase &&
+      prevLocale === nextLocale &&
+      remoteOriginsEqual(prevOrigin, nextOrigin)
+    ) {
       return value;
     }
-    return buildDecorations(tr.state.doc, nextBase, nextLocale);
+    return buildDecorations(tr.state.doc, nextBase, nextLocale, nextOrigin);
   },
   provide: (f) => EditorView.decorations.from(f),
 });
@@ -529,23 +722,41 @@ function buildDecorations(
   doc: CodeMirrorText,
   baseDir: string,
   locale: string,
+  remoteOrigin: RemoteMediaOrigin | null,
 ): DecorationSet {
   const targets = findImageTargets(doc);
   if (targets.length === 0) return Decoration.none;
+
+  const docGallery: MdImageLightboxGalleryEntry[] = [];
+  const resolvedTargets = targets.map((t) => {
+    const items: ResolvedImageItem[] = t.images.map((spec) => {
+      const url = resolveImageSrcToUrl(spec.src, baseDir, remoteOrigin);
+      if (url) {
+        const galleryId = `md-doc-img-${docGallery.length}`;
+        docGallery.push({ src: url, galleryId });
+        return { ...spec, url, galleryId };
+      }
+      return { ...spec, url: null, galleryId: null };
+    });
+    return { target: t, items };
+  });
+
+  const docGalleryKey = docGallery.map((g) => `${g.galleryId}:${g.src}`).join('\u0000');
+
   const builder = new RangeSetBuilder<Decoration>();
-  for (const t of targets) {
+  for (const { target, items } of resolvedTargets) {
     builder.add(
-      t.from,
-      t.to,
+      target.from,
+      target.to,
       Decoration.replace({
         block: true,
         widget: new MarkdownImageWidget(
-          t.images.map((spec) => ({
-            ...spec,
-            url: resolveImageSrcToUrl(spec.src, baseDir),
-          })),
-          t.align,
+          items,
+          target.align,
           locale,
+          Boolean(target.carousel),
+          docGallery,
+          docGalleryKey,
         ),
       }),
     );

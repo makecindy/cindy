@@ -152,6 +152,29 @@ export function nextBotModelRoute(
   return null;
 }
 
+/** The candidate and whether the companion has any alternative for this execution location. */
+export function selectBotFallbackRoute(
+  chain: readonly BotModelRoute[],
+  current: Pick<BotModelRoute, 'harness' | 'model' | 'providerId' | 'agentDeviceId'>,
+  visited: readonly string[],
+  remoteHostId: string | null | undefined,
+  readMergedAccount: (providerId: string) => string | undefined,
+  eligibleForSchedule?: (candidate: BotModelRoute) => boolean,
+) {
+  const currentIndex = botModelRouteIndex(chain, current);
+  if (eligibleForSchedule && currentIndex < 0) return { route: null, routeLocked: undefined };
+  const usable = (candidate: BotModelRoute) => {
+    if (eligibleForSchedule && !eligibleForSchedule(candidate)) return false;
+    if (remoteHostId) return candidate.harness !== 'acp' && candidate.harness === current.harness;
+    // A plugin or another device owns its provider namespace. Placement here describes local accounts.
+    return candidate.harness === 'acp' || !!candidate.agentDeviceId || !candidate.providerId
+      || !readMergedAccount(candidate.providerId);
+  };
+  const route = nextBotModelRoute(chain, current, visited, usable);
+  const routeLocked = !route && !chain.some((candidate, index) => index !== currentIndex && usable(candidate));
+  return { route, routeLocked };
+}
+
 /** A saved model selection supersedes an earlier runtime-only fallback. */
 export function botProfileModelSelectionChanged(previous: Record<string, unknown>, next: Record<string, unknown>): boolean {
   // Legacy profiles may contain only modelChain. Compare the same canonical

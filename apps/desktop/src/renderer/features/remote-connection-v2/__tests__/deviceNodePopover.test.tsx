@@ -15,8 +15,11 @@ vi.mock('react-i18next', async () => {
   const { default: common } = await import('../../../i18n/locales/en/common.json');
   return {
     useTranslation: () => ({
-      t: (key: string, options?: { value?: number; version?: string }) => {
+      t: (key: string, options?: { value?: number; version?: string; transport?: string }) => {
         if (key === 'settings.remoteControl.v2.ms') return `${options?.value} ms`;
+        if (key === 'settings.remoteControl.v2.popover.relayLegSelf' || key === 'settings.remoteControl.v2.popover.relayLegPeer') {
+          return `${key}(${options?.transport})`;
+        }
         if (key === 'settings.devices.apps.cindy') return common.settings.devices.apps.cindy;
         if (key === 'settings.devices.apps.cindyFriend') return common.settings.devices.apps.cindyFriend;
         if (key === 'settings.remoteControl.v2.popover.version') {
@@ -197,15 +200,22 @@ describe('DeviceNodePopover', () => {
   });
 
   // 2026-11-19 用户要求：每台电脑之间的链接显示实际底层传输协议（UDP / WS / WebRTC）。
-  // 生产入口:DeviceNodePopover 路径行。覆盖缺口:此前设备卡片路径行只写协议和直连/中转,没有底层传输协议。
-  // 最小失败输入:Agent-Net 直连/经中转(UDP/WS)、Device Link 直连(WebRTC)/经中转(WS)与切换重连中。tier: unit。
+  // 2026-11-27 用户反馈：经中转的 Agent-Net 两段各走各的，卡片原来只写一种(跟着本机那段)。改为「本机 X · 对方 Y」,
+  // 与拓扑图上两段线一致;对方是旧版没说时只写本机那段。
+  // 生产入口:DeviceNodePopover「连接方式」行。最小失败输入:本机 WS、对方 UDP 的经中转 Agent-Net 设备(旧逻辑只写一种);
+  // 另含 Agent-Net 直连(UDP)、Device Link 直连(WebRTC)/经中转(WS)。tier: unit。
+  const ws = 'settings.remoteControl.v2.relayTransport.websocket';
+  const udp = 'settings.remoteControl.v2.relayTransport.udp';
+  const selfLeg = (transport: string) => `settings.remoteControl.v2.popover.relayLegSelf(${transport})`;
+  const peerLeg = (transport: string) => `settings.remoteControl.v2.popover.relayLegPeer(${transport})`;
   it.each([
-    ['Agent-Net direct UDP', { encrypted: true, path: 'direct' as const, transport: 'udp' as const }, 'settings.remoteControl.v2.relayTransport.udp'],
-    ['Agent-Net relay WS', { encrypted: true, path: 'relay' as const, status: 'relay' as const, transport: 'websocket' as const }, 'settings.remoteControl.v2.relayTransport.websocket'],
-    ['Device Link direct WebRTC', { encrypted: false, path: 'direct' as const, transport: 'webrtc' as const }, 'settings.remoteControl.v2.linkTransport.webrtc'],
-    ['Device Link relay WS', { encrypted: false, path: 'relay' as const, status: 'relay' as const, transport: 'websocket' as const }, 'settings.remoteControl.v2.relayTransport.websocket'],
-  ])('设备卡片路径行显示底层传输协议: %s', (_label, partial, expectedTransport) => {
-    render(<DeviceNodePopover node={node(partial)} relayName="Cindy" onRemoteDesktop={vi.fn()} />);
+    ['Agent-Net direct UDP', { encrypted: true, path: 'direct' as const, transport: 'udp' as const }, null, udp],
+    ['Agent-Net relay, this WS / peer UDP', { encrypted: true, path: 'relay' as const, status: 'relay' as const, transport: 'udp' as const }, 'websocket' as const, `${selfLeg(ws)} · ${peerLeg(udp)}`],
+    ['Agent-Net relay, peer silent', { encrypted: true, path: 'relay' as const, status: 'relay' as const, transport: null }, 'udp' as const, selfLeg(udp)],
+    ['Device Link direct WebRTC', { encrypted: false, path: 'direct' as const, transport: 'webrtc' as const }, null, 'settings.remoteControl.v2.linkTransport.webrtc'],
+    ['Device Link relay WS', { encrypted: false, path: 'relay' as const, status: 'relay' as const, transport: 'websocket' as const }, 'udp' as const, ws],
+  ])('设备卡片连接方式显示底层传输协议: %s', (_label, partial, selfRelayTransport, expectedTransport) => {
+    render(<DeviceNodePopover node={node(partial)} relayName="Cindy" selfRelayTransport={selfRelayTransport} onRemoteDesktop={vi.fn()} />);
     expect(screen.getByText(`· ${expectedTransport}`)).toBeTruthy();
   });
 });

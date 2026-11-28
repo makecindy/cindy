@@ -168,10 +168,11 @@ export interface AgentInputChatMessage {
 }
 
 export interface AgentInputCreateOpts {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
   workingDir: string;
   model: string;
   providerId?: string | null;
+  agentDeviceId?: string;
   orcaRole?: 'lead' | 'worker' | null;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
@@ -513,6 +514,8 @@ export interface AgentInputQueuedMessage {
 
 export type AgentInputDelivery = 'turn' | 'steer';
 
+export type ReconnectHandoff = 'disabled' | 'exhausted';
+
 export type AgentInputRecovery =
   | { kind: 'queue-head'; clientId: string }
   | { kind: 'active-turn'; item: AgentInputQueuedMessage }
@@ -585,6 +588,8 @@ export interface AgentInputProjection {
   errorPersistId?: string | null;
   /** Stable error reason for live clients; older controlled hosts may omit it. */
   errorReason?: string | null;
+  /** Why this reconnect timeout needs manual continuation, when decided by the execution host. */
+  reconnectHandoff?: ReconnectHandoff;
   /** Bounded details for tool-loop errors; never carries the raw provider message. */
   toolLoop?: AgentInputToolLoopDetails | null;
   /** Final-request output usage; optional for older controlled hosts. */
