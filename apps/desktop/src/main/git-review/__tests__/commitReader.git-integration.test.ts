@@ -7,7 +7,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 vi.setConfig({ testTimeout: process.platform === 'win32' ? 60_000 : 30_000 });
 
 import { TestDirectoryTemplate } from '../../../test/vitest/testDirectoryTemplate';
-import { listBranchCommits, readCommitDiff } from '../commitReader';
+import { listBranchCommits, listRecentCommits, readCommitDiff } from '../commitReader';
 import { runGit } from '../gitRunner';
 import type { ReviewScope } from '../types';
 
@@ -95,6 +95,27 @@ afterAll(async () => {
 });
 
 describe('git-review commitReader', () => {
+  // Tier: git-integration — history ordering and upstream resolution need real refs.
+  it('lists recent commits newest-first and resolves the upstream tip', async () => {
+    const repoPath = await initRepo();
+    await fs.writeFile(path.join(repoPath, 'note.txt'), 'one\n');
+    const rootOid = await commitAll(repoPath, 'root');
+    await fs.writeFile(path.join(repoPath, 'note.txt'), 'two\n');
+    const headOid = await commitAll(repoPath, 'second');
+
+    const remotePath = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-git-review-history-'));
+    repos.push(remotePath);
+    await runGit(['init', '--bare'], { cwd: remotePath });
+    await runGit(['remote', 'add', 'origin', remotePath], { cwd: repoPath });
+    await runGit(['push', '--set-upstream', 'origin', 'main'], { cwd: repoPath });
+
+    const result = await listRecentCommits(scope(repoPath), 10);
+
+    expect(result.commits.map((commit) => commit.oid)).toEqual([headOid, rootOid]);
+    expect(result.commits.map((commit) => commit.title)).toEqual(['second', 'root']);
+    expect(result.upstreamOid).toBe(headOid);
+  });
+
   it('lists branch commits from base..HEAD and reads a normal commit diff against first parent', async () => {
     const repoPath = await initRepo();
     await fs.writeFile(path.join(repoPath, 'note.txt'), 'one\n');

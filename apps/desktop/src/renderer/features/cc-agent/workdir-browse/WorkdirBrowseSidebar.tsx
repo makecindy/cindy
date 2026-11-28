@@ -801,7 +801,6 @@ export function WorkdirBrowseSidebar({
                   new CustomEvent('workdir-files-reverted', { detail: { workdir } }),
                 );
               }}
-              onRefresh={gitChanges.refresh}
             />
           ) : filterQuery ? (
             <FilterResultList

@@ -240,6 +240,13 @@ export interface ReviewCommitListData {
   warning: ReviewBranchDiffWarning | null;
 }
 
+export interface ReviewHistoryData {
+  scope: ReviewScope;
+  commits: ReviewCommit[];
+  /** Resolved upstream tip; null when the branch has no upstream. */
+  upstreamOid: string | null;
+}
+
 export interface ReviewCommitDiffData {
   scope: ReviewScope;
   commitOid: string;
@@ -441,3 +448,9 @@ export interface ReviewPushNeedsForceResult {
 }
 
 export type ReviewPushResult = ReviewPushPushedResult | ReviewPushNeedsForceResult;
+
+export interface ReviewPullResult {
+  data: ReviewData;
+  stdout: string;
+  stderr: string;
+}

@@ -10811,7 +10811,21 @@
       "pushBranch": "Push ブランチ：{{branch}}",
       "aiCommitSummary": "AI 要約",
       "commitToGithub": "GitHub にコミット",
-      "changedOnly": "変更されたファイルのみ表示"
+      "changedOnly": "変更されたファイルのみ表示",
+      "unstagedGroup": "未ステージ",
+      "stagedGroup": "ステージ済み",
+      "history": "履歴",
+      "historyEmpty": "コミットはまだありません",
+      "historyUnpushed": "未プッシュ",
+      "pull": "プル",
+      "pullSuccess": "リモートの更新を取得しました",
+      "pullFailedTitle": "プルに失敗しました",
+      "remoteBehind_one": "リモートに新しいバージョンが 1 件あります。先にプルしてください",
+      "remoteBehind_other": "リモートに新しいバージョンが {{count}} 件あります。先にプルしてください",
+      "remoteDiverged": "ローカルとリモートが分岐しています：{{ahead}} 件先行、{{behind}} 件遅れ。先にプルして競合を解決してください",
+      "localAhead_one": "ローカルコミットが 1 件未プッシュです",
+      "localAhead_other": "ローカルコミットが {{count}} 件未プッシュです",
+      "pullBeforePush": "リモートに新しいコミットがあります。先にプルしてください"
     },
     "browser": {
       "newTab": "新しいタブ",

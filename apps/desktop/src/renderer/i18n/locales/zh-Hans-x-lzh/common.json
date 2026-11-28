@@ -10811,7 +10811,21 @@
       "pushBranch": "推分支：{{branch}}",
       "aiCommitSummary": "AI 总结",
       "commitToGithub": "提交于 GitHub",
-      "changedOnly": "仅示已改之卷"
+      "changedOnly": "仅示已改之卷",
+      "unstagedGroup": "未暂存",
+      "stagedGroup": "已暂存",
+      "history": "史",
+      "historyEmpty": "尚无提交",
+      "historyUnpushed": "未推",
+      "pull": "拉取",
+      "pullSuccess": "已得远端之新",
+      "pullFailedTitle": "拉取未成",
+      "remoteBehind_one": "远端有新本一，请先拉取而后提交",
+      "remoteBehind_other": "远端有新本 {{count}}，请先拉取而后提交",
+      "remoteDiverged": "本地与远端已分：领先 {{ahead}}，落后 {{behind}}，请先拉取并理其争",
+      "localAhead_one": "本地领先一本，尚未推",
+      "localAhead_other": "本地领先 {{count}} 本，尚未推",
+      "pullBeforePush": "远端有新本，请先拉取而后推"
     },
     "browser": {
       "newTab": "新分页",

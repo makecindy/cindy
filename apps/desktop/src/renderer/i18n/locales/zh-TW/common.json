@@ -10811,7 +10811,21 @@
       "pushBranch": "推送分支：{{branch}}",
       "aiCommitSummary": "AI 摘要",
       "commitToGithub": "提交到 GitHub",
-      "changedOnly": "僅顯示已變更檔案"
+      "changedOnly": "僅顯示已變更檔案",
+      "unstagedGroup": "未暫存",
+      "stagedGroup": "已暫存",
+      "history": "歷史",
+      "historyEmpty": "暫無提交記錄",
+      "historyUnpushed": "未推送",
+      "pull": "拉取",
+      "pullSuccess": "已拉取遠端更新",
+      "pullFailedTitle": "拉取失敗",
+      "remoteBehind_one": "遠端有 1 個新版本，請先拉取再提交",
+      "remoteBehind_other": "遠端有 {{count}} 個新版本，請先拉取再提交",
+      "remoteDiverged": "本地與遠端已分叉：領先 {{ahead}}，落後 {{behind}}，請先拉取並處理衝突",
+      "localAhead_one": "本地領先 1 個版本，尚未推送",
+      "localAhead_other": "本地領先 {{count}} 個版本，尚未推送",
+      "pullBeforePush": "遠端有新版本，請先拉取再推送"
     },
     "browser": {
       "newTab": "新標籤",

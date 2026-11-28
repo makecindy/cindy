@@ -42,6 +42,7 @@ export type GitReviewReadApi = Pick<
   | 'get'
   | 'summary'
   | 'commits'
+  | 'history'
   | 'commitDiff'
   | 'branchDiff'
   | 'fileDiff'
@@ -94,6 +95,7 @@ export function gitReviewApiFor(deviceId: string | null | undefined): GitReviewR
     get: (p) => invokeOp(deviceId, 'get', p),
     summary: (p) => invokeOp(deviceId, 'summary', p),
     commits: (p) => invokeOp(deviceId, 'commits', p),
+    history: (p) => invokeOp(deviceId, 'history', p),
     commitDiff: (p) => invokeOp(deviceId, 'commit-diff', p),
     branchDiff: (p) => invokeOp(deviceId, 'branch-diff', p),
     fileDiff: (p) => invokeOp(deviceId, 'file-diff', p),

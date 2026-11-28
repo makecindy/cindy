@@ -483,7 +483,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   }, [crossSession, descriptor]);
   const setDescriptor = useCallback(
     (nextDescriptor: ReviewSourceDescriptor) => {
-      ctx.patchState(reviewSourceStatePatch(nextDescriptor));
+      ctx.patchState({ ...reviewSourceStatePatch(nextDescriptor), commitSourcePinned: false });
     },
     [ctx],
   );
@@ -1078,11 +1078,20 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
         commits,
         commitsState.data !== null,
         commitsState.loading,
-      )
+      ) &&
+      !state.commitSourcePinned
     ) {
       setSource('branch');
     }
-  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, setSource, source]);
+  }, [
+    commits,
+    commitsState.data,
+    commitsState.loading,
+    selectedCommitOid,
+    setSource,
+    source,
+    state.commitSourcePinned,
+  ]);
 
   const togglePath = useCallback(
     (id: string) => {

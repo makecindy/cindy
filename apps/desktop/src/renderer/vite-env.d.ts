@@ -5013,6 +5013,7 @@ interface ElectronAPI {
     }) => Promise<import('@/lib/gitReview.types').ReviewData>;
     commitMessage: (params: {
       sessionId: string;
+      includeUnstaged?: boolean;
     }) => Promise<import('@/lib/gitReview.types').ReviewCommitMessageDraft>;
     summary: (params: {
       sessionId: string;
@@ -5021,6 +5022,10 @@ interface ElectronAPI {
       sessionId: string;
       baseRef?: string | null;
     }) => Promise<import('@/lib/gitReview.types').ReviewCommitListData>;
+    history: (params: {
+      sessionId: string;
+      limit?: number;
+    }) => Promise<import('@/lib/gitReview.types').ReviewHistoryData>;
     commitDiff: (params: {
       sessionId: string;
       oid: string;
@@ -5087,6 +5092,9 @@ interface ElectronAPI {
       sessionId: string;
       confirmForce?: import('@/lib/gitReview.types').ReviewPushConfirmForce;
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
+    pull: (params: {
+      sessionId: string;
+    }) => Promise<import('@/lib/gitReview.types').ReviewPullResult>;
   };
 
   taskManagement: import('../shared/taskManagement').TaskManagementApi;

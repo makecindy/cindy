@@ -10855,7 +10855,21 @@
       "pushBranch": "Push branch: {{branch}}",
       "aiCommitSummary": "AI summary",
       "commitToGithub": "Commit to GitHub",
-      "changedOnly": "Show changed files only"
+      "changedOnly": "Show changed files only",
+      "unstagedGroup": "Changes",
+      "stagedGroup": "Staged",
+      "history": "History",
+      "historyEmpty": "No commits yet",
+      "historyUnpushed": "Unpushed",
+      "pull": "Pull",
+      "pullSuccess": "Pulled remote updates",
+      "pullFailedTitle": "Pull failed",
+      "remoteBehind_one": "{{count}} new remote version. Pull before committing.",
+      "remoteBehind_other": "{{count}} new remote versions. Pull before committing.",
+      "remoteDiverged": "Local and remote have diverged: {{ahead}} ahead, {{behind}} behind. Pull and resolve conflicts first.",
+      "localAhead_one": "{{count}} local commit not pushed",
+      "localAhead_other": "{{count}} local commits not pushed",
+      "pullBeforePush": "Remote has new commits; pull before pushing."
     },
     "browser": {
       "newTab": "New tab",

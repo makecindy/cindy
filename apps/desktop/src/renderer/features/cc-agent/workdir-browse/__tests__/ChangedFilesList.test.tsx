@@ -7,6 +7,7 @@ import type { ReviewData, ReviewFileTarget } from '@/lib/gitReview.types';
 import { buildDeterministicCommitMessage } from '../../../../../shared/gitCommitMessage';
 import { ChangedFilesList } from '../ChangedFilesList';
 import type { WorkdirGitFileChange } from '../lib/workdirGitStatus';
+import type { ReviewHistoryData } from '../../../../../shared/gitReviewWire';
 
 const confirm = vi.fn(async () => true);
 vi.mock('react-i18next', () => ({
@@ -76,13 +77,54 @@ const commit = vi.fn(
   async (_params: { sessionId: string; message: string; includeUnstaged?: boolean }) => {
     void _params;
     return {
-      data: {} as ReviewData,
+      data: {
+        scope: {
+          aheadBehind: { ahead: 0, behind: 0, upstream: 'origin/main', stale: false },
+        },
+      } as ReviewData,
       commitOid: '1234567890abcdef',
       stdout: '',
       stderr: '',
     };
   },
 );
+const stageFile = vi.fn(
+  async (_params: { sessionId: string; targets: ReviewFileTarget[] }) => {
+    void _params;
+    return {
+      data: {} as ReviewData,
+      operation: { succeeded: ['a.ts'], failed: [], partial: false, action: 'stage' as const },
+    };
+  },
+);
+const unstageFile = vi.fn(
+  async (_params: { sessionId: string; targets: ReviewFileTarget[] }) => {
+    void _params;
+    return {
+      data: {} as ReviewData,
+      operation: { succeeded: ['a.ts'], failed: [], partial: false, action: 'unstage' as const },
+    };
+  },
+);
+const stageAll = vi.fn(
+  async (_params: { sessionId: string; targets: ReviewFileTarget[] }) => {
+    void _params;
+    return {
+      data: {} as ReviewData,
+      operation: { succeeded: ['a.ts'], failed: [], partial: false, action: 'stage' as const },
+    };
+  },
+);
+const history = vi.fn(
+  async (_params: { sessionId: string; limit?: number }): Promise<ReviewHistoryData> => {
+    void _params;
+    return { scope: {} as never, commits: [], upstreamOid: null };
+  },
+);
+const pull = vi.fn(async (_params: { sessionId: string }) => {
+  void _params;
+  return { data: {} as ReviewData, stdout: '', stderr: '' };
+});
 const commitMessage = vi.fn(async (_params: { sessionId: string }) => {
   void _params;
   return {
@@ -221,7 +263,19 @@ describe('ChangedFilesList', () => {
     vi.clearAllMocks();
     window.localStorage.clear();
     vi.stubGlobal('electronAPI', {
-      gitReview: { commit, commitMessage, discardFile, discardAll, push, unstageAll },
+      gitReview: {
+        commit,
+        commitMessage,
+        discardFile,
+        discardAll,
+        push,
+        pull,
+        unstageAll,
+        stageFile,
+        stageAll,
+        unstageFile,
+        history,
+      },
       openExternal,
     });
   });
@@ -229,18 +283,16 @@ describe('ChangedFilesList', () => {
   it('shows aggregated changes and reverts one file or all files', async () => {
     const { onGitStateChanged } = renderList();
     expect(screen.getByText('rightSidebar.fileBrowser.changes')).toBeTruthy();
-    const row = screen.getByRole('button', { name: /a\.ts/ });
+    const rows = screen.getAllByRole('button', { name: /a\.ts/ });
+    expect(rows).toHaveLength(2);
     await act(async () => {
       fireEvent.click(
-        within(row).getByRole('button', {
+        within(rows[0]).getByRole('button', {
           name: 'rightSidebar.review.actions.discard',
         }),
       );
     });
-    expect(unstageAll).toHaveBeenCalledTimes(1);
-    expect(unstageAll.mock.calls[0][0].targets).toEqual([
-      { path: 'apps/desktop/src/a.ts', oldPath: null, source: 'staged' },
-    ]);
+    expect(unstageAll).not.toHaveBeenCalled();
     expect(discardAll).toHaveBeenCalledTimes(1);
     expect(discardAll.mock.calls[0][0].targets).toEqual([
       { path: 'apps/desktop/src/a.ts', oldPath: null, source: 'unstaged' },
@@ -252,8 +304,11 @@ describe('ChangedFilesList', () => {
         screen.getByRole('button', { name: 'rightSidebar.review.actions.discardAll' }),
       );
     });
-    expect(unstageAll).toHaveBeenCalledTimes(2);
+    expect(unstageAll).toHaveBeenCalledTimes(1);
     expect(discardAll).toHaveBeenCalledTimes(2);
+    expect(unstageAll.mock.calls[0][0].targets).toEqual([
+      { path: 'apps/desktop/src/a.ts', oldPath: null, source: 'staged' },
+    ]);
     expect(discardAll.mock.calls[1][0].targets).toEqual([
       { path: 'apps/desktop/src/a.ts', oldPath: null, source: 'unstaged' },
       { path: 'apps/desktop/new.ts', oldPath: null, source: 'unstaged' },
@@ -266,7 +321,8 @@ describe('ChangedFilesList', () => {
     const messageField = screen.getByRole('textbox', {
       name: 'rightSidebar.fileBrowser.commitMessage',
     }) as HTMLTextAreaElement;
-    expect(messageField.value).toBe(buildDeterministicCommitMessage(data));
+    expect(messageField.value).toContain('apps/desktop/src/a.ts');
+    expect(messageField.value).not.toContain('apps/desktop/new.ts');
 
     await act(async () => {
       fireEvent.click(
@@ -276,6 +332,10 @@ describe('ChangedFilesList', () => {
     expect(messageField.value).toBe(
       'feat(desktop): 增加 AI 提交信息总结\n\n- 根据代码差异生成提交说明',
     );
+    expect(commitMessage).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      includeUnstaged: false,
+    });
 
     const commitButton = screen.getByRole('button', {
       name: 'rightSidebar.fileBrowser.commitToGithub',
@@ -286,7 +346,7 @@ describe('ChangedFilesList', () => {
     expect(commit).toHaveBeenCalledWith({
       sessionId: 'session-1',
       message: 'feat(desktop): 增加 AI 提交信息总结\n\n- 根据代码差异生成提交说明',
-      includeUnstaged: true,
+      includeUnstaged: false,
     });
     expect(buildDeterministicCommitMessage(data)).toContain(
       [
@@ -305,6 +365,96 @@ describe('ChangedFilesList', () => {
     });
     expect(push).toHaveBeenCalledWith({ sessionId: 'session-1' });
     expect(onGitStateChanged).toHaveBeenCalledTimes(3);
+  });
+
+  it('stages and unstages files from the grouped list', async () => {
+    // Tier: unit — verifies per-source stage targets; real git mutations are covered below/main tests.
+    renderList();
+    const rows = screen.getAllByRole('button', { name: /a\.ts/ });
+    await act(async () => {
+      fireEvent.click(
+        within(rows[0]).getByRole('button', {
+          name: 'rightSidebar.review.actions.stage',
+        }),
+      );
+    });
+    expect(stageFile).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      targets: [{ path: 'apps/desktop/src/a.ts', oldPath: null, source: 'unstaged' }],
+    });
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'rightSidebar.review.actions.stageAll',
+        }),
+      );
+    });
+    expect(stageAll).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      targets: [
+        { path: 'apps/desktop/new.ts', oldPath: null, source: 'unstaged' },
+        { path: 'apps/desktop/src/a.ts', oldPath: null, source: 'unstaged' },
+      ],
+    });
+
+    await act(async () => {
+      fireEvent.click(
+        within(rows[1]).getByRole('button', {
+          name: 'rightSidebar.review.actions.unstage',
+        }),
+      );
+    });
+    expect(unstageFile).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      targets: [{ path: 'apps/desktop/src/a.ts', oldPath: null, source: 'staged' }],
+    });
+    expect(screen.getByText('rightSidebar.fileBrowser.historyEmpty')).toBeTruthy();
+  });
+
+  it('blocks commit and offers pull when the branch is behind', async () => {
+    // Tier: unit — pure-behind must disable commit and expose the pull affordance.
+    const { data, rerenderWith } = renderList();
+    rerenderWith({
+      ...data,
+      scope: {
+        ...data.scope,
+        aheadBehind: { ahead: 0, behind: 2, upstream: 'origin/main', stale: true },
+      },
+    });
+
+    expect(screen.getByText('rightSidebar.fileBrowser.remoteBehind')).toBeTruthy();
+    const commitButton = screen.getByRole('button', {
+      name: 'rightSidebar.fileBrowser.commitToGithub',
+    }) as HTMLButtonElement;
+    expect(commitButton.disabled).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'rightSidebar.fileBrowser.pull' }),
+      );
+    });
+    expect(pull).toHaveBeenCalledWith({ sessionId: 'session-1' });
+  });
+
+  it('does not mark the newest commit as unpushed when the branch is in sync', async () => {
+    // Tier: unit — a stale history upstreamOid must not override the fresh ahead=0 status.
+    history.mockResolvedValueOnce({
+      scope: {} as never,
+      commits: [
+        {
+          oid: 'b'.repeat(40),
+          shortOid: 'bbbbbbb',
+          title: 'latest',
+          authorTime: 1_700_000_000,
+        },
+      ],
+      upstreamOid: 'a'.repeat(40),
+    });
+    renderList();
+    await act(async () => {});
+
+    expect(screen.getByText('latest')).toBeTruthy();
+    expect(screen.queryByText('rightSidebar.fileBrowser.historyUnpushed')).toBeNull();
   });
 
   it('remembers auto push across mounts and shows the push branch', () => {
@@ -414,7 +564,7 @@ describe('ChangedFilesList', () => {
     expect(commit).toHaveBeenCalledWith({
       sessionId: 'session-1',
       message: 'feat(desktop): 增加 AI 提交信息总结\n\n- 根据代码差异生成提交说明',
-      includeUnstaged: true,
+      includeUnstaged: false,
     });
   });
 });

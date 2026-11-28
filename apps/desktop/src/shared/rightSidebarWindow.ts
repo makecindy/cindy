@@ -64,6 +64,7 @@ export type RsbWindowCommand =
     }
   | { type: 'open-terminal'; sessionId: string }
   | { type: 'toggle-review-tab'; sessionId: string }
+  | { type: 'open-commit-review'; sessionId: string; commitOid: string }
   | { type: 'open-web-browser'; sessionId: string; url: string; pluginPreview?: RsbPluginPreview }
   | { type: 'open-mail-preview'; sessionId: string; url: string }
   | { type: 'open-mail-card'; sessionId: string; callId: string }
