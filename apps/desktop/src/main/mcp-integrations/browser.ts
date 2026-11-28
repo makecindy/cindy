@@ -6,6 +6,8 @@ import {
   createBrowserControlRuntime,
   browserUploadDirectory,
   setBrowserControlRuntimeConfig,
+  type BrowserControlRequest,
+  type BrowserControlResult,
   type BrowserProxyRoute,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
@@ -25,6 +27,7 @@ import { extractBrowserAvailability, type BrowserAvailability } from './browser-
 import { browserExperienceStore } from '../browser-recipes/experience.js';
 import {
   buildManagedConfig,
+  customManagedProfileName,
   MANAGED_CDP_PORT,
   MANAGED_PROFILE,
   managedBrowserGuardIdentity,
@@ -47,6 +50,11 @@ import {
   activeManagedProfileName,
 } from './browser-real-profile/index.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
+import {
+  isCustomBrowserExecutable,
+  type CustomBrowserStore,
+} from './browser-backend/custom-browser.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { readCdpBrowserCommandLine, terminateManagedChromePortOwner } from './browser-backend/proxy-auth.js';
 import {
   isUserBrowserRunning,
@@ -80,6 +88,8 @@ export interface BrowserRuntimePorts {
   recipes: ReturnType<typeof createUserRecipeLoader> & ReturnType<typeof createUserRecipeWriter>;
   secretIo: { readStrict(key: string): string | null; write(key: string, value: string): boolean };
   createEmbeddedBackend(resolveUploadRoots: (sessionId: string) => Promise<string[]>): BrowserBackend;
+  /** Desktop-only, private selection; Node Host has no picker or selection store. */
+  customBrowserStore?: CustomBrowserStore;
 }
 /** Own browser state in the execution host, never in a disposable UI attachment. */
 export function createBrowserRuntime(ports: BrowserRuntimePorts) {
@@ -89,6 +99,7 @@ const { readBrowserBackendSettings, readBrowserBackendSettingsState, writeBrowse
 const { loadUserBrowserRecipes, userRecipesDir, writeUserRecipe } = ports.recipes;
 const managedLaunch = ports.managedLaunch ?? {};
 const managedPort = managedLaunch.cdpPort ?? MANAGED_CDP_PORT;
+let customBrowser = ports.customBrowserStore?.read() ?? null;
 const createRsbBackend = () => ports.createEmbeddedBackend(id => resolveSessionUploadRoots(id));
 
 
@@ -142,13 +153,15 @@ let lastProxyLaunch: {
   proxyAllowedHostnames?: readonly string[];
 } = {};
 
-/** Last applied profile identity, so the CDP guard follows Cindy-real / relocated ports. */
+/** Last applied profile and port; the CDP guard must target exactly this runtime. */
 let lastManagedIdentity = {
   useRealProfile: false,
   cdpPort: managedPort,
+  customProfileId: undefined as string | undefined,
 };
 
 function rememberManagedIdentity(opts: ManagedBrowserConfigOptions): void {
+  lastManagedIdentity.customProfileId = opts.customBrowser?.profileId;
   if (typeof opts.useRealProfile === 'boolean') {
     lastManagedIdentity.useRealProfile = opts.useRealProfile;
     if (!opts.useRealProfile && opts.cdpPort === undefined) {
@@ -162,12 +175,13 @@ function rememberManagedIdentity(opts: ManagedBrowserConfigOptions): void {
 
 function currentGuardIdentity(): { cdpHttpUrl: string; managedUserDataDir?: string } {
   const runtimeDir = realProfileRuntimeDir();
-  if (!runtimeDir) {
+  if (!runtimeDir || customBrowser === 'invalid') {
     return { cdpHttpUrl: `http://127.0.0.1:${lastManagedIdentity.cdpPort}` };
   }
   return managedBrowserGuardIdentity({
     runtimeDir,
     useRealProfile: lastManagedIdentity.useRealProfile,
+    customProfileId: lastManagedIdentity.customProfileId,
     cdpPort: lastManagedIdentity.cdpPort,
   });
 }
@@ -179,15 +193,18 @@ function applyManagedConfig(opts: ManagedBrowserConfigOptions): void {
       proxyAllowedHostnames: opts.proxyAllowedHostnames,
     };
   }
-  const merged = { ...managedLaunch, ...lastProxyLaunch, ...opts };
+  const merged = {
+    ...managedLaunch, ...lastProxyLaunch, ...opts,
+    customBrowser: customBrowser === 'invalid' ? undefined : customBrowser ?? undefined,
+  };
   rememberManagedIdentity(merged);
   setBrowserControlRuntimeConfig(buildManagedConfig(merged));
 }
 
-function currentRealProfileLaunchOpts(): {
-  useRealProfile: boolean;
-  cdpPort?: number;
-} {
+function currentManagedProfileOpts(): ManagedBrowserConfigOptions {
+  if (customBrowser) {
+    return { useRealProfile: false, customBrowser: customBrowser === 'invalid' ? undefined : customBrowser };
+  }
   const useRealProfile = readBrowserBackendSettings().useRealProfile === true;
   const remembered = useRealProfile ? readCopiedLoginsCdpPort(realProfileRuntimeDir()) : null;
   return {
@@ -196,8 +213,25 @@ function currentRealProfileLaunchOpts(): {
   };
 }
 
+async function isCustomProfileDirectorySafe(): Promise<boolean> {
+  const runtimeDir = realProfileRuntimeDir();
+  const userDataDir = currentGuardIdentity().managedUserDataDir;
+  if (!runtimeDir || !userDataDir) return false;
+  // A junction or symlink could open another profile in spite of a unique
+  // --user-data-dir. A missing parent means nothing below it yet exists.
+  for (const candidate of [runtimeDir, nodePath.join(runtimeDir, 'browser'), nodePath.dirname(userDataDir), userDataDir]) {
+    try {
+      if (!(await fs.promises.lstat(candidate)).isDirectory()) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      break;
+    }
+  }
+  return true;
+}
+
 function wrapManagedRuntime(inner: BrowserControlRuntime) {
-  return wrapRuntimeWithRealProfile(inner, {
+  const standard = wrapRuntimeWithRealProfile(inner, {
     isolatedCdpPort: managedPort,
     isEnabled: () => readBrowserBackendSettings().useRealProfile,
     getRuntimeDir: realProfileRuntimeDir,
@@ -205,6 +239,34 @@ function wrapManagedRuntime(inner: BrowserControlRuntime) {
       applyManagedConfig({ ...lastProxyLaunch, ...opts });
     },
   });
+
+  return {
+    async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
+      const selected = customBrowser;
+      if (!selected) return standard.call(request);
+      const invalid = {
+        reason: 'CUSTOM_BROWSER_INVALID',
+        detectError: 'The selected browser is unavailable. Choose a Chromium browser in local Settings or restore automatic detection.',
+      };
+      if (selected === 'invalid') {
+        if (request.action === 'status') {
+          return { ok: true, action: 'status', status: 200, data: { running: false, ...invalid } };
+        }
+        return { ok: false, action: request.action, errorCode: 'BROWSER_RUNTIME_UNAVAILABLE', message: invalid.detectError, data: invalid };
+      }
+      const routed = request.profile ? request : { ...request, profile: customManagedProfileName(selected.profileId) };
+      // Stop must remain available if an installed app is removed while it is running.
+      if (request.action === 'stop') return inner.call(routed);
+      if (await isCustomBrowserExecutable(selected.executablePath) && await isCustomProfileDirectorySafe()) {
+        return inner.call(routed);
+      }
+      if (request.action === 'status') {
+        const status = await inner.call(routed);
+        return { ...status, data: { ...status.data as object, detectedBrowser: null, detectedExecutablePath: null, ...invalid } };
+      }
+      return { ok: false, action: request.action, errorCode: 'BROWSER_RUNTIME_UNAVAILABLE', message: invalid.detectError, data: invalid };
+    },
+  };
 }
 
 /** Create an immutable-config runtime for one managed-browser launch route. */
@@ -215,7 +277,7 @@ function createManagedRuntime(route: BrowserProxyRoute): BrowserControlRuntime {
   };
   const merged = {
     ...managedLaunch,
-    ...currentRealProfileLaunchOpts(),
+    ...currentManagedProfileOpts(),
     ...lastProxyLaunch,
   };
   rememberManagedIdentity(merged);
@@ -227,27 +289,10 @@ function createManagedRuntime(route: BrowserProxyRoute): BrowserControlRuntime {
   ) as BrowserControlRuntime;
 }
 
-const initialUseRealProfile = readBrowserBackendSettings().useRealProfile;
-const rememberedCopiedLoginsCdpPort = initialUseRealProfile
-  ? readCopiedLoginsCdpPort(realProfileRuntimeDir())
-  : null;
-lastManagedIdentity = {
-  useRealProfile: initialUseRealProfile === true,
-  cdpPort: rememberedCopiedLoginsCdpPort ?? managedPort,
-};
-
-const directBrowserRuntime = createBrowserControlRuntime({
-  config: buildManagedConfig({
-    ...managedLaunch,
-    proxyServer: undefined,
-    useRealProfile: initialUseRealProfile,
-    ...(rememberedCopiedLoginsCdpPort ? { cdpPort: rememberedCopiedLoginsCdpPort } : {}),
-  }),
-  logSink: browserRuntimeLogSink,
-});
+const directBrowserRuntime = createManagedRuntime({ mode: 'direct' });
 
 const externalChromeBackend = new ExternalChromeBackend(
-  wrapManagedRuntime(directBrowserRuntime),
+  directBrowserRuntime,
   logger,
   {
     createRuntime: createManagedRuntime,
@@ -256,7 +301,9 @@ const externalChromeBackend = new ExternalChromeBackend(
     // The failed-stop teardown may only run for a request that targeted this
     // browser: the MCP stop tool threads a resolved profile name, and a stale
     // one 404s before dispatch — that error must never kill the active browser.
-    managedProfileName: () => activeManagedProfileName(readBrowserBackendSettings().useRealProfile),
+    managedProfileName: () => lastManagedIdentity.customProfileId
+      ? customManagedProfileName(lastManagedIdentity.customProfileId)
+      : activeManagedProfileName(lastManagedIdentity.useRealProfile),
     // The vendored stop can only signal a process it launched. On Windows the
     // spawned browser is a short-lived launcher, so once it exits the runtime
     // has no PID left while the real browser keeps the CDP port — every later
@@ -409,6 +456,9 @@ function commitHostBrowserBackendKind(kind: BackendKind, persist: () => Promise<
 }
 
 async function stopExternalRuntimeIfUsed(): Promise<void> {
+  // An unreadable selection was never activated in this process and supplies
+  // no owned profile identity. Do not target the default browser as a fallback.
+  if (customBrowser === 'invalid') return;
   const useRealProfile = readBrowserBackendSettings().useRealProfile;
   const patch = managedConfigPatchBeforeStop({
     rememberedCdpPort: useRealProfile ? readCopiedLoginsCdpPort(realProfileRuntimeDir()) : null,
@@ -455,6 +505,9 @@ async function stopExternalRuntimeIfUsed(): Promise<void> {
  * aborts so POSIX open handles cannot keep copied cookies after unlink.
  */
 async function applyBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
+  if (customBrowser) {
+    throwIpcError('PERMISSION_DENIED', 'Custom browsers do not use copied browser logins.');
+  }
   await stopExternalRuntimeIfUsed();
   if (!enabled) {
     cleanupCopiedLoginsThen(realProfileRuntimeDir(), () => {
@@ -471,6 +524,34 @@ function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
   return backendController.runLifecycle(() =>
     browserProfileLifecycleQueue.run(() => applyBrowserUseRealProfile(enabled)),
   );
+}
+
+function changeCustomBrowser(executablePath: string | null, assertCurrent: () => void): Promise<void> {
+  const store = ports.customBrowserStore;
+  if (!store) throwIpcError('PERMISSION_DENIED', 'The browser selection is available only on this desktop.');
+  return backendController.runLifecycle(() => browserProfileLifecycleQueue.run(async () => {
+    assertCurrent();
+    if ((typeof customBrowser === 'object' && customBrowser?.executablePath === executablePath)
+      || (customBrowser === null && executablePath === null)) return;
+    if (executablePath !== null && !(await isCustomBrowserExecutable(executablePath))) {
+      throwIpcError('CUSTOM_BROWSER_INVALID', 'The selected browser application is not available.');
+    }
+    try {
+      await stopExternalRuntimeIfUsed();
+    } catch (error) {
+      if (isRealProfileError(error) && error.code === FOREIGN_AGENT_BROWSER_ERROR) {
+        throwIpcError(FOREIGN_AGENT_BROWSER_ERROR, 'Another Cindy is using the agent browser port.');
+      }
+      throwIpcError('STOP_FAILED', 'Could not stop the agent browser before changing applications.');
+    }
+    assertCurrent();
+    try {
+      customBrowser = store.save(executablePath);
+    } catch {
+      throwIpcError('INTERNAL', 'Could not save the browser selection.');
+    }
+    applyManagedConfig({ ...currentManagedProfileOpts(), proxyServer: undefined, proxyAllowedHostnames: undefined });
+  }));
 }
 
 /**
@@ -535,7 +616,8 @@ function getBrowserMcpDeps(): {
     // @cindy/mcps' perspective.
     getRuntime: () => backendController,
     resolveProfile: (profile) => resolveBackendProfile(backendController.kind, profile, () =>
-      activeManagedProfileName(readBrowserBackendSettings().useRealProfile)),
+      lastManagedIdentity.customProfileId ? customManagedProfileName(lastManagedIdentity.customProfileId)
+        : activeManagedProfileName(readBrowserBackendSettings().useRealProfile)),
     getBackendScope: () => backendController.getBackendScope(),
     getBackendKind: () => backendController.getCurrentBackendKind(),
     resolveScreenshot: (result) =>
@@ -616,8 +698,10 @@ function getBrowserBackendHealth() {
   return browserBackendHealthService.getHealth();
 }
 
-function createBrowserSettingsHandlers<Event>(assertTrusted: (event: Event) => void) {
-
+function createBrowserSettingsHandlers<Event>(
+  assertTrusted: (event: Event) => void,
+  pickCustomBrowser?: (event: Event) => Promise<string | null>,
+) {
   return createBrowserBackendIpcHandlers<Event>({
     assertTrusted,
     getState: () => {
@@ -626,7 +710,10 @@ function createBrowserSettingsHandlers<Event>(assertTrusted: (event: Event) => v
         active: backendController.getCurrentBackendKind(),
         systemDefault: state.defaults.kind,
         isOverride: state.customizedKeys.includes('kind'),
-        useRealProfile: state.value.useRealProfile,
+        useRealProfile: !customBrowser && state.value.useRealProfile,
+        ...(customBrowser ? {
+          customBrowser: { executablePath: customBrowser === 'invalid' ? null : customBrowser.executablePath },
+        } : {}),
       };
     },
     setKind: async (kind) => {
@@ -636,6 +723,11 @@ function createBrowserSettingsHandlers<Event>(assertTrusted: (event: Event) => v
     setUseRealProfile: async (enabled) => {
       return setBrowserUseRealProfile(enabled);
     },
+    ...(ports.customBrowserStore && pickCustomBrowser ? {
+      pickCustomBrowser,
+      setCustomBrowser: changeCustomBrowser,
+      resetCustomBrowser: (assertCurrent: () => void) => changeCustomBrowser(null, assertCurrent),
+    } : {}),
     reset: async () => {
       // Keep controller -> profile queue ordering, matching external disposal.
       await backendController.setKind(
@@ -651,7 +743,7 @@ function createBrowserSettingsHandlers<Event>(assertTrusted: (event: Event) => v
     },
     getHealth: getBrowserBackendHealth,
     recover: recoverActiveBrowserBackend,
-    probeSourceRead: () => probeOsSourceProfileReadAccess(),
+    probeSourceRead: () => customBrowser ? { readable: false } : probeOsSourceProfileReadAccess(),
     openExtensionStore: () =>
       openExtensionStoreInUserBrowser({ resolveBrowser: () => resolveSourceBrowserFromOs() }),
   });
@@ -663,7 +755,11 @@ function createBrowserSettingsHandlers<Event>(assertTrusted: (event: Event) => v
  * want the agent to operate. Drives the Settings →「自动操作」"打开 Agent 专用浏览器"
  * action. Logins persist in the managed profile's user-data-dir.
  */
-async function openBrowserForLogin(): Promise<void> {
+function openBrowserForLogin(): Promise<void> {
+  return browserProfileLifecycleQueue.run(openBrowserForLoginInQueue);
+}
+
+async function openBrowserForLoginInQueue(): Promise<void> {
   // `start` launches the headed managed Chrome (idempotent: no-op if already running).
   // It already provides a window + new-tab page, so we NEVER open another tab here:
   // doing so raced with Chrome's own initial tab on a cold start and produced a
@@ -678,7 +774,9 @@ async function openBrowserForLogin(): Promise<void> {
   // `start` without proxyServer is an explicit request for direct mode. Probe
   // first so opening the login browser never tears down an already-running
   // caller-selected proxy route just to raise its window.
-  const status = await externalBackend.call({ action: 'status' });
+  const status = await externalChromeBackend.call({ action: 'status' });
+  const statusReason = browserOpenForLoginErrorCodeFromData(status.data);
+  if (statusReason) throw new BrowserOpenForLoginError(statusReason);
   if (!status.ok) {
     throw new Error(
       status.message === FOREIGN_AGENT_BROWSER_ERROR || status.message?.includes('Another Cindy')
@@ -698,7 +796,7 @@ async function openBrowserForLogin(): Promise<void> {
   // process and reinstates its request guard, so run it in that case too.
   const proxyMode = (status.data as { proxy?: { mode?: unknown } } | undefined)?.proxy?.mode;
   if (!running || proxyMode === 'unknown') {
-    const started = await externalBackend.call({ action: 'start' });
+    const started = await externalChromeBackend.call({ action: 'start' });
     if (!started.ok) {
       const reason = browserOpenForLoginErrorCodeFromData(started.data);
       if (reason) throw new BrowserOpenForLoginError(reason);
@@ -708,6 +806,7 @@ async function openBrowserForLogin(): Promise<void> {
       ) {
         throw new BrowserOpenForLoginError(FOREIGN_AGENT_BROWSER_ERROR);
       }
+      if (customBrowser) throw new BrowserOpenForLoginError('CUSTOM_BROWSER_START_FAILED');
       throw new Error('Agent browser failed to start.');
     }
   }
@@ -715,7 +814,7 @@ async function openBrowserForLogin(): Promise<void> {
   // Do not re-probe status.running here: vendored `running` means "CDP is
   // reachable", and pid/userDataDir can still be missing or point at a
   // leftover Chrome on 18800 after a successful start of *this* window.
-  await raiseAgentBrowserWindow(externalBackend);
+  await raiseAgentBrowserWindow(externalChromeBackend);
 }
 
 /**

@@ -60,6 +60,10 @@
     },
     {
       "file": "extension/src/browser/config.ts",
+      "desc": "carry the host-only direct spawn option into the resolved browser configuration"
+    },
+    {
+      "file": "extension/src/browser/config.ts",
       "desc": "preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access"
     },
     {
@@ -144,7 +148,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "cf2f3fa3db0b3497df2e05d67c36a8c01dcf87b29db23a78bbabeb5e386117ef",
+  "contentHash": "7a6112c78dc9795f14fb7a795edd29abbb1e7da29a20e9f4d2e1c9c985651eb3",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

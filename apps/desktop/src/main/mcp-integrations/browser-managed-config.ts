@@ -33,6 +33,10 @@ export const MANAGED_PROFILE = 'Cindy';
  */
 export const REAL_MANAGED_PROFILE = 'Cindy-real';
 
+export function customManagedProfileName(profileId: string): string {
+  return `Cindy-custom-${profileId}`;
+}
+
 /**
  * Fixed brand tint for the managed profile. This intentionally stays on the vivid
  * teal variant instead of the Default Light auto-approval text color. NOTE:
@@ -64,9 +68,11 @@ export const MANAGED_CDP_PORT = 18800;
 export function managedBrowserGuardIdentity(input: {
   runtimeDir: string;
   useRealProfile: boolean;
+  customProfileId?: string;
   cdpPort?: number;
 }): { cdpHttpUrl: string; managedUserDataDir: string } {
-  const profile = input.useRealProfile ? REAL_MANAGED_PROFILE : MANAGED_PROFILE;
+  const profile = input.customProfileId ? customManagedProfileName(input.customProfileId)
+    : input.useRealProfile ? REAL_MANAGED_PROFILE : MANAGED_PROFILE;
   const cdpPort = input.cdpPort ?? MANAGED_CDP_PORT;
   return {
     cdpHttpUrl: `http://127.0.0.1:${cdpPort}`,
@@ -85,8 +91,10 @@ export interface ManagedBrowserConfigOptions {
   proxyAllowedHostnames?: readonly string[];
   /** Consent-gated snapshot of the user's everyday browser logins. */
   useRealProfile?: boolean;
-  /** Chromium binary for the snapshot profile; omitted for the isolated profile. */
+  /** Trusted executable override from host assembly or the everyday-login snapshot. */
   executablePath?: string;
+  /** Desktop's locally approved application, with a separate managed profile. */
+  customBrowser?: { executablePath: string; profileId: string };
   /** Override the managed CDP port (used when Cindy-real relocates off 18800). */
   cdpPort?: number;
 }
@@ -226,9 +234,11 @@ function proxyServerToPacDirective(proxyServer: string): string {
 export function buildManagedConfig(options: ManagedBrowserConfigOptions = {}): BrowserRuntimeConfig {
   const route = parseBrowserProxyServer(options.proxyServer, options.proxyAllowedHostnames);
   const proxyServer = route.mode === 'proxied' ? route.server : undefined;
-  const useRealProfile = options.useRealProfile === true;
-  const defaultProfile = useRealProfile ? REAL_MANAGED_PROFILE : MANAGED_PROFILE;
-  const executablePath = options.executablePath;
+  const custom = options.customBrowser;
+  const useRealProfile = !custom && options.useRealProfile === true;
+  const defaultProfile = custom ? customManagedProfileName(custom.profileId)
+    : useRealProfile ? REAL_MANAGED_PROFILE : MANAGED_PROFILE;
+  const executablePath = custom?.executablePath ?? options.executablePath;
   const cdpPort = options.cdpPort ?? MANAGED_CDP_PORT;
   return {
     browser: {
@@ -236,6 +246,7 @@ export function buildManagedConfig(options: ManagedBrowserConfigOptions = {}): B
       defaultProfile,
       headless: options.headless ?? false, // Desktop stays headed for login and observation
       ...(executablePath ? { executablePath } : {}),
+      ...(custom ? { spawnWithoutShell: true } : {}),
       // A persistent directory alone does not restore session cookies after a
       // clean exit. Apply Chrome's native session restore to both profiles and
       // routes; silent headed startup still keeps automation unobtrusive.
@@ -244,7 +255,7 @@ export function buildManagedConfig(options: ManagedBrowserConfigOptions = {}): B
         '--restore-last-session',
         // Website cookies are copied without Chrome OAuth identity. Disable
         // DICE before startup so it cannot turn that mismatch into a logout.
-        ...(useRealProfile ? ['--allow-browser-signin=false'] : []),
+        ...(useRealProfile || custom ? ['--allow-browser-signin=false'] : []),
         ...(proxyServer ? buildProxyLaunchArgs(proxyServer, route.allowedHostnames) : []),
       ],
       // Two different contracts, so two different policies:

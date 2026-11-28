@@ -43,7 +43,7 @@ import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
 import { DownloadMeter } from '@/components/ui/download-meter';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsField, SettingsPageHeader, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
-import { withDefaultOverride, type DefaultOverrideReset } from './DefaultOverrideControls';
+import { DefaultOverrideControls, withDefaultOverride, type DefaultOverrideReset } from './DefaultOverrideControls';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
@@ -60,6 +60,7 @@ import {
   RECOMMENDED_PAGE_CONTROL_PLUGIN_ID,
   REAL_PROFILE_READ_DENIED,
   type BrowserBackendHealth,
+  type BrowserBackendSettingsState,
 } from '../../../shared/browserBackend';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import {
@@ -225,7 +226,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     'browser detection',
     useCallback(() => window.electronAPI.maker.browser.status(), []),
   );
-  const availability = availabilityRead.value;
+  const { value: availability, retry: refreshBrowserAvailability } = availabilityRead;
   const [androidStatus, setAndroidStatus] = useState<AndroidStatusSummary | null>(null);
   const [androidConfig, setAndroidConfig] = useState<AndroidAutomationConfigState | null>(null);
   const [androidAdbPathDraft, setAndroidAdbPathDraft] = useState('');
@@ -453,7 +454,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   // 用 ref 防止重复触发网络请求。
   const driverUpdateCheckedRef = useRef(false);
 
-  const backendRead = useAutomationSettingsRead(
+  const backendRead = useAutomationSettingsRead<Pick<BrowserBackendSettingsState, 'active' | 'useRealProfile' | 'customBrowser'>>(
     'browser backend configuration',
     useCallback(async () => {
       const state = await window.electronAPI.browserBackend?.getState?.();
@@ -462,6 +463,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       return {
         active: state?.active ?? 'external',
         useRealProfile: state?.useRealProfile === true,
+        customBrowser: state?.customBrowser,
       };
     }, []),
   );
@@ -479,6 +481,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     null,
   );
   const useRealProfile = backendConfig?.useRealProfile ?? false;
+  const customBrowser = backendConfig?.customBrowser;
   const setUseRealProfile = useCallback(
     (enabled: boolean) => {
       setBackendConfig((current) => (current ? { ...current, useRealProfile: enabled } : current));
@@ -739,6 +742,27 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     },
     [browserBackendKind, browserBackendPending, setBrowserBackendKind, t],
   );
+
+  const handleCustomBrowserChange = useCallback(async (reset: boolean) => {
+    if (browserBackendPending || useRealProfilePending) return;
+    setBrowserBackendPending(true);
+    try {
+      if (reset) {
+        setBackendConfig(await window.electronAPI.browserBackend.resetCustomBrowser());
+      } else {
+        const result = await window.electronAPI.browserBackend.pickCustomBrowser();
+        if (result.canceled) return;
+        setBackendConfig(result.state);
+      }
+      refreshBrowserAvailability();
+    } catch (error) {
+      const code = browserOpenForLoginErrorCode(error);
+      const fallback = 'settings.computerUse.customBrowser.saveFailed';
+      toast.error(t(code ? browserOpenForLoginToastKey(code, fallback) : fallback));
+    } finally {
+      setBrowserBackendPending(false);
+    }
+  }, [browserBackendPending, refreshBrowserAvailability, setBackendConfig, t, useRealProfilePending]);
 
   const handleToggleRealProfile = useCallback(
     async (next: boolean) => {
@@ -1610,11 +1634,41 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
               onSetUpUserBrowser={() => void handleSetUpUserBrowser()}
             />
           ) : null}
+          {browserBackendKind === 'external' && typeof window.electronAPI.browserBackend?.pickCustomBrowser === 'function' ? (
+            <SettingsRow
+              wrap
+              title={t('settings.computerUse.customBrowser.title')}
+              hint={(
+                <>
+                  {t('settings.computerUse.customBrowser.description')}
+                  {customBrowser?.executablePath && (
+                    <span className="mt-1 block [overflow-wrap:anywhere]" dir="ltr">{customBrowser.executablePath}</span>
+                  )}
+                </>
+              )}
+              trailing={(
+                <div className="flex flex-wrap items-center gap-2">
+                  <DefaultOverrideControls
+                    isCustomized={Boolean(customBrowser)}
+                    label={t('settings.computerUse.customBrowser.reset')}
+                    disabled={browserBackendPending}
+                    onReset={() => void handleCustomBrowserChange(true)}
+                  />
+                  <Button variant="secondary" size="sm" compact type="button"
+                    disabled={browserBackendPending || useRealProfilePending}
+                    onClick={() => void handleCustomBrowserChange(false)}
+                  >
+                    {t('settings.computerUse.customBrowser.choose')}
+                  </Button>
+                </div>
+              )}
+            />
+          ) : null}
           {/* 拷贝登录文件只对独立浏览器有用,其它浏览器下一律隐藏;要删除拷贝时切回独立浏览器再关。 */}
-          {browserBackendKind === 'external' ? (
+          {browserBackendKind === 'external' && !customBrowser ? (
             <BrowserRealProfileSubsection
               enabled={useRealProfile}
-              pending={useRealProfilePending}
+              pending={useRealProfilePending || browserBackendPending}
               onToggle={(next) => void handleToggleRealProfile(next)}
             />
           ) : null}
@@ -1631,12 +1685,14 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
             <SettingsBlock className="flex flex-wrap items-center justify-between gap-3">
               <p className={cn('min-w-0', SETTINGS_HINT)}>
                 {availability.detected
-                  ? t('settings.computerUse.browser.detected', {
-                      browser: (availability.browserKind ?? 'chromium').replace(/^./, (c) =>
-                        c.toUpperCase(),
-                      ),
-                    })
-                  : t('settings.computerUse.browser.notDetected')}
+                  ? customBrowser
+                    ? t('settings.computerUse.customBrowser.isolated')
+                    : t('settings.computerUse.browser.detected', {
+                        browser: (availability.browserKind ?? 'chromium').replace(/^./, (c) =>
+                          c.toUpperCase(),
+                        ),
+                      })
+                  : t(customBrowser ? 'settings.computerUse.customBrowser.invalid' : 'settings.computerUse.browser.notDetected')}
               </p>
               {availability.detected ? (
                 <Button data-setting-id={computerUseSettings.browserTitle.id}
@@ -1644,12 +1700,13 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   size="sm"
                   className="px-3"
                   type="button"
+                  disabled={browserBackendPending}
                   onClick={handleOpenForLogin}
                 >
                   <LogIn size={12} className="shrink-0" />
                   {t('settings.computerUse.browser.openForLogin')}
                 </Button>
-              ) : (
+              ) : !customBrowser ? (
                 <Button data-setting-id={computerUseSettings.browserTitle.id}
                   variant="secondary"
                   size="sm"
@@ -1660,7 +1717,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   <Download size={12} className="shrink-0" />
                   {t('settings.computerUse.browser.download')}
                 </Button>
-              )}
+              ) : null}
             </SettingsBlock>
           ) : null}
         </SettingsCard>

@@ -9,6 +9,8 @@ export default {
     'Real IPC, browser discovery and device permissions; timeout and stale response behavior is covered by ComputerUseSection.browserHealth.test.tsx',
   cases: {
     default: { about: 'All settings loaded' },
+    'custom-browser': { about: 'Selected Chromium app in a nonstandard location, with a dedicated profile' },
+    'custom-browser-missing': { about: 'An unavailable selection can be changed or reset without silently switching browsers' },
     'mac-control-permission': { about: 'macOS 27.3 opens the missing control permission for CuaDriver.' },
     'driver-rate-limited': {
       about:
@@ -49,6 +51,16 @@ export default {
       name: await ui.t('settings.computerUse.realProfile.toggleAria'),
     });
     if (ui.case === 'default') await loginCopy.waitFor();
+    if (ui.case.startsWith('custom-browser')) {
+      await page.getByRole('button', { name: await ui.t('settings.computerUse.customBrowser.reset') }).waitFor();
+      assert.equal(await loginCopy.count(), 0);
+      const login = page.getByRole('button', { name: await ui.t('settings.computerUse.browser.openForLogin') });
+      if (ui.case === 'custom-browser') await login.waitFor();
+      else {
+        await page.getByText(await ui.t('settings.computerUse.customBrowser.invalid'), { exact: true }).waitFor();
+        assert.equal(await login.count(), 0);
+      }
+    }
     if (ui.case === 'mac-control-permission') {
       const pane = page.getByText(await ui.t('macControlPermission.pane'), { exact: true });
       await pane.scrollIntoViewIfNeeded();

@@ -2,6 +2,17 @@ export const BROWSER_BACKEND_KINDS = ['external', 'rsb-webview', 'user-browser']
 
 export type BrowserBackendKind = (typeof BROWSER_BACKEND_KINDS)[number];
 
+export interface BrowserBackendSettingsState {
+  active: BrowserBackendKind;
+  systemDefault: BrowserBackendKind;
+  isOverride: boolean;
+  useRealProfile: boolean;
+  /** Local Settings only. A null path means the saved selection is unreadable. */
+  customBrowser?: { executablePath: string | null };
+}
+
+export type BrowserPickResult = { canceled: true } | { canceled: false; state: BrowserBackendSettingsState };
+
 export function isBrowserBackendKind(value: unknown): value is BrowserBackendKind {
   return typeof value === 'string' && (BROWSER_BACKEND_KINDS as readonly string[]).includes(value);
 }
@@ -48,6 +59,8 @@ export const BROWSER_OPEN_FOR_LOGIN_ERROR_CODES = [
   'STOP_FAILED',
   FOREIGN_AGENT_BROWSER_ERROR,
   'APP_BOUND_ENCRYPTION_UNSUPPORTED',
+  'CUSTOM_BROWSER_INVALID',
+  'CUSTOM_BROWSER_START_FAILED',
 ] as const;
 
 export type BrowserOpenForLoginErrorCode = (typeof BROWSER_OPEN_FOR_LOGIN_ERROR_CODES)[number];

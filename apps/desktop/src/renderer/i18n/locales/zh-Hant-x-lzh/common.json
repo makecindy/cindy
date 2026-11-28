@@ -6021,6 +6021,16 @@
           "failed": "更新瀏覽器登入態之設定未成"
         }
       },
+      "customBrowser": {
+        "title": "自選瀏覽器",
+        "description": "可擇此機已安裝且可信之 Chromium 瀏覽器，未擇則 Cindy 自行偵測",
+        "choose": "擇瀏覽器",
+        "reset": "復瀏覽器自動偵測",
+        "isolated": "另用獨立設定檔，不複製日常登入狀態",
+        "invalid": "所選應用程式不是可用的 Chromium 瀏覽器。請選擇其他瀏覽器或恢復自動偵測",
+        "startFailed": "無法啟動所選瀏覽器。瀏覽器須支援 Chromium 遠端偵錯",
+        "saveFailed": "未能更易所選瀏覽器"
+      },
       "browserBackend": {
         "title": "代操瀏覽器之標的",
         "defaultTag": "常例",

@@ -78,6 +78,8 @@ export type BrowserConfig = {
   color?: string;
   /** Override the browser executable path (all platforms). */
   executablePath?: string;
+  /** Host-owned: bypass the Linux OOM-adjusting shell for locally approved binaries. */
+  spawnWithoutShell?: boolean;
   /** Start Chrome headless (best-effort). Default: false */
   headless?: boolean;
   /** Pass --no-sandbox to Chrome (Linux containers). Default: false */

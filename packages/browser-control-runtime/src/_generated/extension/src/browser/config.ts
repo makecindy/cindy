@@ -80,6 +80,7 @@ export type ResolvedBrowserConfig = {
   actionTimeoutMs: number;
   color: string;
   executablePath?: string;
+  spawnWithoutShell?: boolean;
   headless: boolean;
   headlessSource?: "config" | "default";
   noSandbox: boolean;
@@ -510,6 +511,7 @@ export function resolveBrowserConfig(
     actionTimeoutMs,
     color: defaultColor,
     executablePath,
+    spawnWithoutShell: cfg?.spawnWithoutShell === true,
     headless,
     headlessSource,
     noSandbox,

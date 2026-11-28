@@ -6124,6 +6124,16 @@
           "failed": "Échec de la mise à jour du paramètre de connexions du navigateur"
         }
       },
+      "customBrowser": {
+        "title": "Navigateur personnalisé",
+        "description": "Choisissez un navigateur Chromium installé auquel vous faites confiance. Sans choix, Cindy le détecte automatiquement.",
+        "choose": "Choisir un navigateur",
+        "reset": "Rétablir la détection automatique du navigateur",
+        "isolated": "Utilise un profil distinct. Les connexions du navigateur habituel ne sont pas copiées.",
+        "invalid": "L’application choisie n’est pas un navigateur Chromium disponible. Choisissez un autre navigateur ou rétablissez la détection automatique.",
+        "startFailed": "Cindy n’a pas pu démarrer le navigateur choisi. Il doit prendre en charge le débogage à distance de Chromium.",
+        "saveFailed": "Impossible de changer le navigateur choisi"
+      },
       "browserBackend": {
         "title": "Navigateur cible de l'automatisation",
         "defaultTag": "Par défaut",

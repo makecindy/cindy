@@ -83,10 +83,11 @@ class FakeChrome extends EventEmitter {
 }
 let children: FakeChrome[];
 
-function launch(executablePath?: string, profileExecutablePath?: string, headless = true) {
+function launch(executablePath?: string, profileExecutablePath?: string, headless = true, spawnWithoutShell = false) {
   const resolved = resolveBrowserConfig({
     headless,
     executablePath,
+    spawnWithoutShell,
     defaultProfile: 'Cindy',
     profiles: { Cindy: { cdpPort: 18800, color: '#00D9C5', executablePath: profileExecutablePath } },
   });
@@ -409,6 +410,18 @@ describe('managed Chrome startup failures', () => {
     await expect(scope === 'global' ? launch(linuxChrome) : launch(undefined, linuxChrome))
       .rejects.toMatchObject({ exitCode: 127 });
     expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  // #8899, unit: production managed launcher with fake process. A selected
+  // executable bypasses the Linux OOM shell on both first and later spawns.
+  it('spawns a locally approved application directly for bootstrap and launch on Linux', async () => {
+    useLinux();
+    preferencesExist = false;
+    plans = ['bootstrap', 'ready'];
+    const launching = launch(linuxChrome, undefined, true, true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(launching).resolves.toMatchObject({ exe: { path: linuxChrome } });
+    expect(vi.mocked(spawn).mock.calls.map(([command]) => command)).toEqual([linuxChrome, linuxChrome]);
   });
 
   it('does not interpret an unwrapped application exit 127 as a shell exec failure', async () => {

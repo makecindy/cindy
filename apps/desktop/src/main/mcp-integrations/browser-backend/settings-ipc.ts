@@ -3,6 +3,8 @@ import type {
   BrowserBackendHealth,
   BrowserBackendRecoveryResult,
   BrowserBackendSourceReadAccess,
+  BrowserBackendSettingsState,
+  BrowserPickResult,
 } from '../../../shared/browserBackend.js';
 import { isBrowserOpenForLoginErrorCode } from '../../../shared/browserBackend.js';
 import {
@@ -13,13 +15,6 @@ import {
 } from '../../utils/ipcValidate.js';
 import { isRealProfileError } from '../browser-real-profile/types.js';
 import type { BackendKind } from './types.js';
-
-export interface BrowserBackendSettingsState {
-  active: BackendKind;
-  systemDefault: BackendKind;
-  isOverride: boolean;
-  useRealProfile: boolean;
-}
 
 export interface BrowserUseRealProfileResult {
   ok: true;
@@ -32,6 +27,9 @@ interface BrowserBackendIpcDeps<Event> {
   setKind(kind: BackendKind): Promise<BackendKind>;
   setUseRealProfile(enabled: boolean): Promise<boolean>;
   reset(): Promise<BackendKind>;
+  pickCustomBrowser?(event: Event): Promise<string | null>;
+  setCustomBrowser?(executablePath: string, assertCurrent: () => void): Promise<void>;
+  resetCustomBrowser?(assertCurrent: () => void): Promise<void>;
   getHealth(): Promise<BrowserBackendHealth>;
   recover(): Promise<BrowserBackendRecoveryResult>;
   probeSourceRead(): BrowserBackendSourceReadAccess;
@@ -40,6 +38,7 @@ interface BrowserBackendIpcDeps<Event> {
 
 /** Pure handler factory so trust gates and response contracts stay testable. */
 export function createBrowserBackendIpcHandlers<Event>(deps: BrowserBackendIpcDeps<Event>) {
+  let picking = false;
   return {
     getState(event: Event) {
       deps.assertTrusted(event);
@@ -64,6 +63,35 @@ export function createBrowserBackendIpcHandlers<Event>(deps: BrowserBackendIpcDe
         }
         throw err;
       }
+    },
+    async pickCustomBrowser(event: Event, ...args: unknown[]): Promise<BrowserPickResult> {
+      const assertCurrent = () => deps.assertTrusted(event);
+      assertCurrent();
+      if (args.length !== 0) throwIpcError('INVALID_ARGUMENT', 'The browser picker takes no arguments.');
+      if (!deps.pickCustomBrowser || !deps.setCustomBrowser) {
+        throwIpcError('PERMISSION_DENIED', 'The browser picker is available only on this desktop.');
+      }
+      if (picking) throwIpcError('DEVICE_BUSY', 'The browser picker is already open.');
+      picking = true;
+      try {
+        const executablePath = await deps.pickCustomBrowser(event);
+        assertCurrent();
+        if (executablePath === null) return { canceled: true };
+        await deps.setCustomBrowser(executablePath, assertCurrent);
+        return { canceled: false, state: deps.getState() };
+      } finally {
+        picking = false;
+      }
+    },
+    async resetCustomBrowser(event: Event, ...args: unknown[]) {
+      const assertCurrent = () => deps.assertTrusted(event);
+      assertCurrent();
+      if (args.length !== 0) throwIpcError('INVALID_ARGUMENT', 'The browser reset takes no arguments.');
+      if (!deps.resetCustomBrowser) {
+        throwIpcError('PERMISSION_DENIED', 'The browser selection is available only on this desktop.');
+      }
+      await deps.resetCustomBrowser(assertCurrent);
+      return deps.getState();
     },
     async reset(event: Event) {
       deps.assertTrusted(event);

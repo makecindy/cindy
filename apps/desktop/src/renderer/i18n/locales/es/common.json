@@ -6124,6 +6124,16 @@
           "failed": "No se pudo actualizar la configuración de inicio de sesión del navegador"
         }
       },
+      "customBrowser": {
+        "title": "Navegador personalizado",
+        "description": "Elige un navegador Chromium instalado y de confianza. Si no eliges ninguno, Cindy lo detecta automáticamente.",
+        "choose": "Elegir navegador",
+        "reset": "Restaurar la detección automática del navegador",
+        "isolated": "Usa un perfil separado. No se copian las sesiones del navegador de uso habitual.",
+        "invalid": "La aplicación seleccionada no es un navegador Chromium disponible. Elige otro navegador o restaura la detección automática.",
+        "startFailed": "Cindy no pudo iniciar el navegador seleccionado. Debe admitir la depuración remota de Chromium.",
+        "saveFailed": "No se pudo cambiar el navegador seleccionado"
+      },
       "browserBackend": {
         "title": "Destino del navegador de automatización",
         "defaultTag": "Predeterminado",

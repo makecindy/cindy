@@ -19,6 +19,9 @@ function buildHandlers() {
     setKind: vi.fn(async (kind: 'external' | 'rsb-webview' | 'user-browser') => kind),
     setUseRealProfile: vi.fn(async (enabled: boolean) => enabled),
     reset: vi.fn(async () => 'external' as const),
+    pickCustomBrowser: vi.fn(async (_event: typeof trustedEvent): Promise<string | null> => null),
+    setCustomBrowser: vi.fn(async (_path: string, assertCurrent: () => void) => assertCurrent()),
+    resetCustomBrowser: vi.fn(async (assertCurrent: () => void) => assertCurrent()),
     getHealth: vi.fn(async () => ({
       active: 'rsb-webview' as const,
       status: 'ready' as const,
@@ -55,6 +58,8 @@ describe('browser backend Settings IPC handlers', () => {
       /untrusted renderer/,
     );
     await expect(handlers.reset(untrusted)).rejects.toThrow(/untrusted renderer/);
+    await expect(handlers.pickCustomBrowser(untrusted)).rejects.toThrow(/untrusted renderer/);
+    await expect(handlers.resetCustomBrowser(untrusted)).rejects.toThrow(/untrusted renderer/);
     expect(() => handlers.getHealth(untrusted)).toThrow(/untrusted renderer/);
     expect(() => handlers.recover(untrusted)).toThrow(/untrusted renderer/);
     expect(() => handlers.probeSourceRead(untrusted)).toThrow(/untrusted renderer/);
@@ -63,6 +68,8 @@ describe('browser backend Settings IPC handlers', () => {
     expect(deps.setKind).not.toHaveBeenCalled();
     expect(deps.setUseRealProfile).not.toHaveBeenCalled();
     expect(deps.reset).not.toHaveBeenCalled();
+    expect(deps.pickCustomBrowser).not.toHaveBeenCalled();
+    expect(deps.resetCustomBrowser).not.toHaveBeenCalled();
     expect(deps.getHealth).not.toHaveBeenCalled();
     expect(deps.recover).not.toHaveBeenCalled();
     expect(deps.probeSourceRead).not.toHaveBeenCalled();
@@ -97,6 +104,31 @@ describe('browser backend Settings IPC handlers', () => {
     expect(deps.probeSourceRead).toHaveBeenCalledTimes(1);
 
     await expect(handlers.setKind(trustedEvent, { kind: 'unknown' })).rejects.toThrow();
+  });
+
+  // #8899 / Electron IPC §5. An approved app must come from the native result,
+  // not a payload or a renderer which lost trust while the picker was open.
+  // Unit: production handlers with deferred dialog output; no native process.
+  it('rejects caller-supplied program and arguments even from trusted settings', async () => {
+    const { handlers, trustedEvent, deps } = buildHandlers();
+    const payload = { executablePath: 'supplied-by-renderer', args: ['--user-data-dir=other'] };
+    await expect(handlers.pickCustomBrowser(trustedEvent, payload)).rejects.toThrow(/INVALID_ARGUMENT/);
+    await expect(handlers.resetCustomBrowser(trustedEvent, payload)).rejects.toThrow(/INVALID_ARGUMENT/);
+    expect(deps.pickCustomBrowser).not.toHaveBeenCalled();
+    expect(deps.setCustomBrowser).not.toHaveBeenCalled();
+    expect(deps.resetCustomBrowser).not.toHaveBeenCalled();
+  });
+
+  it('does not change the selection on cancel or after the requesting frame loses trust', async () => {
+    const { handlers, trustedEvent, deps } = buildHandlers();
+    await expect(handlers.pickCustomBrowser(trustedEvent)).resolves.toEqual({ canceled: true });
+    const { promise, resolve } = Promise.withResolvers<string>();
+    deps.pickCustomBrowser.mockReturnValueOnce(promise);
+    const selection = handlers.pickCustomBrowser(trustedEvent);
+    deps.assertTrusted.mockImplementation(() => { throw new Error('frame navigated'); });
+    resolve('native-result');
+    await expect(selection).rejects.toThrow(/frame navigated/);
+    expect(deps.setCustomBrowser).not.toHaveBeenCalled();
   });
 
   // The login-copy switch failed with only a generic toast; a known cause such as another Cindy
