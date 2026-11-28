@@ -192,6 +192,7 @@ export function BotSettings({
   const botIdentityRef = useRef(bot.id);
   const reconciledBotRef = useRef(bot);
   const savingProfileRef = useRef(false);
+  const confirmedRemoteAvatarRef = useRef<Pick<BotProfile, 'avatar' | 'avatarColor'> | null>(null);
   const saveOwner = useRef(getDataOwnerGeneration()).current;
   const savedSettingsRef = useRef(
     normalizeBotSettingsPayload(
@@ -215,13 +216,18 @@ export function BotSettings({
       if (!isDataOwnerIdCurrent(saveOwner)) throw new Error('Settings owner changed');
       const operationOwner = getDataOwnerGeneration();
       savingProfileRef.current = true;
+      const avatarBeforeSave = confirmedRemoteAvatarRef.current;
       try {
         await target.profile.update(bot.id, {
           ...botSettingsChanges(savedSettingsRef.current, payload, true, modelSelection),
           ...(modelSelection ? { acceptModelSelection: true } : {}),
         });
         if (!isDataOwnerGenerationCurrent(operationOwner)) throw new Error('Settings owner changed');
-        savedSettingsRef.current = payload;
+        // A profile save that started before the avatar receipt still carries the old avatar.
+        const confirmedAvatar = confirmedRemoteAvatarRef.current;
+        savedSettingsRef.current = confirmedAvatar && confirmedAvatar !== avatarBeforeSave
+          ? { ...payload, avatar: confirmedAvatar.avatar, avatarColor: confirmedAvatar.avatarColor }
+          : payload;
       } finally {
         savingProfileRef.current = false;
       }
@@ -408,15 +414,22 @@ export function BotSettings({
 
   const handleChooseAvatar = async (portrait: string) => {
     if (avatarInFlight.current) return;
+    if (!isDataOwnerIdCurrent(saveOwner)) return;
+    const operationOwner = getDataOwnerGeneration();
     avatarInFlight.current = true;
     setAvatarBusy(true);
     setAvatarError(false);
     try {
       await autosave.flush();
-      if (autosave.isDirty()) return;
+      if (!isDataOwnerGenerationCurrent(operationOwner) || autosave.isDirty()) return;
       // The picker chooses and crops on this computer; the teammate's own computer saves the image.
       const next = await target.profile.chooseAvatar(bot.id, portrait.split(',')[1]);
-      if (!next) return;
+      if (!next || !isDataOwnerGenerationCurrent(operationOwner)) return;
+      if (isRemote) {
+        confirmedRemoteAvatarRef.current = { avatar: next.avatar, avatarColor: next.avatarColor };
+        // A name save can be in flight while the avatar picker is saving.
+        savedSettingsRef.current = { ...savedSettingsRef.current, avatar: next.avatar, avatarColor: next.avatarColor };
+      }
       setAvatar(next.avatar);
       setAvatarColor(next.avatarColor);
     } catch {

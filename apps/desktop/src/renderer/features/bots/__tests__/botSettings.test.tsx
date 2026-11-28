@@ -6,6 +6,8 @@ import type { BotCapabilities, BotModelRoute, BotProfile } from '../botStore';
 import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainViewHistoryContext';
 import type { CustomMcpListContext, CustomMcpListResult } from '../../../../shared/customMcp';
 import { beginProvidersRefresh, commitProvidersSnapshot } from '@/lib/providersSnapshotStore';
+import { BotSettingsTargetContext } from '../botSettingsTarget';
+import { localBotSettingsTarget } from '../localBotSettingsTarget';
 
 // #6889 unit regression: the real settings picker must wait for crop
 // confirmation; the old upload-only assertion skipped cancellation entirely.
@@ -995,6 +997,67 @@ describe('Bot settings unified autosave', () => {
       expect(mocks.updateBotProfile).not.toHaveBeenCalled();
       expect(source).toHaveBeenCalledTimes(2);
       expect(window.electronAPI.profileChooseAvatar).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // #8122 unit regression: neither the local crop test nor the autosave scheduler
+  // exercises an older remote rename receipt arriving after the avatar receipt.
+  it('keeps the confirmed remote avatar and does not echo it after a delayed rename receipt', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    window.electronAPI.localDb.bots.chooseAvatarSource = vi.fn(async () => ({
+      canceled: false, previewDataUrl: 'data:image/png;base64,c2Ry',
+    }));
+    window.electronAPI.profileChooseAvatar = vi.fn(async () => { throw new Error('Local mode has no account'); });
+    const original = bot();
+    const renamed = { ...original, name: 'New name' };
+    const saved = { ...renamed, avatar: `cindy-media://blobs/${'c'.repeat(64)}.png`, avatarColor: 'teal' };
+    const merged = { ...saved, description: 'Host description' };
+    const avatarReceipt = Promise.withResolvers<BotProfile>();
+    const renameReceipt = Promise.withResolvers<BotProfile>();
+    const update = vi.fn().mockReturnValueOnce(renameReceipt.promise).mockResolvedValue(saved);
+    const chooseAvatar = vi.fn(() => avatarReceipt.promise);
+    const target = {
+      ...localBotSettingsTarget,
+      kind: 'remote' as const,
+      deviceId: 'test-mac',
+      profile: { update, chooseAvatar, retryInvitation: vi.fn() },
+    };
+    const viewFor = (profile: BotProfile) => (
+      <BotSettingsTargetContext.Provider value={target}>
+        <BotSettings bot={profile} onBack={vi.fn()} onOpenSession={vi.fn()} />
+      </BotSettingsTargetContext.Provider>
+    );
+    try {
+      const view = render(viewFor(original), { wrapper: ConfirmDialogProvider });
+      fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+      const picker = screen.getByRole('button', { name: 'bots.profile.changeAvatar' });
+      fireEvent.click(picker);
+      fireEvent.click(screen.getByRole('button', { name: 'bots.guided.upload' }));
+      await screen.findByRole('alertdialog');
+      fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.crop.done' }));
+      await waitFor(() => expect(chooseAvatar).toHaveBeenCalledTimes(1));
+
+      const name = screen.getByRole('textbox', { name: 'bots.nameLabel' });
+      fireEvent.change(name, { target: { value: renamed.name } });
+      fireEvent.blur(name);
+      expect(update).toHaveBeenCalledExactlyOnceWith(original.id, { name: renamed.name });
+
+      await act(async () => {
+        view.rerender(viewFor(saved));
+        avatarReceipt.resolve(saved);
+      });
+      fireEvent.blur(name);
+      await act(async () => {
+        view.rerender(viewFor(merged));
+        renameReceipt.resolve(merged);
+      });
+
+      expect(update).toHaveBeenCalledTimes(1);
+      expect((name as HTMLInputElement).value).toBe(saved.name);
+      expect(screen.getByDisplayValue(merged.description)).toBeTruthy();
+      expect(picker.querySelector('img')?.getAttribute('src')).toMatch(/^cindy-remote-media:/);
     } finally {
       vi.unstubAllGlobals();
     }
