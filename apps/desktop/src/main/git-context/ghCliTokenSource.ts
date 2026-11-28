@@ -93,6 +93,49 @@ export interface GhCliTokenSource {
   readTokenDetailed(): Promise<GhCliTokenReadResult>;
   /** 只探测 github.com 登录可用性，不读取或缓存 token。 */
   probeAvailability(): Promise<boolean>;
+  /** 本机登录 github.com 的账号(活跃账号在前);`null` 表示探测没做成。永不抛错。 */
+  listLogins(): Promise<GhCliLoginList | null>;
+  /** 指定账号的 token(不是活跃账号也不切换);拿不到返回 null。永不抛错。 */
+  readTokenForLogin(login: string): Promise<string | null>;
+}
+
+/** GitHub 登录名;`gh auth status --json` 的输出只按这个形状采信。 */
+const LOGIN_RE = /^[a-zA-Z0-9-]{1,39}$/;
+
+/** 账号列表;complete=false 表示其中某个账号没读准(不能据此得出「没有账号能读」)。 */
+export interface GhCliLoginList {
+  logins: string[];
+  complete: boolean;
+}
+
+/** `null` = 账号列表没读准(探测失败、输出形状不对),不能当成「没有备用账号」。 */
+function parseLogins(stdout: string): GhCliLoginList | null {
+  try {
+    const { hosts } = JSON.parse(stdout) as { hosts?: unknown };
+    if (!hosts || typeof hosts !== 'object') return null;
+    const entries = (hosts as Record<string, unknown>)['github.com'];
+    // 没有任何 github.com 账号时 gh 输出 `{"hosts":{}}` 并正常退出:这是「确实没有」,
+    // 不是读不到。
+    if (entries === undefined) return { logins: [], complete: true };
+    if (!Array.isArray(entries)) return null;
+    const logins: string[] = [];
+    let complete = true;
+    for (const entry of entries) {
+      const { login, state } = (entry ?? {}) as { login?: unknown; state?: unknown };
+      // `gh auth status --json` 在个别账号校验失败或没查完(gh 2.101 的 timeout)时仍以 0
+      // 退出,只把那个账号的 state 标成 error / timeout。读得到的账号照样可用,但这时的
+      // 列表不完整:不能因为它的存在得出「没有账号能读」——那会把一条读得到的 PR 钉成
+      // not-found,直到失败记忆过期。除 success 之外的状态一律当「这个账号没查准」。
+      if (state !== 'success') {
+        complete = false;
+        continue;
+      }
+      if (typeof login === 'string' && LOGIN_RE.test(login)) logins.push(login);
+    }
+    return { logins, complete };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -119,6 +162,11 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
   let cached: { result: GhCliTokenReadResult; expiresAt: number } | null = null;
   let inFlight: Promise<GhCliTokenReadResult> | null = null;
   let generation = 0;
+  // 多账号只服务「这个仓库该用哪个账号」的分支(见 repoAccountResolver),活跃账号仍是默认。
+  let loginsCache: { list: GhCliLoginList | null; expiresAt: number } | null = null;
+  let loginsInFlight: Promise<GhCliLoginList | null> | null = null;
+  const loginTokens = new Map<string, { token: string; expiresAt: number }>();
+  const loginTokenInFlight = new Map<string, Promise<string | null>>();
 
   function resolveGhBinary(): string {
     return systemGhBinary(platform, existsFn);
@@ -171,6 +219,88 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
     return inFlight;
   }
 
+  async function readLogins(): Promise<GhCliLoginList | null> {
+    const bin = deps.resolveBinary ? await deps.resolveBinary() : resolveGhBinary();
+    return new Promise<GhCliLoginList | null>((resolve) => {
+      try {
+        // `--json` 不吐 token,并在有账号鉴权异常时仍以 0 退出;逐个账号读钥匙串约 1s。
+        execFileFn(
+          bin,
+          ['auth', 'status', '--json', 'hosts', '--hostname', 'github.com'],
+          { timeout: GH_PROBE_TIMEOUT_MS, env: ghAccountEnv(), windowsHide: true },
+          // 非零退出只说明这次探测没做成(超时、spawn 失败、CLI 自身报错),
+          // 不能当成「本机没有备用账号」——那会让仓库被记成读不到。
+          (err, stdout) => resolve(err ? null : parseLogins(stdout)),
+        );
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  // 一次批量刷新可能同时遇到多个仓库的恢复探测,账号列表和每个账号的 token 都要合并在途读取,
+  // 否则同一轮会重复 spawn gh、重复读钥匙串。
+  async function listLogins(): Promise<GhCliLoginList | null> {
+    if (loginsCache && loginsCache.expiresAt > now()) return loginsCache.list;
+    if (loginsInFlight) return loginsInFlight;
+    const gen = generation;
+    loginsInFlight = readLogins()
+      .then((list) => {
+        // 登录态变过就丢掉:那可能是旧账号列表。
+        if (gen === generation)
+          loginsCache = {
+            list,
+            // 没读准的列表只短记,避免一次 CLI 卡顿锁住十分钟的失败记忆。
+            expiresAt: now() + (list && list.complete && list.logins.length > 0 ? ttl : negativeTtl),
+          };
+        return list;
+      })
+      .finally(() => {
+        if (gen === generation) loginsInFlight = null;
+      });
+    return loginsInFlight;
+  }
+
+  async function requestLoginToken(login: string): Promise<string | null> {
+    const bin = deps.resolveBinary ? await deps.resolveBinary() : resolveGhBinary();
+    return new Promise<string | null>((resolve) => {
+      try {
+        execFileFn(
+          bin,
+          ['auth', 'token', '--hostname', 'github.com', '--user', login],
+          { timeout: GH_TIMEOUT_MS, env: ghAccountEnv(), windowsHide: true },
+          (err, stdout) => {
+            // 登出 / 没过期的 token 都只是「这个账号用不了」,不升级成登录引导。
+            const token = err ? '' : stdout.trim();
+            resolve(token.length > 0 ? token : null);
+          },
+        );
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  async function readTokenForLogin(login: string): Promise<string | null> {
+    const hit = loginTokens.get(login);
+    if (hit && hit.expiresAt > now()) return hit.token;
+    const inflight = loginTokenInFlight.get(login);
+    if (inflight) return inflight;
+    const gen = generation;
+    const p = requestLoginToken(login)
+      .then((token) => {
+        if (gen !== generation) return token;
+        if (token) loginTokens.set(login, { token, expiresAt: now() + ttl });
+        else loginTokens.delete(login);
+        return token;
+      })
+      .finally(() => {
+        if (loginTokenInFlight.get(login) === p) loginTokenInFlight.delete(login);
+      });
+    loginTokenInFlight.set(login, p);
+    return p;
+  }
+
   // The legacy settings contract exposes a boolean. A transient failure can reuse
   // a recent confirmation for display only; authorization never consults this value.
   let lastConfirmedUntil = 0;
@@ -194,9 +324,15 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
       lastConfirmedUntil = 0;
       cached = null;
       inFlight = null;
+      loginsCache = null;
+      loginsInFlight = null;
+      loginTokens.clear();
+      loginTokenInFlight.clear();
     },
+    listLogins,
     probeAvailability,
     readTokenDetailed,
+    readTokenForLogin,
     async readToken(): Promise<string | null> {
       const result = await readTokenDetailed();
       return result.ok ? result.token : null;

@@ -115,6 +115,71 @@ describe('createGhCliTokenSource', () => {
     expect(execFileFn).toHaveBeenCalledTimes(1);
   });
 
+  it('没有 github.com 账号时返回完整的空列表', async () => {
+    // 未登录任何账号时 gh 输出 `{"hosts":{}}` 并正常退出:这是「确实没有」,不是读不到。
+    const execFileFn = vi.fn(
+      (_file: string, _args: string[], _opts: { timeout: number }, cb: ExecCb) =>
+        cb(null, JSON.stringify({ hosts: {} }), ''),
+    );
+    const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+
+    expect(await src.listLogins()).toEqual({ logins: [], complete: true });
+  });
+
+  it('零退出但带 state=error 的账号时保留可用账号并标记列表不完整', async () => {
+    // `gh auth status --json` 在个别账号校验失败时仍以 0 退出,只把那个账号标成 error。
+    // 读得到的账号必须照样探测(否则一个无关坏账号会永久拦住恢复);
+    // 同时这份列表不完整,不能据此写「没有账号能读」的失败记忆。
+    const execFileFn = vi.fn(
+      (_file: string, _args: string[], _opts: { timeout: number }, cb: ExecCb) =>
+        cb(
+          null,
+          JSON.stringify({
+            hosts: {
+              'github.com': [
+                { login: 'me', state: 'success', active: true },
+                { login: 'work', state: 'error' },
+              ],
+            },
+          }),
+          '',
+        ),
+    );
+    const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+
+    expect(await src.listLogins()).toEqual({ logins: ['me'], complete: false });
+  });
+
+  it('没查完的账号(state=timeout)也算列表不完整,不能当成没有账号能读', async () => {
+    // gh 2.101 会给没在规定时间内查完的账号返回 state=timeout。把这种条目当成「读不到」
+    // 会让调用方写出「本机没有账号能读这个仓库」的失败记忆,把一条读得到的 PR 钉成不存在。
+    const execFileFn = vi.fn(
+      (_file: string, _args: string[], _opts: { timeout: number }, cb: ExecCb) =>
+        cb(
+          null,
+          JSON.stringify({
+            hosts: {
+              'github.com': [{ login: 'me', state: 'success', active: true }, { login: 'work', state: 'timeout' }],
+            },
+          }),
+          '',
+        ),
+    );
+    const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+
+    expect(await src.listLogins()).toEqual({ logins: ['me'], complete: false });
+  });
+
+  it('gh auth status 非零退出时返回 null,不当成空列表', async () => {
+    const execFileFn = vi.fn(
+      (_file: string, _args: string[], _opts: { timeout: number }, cb: ExecCb) =>
+        cb(new Error('timeout'), '', ''),
+    );
+    const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+
+    expect(await src.listLogins()).toBeNull();
+  });
+
   it('可用性探测只执行静默账号 API，不读取或污染 token cache', async () => {
     const execFileFn = vi.fn(
       (_file: string, args: string[], opts: { timeout: number }, cb: ExecCb) => {

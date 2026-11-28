@@ -60,6 +60,8 @@ import {
 import type { GithubReadService } from './githubReadService';
 import type { GithubReadMethod } from '@cindy/maker-shared';
 import { optionalNullableString, requireString, throwIpcError } from '../utils/ipcValidate';
+import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
+import { createRepoAccountResolver } from './repoAccountResolver.js';
 import { registerGithubSetupIpc } from './githubSetupIpc.js';
 import { GitContextService } from './GitContextService.js';
 import {
@@ -140,6 +142,36 @@ function broadcastToAllWindows(
 async function readGithubToken() {
   return readGithubTokenDetailed();
 }
+
+/**
+ * 这个 token 对这个仓库有没有读权限。只有 404 能证明读不到私有仓库;403(限流、被封、组织
+ * 策略)和超时、网络错误、5xx 都是没查成,不能当成无权限写进失败记忆。用仓库而不是单条 PR:
+ * 一次写错的 PR 编号不能把整个仓库记成读不到。
+ */
+async function repoAccess(token: string, q: PrStatusQuery): Promise<boolean | 'unknown'> {
+  try {
+    await new GithubClient({
+      token,
+      owner: q.owner,
+      repo: q.repo,
+      fetchImpl: githubStatusFetch(token),
+    }).getRepo();
+    return true;
+  } catch (err) {
+    const { status } = err as { status?: unknown };
+    return status === 404 ? false : 'unknown';
+  }
+}
+
+/** 本机登录多个 gh 账号时,按仓库选用看得到它的那个(见 repoAccountResolver)。 */
+const repoAccounts = createRepoAccountResolver({
+  readToken: readGithubToken,
+  // 共享实例会被 invalidateSharedGhCliTokenSource() 换掉(聊天里的设备登录、重新授权),
+  // 这里每次取当前实例,不能把模块加载时的那个闭包住。
+  listLogins: () => getSharedGhCliTokenSource().listLogins(),
+  readTokenForLogin: (login) => getSharedGhCliTokenSource().readTokenForLogin(login),
+  repoAccess,
+});
 
 const ADAPTIVE_LOW_QUOTA_TTL_MS = 5 * 60_000;
 const ADAPTIVE_CRITICAL_QUOTA_TTL_MS = 15 * 60_000;
@@ -323,7 +355,8 @@ export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: st
     broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_STATUS_CHANGED, status, ownerStamp);
   });
   prStatusService = new PrStatusService({
-    readToken: readGithubToken,
+    readToken: (q) => repoAccounts.tokenFor(q),
+    recoverToken: (q, failedToken) => repoAccounts.recover(q, failedToken),
     // Account configured for the instance in the GitLab plugin first, then local glab sign-in.
     readGitlabToken: (host) => gitlabTokens.readTokenDetailed(host),
     fetchGitlab: (token, query) => fetchGitlabMrStatus(token, query, outboundFetch),
@@ -375,6 +408,7 @@ export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: st
   setGithubReadRuntime({ read: readGithub, manage: manageGithubPrs });
   registerGithubSetupIpc(() => {
     prStatusService?.invalidate();
+    repoAccounts.reset();
     githubTransport.invalidate();
   });
   // 自动化「指定 PR 或 Issue」：识别编号是 PR 还是 Issue（仅本机窗口）。
