@@ -31,6 +31,7 @@ import { useAttachments } from '@/hooks/useAttachments';
 import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 import { dispatchInputDeviceAction } from '@/lib/inputDeviceActions';
 import { makerChatStore } from '@/lib/makerChatStore';
+import type { AgentInputProjection, AgentInputQueuedMessage } from '../../../../shared/agentInputQueue';
 import {
   __testing as promptRecommendations,
   beginPromptRecommendationPrediction,
@@ -151,10 +152,12 @@ vi.mock('@/hooks/useAvailableAgents', () => ({ useAvailableAgents: () => ({ agen
 vi.mock('@/hooks/useAgentCapabilities', async (original) => ({ ...await original<typeof import('@/hooks/useAgentCapabilities')>(), useAgentCapabilities: () => ({ capabilities: null, loading: false }) }));
 
 const redeemDrag = vi.fn();
+const localEnqueue = vi.fn();
 const noOp = () => {};
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api: any = new Proxy({}, { get: (_obj, key) => {
   if (key === 'takePendingInstall') return async () => ({ filePath: null });
+  if (key === 'enqueue') return localEnqueue;
   if (key === 'redeemComposerAttachmentDrag') return redeemDrag;
   if (key === 'setModel') return h.setModel;
   if (key === 'uploadChatFolder') return h.uploadChatFolder;
@@ -242,6 +245,110 @@ function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}, t
   const view = render(taskRoster ? <TaskComposer {...props} /> : <ChatInput {...props} />);
   return { ...view, props };
 }
+
+// #13622 / unit: exercise the real editor, send dispatch and queue serialization.
+// With nine distinct links the old composer reached the enqueue port and briefly
+// cleared the draft. The fake port models the current IPC limit without reading sessions.
+it('warns before enqueue and keeps the draft editable until its task references fit', async () => {
+  const sessionId = 'synthetic-reference-composer';
+  const links = Array.from({ length: 9 }, (_, index) => `cindy://session/synthetic-${index}`);
+  h.localProviders = [sshProvider('openai', [sshModel('gpt-6.2-sol')], 'codex')];
+  const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+  localEnqueue.mockReset().mockImplementation(async (id: string, item: AgentInputQueuedMessage): Promise<AgentInputProjection> => {
+    if ((item.sessionRefs?.length ?? 0) > 8) {
+      throw new Error('[INVALID_PARAMS] sessionRefs must contain at most 8 items');
+    }
+    return {
+      sessionId: id,
+      pendingQueue: [item],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: false,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+      credentialSwitchWait: null,
+    };
+  });
+  makerChatStore.setSessionRuntime(sessionId, { agentKind: 'codex', sessionProviderId: 'openai', autoTitleDisabled: true });
+  const { props } = renderComposer({
+    sessionId,
+    runtimeAgentKind: 'codex',
+    vendorKey: 'codex',
+    initialWorkingDir: '/synthetic-workspace',
+    initialModel: 'gpt-6.2-sol',
+    initialProviderId: 'openai',
+    onSend: (text, model, effort, permission, files, mentions) =>
+      makerChatStore.sendMessage(sessionId, text, model, effort, permission, '/synthetic-workspace', files, mentions),
+  });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const enter = async (text: string) => {
+    await act(async () => { h.editor!.commands.setContent(`<p>${text}</p>`); });
+  };
+  const send = async () => {
+    const button = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    await act(async () => { fireEvent.click(button); });
+  };
+  const overLimit = links.join(' ');
+  await enter(overLimit);
+  const draft = h.editor!.getJSON();
+  await send();
+  expect(localEnqueue).not.toHaveBeenCalled();
+  expect(error).toHaveBeenCalledWith('newChat.chatInput.tooManyTaskReferences');
+  expect(h.editor!.getJSON()).toEqual(draft);
+  expect(h.editor!.isEditable).toBe(true);
+
+  const corrected = [...links.slice(0, 8), 'xdt-maker://session/synthetic-0'].join(' ');
+  await enter(corrected);
+  await send();
+  expect(localEnqueue).toHaveBeenCalledOnce();
+  const queued = localEnqueue.mock.calls[0][1] as AgentInputQueuedMessage;
+  expect(queued.text).toBe(corrected);
+  expect(queued.sessionRefs?.map(ref => ref.sessionId)).toEqual(
+    links.slice(0, 8).map(link => link.split('/').at(-1)),
+  );
+  expect(h.editor!.getText()).toBe('');
+
+  await enter('Ordinary message');
+  await send();
+  expect(localEnqueue).toHaveBeenCalledTimes(2);
+  expect(localEnqueue.mock.calls[1][1]).toMatchObject({ text: 'Ordinary message' });
+  expect(localEnqueue.mock.calls[1][1].sessionRefs).toBeUndefined();
+  expect(error).toHaveBeenCalledTimes(1);
+  makerChatStore.purgeSession(sessionId);
+});
+
+it.each(['new task', 'queue edit'])('keeps the %s draft open when its reference count is too high', async (entry) => {
+  const editing = entry === 'queue edit';
+  const submit = vi.fn().mockResolvedValue(true);
+  const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+  h.localProviders = [sshProvider('openai', [sshModel('gpt-6.2-sol')], 'codex')];
+  renderComposer({
+    runtimeAgentKind: 'codex',
+    vendorKey: 'codex',
+    initialWorkingDir: '/synthetic-workspace',
+    initialModel: 'gpt-6.2-sol',
+    initialProviderId: 'openai',
+    ...(editing ? { sessionId: 'synthetic-queue-editor', queueEditingClientId: 'queued-message', onQueueEditSubmit: submit } : { onSend: submit }),
+  });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const links = Array.from({ length: 9 }, (_, index) => `cindy://session/synthetic-${index}`);
+  const buttonName = editing ? 'newChat.pendingQueue.editSaveAria' : 'newChat.sendButton.send';
+  await act(async () => { h.editor!.commands.setContent(`<p>${links.join(' ')}</p>`); });
+  const draft = h.editor!.getJSON();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: buttonName })); });
+  expect(error).toHaveBeenCalledWith('newChat.chatInput.tooManyTaskReferences');
+  expect(submit).not.toHaveBeenCalled();
+  expect(h.editor!.getJSON()).toEqual(draft);
+
+  await act(async () => { h.editor!.commands.setContent(`<p>${links.slice(0, 8).join(' ')}</p>`); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: buttonName })); });
+  expect(submit).toHaveBeenCalledOnce();
+});
 
 // Unit: the editor and outer file handlers share the same drop event. A reserved
 // MIME mixed with plain text must never insert text or fall through to addFiles.

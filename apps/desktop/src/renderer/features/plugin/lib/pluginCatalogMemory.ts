@@ -10,6 +10,7 @@ import type { PluginCatalogFilter } from './pluginMarketPresentation';
 function emptyCatalogMemory() {
   return {
     query: '', catalogTab: 'installed' as 'installed' | 'market', originFilter: 'all' as PluginCatalogFilter,
+    searchScope: 'all' as PluginCatalogFilter,
     installedLimit: 10, marketTotal: null as number | null,
     browser: { current: emptyPluginBrowserCache() },
     marketIcons: new Map() as MarketIconCache,
@@ -47,7 +48,30 @@ export function pluginCatalogMemory(ownerKey: string, target: string): CatalogMe
   return memory;
 }
 
-export function usePluginCatalogState<K extends 'query' | 'catalogTab' | 'originFilter' | 'installedLimit' | 'marketTotal' | 'todayPool' | 'consumedToday' | 'todayLoaded' | 'recommendationBatch' | 'snapshot' | 'remoteSnapshot' | 'catalogPaging' | 'catalogRevision'>(
+/** A new page visit starts at Installed; data stays warm across route changes. */
+export function usePluginCatalogMemory(ownerKey: string, target: string): CatalogMemory {
+  const memory = pluginCatalogMemory(ownerKey, target);
+  const visit = useRef<CatalogMemory | null>(null);
+  if (visit.current !== memory) {
+    visit.current = memory;
+    memory.query = '';
+    memory.catalogTab = 'installed';
+    memory.originFilter = 'all';
+    memory.searchScope = 'all';
+    memory.installedLimit = 10;
+    memory.scroll = { offset: 0, anchor: null };
+    // Keep page contents and measurements, but never scroll a fresh visit to
+    // an anchor belonging to the page that was closed.
+    for (const grid of [memory.installedGrid, memory.browser.current.grid,
+      ...[...(memory.browser.current.variants?.values() ?? [])].map(cache => cache.grid)]) {
+      delete grid.offset;
+      delete grid.restore;
+    }
+  }
+  return memory;
+}
+
+export function usePluginCatalogState<K extends 'query' | 'catalogTab' | 'originFilter' | 'searchScope' | 'installedLimit' | 'marketTotal' | 'todayPool' | 'consumedToday' | 'todayLoaded' | 'recommendationBatch' | 'snapshot' | 'remoteSnapshot' | 'catalogPaging' | 'catalogRevision'>(
   memory: CatalogMemory, key: K,
 ): [CatalogMemory[K], Dispatch<SetStateAction<CatalogMemory[K]>>] {
   const [state, setState] = useState({ memory, value: memory[key] });

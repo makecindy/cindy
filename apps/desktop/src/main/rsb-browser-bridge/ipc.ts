@@ -49,6 +49,9 @@ import {
   pickResourceEventTarget,
   type GuestWebContentsLike,
 } from './resource-watchdog.js';
+import { runWebContentsOpWithGuard } from './webContentsGuard.js';
+
+export const RSB_CAPTURE_PAGE_TIMEOUT_MS = 15_000;
 
 interface IpcLogger {
   info(message: string, ...args: unknown[]): void;
@@ -65,6 +68,8 @@ export interface RegisterRsbBrowserBridgeOptions {
   getHostWebContents: () => WebContents | null;
   /** Main-owned popup WebContents do not expose webview.hostWebContents. */
   getNativePopupOwnerWebContents?: (webContentsId: number) => WebContents | null;
+  /** Timeout override for capturePage() IPC calls (defaults to RSB_CAPTURE_PAGE_TIMEOUT_MS). */
+  captureTimeoutMs?: number;
   logger: IpcLogger;
 }
 
@@ -227,10 +232,22 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
 
     let image: Electron.NativeImage;
     try {
-      image = await target.capturePage();
+      image = await runWebContentsOpWithGuard(
+        target,
+        () => target.capturePage(),
+        {
+          label: 'capturePage',
+          timeoutMs: opts.captureTimeoutMs ?? RSB_CAPTURE_PAGE_TIMEOUT_MS,
+          additionalDestroyedTargets: [event.sender],
+        },
+      );
     } catch (err) {
       logger.warn('RSB browser screenshot capture failed', { tabId, err });
-      throwIpcError('INTERNAL', 'capturePage failed');
+      const msg =
+        err instanceof Error && err.message.includes('timed out')
+          ? 'capturePage timed out'
+          : 'capturePage failed';
+      throwIpcError('INTERNAL', msg);
     }
     // 空图 = 页面还没渲染出内容(刚导航 / guest 未完成首帧)。按失败处理:
     // 写剪贴板路径会静默覆盖用户已有内容却什么都得不到,评论路径会产出全空附件。

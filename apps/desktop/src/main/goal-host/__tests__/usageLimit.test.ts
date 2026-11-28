@@ -110,6 +110,22 @@ describe('classifyTurnOverload', () => {
     expect(classifyTurnOverload({ codexErrorInfo: 'serverOverloaded' })).toBe(true);
   });
 
+  it('结构化 reason=upstream-overload 命中时不依赖文案，大写展示态 reason 不触发重试判定', () => {
+    expect(
+      classifyTurnOverload({
+        message: 'The upstream declined this request.',
+        reason: 'upstream-overload',
+      }),
+    ).toBe(true);
+    // telegram-bot-parity.md: 大写 UPSTREAM_OVERLOADED 仅作展示文案映射，不触发自动重试。
+    expect(
+      classifyTurnOverload({
+        message: 'stream disconnected before completion',
+        reason: 'UPSTREAM_OVERLOADED',
+      }),
+    ).toBe(false);
+  });
+
   it('非过载的结构化 tag 不误判成过载', () => {
     // usageLimitExceeded 要走限额通道等账号周期重置，不能被拽进一分钟短窗口。
     expect(classifyTurnOverload({ message: 'boom', codexErrorInfo: 'usageLimitExceeded' })).toBe(false);
@@ -151,6 +167,18 @@ describe('classifyTurnUsageLimit (billing depletion)', () => {
 describe('classifyTurnUsageLimit (Codex structured tag)', () => {
   it('matches codexErrorInfo usageLimitExceeded even without limit wording', () => {
     expect(classifyTurnUsageLimit({ codexErrorInfo: 'usageLimitExceeded', message: 'Upgrade to Pro' })).toBe(true);
+  });
+
+  // Plugin-engine structured reasons must route to usage-limit vs overload without depending on wording.
+  it('matches ACP plugin structured usage-limit and overload reasons', () => {
+    expect(classifyTurnUsageLimit({ reason: 'acp-usage-limit', message: 'upstream text' })).toBe(true);
+    expect(
+      classifyTurnUsageLimit({
+        message: 'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+      }),
+    ).toBe(true);
+    expect(classifyTurnOverload({ reason: 'acp-overloaded', message: 'upstream text' })).toBe(true);
+    expect(classifyTurnOverload({ reason: 'acp-usage-limit', message: 'upstream text' })).toBe(false);
   });
 });
 

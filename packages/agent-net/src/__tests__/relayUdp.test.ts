@@ -566,9 +566,21 @@ it('gates relay UDP admission on full-size probe, never blames hop 1 when probe 
   // Turning VPN off (networkChanged) immediately clears suspension and re-probes back to UDP within 1s.
   answerProbes = true;
   path.networkChanged();
+  expect(path.unackedDurationMs()).toBeLessThan(100);
   step(1_000);
   expect(path.suspension).toBeNull();
   expect(path.send('member', new Uint8Array(100))).toBe(true);
+  expect(path.unackedDurationMs()).toBe(0);
+  expect(path.verifiedAt).toBeGreaterThan(0);
+
+  // Explicit lightweight probe sends a registration even while idle without suspending UDP.
+  step(1_000);
+  const beforeProbe = registrations().length;
+  path.probeRegistrationNow();
+  expect(registrations().length).toBe(beforeProbe + 1);
+  expect(path.unackedDurationMs()).toBeGreaterThanOrEqual(0);
+  step(250);
+  expect(path.unackedDurationMs()).toBe(0);
 });
 
 it('does not suspend legacy relay UDP when one peer stalls while another relayed peer acknowledges cleanly, and resets backoff across idle gaps', async () => {

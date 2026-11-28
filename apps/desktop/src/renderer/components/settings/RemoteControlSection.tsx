@@ -10,7 +10,7 @@ import { remoteControlSettings } from './RemoteControlSection.settings-search';
  * 实例运维(CloudDeviceDirectory),且云实例卡与本机卡一起常驻,「我的设备」收起时
  * 也可见;其余账号的页面与请求不变。
  * 「我的设备」也是设备管理(用户裁决 2026-11-25):有云主机入口的组织成员在本机卡下面多一行「云主机」
- * (CloudComputerRow,与侧栏菜单同一份入口),添加、查看进度和管理都去网页;开好的云主机就是列表里的设备。
+ * (CloudComputerRow),添加、查看进度和管理都去网页;开好的云主机就是列表里的设备。
  * (Slack 连接子块已迁至「IM 机器人」页 Cindy 栏, 见 ImBotSection.tsx + HookConnectionsSection.tsx)
  *
  * 「Agent-Net (Beta)」开关(useRemoteConnectionV2,默认关，由主进程保存并切换这台电脑的传输):
@@ -48,6 +48,7 @@ import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useRemoteConnectionV2 } from '@/features/remote-connection-v2/useRemoteConnectionV2';
 import { RemoteConnectionV2Section } from '@/features/remote-connection-v2/RemoteConnectionV2Section';
 import { toast } from '@/lib/toast';
+import type { AgentNetSwitchRejoin } from '../../../shared/selfHostedRelay';
 import { SETTINGS_SECTION_TITLE_CLASS, SettingsCard, SettingsPageHeader, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 export { CollapsibleSubSection } from './CollapsibleSubSection';
@@ -119,8 +120,19 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
       const known = ['NOT_SIGNED_IN', 'SECURE_STORAGE_UNAVAILABLE', 'PORT_IN_USE', 'START_FAILED', 'FAILED'].includes(code) ? code : 'FAILED';
       toast.error(t(`settings.remoteControl.relay.errors.${known}`));
     };
+    // Turning Agent-Net on rejoined this computer first (it was removed from the account): same wording as 「重新加入」 in 我的设备.
+    const rejoined = (event: Event) => {
+      const result = (event as CustomEvent<{ result: AgentNetSwitchRejoin }>).detail?.result;
+      if (result === 'rejoined') toast.success(t('settings.devices.rejoin.done'));
+      else if (result === 'agent-net-unavailable') toast.success(t('settings.devices.rejoin.doneWithoutAgentNet'));
+      else toast.error(t(result === 'unsupported' ? 'settings.devices.rejoin.unsupported' : 'settings.devices.rejoin.failed'));
+    };
     window.addEventListener('agent-net-preference-error', report);
-    return () => window.removeEventListener('agent-net-preference-error', report);
+    window.addEventListener('agent-net-rejoin-result', rejoined);
+    return () => {
+      window.removeEventListener('agent-net-preference-error', report);
+      window.removeEventListener('agent-net-rejoin-result', rejoined);
+    };
   }, [t]);
   const deepLink = useRemoteDevicesDeepLink();
   // 设备深链由「我的设备」定位;拓扑只管连接,不再打开深链指向的那台设备的卡片(用户裁决 2026-11-25)。
@@ -278,7 +290,13 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
               <SettingsRow
                 title={t(remoteControlSettings.v2.titleKey)}
                 hint={
-                  v2.changedBy && v2.changedBy.enabled === v2.enabled ? (
+                  v2.removed && !v2.enabled ? (
+                    <>
+                      {t(remoteControlSettings.v2.descriptionKey)}
+                      {/* 被移除过而自动关掉（2026-11-26）：重新打开即可重新加入（agent-net-device-removal.md） */}
+                      <span className="mt-1 block text-[var(--text-secondary)]">{t('settings.remoteControl.v2.removedOff')}</span>
+                    </>
+                  ) : v2.changedBy && v2.changedBy.enabled === v2.enabled ? (
                     <>
                       {t(remoteControlSettings.v2.descriptionKey)}
                       {/* 原型:别的设备远程改了这个开关时，写明是谁、几点(agent-net.md「远程切换其他电脑的连接方式」) */}

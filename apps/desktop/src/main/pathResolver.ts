@@ -407,7 +407,7 @@ export async function bfsFindManyBySuffix(
     { dir: root, depth: 0, crossed: [] },
   ];
   let visited = 0;
-  for (let cursor = 0; cursor < queue.length && !allFull(); cursor++) {
+  walk: for (let cursor = 0; cursor < queue.length && !allFull(); cursor++) {
     const { dir, depth, crossed } = queue[cursor]!;
     // Release consumed paths without shifting the pending breadth-first queue.
     queue[cursor] = undefined;
@@ -438,6 +438,9 @@ export async function bfsFindManyBySuffix(
           if (!crossed.every((pair) => bucket.named.has(pair))) continue;
           if (norm.endsWith(bucket.suffix) && isPathAllowed(abs)) {
             bucket.out.push(abs);
+            // No later entry can change any bucket once every candidate limit
+            // is reached. Do not process the rest of a wide directory or yield.
+            if (bucket.out.length >= maxCandidates && allFull()) break walk;
           }
         }
       }

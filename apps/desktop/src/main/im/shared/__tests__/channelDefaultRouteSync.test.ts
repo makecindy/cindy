@@ -361,13 +361,13 @@ describe('syncUnderLock', () => {
     mocks.resolveDefaults.mockResolvedValue({ ...OLD, fingerprint: 'fp-back' });
     await sync().syncUnderLock('t1');
     expect((await rowOf('t1')).agentDeviceId).toBeNull();
-    expect(mocks.applyRoute).toHaveBeenLastCalledWith('t1', { ...OLD, agentDeviceId: null, fastMode: false }, 'claude-code');
+    expect(mocks.applyRoute).toHaveBeenLastCalledWith('t1', { ...OLD, agentDeviceId: null, fastMode: false }, 'claude-code', null);
   });
   it('switches a following task and records the read-back route under the new fingerprint', async () => {
     await insertTask('t1', OLD);
     await expect(sync().syncUnderLock('t1')).resolves.toBe(false);
 
-    expect(mocks.applyRoute).toHaveBeenCalledWith('t1', { ...NEW, agentDeviceId: null, fastMode: false }, 'claude-code');
+    expect(mocks.applyRoute).toHaveBeenCalledWith('t1', { ...NEW, agentDeviceId: null, fastMode: false }, 'claude-code', null);
     const record = parseImDefaultRouteRecord((await rowOf('t1')).imDefaultRoute);
     expect(record).toEqual({ v: 1, fp: 'fp-new', route: NEW });
   });
@@ -400,7 +400,7 @@ describe('syncUnderLock', () => {
     await insertTask('t1', OLD, { fastMode: true });
     await sync().syncUnderLock('t1');
 
-    expect(mocks.applyRoute).toHaveBeenCalledWith('t1', { ...NEW, agentDeviceId: null, fastMode: true }, 'claude-code');
+    expect(mocks.applyRoute).toHaveBeenCalledWith('t1', { ...NEW, agentDeviceId: null, fastMode: true }, 'claude-code', null);
   });
 
   it('still defers the generic apply when the staged claim write fails', async () => {
@@ -958,7 +958,7 @@ describe('official bot follows defaults without an extra control', () => {
     await insertTask('official', OLD, { source: 'telegram', marker: false, record: null, fastMode: true });
     await writeHookDefaultRouteRecord('official', hookFp);
     await (await officialFollower()).syncUnderLock('official');
-    expect(mocks.applyRoute).toHaveBeenCalledWith('official', { ...NEW, agentDeviceId: null, fastMode: true }, 'claude-code');
+    expect(mocks.applyRoute).toHaveBeenCalledWith('official', { ...NEW, agentDeviceId: null, fastMode: true }, 'claude-code', null);
     expect((await rowOf('official')).permissionMode).toBe('auto');
     expect(parseImDefaultRouteRecord((await rowOf('official')).imDefaultRoute)?.fp).toBe(nextHookFp);
     mocks.fingerprint.mockReturnValue(hookFp);
@@ -979,7 +979,7 @@ describe('official bot follows defaults without an extra control', () => {
     await insertTask('official', OLD, { source: 'telegram', marker: false, record: null });
     await writeHookDefaultRouteRecord('official', automaticFp);
     await (await officialFollower()).syncUnderLock('official');
-    expect(mocks.applyRoute).toHaveBeenCalledWith('official', { ...NEW, agentDeviceId: null, fastMode: false }, 'claude-code');
+    expect(mocks.applyRoute).toHaveBeenCalledWith('official', { ...NEW, agentDeviceId: null, fastMode: false }, 'claude-code', null);
     expect(parseImDefaultRouteRecord((await rowOf('official')).imDefaultRoute)?.fp).toBe(nextHookFp);
   });
 
@@ -1006,8 +1006,44 @@ describe('official bot follows defaults without an extra control', () => {
     expect(parseImDefaultRouteRecord((await rowOf('official')).imDefaultRoute)?.route).toMatchObject(remote);
     mocks.resolveDefaults.mockResolvedValue({ ...remote, agentDeviceId: 'share:other', fingerprint: nextHookFp });
     await (await officialFollower()).syncUnderLock('official');
-    expect(mocks.applyRoute).toHaveBeenCalledWith('official', { ...remote, agentDeviceId: 'share:other', fastMode: false }, 'claude-code');
+    expect(mocks.applyRoute).toHaveBeenCalledWith('official', { ...remote, agentDeviceId: 'share:other', fastMode: false }, 'claude-code', null);
     expect((await rowOf('official')).agentDeviceId).toBe('share:other');
+  });
+
+  // 回归：IM/官方 hook 任务切到插件引擎(acp)后，默认路由跟随需传递 currentProviderId、支持切入/切出 acp，
+  // 且手动切到 acp 立墓碑后不再被默认覆盖。最小失败输入：acp 任务与内置默认互切。
+  it('follows channel default to and from a plugin engine and respects manual acp override', async () => {
+    const { writeHookDefaultRouteRecord } = await import('../../../hook-control/defaultRouteFollow');
+    const ACP_ROUTE: ImDefaultRoute = {
+      agentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+      effort: 'high',
+      agentDeviceId: 'mini',
+    };
+    await insertTask('official-acp', OLD, { source: 'x', marker: false, record: null });
+    await writeHookDefaultRouteRecord('official-acp', hookFp);
+    mocks.resolveDefaults.mockResolvedValue({ ...ACP_ROUTE, fingerprint: nextHookFp });
+    await (await officialFollower()).syncUnderLock('official-acp');
+    expect(mocks.applyRoute).toHaveBeenCalledWith(
+      'official-acp',
+      { ...ACP_ROUTE, fastMode: false },
+      'claude-code',
+      null,
+    );
+    expect((await rowOf('official-acp')).agentKind).toBe('acp');
+    expect((await rowOf('official-acp')).providerId).toBe(ACP_ROUTE.providerId);
+
+    // 切回内置默认时，把当前的 acp providerId 传给 applyRoute
+    mocks.fingerprint.mockReturnValue('["hook","fp-back-cc"]');
+    mocks.resolveDefaults.mockResolvedValue({ ...NEW, fingerprint: '["hook","fp-back-cc"]' });
+    await (await officialFollower()).syncUnderLock('official-acp');
+    expect(mocks.applyRoute).toHaveBeenLastCalledWith(
+      'official-acp',
+      { ...NEW, agentDeviceId: null, fastMode: false },
+      'acp',
+      ACP_ROUTE.providerId,
+    );
   });
 
   it('does not claim historical official tasks, personal bot tasks, or remote tasks', async () => {
@@ -1028,5 +1064,35 @@ describe('official bot follows defaults without an extra control', () => {
     mocks.readPendingRoute.mockReturnValueOnce(undefined);
     expect(await (await officialFollower()).syncUnderLock('official')).toBe(true);
     expect(parseImDefaultRouteRecord((await rowOf('official')).imDefaultRoute)?.pendingRev).toBe(7);
+  });
+
+  // 2026-11-27: 插件引擎跟随切换必须把当前插件 providerId 传给 applySessionRouteUnderSendLock，
+  // 以便跨插件引擎(同样 agentKind='acp'、不同 providerId)正确识别为跨引擎切换。
+  it('passes current providerId when following away from a plugin engine session', async () => {
+    const oldAcp = {
+      agentKind: 'acp' as const,
+      model: 'deepseek-v4',
+      providerId: 'acp-plugin:dsh:dsh',
+      effort: '',
+    };
+    const nextAcp = {
+      agentKind: 'acp' as const,
+      model: 'gemini-3-pro',
+      providerId: 'acp-plugin:agy:agy',
+      effort: '',
+    };
+    await insertTask('official-acp', oldAcp, {
+      source: 'telegram',
+      marker: false,
+      record: buildImDefaultRouteRecord(hookFp, oldAcp),
+    });
+    mocks.resolveDefaults.mockResolvedValue({ ...nextAcp, fingerprint: nextHookFp });
+    await (await officialFollower()).syncUnderLock('official-acp');
+    expect(mocks.applyRoute).toHaveBeenCalledWith(
+      'official-acp',
+      { ...nextAcp, agentDeviceId: null, fastMode: false },
+      'acp',
+      oldAcp.providerId,
+    );
   });
 });

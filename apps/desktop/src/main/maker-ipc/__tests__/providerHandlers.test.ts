@@ -2828,6 +2828,25 @@ describe('provider:custom:* CRUD handlers', () => {
     );
   });
 
+  it.each([
+    ['zhipu-coding-plan-cn', 'https://open.bigmodel.cn/api/coding/paas/v4'],
+    ['zhipu-glm-global', 'https://api.z.ai/api/paas/v4'],
+    ['zhipu-glm-cn', 'https://proxy.example/v4'],
+  ])('uses saved preset identity and endpoint to exclude %s at %s from the voice probe', async (catalogPresetId, baseUrl) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const fetchModels = vi.fn(async () => ({ ok: true, models: [{ id: 'chat', name: 'Chat' }] }));
+    registerProviderHandlers(harness, makeDeps({
+      fetchModels, readSavedProviderRoute: () => ({ catalogPresetId, baseUrl, modelsUrl: null }),
+    }));
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      savedProviderId: 'saved-1', agent: 'pi', apiKey: 'fixture', authMethod: 'apiKey',
+      catalogPresetId: 'zhipu-glm-cn', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    });
+    expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({ catalogPresetId, baseUrl }));
+    expect(fetchModels).not.toHaveBeenCalledWith(expect.objectContaining({ probeGlmFlash: expect.any(Function) }));
+  });
+
   it('pins the request target to the saved endpoint so a spoofed baseUrl cannot exfiltrate the secret header', async () => {
     // 安全边界在 main:renderer 传的 baseUrl 不可信。带 savedProviderId 时,请求目标必须
     // 被钉回已存 baseUrl/modelsUrl,密文头只可能发往该供应商自己的端点,而非攻击者地址。
@@ -5639,11 +5658,17 @@ describe('model context limit IPC', () => {
     });
     await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 80, stamp);
     expect(writeModelCompaction).toHaveBeenCalledExactlyOnceWith([primary, related], 80);
-    for (const invalid of [49, 91, 80.5, '80', NaN]) {
+    // Owner ruling 2026-10-29: the ratio range is back to 50–95 with 1% granularity.
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 95, stamp);
+    expect(writeModelCompaction).toHaveBeenLastCalledWith([primary, related], 95);
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 91, stamp);
+    expect(writeModelCompaction).toHaveBeenLastCalledWith([primary, related], 91);
+    expect(writeModelCompaction).toHaveBeenCalledTimes(3);
+    for (const invalid of [49, 96, 80.5, '80', NaN]) {
       await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, invalid, stamp)).rejects.toThrow();
     }
     await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 70, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
-    expect(writeModelCompaction).toHaveBeenCalledTimes(1);
+    expect(writeModelCompaction).toHaveBeenCalledTimes(3);
   });
 
   it('returns native facts separately from model preferences without writing or launching a task', async () => {
@@ -6720,6 +6745,61 @@ describe('Agent API connection configuration', () => {
       expect(readApiKey).toHaveBeenCalledExactlyOnceWith('pi');
       expect(JSON.stringify(readback)).not.toContain('synthetic-key');
     } finally { await client.close(); await server.close(); }
+  });
+  it.each(['https://open.bigmodel.cn/api/anthropic', 'https://open.bigmodel.cn/api/coding/paas/v4', 'https://open.bigmodel.cn/api/paas/v4'])(
+    'refreshes ordinary preset Flash at %s and invalidates it on key rotation', async baseUrl => {
+    const flash = 'glm-realtime-flash';
+    let catalogDenied = false;
+    let key = 'fixture-key';
+    let access: 'available' | 'unavailable' | 'unknown' = 'available';
+    setup({
+      readSavedProviderRoute: () => ({ baseUrl, modelsUrl: null, catalogPresetId: 'zhipu-glm-cn' }),
+      readCustomProviderKeyForMutation: () => key,
+      storeCustomProviderKey: (_id, _agent, value) => { key = value; return true; },
+      fetchModels: spec => {
+        expect(spec.probeGlmFlash).toBeTypeOf('function');
+        return fetchProviderModels({ ...spec, probeGlmFlash: async () => access },
+          async () => catalogDenied ? new Response('', { status: 403 }) : Response.json({ data: [{ id: 'glm-5' }] }));
+      },
+    });
+    await createCustomProvider({ id: 'glm-test', name: 'GLM', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl, catalogPresetId: 'zhipu-glm-cn', wireProtocol: 'openai-chat', models: [] } } });
+    const refresh = async (saved = true) => {
+      expect(await manageAppModels({ operation: 'connection', change: { action: 'refreshModels',
+        providerId: 'glm-test', agent: 'pi' } }, async () => {})).toMatchObject({ saved, ...(catalogDenied && { ok: false, status: 403 }) });
+      const config = (await getCustomProvider('glm-test'))!;
+      const rows = config.runtimes.pi!.models;
+      expect(rows.map(row => row.id)).toEqual(['glm-5', flash]);
+      expect(rows.find(row => row.id === flash)?.discoveredMetadata?.mode).toBe('realtime');
+      const { realtimeModels } = await import('../../voice-conversation/realtimeModels.js');
+      const provider = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      return realtimeModels({ catalog: { ...BUNDLED_CATALOG, providers: [provider] },
+        disabled: () => false, gatewayAllowed: false, readKey: () => key,
+        gatewayConnection: () => { throw Error('unexpected gateway'); } }).map(model => model.id);
+    };
+    expect(await refresh()).toEqual([flash]);
+    access = 'unknown';
+    expect(await refresh()).toEqual([flash]);
+    access = 'unavailable';
+    expect(await refresh()).toEqual([]);
+    access = 'unknown';
+    expect(await refresh()).toEqual([]);
+    access = 'available';
+    expect(await refresh()).toEqual([flash]);
+    catalogDenied = true;
+    access = 'unknown';
+    expect(await refresh(false)).toEqual([flash]);
+    access = 'unavailable';
+    expect(await refresh()).toEqual([]);
+    expect(await refresh(false)).toEqual([]);
+    catalogDenied = false;
+    access = 'available';
+    expect(await refresh()).toEqual([flash]);
+    expect(await manageAppModels({ operation: 'connection', change: { action: 'setKey',
+      providerId: 'glm-test', agent: 'pi' } }, async () => {}, async () => 'fixture-replacement'))
+      .toMatchObject({ saved: true });
+    access = 'unknown';
+    expect(await refresh()).toEqual([]);
   });
   it('creates, discovers, edits and tests through Settings without returning credentials or upstream bodies', async () => {
     const deps = setup({ testConnection: vi.fn(async () => ({ ok: false, code: 'AUTH_INVALID' as const, latencyMs: 1, detail: 'synthetic-key' })) });

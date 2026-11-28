@@ -68,6 +68,7 @@ import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
 import { modelsAfterProviderEndpointEdit } from '@/lib/customProviderEndpointEdit';
 import type { DetectedProviderDraft } from '../../../shared/providerDetection';
+import { hasGlmFlashDiscovery, isGlmPresetRoute } from '../../../shared/glmRealtimeDiscovery';
 import { SpeechModelChoices } from './SpeechModelChoices';
 import { isRealtimeModel } from '../../../shared/speechProviderSetup';
 import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTarget, withSpeechApiPresets } from '../../../shared/speechProviderSetup';
@@ -1118,6 +1119,7 @@ export function AddProviderWizard({
         })
         .map(([modelsUrl]) => modelsUrl),
     );
+    const glmRefreshBatch = preset.id === 'zhipu-glm-cn' ? crypto.randomUUID() : undefined;
     const sharedProtocolUrls = new Set([...discoveryAgentsByUrl.entries()]
       .filter(([, owners]) => new Set(owners.map(agent => presetCandidateRoute(preset, agent).wireProtocol)).size > 1)
       .map(([url]) => url));
@@ -1158,10 +1160,13 @@ export function AddProviderWizard({
             const openHubsInventory = preset.id === 'openhubs' && !source.route
               && /^https:\/\/openhubs\.zhidemai\.com(?:\/v1)?\/?$/.test(source.baseUrl)
               && !!source.modelsUrl && isOpenHubsModelsUrl(source.modelsUrl);
-            const reuseDetection = detected?.catalog?.ok && agent === detected.agent
+            const glmProbe = !source.route && isGlmPresetRoute(source.baseUrl, preset.id);
+            const reuseDetection = !glmProbe && detected?.catalog?.ok && agent === detected.agent
               && apiKey === detected.apiKey && source.baseUrl === detected.preset.runtimes[agent]?.baseUrl
               && !source.route && !source.modelsUrl?.includes('client_version=');
             const r = reuseDetection ? detected!.catalog! : await api.fetchProviderModels({
+              ...(glmProbe ? { catalogPresetId: preset.id, refreshBatch: glmRefreshBatch }
+                : preset.id === 'zhipu-coding-plan-cn' ? { catalogPresetId: preset.id } : {}),
               ...(detected ? { redirect: 'error' as const } : {}),
               agent,
               baseUrl: source.baseUrl,
@@ -1229,7 +1234,8 @@ export function AddProviderWizard({
         const hasInterfaceProfiles = presetRouteHasInterfaceProfiles(preset, modelRegistry, runtimeRoute);
         for (const m of models) {
           const existing = next.get(m.id);
-          const candidate = presetModelCandidate(preset, agent, m, modelRegistry,
+          const candidate: ProviderRuntimeModelConfig | undefined = isGlmPresetRoute(runtimeRoute.baseUrl, preset.id) && hasGlmFlashDiscovery(m)
+            ? { id: m.id, name: m.name } : presetModelCandidate(preset, agent, m, modelRegistry,
             runtimeRoute,
             route, preservePresetOwnership || (!!hasInterfaceProfiles && !!modelsUrl && sharedProtocolUrls.has(modelsUrl)));
           if (!candidate && !existing?.agents.includes(agent)) continue;
@@ -1572,10 +1578,21 @@ export function AddProviderWizard({
   const speechPicks = [...picks.entries()].filter(([id, value]) => value.manualSpeech || value.agents.some(agent =>
     isSpeechModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent], mode: sel?.kind === 'preset' ? sel.preset.runtimes[agent]?.models.find(model => model.id === id)?.mode : undefined })));
   const speechIds = new Set(speechPicks.map(([id]) => id));
-  const realtimePicks = [...picks.entries()].filter(([id, value]) => value.realtime || value.agents.some(agent =>
-    isRealtimeModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent] }, modelRegistry)));
+  const glmPreset = sel?.kind === 'preset' && sel.preset.id === 'zhipu-glm-cn';
+  const realtimePicks = [...picks.entries()].filter(([id, value]) => glmPreset
+    ? value.agents.some(agent => hasGlmFlashDiscovery({ id, name: value.name, discoveredMetadata: value.discoveredMetadata?.[agent] }))
+    : value.realtime || value.agents.some(agent =>
+      isRealtimeModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent] }, modelRegistry)));
   const realtimeIds = new Set(realtimePicks.map(([id]) => id));
   const generalPicks = [...picks.entries()].filter(([id]) => !speechIds.has(id) && !realtimeIds.has(id));
+  const setAllGeneralPicks = (checked: boolean) => setPicks(previous => {
+    const next = new Map(previous);
+    for (const [id] of generalPicks) {
+      const value = next.get(id);
+      if (value && value.checked !== checked) next.set(id, { ...value, checked });
+    }
+    return next;
+  });
   const togglePick = (id: string) => setPicks(previous => {
     const next = new Map(previous); const value = next.get(id);
     if (value) next.set(id, { ...value, checked: !value.checked });
@@ -2216,9 +2233,10 @@ export function AddProviderWizard({
                     }} />}
                   {(speechTarget?.service === 'openai' || speechTarget?.service === 'bailian' || realtimePicks.length > 0) && <SpeechModelChoices
                     mode="realtime"
+                    sessionConfirmed={glmPreset}
                     choices={realtimePicks.map(([id, value]) => ({ id, ...value, manual: value.realtime }))}
                     onToggle={togglePick}
-                    onAdd={id => {
+                    onAdd={glmPreset ? undefined : id => {
                       const agent = speechTarget?.agent ?? realtimePicks[0]?.[1].agents[0];
                       if (!agent) return;
                       setPicks(previous => {
@@ -2235,26 +2253,24 @@ export function AddProviderWizard({
                       className="flex flex-col overflow-hidden rounded-xl border"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
-                      {generalPicks.map(([id, v], i) => (
+                      <div className="flex items-center gap-3 px-3.5 py-2.5">
+                        <Button data-settings-search-action="Select all ordinary models in the preset provider draft" variant="secondary" size="xs" tone="quiet" compact type="button" onClick={() => setAllGeneralPicks(true)}>
+                          {t('settings.providers.custom.fetch.selectAll')}
+                        </Button>
+                        <Button data-settings-search-action="Clear all ordinary model selections in the preset provider draft" variant="secondary" size="xs" tone="quiet" compact type="button" onClick={() => setAllGeneralPicks(false)}>
+                          {t('settings.providers.custom.fetch.clearAll')}
+                        </Button>
+                      </div>
+                      {generalPicks.map(([id, v]) => (
                         <label
                           key={id}
-                          className={cn(
-                            'flex cursor-pointer items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-                            i > 0 && 'border-t',
-                          )}
+                          className="flex cursor-pointer items-center gap-2.5 border-t px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
                           style={{ borderColor: 'var(--border-default)' }}
                         >
                           <Checkbox
                             data-settings-search-action="Choose whether this discovered model is added to the new provider"
                             checked={v.checked}
-                            onChange={() =>
-                              setPicks((prev) => {
-                                const next = new Map(prev);
-                                const cur = next.get(id);
-                                if (cur) next.set(id, { ...cur, checked: !cur.checked });
-                                return next;
-                              })
-                            }
+                            onChange={() => togglePick(id)}
                           />
                           <span
                             className="min-w-0 flex-1 truncate text-13"

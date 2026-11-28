@@ -28,6 +28,7 @@ export function renderMailCard(mail: MailCardData): string {
     (active && mail.deleteLabel ? button('delete', mail.deleteLabel) : '') +
     (active ? button('send', mail.sendLabel, true) : '') +
     (!mail.supersededBy && mail.pendingSend ? button('cancel', mail.pendingSend.cancelLabel) + button('now', mail.pendingSend.sendNowLabel) : '') +
+    (!mail.supersededBy && !mail.pendingSend && mail.state === 'sending' && mail.cancelLabel ? button('cancel', mail.cancelLabel) : '') +
     (!mail.supersededBy && mail.state === 'sent' && mail.continueLabel ? button('continue', mail.continueLabel) : '') + '</div></div></div>';
 }
 
@@ -94,7 +95,7 @@ export class MailCardService {
     if (!mail && priorMail && p.statusOnly && typeof p.statusOnly === 'object') {
       const status = p.statusOnly as Record<string, unknown>;
       mail = parseMailCard({ ...priorMail, status: status.status, state: status.state,
-        continueLabel: status.continueLabel, pendingSend: status.pendingSend });
+        continueLabel: status.continueLabel, pendingSend: status.pendingSend, cancelLabel: status.cancelLabel });
     }
     if (!mail || mail.supersededBy || (priorMail && (priorMail.accountId !== mail.accountId || priorMail.draftId !== mail.draftId))) return { ok: false };
     if (priorMail && ['sent', 'deleted'].includes(priorMail.state) && mail.state !== priorMail.state) return { ok: false };

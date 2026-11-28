@@ -10,13 +10,20 @@ import { verifiedInboundMediaMime } from './inboundMediaVerify';
 import type { GroupHistorySearchLane } from './groupHistorySearch';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
 
-export async function readGroupHistoryImage(args: {
+export interface GroupHistoryImageReadArgs {
   lane: GroupHistorySearchLane;
   messageId: string;
   ref: TelegramHistoryImageRef;
   scope: GroupHistoryAccessScope;
   isCurrent: () => boolean;
-}): Promise<{ data: string; mimeType: string } | null> {
+}
+
+const MAX_HISTORY_IMAGE_BYTES = 20 * 1024 * 1024;
+
+async function loadGroupHistoryImage(
+  args: GroupHistoryImageReadArgs,
+  needBytes: boolean,
+): Promise<{ absPath: string; mimeType: string; bytes?: Buffer } | null> {
   const snapshot = getCurrentDbClientSnapshot();
   if (!snapshot) return null;
   const assertCurrent = () => {
@@ -31,13 +38,15 @@ export async function readGroupHistoryImage(args: {
     assertCurrent();
     if (!info || !/^image\/(png|jpeg|gif|webp)$/.test(resolved.mimeType)) return null;
     try {
-      if ((await stat(resolved.absPath)).size > 20 * 1024 * 1024) return null;
+      const fileSize = (await stat(resolved.absPath)).size;
+      if (fileSize <= 0 || fileSize > MAX_HISTORY_IMAGE_BYTES) return null;
       const bytes = await readFile(resolved.absPath);
       assertCurrent();
-      if (!bytes.length || bytes.length > 20 * 1024 * 1024) return null;
+      if (!bytes.length || bytes.length > MAX_HISTORY_IMAGE_BYTES) return null;
       return {
-        data: bytes.toString('base64'),
+        absPath: resolved.absPath,
         mimeType: verifiedInboundMediaMime(bytes, resolved.mimeType, 'image'),
+        ...(needBytes ? { bytes } : {}),
       };
     } catch (error) {
       assertCurrent();
@@ -57,11 +66,15 @@ export async function readGroupHistoryImage(args: {
   assertCurrent();
   if (cached) {
     try {
-      if ((await stat(cached.absPath)).size > 20 * 1024 * 1024) return null;
+      const fileSize = (await stat(cached.absPath)).size;
+      if (fileSize <= 0 || fileSize > MAX_HISTORY_IMAGE_BYTES) return null;
+      if (!needBytes) {
+        return { absPath: cached.absPath, mimeType: cached.mimeType };
+      }
       const bytes = await readFile(cached.absPath);
       assertCurrent();
-      if (bytes.length > 0 && bytes.length <= 20 * 1024 * 1024)
-        return { data: bytes.toString('base64'), mimeType: cached.mimeType };
+      if (bytes.length > 0 && bytes.length <= MAX_HISTORY_IMAGE_BYTES)
+        return { absPath: cached.absPath, mimeType: cached.mimeType, bytes };
       return null;
     } catch (error) {
       assertCurrent();
@@ -76,7 +89,7 @@ export async function readGroupHistoryImage(args: {
         ? await args.scope.readImage(args.ref.fileId)
         : null;
   assertCurrent();
-  if (!bytes || bytes.length === 0 || bytes.length > 20 * 1024 * 1024) return null;
+  if (!bytes || bytes.length === 0 || bytes.length > MAX_HISTORY_IMAGE_BYTES) return null;
   const mimeType = verifiedInboundMediaMime(bytes, args.ref.mimeType, 'image');
   const stored = await integrationCachePut(
     {
@@ -93,5 +106,20 @@ export async function readGroupHistoryImage(args: {
     await stored.rollbackRef();
     return null;
   }
-  return { data: bytes.toString('base64'), mimeType };
+  return { absPath: stored.absPath, mimeType, ...(needBytes ? { bytes } : {}) };
+}
+
+/** Resolve an authorized group history image to a cached local cindy-media blob file path. */
+export async function resolveGroupHistoryImageFile(
+  args: GroupHistoryImageReadArgs,
+): Promise<{ absPath: string; mimeType: string } | null> {
+  const loaded = await loadGroupHistoryImage(args, false);
+  return loaded ? { absPath: loaded.absPath, mimeType: loaded.mimeType } : null;
+}
+
+export async function readGroupHistoryImage(
+  args: GroupHistoryImageReadArgs,
+): Promise<{ data: string; mimeType: string } | null> {
+  const loaded = await loadGroupHistoryImage(args, true);
+  return loaded?.bytes ? { data: loaded.bytes.toString('base64'), mimeType: loaded.mimeType } : null;
 }

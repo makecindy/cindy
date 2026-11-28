@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "Eine Einstellung auf deinem Computer eingeben"
   },
   "inputHandoff": {
+    "refreshVerification": "QR-Code aktualisieren",
     "originWarning": {
       "insecure": "Diese Seite verwendet keine sichere Verbindung. Deine Eingaben könnten von anderen mitgelesen werden.",
       "ip-address": "Diese Seite verwendet eine IP-Adresse statt einer Domain. Prüfe, ob es die erwartete Website ist.",

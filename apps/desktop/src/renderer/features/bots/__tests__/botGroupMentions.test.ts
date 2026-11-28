@@ -28,6 +28,7 @@ describe('resolveBotGroupMentions', () => {
   // Group identity: two namesakes from different organizations share a short alias.
   it('uses the visible organization name for candidate search and typed mentions', () => {
     const roster = chatGroupMentionRoster(['Alpha', 'Beta'].map(orgName => ({
+      isSelf: orgName === 'Beta',
       name: 'Ann', botId: orgName, orgName, showOrgName: true, actorKind: 'human',
       status: 'active', avatar: '', avatarColor: '',
     })));

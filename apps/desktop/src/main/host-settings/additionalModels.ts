@@ -18,6 +18,8 @@ import { readModelDisableOverrides, getHostModelAccessStore } from '../maker-hos
 import { getModelVisibilityMirrorSnapshot } from '../maker-host/model-visibility-mirror.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { buildTextOneshotPinOptions } from '../utility-model/textOneshotPinOptions.js';
+import { buildAuxiliaryRouteOptions } from '../utility-model/auxiliaryRouteRefsCore.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
 import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
 import type { OverrideSettingsCommitOptions, OverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { HostSettingsError } from './operations.js';
@@ -81,9 +83,18 @@ export async function modelSettingsChoices(domain: ModelSettingsDomain): Promise
     } : { entries: routes };
   } else if (isImSettingsDomain(domain)) {
     const permissions = domain === 'imWechat' ? ['ask', 'default', 'plan', 'auto'] : ['ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
+    let modelGroupChoices: SettingsChoice[] = [];
+    try {
+      modelGroupChoices = readModelGroupsConfig().routes
+        .filter(route => !route.hidden)
+        .map(route => ({ value: route.id, label: route.name }));
+    } catch {
+      modelGroupChoices = [];
+    }
     choices = {
       agentKind: catalog.agents.filter(agent => domain !== 'imWechat' || agent !== 'pi').map(agent => ({ value: agent, label: agent })),
       permissionMode: permissions.map(value => ({ value, label: value })),
+      modelGroup: modelGroupChoices,
       ...Object.fromEntries(['claude-code', 'codex', 'pi'].map(agent => [agent === 'claude-code' ? 'claudeCode' : agent,
         models.filter(item => item.agent === agent).map(({ provider, model }) => ({
           value: { providerId: provider.id, modelId: model.id, effort: model.defaultEffort ?? model.efforts[0] ?? 'high' },
@@ -93,8 +104,16 @@ export async function modelSettingsChoices(domain: ModelSettingsDomain): Promise
     };
   } else if (domain === 'subagentModel') choices = { claudeCode: models.filter(item => item.agent === 'claude-code').map(({ provider, model }) => ({ value: { providerId: provider.id, modelId: model.id }, label: `${model.name} · ${provider.name}` })) };
   else if (domain === 'auxiliaryModel') {
-    choices = { models: buildTextOneshotPinOptions(getActiveCatalog(), readModelDisableOverrides(), readProviderOrder(), hasOneshotProviderCredential)
-      .map(option => ({ value: option.id, label: option.label })) };
+    const pinOptions = buildTextOneshotPinOptions(getActiveCatalog(), readModelDisableOverrides(), readProviderOrder(), hasOneshotProviderCredential);
+    const usable = new Map(pinOptions.map((option) => [option.id, option] as const));
+    const currentAux = inspectModelSettings('auxiliaryModel');
+    const selectedAux = currentAux.status === 'ready' && Array.isArray(currentAux.value.models)
+      ? currentAux.value.models.filter((item): item is string => typeof item === 'string')
+      : [];
+    const routeOptions = buildAuxiliaryRouteOptions(usable, selectedAux);
+    choices = {
+      models: [...routeOptions, ...pinOptions].map(option => ({ value: option.id, label: option.label })),
+    };
   } else choices = { modelChain: models.map(({ provider, model, agent }) => ({ value: {
     harness: agent === 'claude-code' ? 'claude' : agent, providerId: provider.id, model: model.id,
     effort: model.defaultEffort && model.efforts.includes(model.defaultEffort) ? model.defaultEffort : '', fastMode: false,

@@ -315,6 +315,7 @@
 }
 
 .plugin-catalog-heading {
+  --wallpaper-glass-fill: var(--surface);
   position: sticky;
   top: 0;
   z-index: var(--z-raised);
@@ -325,7 +326,7 @@
   background-color: var(--surface);
 }
 
-.plugin-catalog-heading::before {
+.plugin-catalog-heading::after {
   position: absolute;
   inset-inline: 0;
   inset-block-end: 0;

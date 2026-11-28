@@ -9,7 +9,7 @@ import { MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { shortDeviceRef } from '@cindy/device-link';
 import type { AgentNetSocketOptions } from './socket.js';
 import type { PeerRule } from './socketPorts.js';
-import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute, type UdpRebindReason } from './types.js';
 import type { SessionConfig, SessionHandle } from './session/peer.js';
 import { WorkerSessions } from './session/workerSessions.js';
 
@@ -115,6 +115,8 @@ interface PeerStatus {
   directRttMs?: number | null;
   relayRttMs?: number | null;
   pathPreference?: PathPreference;
+  /** How the peer's datagrams reach the relay, as it said on the control stream (pathRouter.ts `relayVia`). */
+  peerRelayVia?: 'udp' | 'websocket' | null;
   dialing: boolean;
 }
 
@@ -130,9 +132,15 @@ function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: Read
     if ((status.pathPreference ?? 'auto') !== (prev?.pathPreference ?? 'auto')) return true;
     if ((status.directRttMs != null) !== (prev?.directRttMs != null)) return true;
     if ((status.relayRttMs != null) !== (prev?.relayRttMs != null)) return true;
+    if ((status.peerRelayVia ?? null) !== (prev?.peerRelayVia ?? null)) return true;
   }
   for (const [id, status] of previous) if (!next.has(id) && peerRoute(status)) return true;
   return false;
+}
+
+const UDP_REBIND_REASONS: ReadonlySet<UdpRebindReason> = new Set(['network-changed', 'send-errors', 'udp-blackhole']);
+function isUdpRebindReason(value: unknown): value is UdpRebindReason {
+  return typeof value === 'string' && UDP_REBIND_REASONS.has(value as UdpRebindReason);
 }
 
 /** The encrypted transport/parser runs off Main; privileged outbound sockets retain the host's proxy policy. */
@@ -185,7 +193,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     });
     const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, onRelayReplaced, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
       log: _log, onLog: _onLog, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog,
-      relayStuckMs: _stuck, onRelayClosed: _relayClosed, observeUdpTraffic, native, ...portable } = options;
+      relayStuckMs: _stuck, onRelayClosed: _relayClosed, onUdpRebound: _udpRebound, observeUdpTraffic, native, ...portable } = options;
     if (observeUdpTraffic) {
       // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
       const bytes = new BigUint64Array(new SharedArrayBuffer(2 * BigUint64Array.BYTES_PER_ELEMENT));
@@ -406,6 +414,8 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     directRttMs?: number | null;
     relayRttMs?: number | null;
     pathPreference?: PathPreference;
+    /** The peer's own leg to the relay, once it said (older peers never do). */
+    peerRelayVia?: 'udp' | 'websocket';
   }> {
     if (this.closed || this.closeTimer) return [];
     const routes = [];
@@ -420,6 +430,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
           ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
           ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
           ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+          ...(status.peerRelayVia ? { peerRelayVia: status.peerRelayVia } : {}),
         });
       }
     }
@@ -462,6 +473,12 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       if (typeof message.reason === 'string' && /^[A-Z0-9_]{1,80}$/.test(message.reason)) {
         this.options.log?.warn(`agent-net relay connection was ended by this device (${message.reason}); reconnecting`);
       }
+      return;
+    }
+    if (message.type === 'udp-rebound') {
+      const reason = isUdpRebindReason(message.reason) ? message.reason : null;
+      this.options.log?.info(`agent-net rebound UDP socket (reason=${reason ?? 'unknown'})`);
+      if (reason) this.options.onUdpRebound?.(reason);
       return;
     }
     if (message.type === 'delegation-requests') { this.options.onDelegationRequests?.(message.requests); return; }

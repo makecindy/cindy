@@ -80,10 +80,14 @@ export function UnifiedModelRow({
   sourceNotice,
   measurementOnly = false,
   readable = false,
+  tabIndex = 0,
+  position,
 }: {
   /** Hidden intrinsic-width probe: share row typography, omit interaction and fixed-size artwork. */
   measurementOnly?: boolean;
   readable?: boolean;
+  tabIndex?: number | undefined;
+  position?: { index: number; total: number } | undefined;
   /**
    * Supplied only in the combined All / Favorites views; omitted = the local description.
    * The panel omits it only for this catalog's own Cindy AI (see UnifiedModelPanel aggregateSourceLabel).
@@ -164,7 +168,9 @@ export function UnifiedModelRow({
     'aria-label': paymentRequiredActionLabel,
     // ← 开配置浮层是这一行唯一的键盘入口,不声明就只有摸索得到(读屏用户尤甚)。
     'aria-keyshortcuts': paymentRequired || !customizable ? undefined : 'ArrowLeft',
-    tabIndex: interactionDisabled ? -1 : 0,
+    tabIndex: interactionDisabled ? -1 : tabIndex,
+    'aria-posinset': position?.index,
+    'aria-setsize': position?.total,
     'data-model-selected': selected ? ('true' as const) : undefined,
     // Shared menu row: the panel's glide highlight; the chosen row keeps its static fill (below).
     ...menuRowAttrs(),
@@ -205,6 +211,7 @@ export function UnifiedModelRow({
   const starButton = !measurementOnly && onStar ? (
     <button
       type="button"
+      tabIndex={tabIndex}
       disabled={interactionDisabled || paymentRequired}
       onClick={(event) => {
         event.stopPropagation();
@@ -233,6 +240,7 @@ export function UnifiedModelRow({
   const customizeButton = !measurementOnly && (
     <button
       type="button"
+      tabIndex={tabIndex}
       data-row-customize
       aria-expanded={active}
       aria-haspopup="dialog"
