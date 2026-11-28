@@ -56,6 +56,7 @@ export interface ContextWindowBudgetChipProps {
   details?: React.ReactNode;
   onInspect?: () => void;
   onCompact?: () => void;
+  showWindowBudget?: boolean;
   sessionId: string;
   /** 运行期上下文占用，用于「换小档位会立刻触发压缩」的提示。 */
   contextTokens: number;
@@ -102,6 +103,7 @@ export function ContextWindowBudgetChip({
   providers = null,
   deviceId,
   disabled = false,
+  showWindowBudget = true,
 }: ContextWindowBudgetChipProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -620,7 +622,7 @@ export function ContextWindowBudgetChip({
             <p className="mt-2 text-12 leading-relaxed text-[var(--text-secondary)]">{t('ccAgent.contextRingPanel.compactHelp')}</p>
           </div>
         )}
-        {hasOptions && (
+        {showWindowBudget && hasOptions && (
           <details className="group mt-4 border-t border-[var(--border-default)] pt-3" data-context-window-options>
             <summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-lg py-1 text-12 font-medium text-[var(--text-secondary)] outline-none hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden">
               <span>{t('ccAgent.contextRingPanel.adjust')}</span>

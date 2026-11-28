@@ -110,4 +110,35 @@ describe('makerChatStore context window refresh', () => {
     expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow).toBe(1_048_576);
     makerChatStore.purgeSession(sessionId);
   });
+
+  // 伙伴聊天只用圆环显示上下文占用: Pi 在请求开始时会报「窗口 + 0 token」,
+  // 此时窗口虽已来自运行期, 用量还不能算已知, 否则圆环会提前显示 0%。
+  it('does not treat a startup zero-token report as known usage', () => {
+    const sessionId = 'context-usage-startup';
+    makerChatStore.purgeSession(sessionId);
+    makerChatStore.__applyStatusUpdateForTest(sessionId, {
+      sessionId, status: 'Working', isRunning: true, tokenUsage: 0, costUsd: 0,
+      contextTokens: 0, contextWindow: 1_000_000,
+    });
+    const status = makerChatStore.getSnapshot(sessionId).agentStatus;
+    expect(status.contextWindowFromRuntime).toBe(true);
+    expect(status.contextUsageReported).not.toBe(true);
+    makerChatStore.purgeSession(sessionId);
+  });
+
+  it.each<[string, Partial<CCAgentStatusUpdate>]>([
+    ['a completed turn', { status: 'Done', isRunning: false, contextTokens: 0 }],
+    ['a mid-turn non-zero report', { status: 'Working', isRunning: true, contextTokens: 12_340 }],
+    ['an authoritative mid-turn snapshot', {
+      status: 'Working', isRunning: true, contextTokens: 0, contextSnapshotAuthoritative: true,
+    }],
+  ])('marks usage known after %s', (_label, update) => {
+    const sessionId = 'context-usage-known';
+    makerChatStore.purgeSession(sessionId);
+    makerChatStore.__applyStatusUpdateForTest(sessionId, {
+      sessionId, tokenUsage: 0, costUsd: 0, contextWindow: 1_000_000, ...update,
+    });
+    expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextUsageReported).toBe(true);
+    makerChatStore.purgeSession(sessionId);
+  });
 });

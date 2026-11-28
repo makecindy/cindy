@@ -874,6 +874,13 @@ export interface AgentStatus {
   contextWindow: number;
   /** Model-picker metadata is replaceable until a runtime snapshot arrives. */
   contextWindowFromRuntime?: boolean;
+  /**
+   * True once a context reading is real: a completed turn's snapshot, an
+   * authoritative mid-turn snapshot, or any non-zero token report. Pi reports
+   * the window together with 0 tokens when a request starts, so a known window
+   * alone must not make a companion's context ring read as 0%.
+   */
+  contextUsageReported?: boolean;
   isRunning: boolean;
   startedAt: number | null;
   /**
@@ -8134,6 +8141,7 @@ function applyBackgroundStatus(
   let contextTokens = state.agentStatus.contextTokens;
   let contextWindow = state.agentStatus.contextWindow;
   let contextWindowFromRuntime = state.agentStatus.contextWindowFromRuntime;
+  let contextUsageReported = state.agentStatus.contextUsageReported;
   if (
     typeof data.contextWindow === 'number' &&
     data.contextWindow > 0 &&
@@ -8143,6 +8151,9 @@ function applyBackgroundStatus(
     contextTokens = data.contextTokens;
     contextWindow = data.contextWindow;
     contextWindowFromRuntime = true;
+    // Idle compact / late background status carries a real reading; a startup
+    // status that only names the window keeps zero tokens unconfirmed.
+    if (data.contextTokens > 0 || rawStatus === 'Done') contextUsageReported = true;
   }
   return {
     ...state,
@@ -8152,6 +8163,7 @@ function applyBackgroundStatus(
       contextTokens,
       contextWindow,
       contextWindowFromRuntime,
+      contextUsageReported,
     },
   };
 }
@@ -8287,6 +8299,14 @@ function handleStatusUpdate(
       contextTokens: ct,
       contextWindow: cw,
       contextWindowFromRuntime: hasContextSnapshot || state.agentStatus.contextWindowFromRuntime,
+      // 只有可确认为真实读数的快照才算「用量已知」: 回合结束、宿主标记为权威的
+      // turn 中快照, 或非零 token 上报。Pi 在请求开始时只报窗口 + 0 token。
+      contextUsageReported:
+        state.agentStatus.contextUsageReported ||
+        (hasContextSnapshot &&
+          (isTurnComplete ||
+            update.contextSnapshotAuthoritative === true ||
+            (update.contextTokens ?? 0) > 0)),
       isRunning: update.isRunning,
       startedAt,
       lastStartedAt,

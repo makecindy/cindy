@@ -48,6 +48,8 @@ export function ContextCapacityRing({
   onCompact,
   providers,
   disabled,
+  showWindowBudget = true,
+  contextUsageKnown = true,
 }: {
   isRunning?: boolean;
   visible?: boolean;
@@ -67,6 +69,10 @@ export function ContextCapacityRing({
   onCompact?: () => void;
   providers?: ComponentProps<typeof ContextWindowBudgetChip>['providers'];
   disabled?: boolean;
+  /** Companion chats expose usage/compaction without task-window configuration. */
+  showWindowBudget?: boolean;
+  /** False until a companion has a runtime usage snapshot, including a measured zero. */
+  contextUsageKnown?: boolean;
 }) {
   const { t } = useTranslation();
   const [contextInspection, setContextInspection] = useState(0);
@@ -87,8 +93,9 @@ export function ContextCapacityRing({
     nativeContextPending: codexContext?.pendingApply,
     modelContextWindow: getModelContextWindow(model, vendorKey, deviceId),
   });
+  const hasUsage = contextUsageKnown && contextWindow > 0;
   const pct =
-    contextWindow > 0
+    hasUsage
       ? Math.min(Math.max(Math.round((contextTokens / contextWindow) * 100), 0), 100)
       : 0;
 
@@ -109,7 +116,7 @@ export function ContextCapacityRing({
 
   const usedTokens = Math.max(0, contextTokens);
   const tooltipText =
-    contextWindow > 0
+    hasUsage
       ? `Context — ${formatTokenCount(usedTokens)} / ${formatTokenCount(contextWindow)} (${pct}%)`
       : 'No context data yet';
 
@@ -147,13 +154,13 @@ export function ContextCapacityRing({
         />
       </svg>
       <span className="text-12 font-medium leading-none" style={{ color: fillColor }}>
-        {contextWindow > 0 ? `${pct}%` : '—'}
+        {hasUsage ? `${pct}%` : '—'}
       </span>
     </>
   );
 
   const statusKey =
-    contextWindow <= 0 ? 'unknown' : pct > 90 ? 'nearLimit' : pct > 70 ? 'elevated' : 'available';
+    !hasUsage ? 'unknown' : pct > 90 ? 'nearLimit' : pct > 70 ? 'elevated' : 'available';
   const details = (
     <div className="space-y-4">
       <div>
@@ -169,9 +176,9 @@ export function ContextCapacityRing({
         <div className="flex items-end justify-between gap-3">
           <div className="flex items-baseline gap-1 tabular-nums text-[var(--text-primary)]">
             <span className="text-28 font-medium leading-none tracking-tight">
-              {contextWindow > 0 ? pct : '—'}
+              {hasUsage ? pct : '—'}
             </span>
-            {contextWindow > 0 && <span className="text-16">%</span>}
+            {hasUsage && <span className="text-16">%</span>}
             <span className="ml-1 text-12 text-[var(--text-secondary)]">
               {t('ccAgent.contextRingPanel.used')}
             </span>
@@ -180,7 +187,7 @@ export function ContextCapacityRing({
             {t(`ccAgent.contextRingPanel.${statusKey}`)}
           </span>
         </div>
-        {contextWindow > 0 && (
+        {hasUsage && (
           <>
             <div
               role="progressbar"
@@ -201,11 +208,16 @@ export function ContextCapacityRing({
                 total: formatTokenCount(contextWindow),
               })}
             </p>
+            {!showWindowBudget && (
+              <p className="mt-2 text-12 leading-relaxed text-[var(--text-secondary)]">
+                {t('ccAgent.contextRingPanel.snapshotHint')}
+              </p>
+            )}
           </>
         )}
-        {(contextWindow <= 0 || pct <= 70) && (
+        {(!hasUsage || pct <= 70) && (
           <p className="mt-2 text-12 leading-relaxed text-[var(--text-secondary)]">
-            {t(`ccAgent.contextRingPanel.${contextWindow <= 0 ? 'unknownHint' : 'continueHint'}`)}
+            {t(`ccAgent.contextRingPanel.${!hasUsage ? 'unknownHint' : 'continueHint'}`)}
           </p>
         )}
       </div>
@@ -253,6 +265,7 @@ export function ContextCapacityRing({
         details={details}
         onInspect={vendorKey === 'codex' ? () => setContextInspection((n) => n + 1) : undefined}
         onCompact={onCompact}
+        showWindowBudget={showWindowBudget}
       >
         {ringContent}
       </ContextWindowBudgetChip>
