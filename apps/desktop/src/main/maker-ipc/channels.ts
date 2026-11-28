@@ -127,6 +127,11 @@ export const MAKER_INVOKE = {
    * → UNSUPPORTED_CAPABILITY。
    */
   STOP_AGENT_TASK: 'maker:agent-task:stop',
+  /**
+   * 停止 Workflow 内单个 Agent。入参 (sessionId, workflowTaskId, agentId)。
+   * 独立 channel 防止旧被控端忽略新参数而误停整个 Workflow;旧端按不支持降级。
+   */
+  STOP_WORKFLOW_AGENT: 'maker:workflow-agent:stop',
   /** Send a message to one active Cindy-owned PI Subagent run. */
   CONTROL_PI_SUBAGENT: 'maker:pi-subagent:control',
   /**

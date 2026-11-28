@@ -240,6 +240,17 @@ describe('extractWorkflowProgress', () => {
     expect(p!.agents).toEqual([{ label: 'verify:auth', state: 'queued', phaseIndex: 0 }]);
   });
 
+  it('maps the native Workflow user-skip flag to stopped instead of failed', () => {
+    const p = extractWorkflowProgress({
+      runId: 'wf_skip',
+      status: 'running',
+      workflowProgress: [
+        { type: 'workflow_agent', agentId: 'a1', state: 'error', skipped: true, error: 'skipped by user' },
+      ],
+    });
+    expect(p!.agents).toEqual([{ label: 'a1', agentId: 'a1', state: 'stopped' }]);
+  });
+
   it('returns null when runId is missing or input is not an object', () => {
     expect(extractWorkflowProgress({ status: 'completed' })).toBeNull();
     expect(extractWorkflowProgress(null)).toBeNull();
@@ -263,6 +274,37 @@ describe('readWorkflowProgressByTaskId', () => {
     const p = await readWorkflowProgressByTaskId(dir, 'wmowi77vg');
     expect(p?.runId).toBe('wf_fe3a6ac8-543');
     expect(p?.agents).toHaveLength(2);
+  });
+
+  it('restores a user-stopped agent from persisted metadata without masking ordinary errors', async () => {
+    // 生产入口:readWorkflowProgressByTaskId;历史重载后用户停止仍显示 stopped,
+    // 没有 stoppedByUser 证据的失败保持原样。最小输入是一条停止行和一条真实错误行。
+    // tier=unit;真实文件只使用 os.tmpdir() 下本用例独立目录。
+    const sessionDir = path.join(dir, 'session');
+    const workflowsDir = path.join(sessionDir, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.writeFile(path.join(workflowsDir, 'wf_stop.json'), JSON.stringify({
+      runId: 'wf_stop',
+      taskId: 'wf-task',
+      status: 'running',
+      workflowProgress: [
+        { type: 'workflow_agent', agentId: 'stopped-a', label: 'A', state: 'error', error: 'aborted' },
+        { type: 'workflow_agent', agentId: 'failed-b', label: 'B', state: 'error', error: 'real failure' },
+      ],
+    }));
+    const metadataDir = path.join(sessionDir, 'subagents', 'workflows', 'wf_stop');
+    await fs.mkdir(metadataDir, { recursive: true });
+    await fs.writeFile(
+      path.join(metadataDir, 'agent-stopped-a.meta.json'),
+      JSON.stringify({ stoppedByUser: true }),
+    );
+
+    const progress = await readWorkflowProgressByTaskId(workflowsDir, 'wf-task');
+    expect(progress?.agents).toMatchObject([
+      { agentId: 'stopped-a', state: 'stopped' },
+      { agentId: 'failed-b', state: 'error', error: 'real failure' },
+    ]);
+    expect(progress?.agents[0]?.error).toBeUndefined();
   });
 
   it('returns null when no file matches the taskId', async () => {

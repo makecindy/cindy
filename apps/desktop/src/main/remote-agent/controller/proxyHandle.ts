@@ -624,6 +624,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     stopBackgroundTask: async (taskId: string) => {
       await callIfLive('stopBackgroundTask', taskId);
     },
+    stopWorkflowAgent: async (workflowTaskId: string, agentId: string) => {
+      await callIfLive('stopWorkflowAgent', workflowTaskId, agentId);
+    },
     resumeBackgroundTask: async (taskId: string, message: string, childId?: string) => {
       await call('resumeBackgroundTask', taskId, message, childId);
     },

@@ -113,6 +113,8 @@ export interface WorkflowProgressEntry {
   error?: string;
   attempt?: number;
   cached?: boolean;
+  /** CLI 原生 Workflow user-skip:该 Agent 被用户主动跳过,不是失败。 */
+  skipped?: boolean;
   agentType?: string;
 }
 
@@ -182,6 +184,7 @@ export function normalizeWorkflowProgressEntries(
       if (value !== undefined) entry[key] = value;
     }
     if (typeof e.cached === 'boolean') entry.cached = e.cached;
+    if (typeof e.skipped === 'boolean') entry.skipped = e.skipped;
     out.push(entry as unknown as WorkflowProgressEntry);
   }
   return out.length > 0 ? out : undefined;

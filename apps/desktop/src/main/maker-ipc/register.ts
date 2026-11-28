@@ -1397,6 +1397,7 @@ import {
   type ReviewFailureReason,
 } from './reviewStartHandler.js';
 import { registerStopAgentTaskHandler } from './stopAgentTaskHandler.js';
+import { registerStopWorkflowAgentHandler } from './stopWorkflowAgentHandler.js';
 import { registerStopSessionBackgroundTasksHandler } from './stopSessionBackgroundTasksHandler.js';
 import { registerProviderHandlers } from './providerHandlers.js';
 import { readModelImageInputOverride, writeModelImageInputOverride } from '../maker-host/model-catalog-override-store.js';
@@ -7420,6 +7421,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return (await controlPiSubagentRuns(runRoot, run.runId, 'stop')) > 0;
     },
+  });
+
+  // Workflow 行级停止使用独立通道;旧远程端不支持时必须明确失败,不能误停顶层任务。
+  registerStopWorkflowAgentHandler(createElectronIpcHandlerRegistry(), {
+    assertCaller: (event) => {
+      if (!isDeviceLinkInvoke()) {
+        assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+      }
+    },
+    getLiveSession: (sessionId) => maker.getSession(sessionId) ?? undefined,
   });
 
   ipcMain.handle(MAKER_INVOKE.CONTROL_PI_SUBAGENT, async (event, input: unknown) => {

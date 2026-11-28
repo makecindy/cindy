@@ -24,7 +24,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import { ASYNC_QUESTION_ANSWER } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
-import type { AgentEvent } from '../../../types/events.js';
+import type { AgentEvent, AgentTaskUpdateEventData } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { ModelDescriptor } from '../../../types/capabilities.js';
 
@@ -356,6 +356,25 @@ function taskProgress(taskId: string, taskType = 'local_agent'): Record<string, 
     task_type: taskType,
     description: `late progress ${taskId}`,
   };
+}
+
+function workflowProgress(
+  taskId: string,
+  workflowProgress: AgentTaskUpdateEventData['workflowProgress'],
+): Record<string, unknown> {
+  return {
+    type: 'system',
+    subtype: 'task_progress',
+    task_id: taskId,
+    task_type: 'local_workflow',
+    description: `workflow ${taskId}`,
+    workflow_progress: workflowProgress,
+  };
+}
+
+function observedWorkflowRows(events: AgentEvent[]) {
+  const latest = taskEvents(events).at(-1);
+  return (latest?.data as AgentTaskUpdateEventData | undefined)?.workflowProgress;
 }
 
 function taskUpdatedRunning(taskId: string): Record<string, unknown> {
@@ -2672,7 +2691,156 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
-  it('stopBackgroundTask success closes an awaiting continuation without a task notification', async () => {
+  it('stopWorkflowAgent stops only the named agent and keeps its stopped state across late frames', async () => {
+    // 生产入口与可观察结果:同一 workflow 只有目标行停止,其它行继续,迟到帧不覆盖 stopped。
+    // 最小失败输入:两个运行中 Agent 共用一个 workflowTaskId;tier=unit。
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+    await handle.send({ type: 'user', content: 'spawn workflow' });
+    stream.emit(taskStarted('wf-1', 'local_workflow'));
+    stream.emit(workflowProgress('wf-1', [
+      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'A', state: 'progress' },
+      { type: 'workflow_agent', index: 1, agentId: 'agent-b', label: 'B', state: 'progress' },
+    ]));
+    await waitFor(() => observedWorkflowRows(events)?.length === 2, 'workflow rows observed');
+
+    await handle.stopWorkflowAgent!('wf-1', 'agent-a');
+    await waitFor(
+      () => observedWorkflowRows(events)?.[0]?.state === 'stopped',
+      'stopped workflow projection observed',
+    );
+    expect(fakeQuery.stopTask!.mock.calls.map((call) => call[0])).toEqual(['agent-a']);
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+    expect(observedWorkflowRows(events)?.map((row) => row.state)).toEqual(['stopped', 'progress']);
+
+    stream.emit(workflowProgress('wf-1', [
+      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'A', state: 'error', error: 'aborted' },
+      { type: 'workflow_agent', index: 1, agentId: 'agent-b', label: 'B', state: 'progress' },
+    ]));
+    await waitFor(() => taskEvents(events).length >= 4, 'late workflow frame observed');
+    expect(observedWorkflowRows(events)?.map((row) => row.state)).toEqual(['stopped', 'progress']);
+
+    await handle.stopWorkflowAgent!('wf-1', 'agent-a');
+    expect(fakeQuery.stopTask).toHaveBeenCalledTimes(1);
+
+    // 明确重试产生的新 attempt 是新的运行,不继承旧停止闩锁。
+    stream.emit(workflowProgress('wf-1', [
+      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'A', state: 'progress', attempt: 2 },
+      { type: 'workflow_agent', index: 1, agentId: 'agent-b', label: 'B', state: 'done' },
+    ]));
+    await waitFor(
+      () => observedWorkflowRows(events)?.[0]?.state === 'progress',
+      'new attempt is not hidden by the old stop',
+    );
+    expect(observedWorkflowRows(events)?.map((row) => row.state)).toEqual(['progress', 'done']);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('stopWorkflowAgent leaves the row running on failure and rejects an agent from another scope', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+    await handle.send({ type: 'user', content: 'spawn workflow' });
+    stream.emit(taskStarted('wf-1', 'local_workflow'));
+    stream.emit(workflowProgress('wf-1', [
+      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'A', state: 'progress' },
+    ]));
+    await waitFor(() => observedWorkflowRows(events)?.length === 1, 'workflow row observed');
+
+    fakeQuery.stopTask!.mockRejectedValueOnce(new Error('stop failed'));
+    await expect(handle.stopWorkflowAgent!('wf-1', 'agent-a')).rejects.toThrow('stop failed');
+    expect(observedWorkflowRows(events)?.[0]?.state).toBe('progress');
+    await expect(handle.stopWorkflowAgent!('wf-1', 'agent-other')).rejects.toThrow('does not belong');
+    expect(fakeQuery.stopTask).toHaveBeenCalledTimes(1);
+
+    stream.emit(workflowProgress('wf-1', [
+      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'A', state: 'progress' },
+    ]));
+    await waitFor(() => taskEvents(events).length >= 3, 'post-failure progress observed');
+    expect(observedWorkflowRows(events)?.[0]?.state).toBe('progress');
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  // PR #12825: a retry may arrive before the first attempt's stop is acknowledged.
+  // Unit coverage goes through the provider handle and observes the next attempt's progress.
+  it.each([
+    { state: 'done', attempt: 1 },
+    { state: 'progress', attempt: 2 },
+  ])('stopWorkflowAgent preserves $state for attempt $attempt when a stop settles late', async ({ state, attempt }) => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+    await handle.send({ type: 'user', content: 'spawn workflow' });
+    stream.emit(taskStarted('wf-1', 'local_workflow'));
+    stream.emit(workflowProgress('wf-1', [
+      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'A', state: 'progress' },
+      { type: 'workflow_agent', index: 1, agentId: 'agent-b', label: 'B', state: 'progress' },
+    ]));
+    await waitFor(() => observedWorkflowRows(events)?.length === 2, 'workflow rows observed');
+
+    const stopped = createDeferred();
+    fakeQuery.stopTask!.mockImplementationOnce(() => stopped.promise);
+    const request = handle.stopWorkflowAgent!('wf-1', 'agent-a');
+    stream.emit(workflowProgress('wf-1', [
+      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'A', state, attempt },
+      { type: 'workflow_agent', index: 1, agentId: 'agent-b', label: 'B', state: 'progress' },
+    ]));
+    await waitFor(() => observedWorkflowRows(events)?.[0]?.attempt === attempt, 'updated attempt observed');
+    stopped.resolve();
+    await request;
+
+    stream.emit(workflowProgress('wf-1', [
+      { type: 'workflow_agent', index: 0, agentId: 'agent-a', label: 'Updated A', state, attempt },
+      { type: 'workflow_agent', index: 1, agentId: 'agent-b', label: 'B', state: 'progress' },
+    ]));
+    await waitFor(() => observedWorkflowRows(events)?.[0]?.label === 'Updated A', 'next progress observed');
+    expect(observedWorkflowRows(events)?.[0]?.state).toBe(state);
+    expect(observedWorkflowRows(events)?.[1]?.state).toBe('progress');
+    expect(fakeQuery.stopTask).toHaveBeenCalledExactlyOnceWith('agent-a');
+    if (attempt === 2) {
+      await handle.stopWorkflowAgent!('wf-1', 'agent-a');
+      await waitFor(() => observedWorkflowRows(events)?.[0]?.state === 'stopped', 'retry stopped');
+      expect(observedWorkflowRows(events)?.[1]?.state).toBe('progress');
+      expect(fakeQuery.stopTask!.mock.calls).toEqual([['agent-a'], ['agent-a']]);
+    }
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  // PR #12825 unit: a terminal Workflow frame may precede the last child's stop acknowledgment.
+  it.each([true, false])('settles the last Workflow Agent after the Workflow ends (accepted: %s)', async (accepted) => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+    await handle.send({ type: 'user', content: 'spawn workflow' });
+    stream.emit(taskStarted('wf-1', 'local_workflow'));
+    const row = { type: 'workflow_agent' as const, index: 0, agentId: 'agent-a', label: 'A' };
+    stream.emit(workflowProgress('wf-1', [{ ...row, state: 'progress' }]));
+    await waitFor(() => observedWorkflowRows(events)?.[0]?.state === 'progress', 'workflow row observed');
+
+    const stopped = createDeferred();
+    fakeQuery.stopTask!.mockImplementationOnce(() => stopped.promise);
+    const request = handle.stopWorkflowAgent!('wf-1', 'agent-a');
+    stream.emit(workflowProgress('wf-1', [{ ...row, state: 'error' }]));
+    stream.emit(taskNotification('wf-1', 'failed'));
+    await waitFor(() => (taskEvents(events).at(-1)?.data as AgentTaskUpdateEventData)?.status === 'failed', 'workflow terminal observed');
+
+    if (accepted) {
+      stopped.resolve();
+      await request;
+      await waitFor(() => observedWorkflowRows(events)?.[0]?.state === 'stopped', 'accepted stop observed on terminal workflow');
+      expect((taskEvents(events).at(-1)?.data as AgentTaskUpdateEventData)?.status).toBe('failed');
+    } else {
+      stopped.reject(new Error('stop failed'));
+      await expect(request).rejects.toThrow('stop failed');
+      expect(observedWorkflowRows(events)?.[0]?.state).not.toBe('stopped');
+    }
+    expect(handle.listBackgroundTasks?.()).toEqual([]);
+    await handle.stopWorkflowAgent!('wf-1', 'agent-a');
+    expect(fakeQuery.stopTask).toHaveBeenCalledExactlyOnceWith('agent-a');
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('stopBackgroundTask success an awaiting continuation without a task notification', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream();
 
     await handle.send({ type: 'user', content: 'spawn background work' });

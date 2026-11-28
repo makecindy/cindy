@@ -646,6 +646,37 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it('Workflow 单停:按归属走独立通道,归属未知时拒绝且不回退顶层停止', async () => {
+    // 生产入口:stopWorkflowAgentFor;远程旧端不支持时只能报升级,不能调用
+    // maker:agent-task:stop 误停整个 Workflow。最小输入=workflowTaskId+agentId;tier=unit。
+    const { makerSpies, localSessions, invoke } = stubElectron();
+    const stopWorkflowAgent = vi.fn().mockResolvedValue({ ok: true });
+    Object.assign(makerSpies, { stopWorkflowAgent });
+    invoke.mockResolvedValue({ ok: true });
+    const { stopWorkflowAgentFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
+
+    await stopWorkflowAgentFor('rs', 'wf-1', 'agent-1');
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:workflow-agent:stop', [
+      'rs',
+      'wf-1',
+      'agent-1',
+    ]);
+    expect(stopWorkflowAgent).not.toHaveBeenCalled();
+
+    await expect(stopWorkflowAgentFor('unknown', 'wf-1', 'agent-1')).rejects.toThrow(
+      'DEVICE_LINK_NOT_CONNECTED',
+    );
+    expect(stopWorkflowAgent).not.toHaveBeenCalled();
+
+    localSessions.get.mockResolvedValue({ id: 'local-sess' });
+    invoke.mockClear();
+    await stopWorkflowAgentFor('local-sess', 'wf-2', 'agent-2');
+    expect(stopWorkflowAgent).toHaveBeenCalledWith('local-sess', 'wf-2', 'agent-2');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('后台任务停止:本机查询在途期间远程注册表完成水合 → 仍走远程,不落到同 id 本机会话', async () => {
     const { makerSpies, localSessions, invoke } = stubElectron();
     const stopAgentTask = vi.fn().mockResolvedValue({ ok: true });

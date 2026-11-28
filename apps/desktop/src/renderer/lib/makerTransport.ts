@@ -722,6 +722,26 @@ export async function stopAgentTaskFor(sessionId: string, taskId: string): Promi
   }>;
 }
 
+/**
+ * 停止 Workflow 内一个 Agent。必须使用独立远程通道:旧被控端收到顶层 stop
+ * 会忽略新参数而停止全部,因此这里不做旧通道回退,由既有错误提示要求升级。
+ */
+export async function stopWorkflowAgentFor(
+  sessionId: string,
+  workflowTaskId: string,
+  agentId: string,
+): Promise<{ ok: true }> {
+  const deviceId = await resolveStopOwner(sessionId);
+  if (!deviceId) {
+    return window.electronAPI.maker.stopWorkflowAgent(sessionId, workflowTaskId, agentId);
+  }
+  return invokeRemote(deviceId, 'maker:workflow-agent:stop', [
+    sessionId,
+    workflowTaskId,
+    agentId,
+  ]) as Promise<{ ok: true }>;
+}
+
 /** 会话级「全部停止」(关闭归属端常驻 agent 进程);路由与错误语义同 stopAgentTaskFor。 */
 export async function stopSessionBackgroundTasksFor(sessionId: string): Promise<{ ok: true }> {
   const deviceId = await resolveStopOwner(sessionId);

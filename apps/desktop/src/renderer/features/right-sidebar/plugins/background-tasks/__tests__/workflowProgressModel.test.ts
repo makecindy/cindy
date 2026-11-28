@@ -69,6 +69,7 @@ describe('buildWorkflowTreeModel', () => {
     expect(model!.groups[0].agents).toEqual([
       {
         key: 'a1',
+        agentId: 'a1',
         label: 'search:web',
         state: 'done',
         model: 'claude-haiku-4-5',
@@ -115,6 +116,7 @@ describe('buildWorkflowTreeModel', () => {
     expect(model.groups[0].detail).toBe('gather info');
     expect(model.groups[0].agents[0]).toEqual({
       key: 'fx',
+      agentId: 'fx',
       label: 'x',
       state: 'done',
       durationMs: 4000,
@@ -198,7 +200,7 @@ describe('buildWorkflowTreeModel', () => {
     expect(model.groups[0].agents[0].durationMs).toBeUndefined();
   });
 
-  it('终态修正:任务终态而 agent 仍呈 start/progress/running/queued → state 改 error,error 字段留空', () => {
+  it('终态修正:用户停止 Workflow 时,未收口 agent 落 stopped 而非 error', () => {
     const entries: WorkflowProgressEntry[] = [
       agentEntry(0, { agentId: 'a1', label: 'l1', state: 'start' }),
       agentEntry(1, { agentId: 'a2', label: 'l2', state: 'progress' }),
@@ -211,7 +213,7 @@ describe('buildWorkflowTreeModel', () => {
     const rows = model.groups[0].agents;
     for (const key of ['a1', 'a2', 'a3', 'a4']) {
       const row = rows.find((r) => r.key === key)!;
-      expect(row.state).toBe('error');
+      expect(row.state).toBe('stopped');
       expect(row.error).toBeUndefined();
     }
     expect(rows.find((r) => r.key === 'a5')!.state).toBe('done');
@@ -230,6 +232,14 @@ describe('buildWorkflowTreeModel', () => {
     expect(model.groups[0].agents.find((r) => r.key === 'fx')!.state).toBe('error');
     // stopped 是终态,不修正
     expect(model.groups[0].agents.find((r) => r.key === 'fy')!.state).toBe('stopped');
+  });
+
+  it('原生 user-skip(skipped=true)按 stopped 建模,并保留真实 agentId', () => {
+    const model = buildWorkflowTreeModel({
+      entries: [agentEntry(0, { agentId: 'a1', label: 'A', state: 'error', skipped: true })],
+      taskStatus: 'running',
+    })!;
+    expect(model.groups[0].agents[0]).toMatchObject({ agentId: 'a1', state: 'stopped' });
   });
 
   it('任务运行中不做终态修正', () => {
@@ -452,7 +462,7 @@ describe('isTerminalWorkflowFileStatus(文件快照收口判定)', () => {
 });
 
 describe('workflowAgentVisualState(方块条视觉归一)', () => {
-  it('两套词表归一到四色;未知词与 start 归 queued(宁少染不误染)', async () => {
+  it('两套词表归一到视觉状态;stopped 独立于 failed,未知词与 start 归 queued', async () => {
     const { workflowAgentVisualState } = await import('../workflowProgressModel');
     expect(workflowAgentVisualState('done')).toBe('done');
     expect(workflowAgentVisualState('completed')).toBe('done');
@@ -460,8 +470,9 @@ describe('workflowAgentVisualState(方块条视觉归一)', () => {
     expect(workflowAgentVisualState('progress')).toBe('running');
     expect(workflowAgentVisualState('error')).toBe('failed');
     expect(workflowAgentVisualState('failed')).toBe('failed');
-    expect(workflowAgentVisualState('stopped')).toBe('failed');
-    expect(workflowAgentVisualState('killed')).toBe('failed');
+    expect(workflowAgentVisualState('stopped')).toBe('stopped');
+    expect(workflowAgentVisualState('killed')).toBe('stopped');
+    expect(workflowAgentVisualState('error', true)).toBe('stopped');
     expect(workflowAgentVisualState('start')).toBe('queued');
     expect(workflowAgentVisualState('queued')).toBe('queued');
     expect(workflowAgentVisualState('pending')).toBe('queued');

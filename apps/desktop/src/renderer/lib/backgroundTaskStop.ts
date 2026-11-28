@@ -12,6 +12,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 
 export {
   stopAgentTaskFor as stopBackgroundTask,
+  stopWorkflowAgentFor as stopWorkflowAgent,
   stopSessionBackgroundTasksFor as stopAllBackgroundTasks,
 } from './makerTransport';
 

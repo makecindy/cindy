@@ -28,6 +28,8 @@ import type {
 export interface WorkflowTreeAgentRow {
   /** 渲染 key:agentId 优先,缺失时用条目序号兜底(同一次构建内稳定唯一)。 */
   key: string;
+  /** 单停控制所需的真实运行时 id;key 只是 React 渲染锚点,不能代替它。 */
+  agentId?: string;
   label: string;
   /** 原样透传的运行状态(两套词表任一;终态修正后可能为 'error')。 */
   state: string;
@@ -134,11 +136,17 @@ export function buildWorkflowTreeModel(input: {
     : groupsFromFile(file!);
 
   if (isTerminal) {
+    // 用户停止不是失败:任务/文件的 stopped/killed 让未收口行同样落 stopped;
+    // completed/failed 下仍滞留的行才按 error 处理。已有真实终态一律不改写。
+    const terminalStatus = isTerminalWorkflowFileStatus(file?.status)
+      ? file?.status
+      : taskStatus;
+    const stopped = terminalStatus === 'stopped' || terminalStatus === 'killed';
     for (const group of groups) {
       for (const row of group.agents) {
         if (CORRECTABLE_AGENT_STATES.has(row.state)) {
           // error 字段留空:兜底文案由 UI 层 i18n 提供,本层不写死。
-          row.state = 'error';
+          row.state = stopped ? 'stopped' : 'error';
         }
       }
     }
@@ -289,8 +297,9 @@ function assembleGroups(
 function rowFromEntry(entry: WorkflowProgressEntry, ordinal: number): WorkflowTreeAgentRow {
   return {
     key: entry.agentId ?? `entry-${ordinal}`,
+    ...(entry.agentId !== undefined ? { agentId: entry.agentId } : {}),
     label: entry.label ?? entry.agentId ?? `#${entry.index}`,
-    state: entry.state ?? 'queued',
+    state: entry.skipped ? 'stopped' : (entry.state ?? 'queued'),
     ...(entry.model !== undefined ? { model: entry.model } : {}),
     ...(entry.attempt !== undefined ? { attempt: entry.attempt } : {}),
     ...(entry.lastToolName !== undefined ? { lastToolName: entry.lastToolName } : {}),
@@ -303,6 +312,7 @@ function rowFromEntry(entry: WorkflowProgressEntry, ordinal: number): WorkflowTr
 function rowFromFileAgent(agent: WorkflowAgentProgress, index: number): WorkflowTreeAgentRow {
   return {
     key: agent.agentId || `file-${index}`,
+    ...(agent.agentId !== undefined ? { agentId: agent.agentId } : {}),
     label: agent.label,
     state: agent.state,
     ...(agent.model !== undefined ? { model: agent.model } : {}),
@@ -380,15 +390,19 @@ function backfillRowFromFile(
 
 // ── agent 状态的视觉归一(方块条 / 计数共用) ─────────────────────────────────
 
-/** 方块条四色视觉态。 */
-export type WorkflowAgentVisualState = 'done' | 'running' | 'failed' | 'queued';
+/** 方块条视觉态:stopped 与 failed 分开,用户主动停止不再染红。 */
+export type WorkflowAgentVisualState = 'done' | 'running' | 'failed' | 'stopped' | 'queued';
 
 /**
  * 把两套状态词表(事件流 start/progress/done/error;wf 文件 queued/running/done/
- * failed/stopped/killed)归一成方块条四色。未知词按 queued(中性灰)处理 ——
+ * failed/stopped/killed)归一成方块条视觉态。未知词按 queued(中性灰)处理 ——
  * 词表无契约,宁可少染色不可误染色;'start' 对齐官方 CLI 语义(已入队未跑,灰)。
  */
-export function workflowAgentVisualState(state: string | undefined): WorkflowAgentVisualState {
+export function workflowAgentVisualState(
+  state: string | undefined,
+  skipped?: boolean,
+): WorkflowAgentVisualState {
+  if (skipped) return 'stopped';
   switch (state) {
     case 'done':
     case 'completed':
@@ -398,9 +412,10 @@ export function workflowAgentVisualState(state: string | undefined): WorkflowAge
       return 'running';
     case 'error':
     case 'failed':
+      return 'failed';
     case 'stopped':
     case 'killed':
-      return 'failed';
+      return 'stopped';
     default:
       return 'queued';
   }

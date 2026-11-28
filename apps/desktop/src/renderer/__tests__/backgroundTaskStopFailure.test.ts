@@ -20,6 +20,12 @@ describe('reportBackgroundTaskStopFailure', () => {
     expect(warning).toHaveBeenCalledWith('chat.backgroundActivity.remoteStopUnsupported');
   });
 
+  // PR #12825 unit: an upgraded owner can route to an older Claude executor.
+  it('alerts when the executor lacks the negotiated Workflow Agent stop method', () => {
+    reportBackgroundTaskStopFailure(new Error('[UNSUPPORTED_CAPABILITY] stopWorkflowAgent'), t, 'workflow-agent');
+    expect(warning).toHaveBeenCalledWith('chat.backgroundActivity.remoteStopUnsupported');
+  });
+
   it('远程电脑未连接 / 超时 / 繁忙 / 归属未解析时提示稍后重试', () => {
     for (const message of [
       '[DEVICE_LINK_NOT_CONNECTED] Background task ownership is unresolved',

@@ -19,6 +19,7 @@ vi.mock('@/lib/makerTransport', () => ({
 vi.mock('@/lib/backgroundTaskStop', () => ({
   canManageBackgroundTasks: () => true,
   stopBackgroundTask: vi.fn(async () => {}),
+  stopWorkflowAgent: vi.fn(async () => {}),
 }));
 
 vi.mock('@/features/right-sidebar/lib/openBackgroundTasksTab', () => ({
