@@ -130,6 +130,8 @@ export default {
     if (sceneName === 'target-blocked-mac') {
       await section.getByText(await k('blocked.REMOTE_LOGIN_OFF')).waitFor();
       assert.equal(await section.getByText(SSHD_INSTALL_COMMAND).count(), 0);
+      // The guidance opens the Sharing pane directly instead of leaving the person to find it.
+      await section.getByRole('button', { name: await k('openSharingSettings'), exact: true }).waitFor();
       // No alias to offer while the other devices cannot connect.
       assert.equal(await section.locator('code').count(), 0);
       await section.getByText(await described('defaultOff'), { exact: true }).waitFor();
@@ -172,6 +174,8 @@ export default {
     // and the key.
     await section.getByText(await described('defaultOn'), { exact: true }).waitFor();
     await section.getByText('ssh cindy-vm-4-7-ubuntu', { exact: true }).waitFor();
+    // The command copies from here too, like on the other devices' cards.
+    await section.getByRole('button', { name: await k('device.copy'), exact: true }).waitFor();
     await section.getByText(await k('listHeading', { count: 3 })).waitFor();
     for (const name of ['Studio Mac', 'MacBook Air', 'Office server']) {
       await section.getByText(name, { exact: true }).waitFor();

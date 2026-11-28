@@ -7410,6 +7410,7 @@
         },
         "otherDistributions": "다른 Linux 배포판에서는 openssh-server를 설치하고 sshd 서비스를 시작하세요.",
         "copyCommand": "명령 복사",
+        "openSharingSettings": "공유 설정 열기",
         "copied": "복사됨",
         "copyFailed": "복사하지 못했습니다",
         "listHeading": "SSH로 연결할 수 있는 기기({{count}})",

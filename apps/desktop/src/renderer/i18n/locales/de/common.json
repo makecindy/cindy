@@ -7453,6 +7453,7 @@
         },
         "otherDistributions": "Installiere auf anderen Linux-Distributionen openssh-server und starte den Dienst sshd.",
         "copyCommand": "Befehl kopieren",
+        "openSharingSettings": "Einstellungen „Teilen“ öffnen",
         "copied": "Kopiert",
         "copyFailed": "Kopieren fehlgeschlagen",
         "listHeading": "Geräte mit SSH-Zugriff ({{count}})",

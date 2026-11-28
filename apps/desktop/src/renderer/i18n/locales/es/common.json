@@ -7522,6 +7522,7 @@
         },
         "otherDistributions": "En otras distribuciones de Linux, instala openssh-server e inicia el servicio sshd.",
         "copyCommand": "Copiar comando",
+        "openSharingSettings": "Abrir ajustes de Compartir",
         "copied": "Copiado",
         "copyFailed": "No se pudo copiar",
         "listHeading": "Dispositivos que pueden usar SSH ({{count}})",

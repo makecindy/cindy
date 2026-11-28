@@ -25,6 +25,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { FormField } from '@/components/ui/form-field';
 import { Input, Textarea } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import {
@@ -67,6 +68,9 @@ function formatWhen(ms: number, t: Translate): string {
     ? t('settings.remoteControl.sshAccess.todayAt', { time })
     : date.toLocaleDateString(appI18n.language, { month: 'short', day: 'numeric' });
 }
+
+/** macOS System Settings → General → Sharing, scrolled to Remote Login (allowlisted by `shell:open-external`). */
+export const MAC_REMOTE_LOGIN_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preferences.sharing?Services_RemoteLogin';
 
 async function copyText(text: string, t: (key: string) => string): Promise<void> {
   try {
@@ -402,6 +406,20 @@ export function SshAccessSetting({ selfName, selfDeviceId, deviceNames }: {
           <p className="text-12 leading-[1.5] text-[var(--text-primary)]">
             {t(`settings.remoteControl.sshAccess.blocked.${state.blocked}`)}
           </p>
+          {state.blocked === 'REMOTE_LOGIN_OFF' && (
+            <div>
+              <Button
+                data-settings-search-action="Open the macOS Sharing settings to turn on Remote Login"
+                variant="secondary"
+                size="sm"
+                compact
+                type="button"
+                onClick={() => void window.electronAPI.openExternal(MAC_REMOTE_LOGIN_SETTINGS_URL)}
+              >
+                {t('settings.remoteControl.sshAccess.openSharingSettings')}
+              </Button>
+            </div>
+          )}
           {state.blocked === 'SSHD_UNREACHABLE' && (
             <>
               <div className="flex items-start gap-2">
@@ -429,14 +447,30 @@ export function SshAccessSetting({ selfName, selfDeviceId, deviceNames }: {
       {state.setting && (
         <>
           {alias && state.enabled && !state.blocked && (
-            <p className="text-12 text-[var(--text-secondary)]">
-              {/* The string places the command, with or without a space after its colon. */}
-              <Trans
-                i18nKey="settings.remoteControl.sshAccess.aliasIntro"
-                values={{ command: `ssh ${alias}` }}
-                components={{ command: <code className="select-text font-mono text-[var(--text-primary)]" /> }}
-              />
-            </p>
+            <div className="flex items-center gap-1.5">
+              <p className="min-w-0 text-12 text-[var(--text-secondary)]">
+                {/* The string places the command, with or without a space after its colon. */}
+                <Trans
+                  i18nKey="settings.remoteControl.sshAccess.aliasIntro"
+                  values={{ command: `ssh ${alias}` }}
+                  components={{ command: <code className="select-text font-mono text-[var(--text-primary)]" /> }}
+                />
+              </p>
+              <Tip text={t('settings.remoteControl.sshAccess.device.copy')}>
+                <Button
+                  data-settings-search-action="Copy the terminal command that opens SSH to this computer"
+                  variant="secondary"
+                  tone="quiet"
+                  size="sm"
+                  type="button"
+                  aria-label={t('settings.remoteControl.sshAccess.device.copy')}
+                  className="w-7 shrink-0 px-0"
+                  onClick={() => void copyText(`ssh ${alias}`, t)}
+                >
+                  <Copy size={13} aria-hidden />
+                </Button>
+              </Tip>
+            </div>
           )}
           <div className="flex flex-col border-t border-[var(--border-default)] pt-2">
             <span className="text-11 text-[var(--text-tertiary)]">

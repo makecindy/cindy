@@ -7410,6 +7410,7 @@
         },
         "otherDistributions": "其他 Linux 发行版请安装 openssh-server 并启动 sshd 服务。",
         "copyCommand": "复制命令",
+        "openSharingSettings": "打开共享设置",
         "copied": "已复制",
         "copyFailed": "复制失败",
         "listHeading": "可以 SSH 的设备（{{count}}）",

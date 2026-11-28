@@ -7410,6 +7410,7 @@
         },
         "otherDistributions": "その他の Linux ディストリビューションでは、openssh-server をインストールして sshd サービスを起動してください。",
         "copyCommand": "コマンドをコピー",
+        "openSharingSettings": "共有設定を開く",
         "copied": "コピーしました",
         "copyFailed": "コピーできませんでした",
         "listHeading": "SSH で接続できるデバイス（{{count}}）",

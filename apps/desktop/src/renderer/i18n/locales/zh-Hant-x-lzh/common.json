@@ -7410,6 +7410,7 @@
         },
         "otherDistributions": "他 Linux 發行版，請安裝 openssh-server 並啟 sshd 服務。",
         "copyCommand": "錄命令",
+        "openSharingSettings": "啟共享之設",
         "copied": "已錄",
         "copyFailed": "錄之未成",
         "listHeading": "可 SSH 之裝置（{{count}}）",
