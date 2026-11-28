@@ -4424,15 +4424,19 @@ function MessageBubble({
       {attachmentStripNode}
       {dispatchRoute && messageDispatchRouteMismatch(dispatchRoute) && dispatchRoute.selected ? (
         <ErrorNotice message={t('session.screen.modelSwitchPreparation.usingPrevious', {
-          actual: messageDispatchRouteLabel(dispatchRoute, t('models.pluginEngines.genericName')),
-          target: messageDispatchRouteLabel(dispatchRoute.selected, t('models.pluginEngines.genericName')),
+          actual: messageDispatchRouteLabel(
+            dispatchRoute,
+            t('models.pluginEngines.genericName'),
+            t('models.pluginEngines.defaultModel'),
+          ),
+          target: messageDispatchRouteLabel(
+            dispatchRoute.selected,
+            t('models.pluginEngines.genericName'),
+            t('models.pluginEngines.defaultModel'),
+          ),
         })}>
           {dispatchRoute.switchError ? <AgentErrorDetails message={dispatchRoute.switchError} /> : null}
         </ErrorNotice>
-      ) : dispatchRoute ? (
-        <Text style={styles.failedSamplingAttemptText} testID="message.dispatchRoute">
-          {messageDispatchRouteLabel(dispatchRoute, t('models.pluginEngines.genericName'))}
-        </Text>
       ) : null}
       {item.message.failedSamplingAttempt ? (
         <Text style={styles.failedSamplingAttemptText}>

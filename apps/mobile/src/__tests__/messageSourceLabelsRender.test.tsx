@@ -1498,3 +1498,52 @@ it('opens public audio in the attachment player without a computer resolver', as
     act(() => root.unmount());
   }
 });
+
+// PR #13360 follow-up / unit: normal user messages (including historical rows carrying a
+// non-mismatch dispatchRoute) must not show a route label above the bubble on Mobile; only
+// mismatched fallback sends show ErrorNotice, with a readable plugin engine name and no raw
+// `acp-plugin:...` id.
+it('hides non-mismatch dispatchRoute and shows readable plugin names only on fallback mismatch', () => {
+  const normal = mount([
+    msg('normal-route', '普通消息', {
+      dispatchRoute: {
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy',
+        agentDeviceId: null,
+      },
+    }),
+  ]);
+  try {
+    expect(normal.host.querySelector('[data-testid="message.dispatchRoute"]')).toBeNull();
+    expect(normal.host.textContent).not.toContain('acp-plugin:');
+    expect(normal.host.textContent).not.toContain('插件引擎');
+  } finally {
+    normal.unmount();
+  }
+
+  const fallback = mount([
+    msg('fallback-route', '回退消息', {
+      dispatchRoute: {
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy',
+        agentDeviceId: null,
+        engineName: 'Antigravity',
+        selected: {
+          agentKind: 'codex',
+          model: 'gpt-6-astra',
+          providerId: 'openai',
+          agentDeviceId: null,
+        },
+        switchError: '[DEVICE_LINK_TIMEOUT] Target preparation timed out',
+      },
+    }),
+  ]);
+  try {
+    expect(fallback.host.textContent).toContain('本次使用 Antigravity · gemini-4-neon，Codex · openai · gpt-6-astra 尚未就绪');
+    expect(fallback.host.textContent).not.toContain('acp-plugin:');
+  } finally {
+    fallback.unmount();
+  }
+});
