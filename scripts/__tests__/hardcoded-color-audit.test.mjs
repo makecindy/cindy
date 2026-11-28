@@ -344,46 +344,64 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   for (const args of [['--base-ref'], ['--bogus'], ['--base-ref','missing-ref'], ['--head-ref',commit,'--worktree']]) assert.equal(cli(...args).status,2);
   const workflow = matter.engines.yaml.parse(fs.readFileSync(path.join(root,'.github/workflows/ci.yml'),'utf8'));
   const summary = workflow.jobs.verify.steps[0];
-  for (const checks of ['success','failure','cancelled','skipped']) {
-    for (const shards of ['success','failure','cancelled','skipped']) {
-      // The parallel typecheck job blocks verify like the checks it was split from.
-      for (const typecheck of checks === 'success' && shards === 'success' ? ['success','failure','cancelled','skipped'] : ['success']) {
-      // Host combinations only matter once the other gates pass.
-      const allGreen = checks === 'success' && shards === 'success' && typecheck === 'success';
-      for (const selection of allGreen ? ['success','failure','cancelled','skipped'] : ['success']) {
-      for (const required of allGreen ? ['true','false',''] : ['true']) {
-      for (const hosts of allGreen ? ['success','failure','cancelled','skipped'] : ['success']) {
-      // Windows' bash.exe is a WSL shim and does not forward Node's ad-hoc
-      // environment object. Set fixture values inside the shell script so
-      // this contract test behaves the same on Windows and Linux.
-      const aggregateScript = summary.run
-        .replaceAll('$VERIFY_CHECKS_RESULT', checks)
-        .replaceAll('$TYPECHECK_RESULT', typecheck)
-        .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards)
-        .replaceAll('$HOST_CHANGES_RESULT', selection)
-        .replaceAll('$HOST_REQUIRED', required)
-        .replaceAll('$HOST_REGRESSIONS_RESULT', hosts);
-      const aggregate = runBash(aggregateScript);
+  const verifyDefaults = {
+    $CHANGES_RESULT: 'success',
+    $CLIENT_REQUIRED: 'true',
+    $VERIFY_CHECKS_RESULT: 'success',
+    $TYPECHECK_DESKTOP_MAIN_RESULT: 'success',
+    $TYPECHECK_DESKTOP_RENDERER_RESULT: 'success',
+    $TYPECHECK_MOBILE_RESULT: 'success',
+    $LINUX_UNIT_SHARDS_RESULT: 'success',
+    $LINUX_MOBILE_UNIT_RESULT: 'success',
+    $LINUX_PACKAGES_UNIT_RESULT: 'success',
+    $HOST_REQUIRED: 'true',
+    $HOST_REGRESSIONS_RESULT: 'success',
+  };
+  const renderVerify = (overrides) =>
+    Object.entries({ ...verifyDefaults, ...overrides }).reduce((acc, [k, v]) => acc.replaceAll(k, v), summary.run);
+  // Windows' bash.exe is a WSL shim and does not forward Node's ad-hoc
+  // environment object. Set fixture values inside the shell script so
+  // this contract test behaves the same on Windows and Linux.
+  for (const result of ['success', 'failure', 'cancelled', 'skipped']) {
+    for (const target of [
+      '$CHANGES_RESULT',
+      '$VERIFY_CHECKS_RESULT',
+      '$TYPECHECK_DESKTOP_MAIN_RESULT',
+      '$TYPECHECK_DESKTOP_RENDERER_RESULT',
+      '$TYPECHECK_MOBILE_RESULT',
+      '$LINUX_UNIT_SHARDS_RESULT',
+      '$LINUX_MOBILE_UNIT_RESULT',
+      '$LINUX_PACKAGES_UNIT_RESULT',
+      '$HOST_REGRESSIONS_RESULT',
+    ]) {
+      const aggregate = runBash(renderVerify({ [target]: result }));
       if (!aggregate) return t.skip('Git Bash is unavailable on this host');
-      // Host regressions may be skipped only when selection succeeded and said they are not needed.
-      const hostOk = selection === 'success'
-        && ((required === 'true' && hosts === 'success') || (required === 'false' && hosts === 'skipped'));
-      assert.equal(aggregate.status === 0, allGreen && hostOk);
-      }
-      }
-      }
-      }
+      assert.equal(aggregate.status === 0, result === 'success', `${target}=${result}`);
     }
   }
-  const propagatedScript = summary.run
-    .replaceAll('$VERIFY_CHECKS_RESULT', failed.status ? 'failure' : 'success')
-    .replaceAll('$TYPECHECK_RESULT', 'success')
-    .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success')
-    .replaceAll('$HOST_CHANGES_RESULT', 'success')
-    .replaceAll('$HOST_REQUIRED', 'true')
-    .replaceAll('$HOST_REGRESSIONS_RESULT', 'success');
-  const propagated = runBash(propagatedScript);
-  if (!propagated) return t.skip('Git Bash is unavailable on this host');
+  for (const required of ['true', 'false', '']) {
+    for (const hosts of ['success', 'failure', 'cancelled', 'skipped']) {
+      const aggregate = runBash(renderVerify({ $HOST_REQUIRED: required, $HOST_REGRESSIONS_RESULT: hosts }));
+      if (!aggregate) return t.skip('Git Bash is unavailable on this host');
+      const hostOk = (required === 'true' && hosts === 'success') || (required === 'false' && hosts === 'skipped');
+      assert.equal(aggregate.status === 0, hostOk, `host required=${required} result=${hosts}`);
+    }
+  }
+  const docsOnly = {
+    $CLIENT_REQUIRED: 'false',
+    $TYPECHECK_DESKTOP_MAIN_RESULT: 'skipped',
+    $TYPECHECK_DESKTOP_RENDERER_RESULT: 'skipped',
+    $TYPECHECK_MOBILE_RESULT: 'skipped',
+    $LINUX_UNIT_SHARDS_RESULT: 'skipped',
+    $LINUX_MOBILE_UNIT_RESULT: 'skipped',
+    $LINUX_PACKAGES_UNIT_RESULT: 'skipped',
+    $HOST_REQUIRED: 'false',
+    $HOST_REGRESSIONS_RESULT: 'skipped',
+  };
+  const docsPass = runBash(renderVerify(docsOnly));
+  if (!docsPass) return t.skip('Git Bash is unavailable on this host');
+  assert.equal(docsPass.status, 0);
+  const propagated = runBash(renderVerify({ ...docsOnly, $VERIFY_CHECKS_RESULT: failed.status ? 'failure' : 'success' }));
   assert.notEqual(propagated.status,0);
   fs.writeFileSync(path.join(temp,'scripts/hardcoded-color-exemptions.json'),'{bad json');
   assert.throws(()=>audit({root:temp,baseRef:commit,worktree:true}));
@@ -475,7 +493,10 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.equal(colors.run, 'pnpm check:design-colors --base-ref "$DESIGN_BASE_REF" --head-ref "$DESIGN_HEAD_REF"');
   assert.match(colors.env.DESIGN_BASE_REF, /github\.event\.pull_request\.base\.sha/);
   assert.match(colors.env.DESIGN_HEAD_REF, /github\.sha/);
-  for (const node of [checks, colors, checks.steps.find(s=>s.name==='Check design inventory registration')]) {
+  assert.equal(checks['continue-on-error'], undefined);
+  assert.equal(checks.needs, undefined);
+  assert.equal(checks.if, undefined);
+  for (const node of [colors, checks.steps.find(s=>s.name==='Check design inventory registration')]) {
     assert.equal(node['continue-on-error'], undefined);
     assert.equal(node.if, undefined);
   }
@@ -484,15 +505,26 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.ok(pkg.scripts['test:runner'].includes('scripts/__tests__/hardcoded-color-audit.test.mjs'));
   assert.equal(workflow.jobs.verify.name,'verify');
   assert.match(workflow.jobs.verify.if,/always\(\)/);
-  assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','typecheck','linux-unit-shards','host-changes','host-regressions']);
+  assert.deepEqual(workflow.jobs.verify.needs,[
+    'changes',
+    'verify-checks',
+    'typecheck-desktop-main',
+    'typecheck-desktop-renderer',
+    'typecheck-mobile',
+    'linux-unit-shards',
+    'linux-mobile-unit',
+    'linux-packages-unit',
+    'host-regressions',
+  ]);
   const host = workflow.jobs['host-regressions'];
-  assert.equal(host.needs, 'host-changes');
+  assert.equal(host.needs, 'changes');
+  assert.equal(host.if, "needs.changes.outputs.host == 'true'");
   assert.deepEqual(host.strategy.matrix.os, ['ubuntu-latest', 'windows-latest', 'macos-latest']);
   assert.equal(host['continue-on-error'], undefined);
   assert.ok(host.steps.some(s => s.run === 'pnpm --filter @cindy/host test'));
   const windows=workflow.jobs['windows-unit'];
   assert.equal(windows.name,'Windows unit tests');
-  assert.deepEqual(windows.needs,['windows-unit-shards','windows-runner-checks']);
+  assert.deepEqual(windows.needs,['changes','windows-unit-shards','windows-mobile-unit','windows-packages-unit','windows-runner-checks']);
   assert.match(windows.if,/always\(\)/);
   for(const name of ['linux-unit-shards','windows-unit-shards']) {
     const job=workflow.jobs[name];
@@ -500,21 +532,45 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
     assert.ok(shards.length>=2);
     assert.deepEqual(shards,shards.map((_,i)=>i+1));
     assert.equal(job.strategy['fail-fast'],false);
-    assert.ok(job.steps.some(s=>s.run==='pnpm run test:workspaces --tier unit'));
+    assert.equal(job.steps[0].with.lfs, true);
+    assert.ok(job.steps.some(s=>s.run==='pnpm run test:workspaces --tier unit --workspace desktop'));
   }
+  assert.equal(workflow.jobs['windows-runner-checks'].steps[0].with.filter, undefined);
+  assert.ok(workflow.jobs['linux-packages-unit'].steps.some(s => s.run === 'pnpm install:ripgrep'));
   // Companion DB regressions run once per OS: on Linux shard 1, and on Windows
   // in the parallel one-off job instead of on a shard's critical path.
   assert.ok(workflow.jobs['linux-unit-shards'].steps.some(s=>s.name==='Run companion database regressions' && s.if==='matrix.shard == 1'));
   assert.ok(workflow.jobs['windows-runner-checks'].steps.some(s=>s.name==='Run companion database regressions' && s.if===undefined));
-  const gateVars=['$WINDOWS_UNIT_SHARDS_RESULT','$WINDOWS_RUNNER_CHECKS_RESULT'];
-  for(const result of ['success','failure','cancelled','skipped']) {
-    for(const target of gateVars) {
-      const windowsScript=gateVars.reduce((script,name)=>script.replaceAll(name,name===target?result:'success'),windows.steps[0].run);
-      const run=runBash(windowsScript);
+
+  const windowsGateVars = {
+    $CHANGES_RESULT: 'success',
+    $CLIENT_REQUIRED: 'true',
+    $WINDOWS_UNIT_SHARDS_RESULT: 'success',
+    $WINDOWS_MOBILE_UNIT_RESULT: 'success',
+    $WINDOWS_PACKAGES_UNIT_RESULT: 'success',
+    $WINDOWS_RUNNER_CHECKS_RESULT: 'success',
+  };
+  const renderGate = (script, overrides) =>
+    Object.entries({ ...windowsGateVars, ...overrides }).reduce((acc, [k, v]) => acc.replaceAll(k, v), script);
+  for (const result of ['success', 'failure', 'cancelled', 'skipped']) {
+    for (const target of ['$CHANGES_RESULT', '$WINDOWS_UNIT_SHARDS_RESULT', '$WINDOWS_MOBILE_UNIT_RESULT', '$WINDOWS_PACKAGES_UNIT_RESULT', '$WINDOWS_RUNNER_CHECKS_RESULT']) {
+      const run = runBash(renderGate(windows.steps[0].run, { [target]: result }));
       if (!run) return t.skip('Git Bash is unavailable on this host');
-      assert.equal(run.status===0,result==='success',`${target}=${result}`);
+      assert.equal(run.status === 0, result === 'success', `${target}=${result}`);
     }
   }
+  const docsOnly = {
+    $CLIENT_REQUIRED: 'false',
+    $WINDOWS_UNIT_SHARDS_RESULT: 'skipped',
+    $WINDOWS_MOBILE_UNIT_RESULT: 'skipped',
+    $WINDOWS_PACKAGES_UNIT_RESULT: 'skipped',
+    $WINDOWS_RUNNER_CHECKS_RESULT: 'skipped',
+  };
+  const skippedPass = runBash(renderGate(windows.steps[0].run, docsOnly));
+  if (!skippedPass) return t.skip('Git Bash is unavailable on this host');
+  assert.equal(skippedPass.status, 0);
+  const skippedFail = runBash(renderGate(windows.steps[0].run, { ...docsOnly, $WINDOWS_MOBILE_UNIT_RESULT: 'failure' }));
+  assert.notEqual(skippedFail.status, 0);
 });
 
 test('new off-scale radii block in Desktop renderer consumers; governed and dynamic values stay report-only', () => {

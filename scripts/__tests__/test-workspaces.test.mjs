@@ -71,6 +71,7 @@ import {
 } from "../ci-database-tests.mjs";
 
 import { detectHostChanges, needsHostTests } from "../ci-host-tests.mjs";
+import { classifyCiChanges, detectCiChanges } from "../ci-changes.mjs";
 
 // Runner tier: the experimental Host must not allocate three OS jobs for a
 // mobile/docs-only change, or silently skip shared inputs/deletions/unknown
@@ -87,6 +88,75 @@ test("Host CI selects shared runtime and infrastructure but skips unrelated chan
 	]) assert.equal(needsHostTests([file]), true, file);
 	assert.equal(needsHostTests(["README.md", "docs/host/basic-web.md", "apps/mobile/app/index.tsx", ".github/ISSUE_TEMPLATE/bug.yml"]), false);
 	assert.equal(needsHostTests([]), false);
+});
+
+// Runner tier: Mobile OAuth and Desktop projection sources are consumed by the
+// other app's unit suites. Both directions must select the shared client group.
+test("CI selects both clients for cross-app changes and skips runtime work for docs", () => {
+	for (const file of [
+		"CONTRIBUTING.md", "CONTRIBUTING.en.md", "docs/dev-rules/repo-map.md",
+		".github/workflows/dependency-download-check.yml",
+	]) assert.deepEqual(classifyCiChanges([file]), { client: false, host: false }, file);
+
+	assert.deepEqual(
+		classifyCiChanges(["apps/mobile/src/plugins/pluginOauthCrypto.ts"]),
+		{ client: true, host: false },
+	);
+	assert.deepEqual(
+		classifyCiChanges(["apps/desktop/src/main/device-link/mobileToolProjection.ts"]),
+		{ client: true, host: true },
+	);
+	for (const file of [
+		"apps/desktop/src/renderer/lib/userPreferences.types.ts",
+		".github/workflows/ci.yml", "pnpm-lock.yaml", "unknown-top-level-dir/file.ts",
+	]) assert.deepEqual(classifyCiChanges([file]), { client: true, host: true }, file);
+});
+
+test("CI compares the event's checked-out candidate, including rename sources, and falls back to full CI", async () => {
+	const base = "a".repeat(40), head = "b".repeat(40);
+	const pr = {
+		eventName: "pull_request",
+		event: { pull_request: { number: 13710, base: { sha: base } } },
+		head,
+		repository: "makecindy/cindy",
+		token: "tok",
+	};
+	const renamed = await detectCiChanges({
+		...pr,
+		fetchImpl: async (url) => {
+			assert.equal(url, `https://api.github.com/repos/makecindy/cindy/compare/${base}...${head}`);
+			return {
+				ok: true,
+				json: async () => ({
+					status: "ahead",
+					files: [{ status: "renamed", filename: "docs/moved.md", previous_filename: "apps/mobile/src/old.ts" }],
+				}),
+			};
+		},
+	});
+	assert.deepEqual(renamed.changes, { client: true, host: false });
+
+	for (const data of [
+		{ status: "ahead", files: Array.from({ length: 300 }, (_, i) => ({ filename: `docs/${i}.md` })) },
+		{ status: "diverged", files: [{ filename: "CONTRIBUTING.md" }] },
+		{ status: "ahead", files: [{ status: "renamed", filename: "docs/moved.md" }] },
+	]) {
+		const compared = await detectCiChanges({ ...pr, fetchImpl: async () => ({ ok: true, json: async () => data }) });
+		assert.deepEqual(compared.changes, { client: true, host: true });
+	}
+	const unavailable = await detectCiChanges({ ...pr, fetchImpl: async () => ({ ok: false, status: 500 }) });
+	assert.deepEqual(unavailable.changes, { client: true, host: true });
+
+	for (const eventName of ["push", "workflow_dispatch"]) {
+		let fetched = false;
+		const full = await detectCiChanges({
+			...pr,
+			eventName,
+			fetchImpl: async () => { fetched = true; },
+		});
+		assert.deepEqual(full.changes, { client: true, host: true });
+		assert.equal(fetched, false);
+	}
 });
 
 test("Host CI compares PR, merge queue and push ranges without losing deleted paths", () => {
@@ -371,10 +441,11 @@ test("client CI owns the complete Desktop Git integration tier", () => {
 	).replace(/\r\n/g, "\n");
 	const job = workflow.match(/\n  git-integration:\n([\s\S]*)$/);
 	assert.ok(job, "client CI must define an independent git-integration job");
-	assert.match(
-		job[1],
-		/^\s{6}- name: Run Desktop Git integration tests\n\s{8}run: pnpm test:git-integration$/m,
-	);
+	assert.match(job[1], /^    needs: changes$/m);
+	assert.match(job[1], /^    if: needs\.changes\.outputs\.client == 'true'$/m);
+	assert.match(job[1], /node scripts\/test-workspaces\.mjs --tier git-integration/);
+	assert.match(job[1], /node --test scripts\/__tests__\/dev-migration-policy\.git-integration\.test\.ts/);
+	assert.doesNotMatch(job[1], /pnpm test:(?:git-integration|runner)/);
 	const windowsChecks = workflow.match(/\n  windows-runner-checks:\n([\s\S]*?)(?=\n  [\w-]+:)/);
 	assert.ok(windowsChecks);
 	assert.match(

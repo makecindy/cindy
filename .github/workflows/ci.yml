@@ -13,9 +13,11 @@ on:
 permissions:
   contents: read
 
+# PR/merge_group 上新提交立即取消旧 run；push(main) 不取消在途 run，由 GitHub Actions
+# 自动把排队中的多次合并折叠为最新一次，避免高频合并时反复拉起再杀掉整批 runner。
 concurrency:
   group: client-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 env:
   XDT_SKIP_AGENT_BIN_INSTALL: '1'
@@ -27,8 +29,29 @@ env:
   NODE_OPTIONS: '--max-old-space-size=8192'
 
 jobs:
-  # 静态检查和 runner 自测与类型检查、Linux 单测分片并行。这里不装
-  # bundled ripgrep；它只在 Desktop 单测收集时需要，由单测分片自行安装。
+  # 只对明确的文档或独立工作流改动跳过客户端回归。静态检查始终运行，
+  # 比较失败或被截断时运行全量检查。
+  changes:
+    name: Select CI jobs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      client: ${{ steps.changes.outputs.client }}
+      host: ${{ steps.changes.outputs.host }}
+    steps:
+      - name: Checkout CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts
+
+      - name: Classify changed paths
+        id: changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci-changes.mjs
+
+  # 静态检查和 runner 自测始终运行，与变更分类并行。
   verify-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -38,7 +61,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          lfs: true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -134,18 +156,18 @@ jobs:
       - name: Run mobile scope guard
         run: pnpm --filter mobile test:scope
 
-  # 类型检查单独并行：Desktop tsc 单步约 5 分钟，串在 verify-checks 里会让它成为
-  # 整轮最慢的 job。只读工作树，不需要完整历史；由 verify 汇总门禁一并阻断。
-  typecheck:
-    name: Typecheck
+  # Desktop main / renderer 与 Mobile 的类型检查拆为三个并行 job，避免串行拉长
+  # 反馈时间；只装当前 Linux x64 依赖并复用主干的 pnpm 锁文件校验结果。
+  typecheck-desktop-main:
+    name: Typecheck (Desktop main)
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     steps:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          lfs: true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -157,29 +179,127 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+
+      - name: Select Linux x64 runner dependencies
+        run: pnpm config set --location=project --json supportedArchitectures '{"os":["linux"],"cpu":["x64"],"libc":["glibc"]}'
+
+      - name: Restore pnpm lockfile verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
 
       - name: Install dependencies
+        env:
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
         run: pnpm install --frozen-lockfile
 
-      # desktop 的 tsc 峰值内存已经贴着全局 4096MB 上限(2026-08-03 本地实测
-      # 约 4.2GB,`--extendedDiagnostics` 下 Types ~125 万、Instantiations ~277 万),
-      # 在 runner 上会随机 OOM(FATAL ERROR: Ineffective mark-compacts near heap
-      # limit)。已排除单点热点:移走最大的单个测试文件只省 ~5MB、移走 1400 行的
-      # 插件页组件只省 ~14MB,skipLibCheck 也早已开启——是整仓类型规模的自然结果,
-      # 不是某处写法。这一步单独给更大的堆,其它步骤维持全局值。
-      - name: Typecheck desktop
+      - name: Typecheck desktop (main)
+        working-directory: apps/desktop
         env:
-          NODE_OPTIONS: '--max-old-space-size=6144'
-        run: pnpm --filter desktop typecheck
+          NODE_OPTIONS: '--max-old-space-size=10240'
+        run: |
+          node scripts/check-typecheck-shards.mjs
+          pnpm exec tsc --noEmit -p tsconfig.main.json
+
+  typecheck-desktop-renderer:
+    name: Typecheck (Desktop renderer)
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+
+      - name: Select Linux x64 runner dependencies
+        run: pnpm config set --location=project --json supportedArchitectures '{"os":["linux"],"cpu":["x64"],"libc":["glibc"]}'
+
+      - name: Restore pnpm lockfile verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
+
+      - name: Install dependencies
+        env:
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck desktop (renderer)
+        working-directory: apps/desktop
+        env:
+          NODE_OPTIONS: '--max-old-space-size=10240'
+        run: |
+          node scripts/check-typecheck-shards.mjs
+          pnpm exec tsc --noEmit -p tsconfig.renderer.json
+
+  typecheck-mobile:
+    name: Typecheck (Mobile)
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+
+      - name: Select Linux x64 runner dependencies
+        run: pnpm config set --location=project --json supportedArchitectures '{"os":["linux"],"cpu":["x64"],"libc":["glibc"]}'
+
+      - name: Restore pnpm lockfile verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
+
+      - name: Install dependencies
+        env:
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck mobile
         run: pnpm --filter mobile typecheck
 
-  # Linux 单测使用与 Windows 相同的确定性 Vitest 分片。八个分片分别覆盖每个
-  # workspace 经 Vitest 切分后的测试文件，并集等于完整 unit tier；不重复 test:runner。
+  # Linux Desktop 单测使用与 Windows 相同的确定性按耗时 8 分片；Mobile 与轻量 packages
+  # 拆到独立并行 job，避免压在 8 片关键路径上，也避免小包在 16 个分片里反复冷启动 Vitest。
   linux-unit-shards:
-    name: Linux unit tests (${{ matrix.shard }}/8)
+    name: Linux desktop unit tests (${{ matrix.shard }}/8)
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -192,8 +312,7 @@ jobs:
     steps:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # Unit shards only read the working tree; full history and every remote
-        # branch cost ~0.5 min per shard (verify, runner and Git jobs keep depth 0).
+        # Desktop unit suites can load sqlite-vec on any shard.
         with:
           lfs: true
 
@@ -207,10 +326,31 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+
+      - name: Select Linux x64 unit-test dependencies
+        run: pnpm config set --location=project --json supportedArchitectures '{"os":["linux"],"cpu":["x64"],"libc":["glibc"]}'
+
+      - name: Restore pnpm lockfile verification
+        id: pnpm-verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
 
       - name: Install dependencies
+        env:
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
         run: pnpm install --frozen-lockfile
+
+      - name: Save verified lockfile from main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 1 && steps.pnpm-verification.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: ${{ steps.pnpm-verification.outputs.cache-primary-key }}
 
       # XDT_SKIP_AGENT_BIN_INSTALL 跳过了 postinstall 的全部 agent 二进制,但
       # runtime-configs.ts 模块顶层的 bundledRipgrepDir() 缺 rg 时直接 throw,
@@ -247,12 +387,12 @@ jobs:
           sudo apt-get "${apt_options[@]}" update
           sudo apt-get "${apt_options[@]}" install --yes libarchive-tools binutils desktop-file-utils xdg-utils
 
-      - name: Run client and package unit test shard
+      - name: Run Desktop unit test shard
         # package script 会传递 npm_execpath，让子进程复用当前 pnpm 入口。
         # XDT_VITEST_FILE_TIMINGS 让 Desktop 额外写出每个测试文件的耗时，供按耗时分片。
         env:
           XDT_VITEST_FILE_TIMINGS: ${{ runner.temp }}/vitest-file-timings/desktop-linux-shard-${{ matrix.shard }}.json
-        run: pnpm run test:workspaces --tier unit
+        run: pnpm run test:workspaces --tier unit --workspace desktop
 
       - name: Upload Desktop file timings
         if: ${{ !cancelled() }}
@@ -263,39 +403,117 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      # 真实进程与 Unix socket 覆盖独立执行一次，不混入日常 unit 或其他分片。
-      - name: Run Pi manager integration tests
-        if: matrix.shard == 1
-        run: pnpm run test:workspaces --tier integration --workspace @cindy/maker-pi-manager
-
       # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
       - name: Run companion database regressions
         if: matrix.shard == 1
         run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
 
-  # Detect once without dependency installation; unrelated changes allocate no
-  # Windows/macOS Host runners. All event types retain the stable verify gate.
-  host-changes:
-    name: Select Host regressions
+  linux-mobile-unit:
+    name: Linux mobile unit tests
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      required: ${{ steps.changes.outputs.required }}
+    timeout-minutes: 25
+
     steps:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
-          fetch-depth: 0
-      - name: Select Host regressions
-        id: changes
-        run: node scripts/ci-host-tests.mjs
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+
+      - name: Select Linux x64 unit-test dependencies
+        run: pnpm config set --location=project --json supportedArchitectures '{"os":["linux"],"cpu":["x64"],"libc":["glibc"]}'
+
+      - name: Restore pnpm lockfile verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
+
+      - name: Install dependencies
+        env:
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Mobile unit tests
+        run: pnpm run test:workspaces --tier unit --workspace mobile
+
+  linux-packages-unit:
+    name: Linux package unit tests
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+
+      - name: Select Linux x64 unit-test dependencies
+        run: pnpm config set --location=project --json supportedArchitectures '{"os":["linux"],"cpu":["x64"],"libc":["glibc"]}'
+
+      - name: Restore pnpm lockfile verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
+
+      - name: Install dependencies
+        env:
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
+        run: pnpm install --frozen-lockfile
+
+      # maker-core 的 Pi 搜索测试使用随包 ripgrep。
+      - name: Cache bundled ripgrep
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ripgrep-bin
+          key: ripgrep-bin-${{ runner.os }}-${{ hashFiles('tools/ripgrep/latest.json') }}
+
+      - name: Install bundled ripgrep
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:ripgrep
+
+      - name: Run package unit tests
+        run: pnpm run test:workspaces --tier unit --exclude-workspace desktop,mobile
+
+      # 真实进程与 Unix socket 覆盖独立执行一次，不混入日常 unit 或其他分片。
+      - name: Run Pi manager integration tests
+        run: pnpm run test:workspaces --tier integration --workspace @cindy/maker-pi-manager
 
   # Host's Node tests are outside the Vitest workspace tiers. Exercise its
   # actual loaders, HTTP authorization and worker processes on every desktop OS.
   # Credential tests use synthetic records; no login or system keychain access.
   host-regressions:
-    needs: host-changes
-    if: needs.host-changes.outputs.required == 'true'
+    needs: changes
+    if: needs.changes.outputs.host == 'true'
     name: Host regressions (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -325,7 +543,10 @@ jobs:
       # Most acceptance scripts in apps/host/scripts need native engines or a browser and
       # are not run here. Load each one's imports without running it, so a shared desktop
       # module that starts importing Electron fails here rather than on the next manual run.
+      # Module import graph is platform independent: running once on Linux saves ~5 min of
+      # macOS + Windows runner time per PR without reducing coverage.
       - name: Load Host acceptance scripts (imports only)
+        if: matrix.os == 'ubuntu-latest'
         working-directory: apps/host
         run: node scripts/check-e2e-imports.mjs
       # These three need no engine, browser, account or network.
@@ -346,42 +567,60 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: pnpm --filter @cindy/host typecheck
 
-  # 保留原 required check 名 verify；Host 仅允许明确无关时跳过，选择失败也阻断。
+  # 保留原 required check 名 verify；各分组仅允许明确无关时跳过，分类失败或任一必需组失败均阻断。
   verify:
     name: verify
     if: ${{ always() }}
     needs:
+      - changes
       - verify-checks
-      - typecheck
+      - typecheck-desktop-main
+      - typecheck-desktop-renderer
+      - typecheck-mobile
       - linux-unit-shards
-      - host-changes
+      - linux-mobile-unit
+      - linux-packages-unit
       - host-regressions
     runs-on: ubuntu-latest
     steps:
-      - name: Require checks and every Linux unit shard
+      - name: Require selected Linux checks, typechecks, unit suites and Host regressions
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CLIENT_REQUIRED: ${{ needs.changes.outputs.client }}
           VERIFY_CHECKS_RESULT: ${{ needs.verify-checks.result }}
-          TYPECHECK_RESULT: ${{ needs.typecheck.result }}
+          TYPECHECK_DESKTOP_MAIN_RESULT: ${{ needs.typecheck-desktop-main.result }}
+          TYPECHECK_DESKTOP_RENDERER_RESULT: ${{ needs.typecheck-desktop-renderer.result }}
+          TYPECHECK_MOBILE_RESULT: ${{ needs.typecheck-mobile.result }}
           LINUX_UNIT_SHARDS_RESULT: ${{ needs.linux-unit-shards.result }}
-          HOST_CHANGES_RESULT: ${{ needs.host-changes.result }}
-          HOST_REQUIRED: ${{ needs.host-changes.outputs.required }}
+          LINUX_MOBILE_UNIT_RESULT: ${{ needs.linux-mobile-unit.result }}
+          LINUX_PACKAGES_UNIT_RESULT: ${{ needs.linux-packages-unit.result }}
+          HOST_REQUIRED: ${{ needs.changes.outputs.host }}
           HOST_REGRESSIONS_RESULT: ${{ needs.host-regressions.result }}
         run: |
+          test "$CHANGES_RESULT" = "success"
+          check_gate() {
+            case "$1:$2" in
+              true:success|false:skipped) ;;
+              *) echo "$3 did not pass (required=$1 result=$2)"; exit 1 ;;
+            esac
+          }
           test "$VERIFY_CHECKS_RESULT" = "success"
-          test "$TYPECHECK_RESULT" = "success"
-          test "$LINUX_UNIT_SHARDS_RESULT" = "success"
-          test "$HOST_CHANGES_RESULT" = "success"
-          case "$HOST_REQUIRED:$HOST_REGRESSIONS_RESULT" in
-            true:success|false:skipped) ;;
-            *) echo "Host selection or regressions did not pass"; exit 1 ;;
-          esac
+          check_gate "$CLIENT_REQUIRED" "$TYPECHECK_DESKTOP_MAIN_RESULT" "typecheck-desktop-main"
+          check_gate "$CLIENT_REQUIRED" "$TYPECHECK_DESKTOP_RENDERER_RESULT" "typecheck-desktop-renderer"
+          check_gate "$CLIENT_REQUIRED" "$TYPECHECK_MOBILE_RESULT" "typecheck-mobile"
+          check_gate "$CLIENT_REQUIRED" "$LINUX_UNIT_SHARDS_RESULT" "linux-unit-shards"
+          check_gate "$CLIENT_REQUIRED" "$LINUX_MOBILE_UNIT_RESULT" "linux-mobile-unit"
+          check_gate "$CLIENT_REQUIRED" "$LINUX_PACKAGES_UNIT_RESULT" "linux-packages-unit"
+          check_gate "$HOST_REQUIRED" "$HOST_REGRESSIONS_RESULT" "host-regressions"
 
   # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。八个
-  # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
-  # 只需执行一次的检查放在 windows-runner-checks，不压在任一分片的关键路径上。
+  # Windows Desktop 分片并行运行，与独立的 Mobile/Packages job 组成完整 unit tier，
+  # 不再让 Mobile 与小包压在每片 Desktop 的关键路径上。
   # 分片数与实测依据见 docs/dev-rules/desktop-unit-test-performance.md。
   windows-unit-shards:
-    name: Windows unit tests (${{ matrix.shard }}/8)
+    name: Windows desktop unit tests (${{ matrix.shard }}/8)
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
     runs-on: windows-latest
     timeout-minutes: 40
     strategy:
@@ -394,8 +633,6 @@ jobs:
     steps:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # Unit shards only read the working tree; full history and every remote
-        # branch cost ~0.5 min per shard (verify, runner and Git jobs keep depth 0).
         with:
           lfs: true
 
@@ -482,13 +719,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm install:ripgrep
 
-      - name: Run client and package unit tests
+      - name: Run Desktop unit tests
         # 通过 package script 传递
         # npm_execpath，避免 Windows 子进程退回 PATH 上的 pnpm.cmd。
         # XDT_VITEST_FILE_TIMINGS 让 Desktop 额外写出每个测试文件的耗时，供按耗时分片。
         env:
           XDT_VITEST_FILE_TIMINGS: ${{ runner.temp }}/vitest-file-timings/desktop-windows-shard-${{ matrix.shard }}.json
-        run: pnpm run test:workspaces --tier unit
+        run: pnpm run test:workspaces --tier unit --workspace desktop
 
       - name: Upload Desktop file timings
         if: ${{ !cancelled() }}
@@ -499,10 +736,124 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  windows-mobile-unit:
+    name: Windows mobile unit tests (${{ matrix.shard }}/2)
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/2
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Keep temp files on the workspace drive
+        shell: pwsh
+        run: |
+          $temp = Join-Path (Split-Path -Qualifier $env:GITHUB_WORKSPACE) 'cindy-tmp'
+          New-Item -ItemType Directory -Force -Path $temp | Out-Null
+          "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        id: setup-node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+
+      - name: Select Windows x64 unit-test dependencies
+        shell: pwsh
+        run: pnpm.cmd config set --location=project --json supportedArchitectures '{\"os\":[\"win32\"],\"cpu\":[\"x64\"],\"libc\":[\"glibc\"]}'
+
+      - name: Restore pnpm lockfile verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
+
+      - name: Install dependencies
+        env:
+          PNPM_STORE_CACHE_HIT: ${{ steps.setup-node.outputs.cache-hit }}
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
+        run: ./scripts/ci-windows-install.ps1 -ReportPath (Join-Path $env:RUNNER_TEMP 'pnpm-install.json')
+
+      - name: Run Mobile unit tests
+        run: pnpm run test:workspaces --tier unit --workspace mobile
+
+  windows-packages-unit:
+    name: Windows package unit tests
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Keep temp files on the workspace drive
+        shell: pwsh
+        run: |
+          $temp = Join-Path (Split-Path -Qualifier $env:GITHUB_WORKSPACE) 'cindy-tmp'
+          New-Item -ItemType Directory -Force -Path $temp | Out-Null
+          "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        id: setup-node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+
+      - name: Select Windows x64 unit-test dependencies
+        shell: pwsh
+        run: pnpm.cmd config set --location=project --json supportedArchitectures '{\"os\":[\"win32\"],\"cpu\":[\"x64\"],\"libc\":[\"glibc\"]}'
+
+      - name: Restore pnpm lockfile verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
+
+      - name: Install dependencies
+        env:
+          PNPM_STORE_CACHE_HIT: ${{ steps.setup-node.outputs.cache-hit }}
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
+        run: ./scripts/ci-windows-install.ps1 -ReportPath (Join-Path $env:RUNNER_TEMP 'pnpm-install.json')
+
+      - name: Run package unit tests
+        run: pnpm run test:workspaces --tier unit --exclude-workspace desktop,mobile
+
   # Windows runner 自测和伴侣数据库回归各只需执行一次。单独并行运行，避免给
   # 某一个 unit 分片额外叠加约 4 分钟、拖长整条关键路径。
   windows-runner-checks:
     name: Windows runner and database checks
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
     runs-on: windows-latest
     timeout-minutes: 25
 
@@ -569,34 +920,49 @@ jobs:
         if: steps.database-changes.outputs.required == 'true'
         run: node scripts/ci-database-tests.mjs run
 
-  # 保留稳定的必需检查名，并确保任一分片或一次性检查失败、取消都会阻断汇总门禁。
+  # 保留稳定的必需检查名，并确保任一必需分片、子套件或一次性检查失败、取消都会阻断汇总门禁。
   windows-unit:
     name: Windows unit tests
     if: ${{ always() }}
     needs:
+      - changes
       - windows-unit-shards
+      - windows-mobile-unit
+      - windows-packages-unit
       - windows-runner-checks
     runs-on: ubuntu-latest
     steps:
-      - name: Require every Windows unit shard and runner checks
+      - name: Require selected Windows unit suites and runner checks
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CLIENT_REQUIRED: ${{ needs.changes.outputs.client }}
           WINDOWS_UNIT_SHARDS_RESULT: ${{ needs.windows-unit-shards.result }}
+          WINDOWS_MOBILE_UNIT_RESULT: ${{ needs.windows-mobile-unit.result }}
+          WINDOWS_PACKAGES_UNIT_RESULT: ${{ needs.windows-packages-unit.result }}
           WINDOWS_RUNNER_CHECKS_RESULT: ${{ needs.windows-runner-checks.result }}
         run: |
-          test "$WINDOWS_UNIT_SHARDS_RESULT" = "success"
-          test "$WINDOWS_RUNNER_CHECKS_RESULT" = "success"
+          test "$CHANGES_RESULT" = "success"
+          check_gate() {
+            case "$1:$2" in
+              true:success|false:skipped) ;;
+              *) echo "$3 did not pass (required=$1 result=$2)"; exit 1 ;;
+            esac
+          }
+          check_gate "$CLIENT_REQUIRED" "$WINDOWS_UNIT_SHARDS_RESULT" "windows-unit-shards"
+          check_gate "$CLIENT_REQUIRED" "$WINDOWS_MOBILE_UNIT_RESULT" "windows-mobile-unit"
+          check_gate "$CLIENT_REQUIRED" "$WINDOWS_PACKAGES_UNIT_RESULT" "windows-packages-unit"
+          check_gate "$CLIENT_REQUIRED" "$WINDOWS_RUNNER_CHECKS_RESULT" "windows-runner-checks"
 
   git-integration:
     name: Desktop Git integration
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
     steps:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          lfs: true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -608,9 +974,22 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+
+      - name: Select Linux x64 runner dependencies
+        run: pnpm config set --location=project --json supportedArchitectures '{"os":["linux"],"cpu":["x64"],"libc":["glibc"]}'
+
+      - name: Restore pnpm lockfile verification
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pnpm-cache/lockfile-verified.jsonl
+          key: pnpm-verified-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.npmrc') }}
 
       - name: Install dependencies
+        env:
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
         run: pnpm install --frozen-lockfile
 
       # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
@@ -626,5 +1005,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm install:ripgrep
 
+      # test:runner 已在 verify-checks 与 windows-runner-checks 各跑一遍，这里不再重复执行第三遍。
       - name: Run Desktop Git integration tests
-        run: pnpm test:git-integration
+        run: |
+          node scripts/test-workspaces.mjs --tier git-integration
+          node --test scripts/__tests__/dev-migration-policy.git-integration.test.ts
