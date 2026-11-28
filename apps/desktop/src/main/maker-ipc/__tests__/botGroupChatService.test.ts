@@ -37,7 +37,11 @@ import {
   type PlanDecision,
   type PlanDecisionInput,
 } from '../botGroupDivision.js';
-import type { BotGroupAttachment, BotGroupDetail } from '../../../shared/botGroupChat.js';
+import type {
+  BotGroupAttachment,
+  BotGroupChangedPayload,
+  BotGroupDetail,
+} from '../../../shared/botGroupChat.js';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import { installDesktopInteractionHandler, installInteractionLifecycleObserver, requestHostInteraction } from '../interactionRouter.js';
 import { GhostSetupInteractionBridge, type GhostSetupInteractionSnapshot } from '../../cindy-brain/ghostSetupInteractionBridge.js';
@@ -145,7 +149,7 @@ interface Harness {
   dispatches: Array<{ botId: string; clientId: string; prompt: string; sessionId: string; attachments: string[] }>;
   lanes: Array<Parameters<BotGroupChatServiceDeps['ensureLane']>[0]>;
   abortLane: ReturnType<typeof vi.fn>;
-  events: Array<{ groupId: string; change: string }>;
+  events: BotGroupChangedPayload[];
 }
 
 /** `script` returns the Bot's reply; null leaves the turn pending. `delays` orders parallel replies. */
