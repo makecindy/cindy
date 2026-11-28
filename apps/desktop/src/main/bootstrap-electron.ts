@@ -156,6 +156,8 @@ import {
   readWindowFullscreenState,
   showMainWindowAndRestoreFullscreen,
 } from './mainWindowFullscreenStartup';
+import { installMacFullscreenDesyncRecovery } from './macFullscreenRecovery';
+import { readPluginUiRegions } from './mcp-apps/visibility';
 import {
   installMainWindowMaximizeRecovery,
   installMainWindowNativeRestoreIntent,
@@ -1372,7 +1374,7 @@ import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { registerModelGroupDecisionIpc } from './model-groups/decisionIpc.js';
 import { registerDesktopSshCodexProvidersReader } from './model-groups/desktopResolver.js';
 import { registerModelGroupsIpc } from './model-groups/ipc.js';
-import { registerFeishuGroupSettingsIpc } from './im/feishu/groupSettingsIpc.js';
+import { registerImChatSettingsIpc } from './im/shared/chatSettingsIpc.js';
 import { wireFeishuGroupProjectPorts } from './im/feishu/groupProjectPortsWiring.js';
 import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
@@ -4972,6 +4974,15 @@ const createWindow = () => {
     // animation start so traffic-light padding returns before the end event.
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
   });
+  installMacFullscreenDesyncRecovery(mainWindow, {
+    windowLabel: 'main',
+    trafficLightPosition: { x: 12, y: 16 },
+    minSize: { width: 800, height: 600 },
+    shouldShowWindowButtons: () => {
+      const regions = readPluginUiRegions(mainWindow);
+      return regions.workspace && regions.windowControls;
+    },
+  });
 
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
@@ -5910,7 +5921,7 @@ const registerIpcHandlers = () => {
     return imDefaultSettingsWire(channel);
   });
   wireFeishuGroupProjectPorts();
-  registerFeishuGroupSettingsIpc();
+  registerImChatSettingsIpc();
   if (!hostClientMode) {
     registerDesktopSshCodexProvidersReader(listSshCodexProviders);
     registerModelGroupsIpc();

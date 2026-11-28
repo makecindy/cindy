@@ -153,6 +153,7 @@ describe('remote xdt-file links', () => {
   it.each([
     ['xdt-file:///tmp/site/index.html', '/tmp/site/index.html'],
     ['xdt-file:///tmp/%E4%B8%AD%E6%96%87%20a%23b.html', '/tmp/中文 a#b.html'],
+    ['xdt-file:///tmp/a.dart%23L117', '/tmp/a.dart#L117'],
     ['xdt-file:///C:/site/index.html', 'C:/site/index.html'],
     ['xdt-file://open?path=C%3A%5Csite%5Cindex.html', 'C:\\site\\index.html'],
     ['xdt-file://open?path=%2Ftmp%2Fpage.html', '/tmp/page.html'],
@@ -258,6 +259,18 @@ describe('classifyInlineCodePathCandidate', () => {
 });
 
 describe('classifyChatPathLinkTarget', () => {
+  // #13617: the preview reads href as a filename and receives its initial line separately.
+  it.each([
+    ['#L117', 117],
+    ['#L117-L124', 117],
+    ['', undefined],
+  ] as const)('opens a local Dart link with suffix "%s"', (suffix, line) => {
+    const href = 'navigator_history_provider.dart';
+    const target = classifyChatPathLinkTarget(href + suffix);
+    expect(target?.href).toBe(href);
+    expect(target?.line).toBe(line);
+  });
+
   it('绝对路径 + 行号后缀 → 候选(截图实例形态)', () => {
     expect(classifyChatPathLinkTarget('/Users/me/proj/README.md:17')).toEqual({
       href: '/Users/me/proj/README.md',

@@ -1514,6 +1514,21 @@ describe('BotGroupChatView', () => {
     expect(screen.getByRole('complementary')).toBe(panel);
   });
 
+  // #13638: getBotGroup may return a full page of hidden notices. Existing history
+  // cases start from visible messages. Unit: the real timeline must still reach older text.
+  it('loads earlier messages through pages with no visible messages', async () => {
+    mocks.getBotGroup.mockResolvedValueOnce({ ok: true, group: detail({ messages: [], pageOldestSequence: 300, hasMoreBefore: true }) })
+      .mockResolvedValueOnce({ ok: true, group: detail({ messages: [], pageOldestSequence: 200, hasMoreBefore: true }) })
+      .mockResolvedValueOnce({ ok: true, group: detail({ messages: [msg({ content: 'Earlier visible message', sequence: 199 })], hasMoreBefore: false }) });
+    renderView();
+    const earlier = await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' });
+    await act(async () => { fireEvent.click(earlier); });
+    await act(async () => { fireEvent.click(earlier); });
+    expect(await screen.findByText('Earlier visible message')).toBeTruthy();
+    expect(mocks.getBotGroup.mock.calls.map(([, options]) => options?.beforeSequence)).toEqual([undefined, 300, 200]);
+    expect(screen.queryByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' })).toBeNull();
+  });
+
   it('updates an attachment on an earlier page when its download finishes', async () => {
     let arrived = false;
     const latest = msg({ id: 'latest', sequence: 300, content: 'Latest question' });

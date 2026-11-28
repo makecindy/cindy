@@ -278,7 +278,6 @@ import {
 } from './sidebar/railPanelStore';
 import { SessionEntryList } from './sidebar/SessionEntryList';
 import { useInboxUnread } from './sidebar/useInboxUnread';
-import { useTeammateInboxEntries } from '@/features/bots/useTeammateInboxEntries';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
   getDialogueCollapseLimit,
@@ -468,8 +467,6 @@ function sameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean 
 }
 
 /* ============================== Root ============================== */
-
-const EMPTY_INBOX_TEAMMATES: readonly never[] = [];
 
 export function CCAgentSidebarUpper() {
   const { t } = useTranslation();
@@ -2310,10 +2307,8 @@ function ExpandedView({
   }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform,
     inboxFilter]);
 
-  const teammateEntries = useTeammateInboxEntries();
-  const inboxTeammates = sidebarContentFilterCount(inboxFilter) ? EMPTY_INBOX_TEAMMATES : teammateEntries;
   const { now: inboxNow, hasUnread } = useInboxUnread(
-    inboxSessions, inboxTeammates, projectPriorityProjection.base, isInboxTeammateTask,
+    inboxSessions, projectPriorityProjection.base, isInboxTeammateTask,
   );
   const reportUnread = useContext(InboxUnreadReporter);
   useLayoutEffect(() => {
@@ -3376,8 +3371,7 @@ function ExpandedView({
         const queue = [...order, ...remaining.filter(id => !original.has(id))];
         const key = pickSessionIdAfterRemoval(queue, removed, anchor) ?? remaining[0];
         const next = key ? available.get(key) : undefined;
-        if (next && 'route' in next) navigate(next.route);
-        else if (next) void handleSessionClick(next.sessionId);
+        if (next) void handleSessionClick(next.sessionId);
         else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
       };
       if (action === 'complete' && canHandleOfflineInbox && offlineDeviceId && session) {
@@ -4134,7 +4128,6 @@ function ExpandedView({
                 <ProjectsSection
                   inboxSessions={inboxSessions}
                   inboxNow={inboxNow}
-                  inboxTeammates={inboxTeammates}
                   isInboxTeammateTask={isInboxTeammateTask}
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}

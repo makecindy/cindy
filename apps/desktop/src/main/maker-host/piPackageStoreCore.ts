@@ -39,6 +39,7 @@ import {
   evaluatePiRuntimeRequirements,
 } from './pi-package-compatibility.js';
 import {
+  assertStableTreeParent,
   isWithinConfinement,
   openCanonicalRegularFile,
   openConstrainedRegularFile,
@@ -3343,6 +3344,11 @@ interface FingerprintFileContribution {
  * PI_PACKAGE_FINGERPRINT_CONCURRENCY; hash updates and budget accounting stay
  * in sorted DFS order, so completion order can never change the digest.
  */
+interface StableTreeParent {
+  path: string;
+  stat: Stats;
+}
+
 async function fingerprintPiPackageTree(
   rawRoot: string,
   limits: PiPackageSnapshotLimits = DEFAULT_SNAPSHOT_LIMITS,
@@ -3358,6 +3364,10 @@ async function fingerprintPiPackageTree(
   const escapedMessage = 'Pi extension fingerprint contains an escaped link';
   const changedMessage = 'Pi extension package changed before fingerprinting';
 
+  const assertParent = async (parent?: StableTreeParent): Promise<void> => {
+    if (parent) await assertStableTreeParent(root, parent.path, parent.stat, changedMessage);
+  };
+
   // Only I/O is parallel. The returned chunks are copied out of the shared
   // scratch buffer because they are committed to the hash later; at most one
   // byte-bounded batch of files is ever buffered.
@@ -3365,7 +3375,9 @@ async function fingerprintPiPackageTree(
     canonical: string,
     relativePath: string,
     before: Stats,
+    parent?: StableTreeParent,
   ): Promise<FingerprintFileContribution> => {
+    await assertParent(parent);
     const field = `file:${relativePath}:${before.mode & 0o777}:${before.size}`;
     const handle = await openCanonicalRegularFile(
       root,
@@ -3398,6 +3410,7 @@ async function fingerprintPiPackageTree(
       if (!sameStableStat(before, after) || position !== after.size) {
         throw new Error('Pi extension package changed while fingerprinting');
       }
+      await assertParent(parent);
       return { field, chunks };
     } finally {
       await handle.close().catch(() => undefined);
@@ -3423,7 +3436,12 @@ async function fingerprintPiPackageTree(
     for (const chunk of contribution.chunks) hash.update(chunk);
   };
 
-  type PendingFile = { canonical: string; relativePath: string; stat: Stats };
+  type PendingFile = {
+    canonical: string;
+    relativePath: string;
+    stat: Stats;
+    parent?: StableTreeParent;
+  };
   let pendingFiles: PendingFile[] = [];
   let pendingBytes = 0;
   const flushPendingFiles = async (): Promise<void> => {
@@ -3432,28 +3450,41 @@ async function fingerprintPiPackageTree(
     pendingFiles = [];
     pendingBytes = 0;
     const contributions = await Promise.all(batch.map((file) =>
-      readFileContribution(file.canonical, file.relativePath, file.stat)));
+      readFileContribution(file.canonical, file.relativePath, file.stat, file.parent)));
     for (const contribution of contributions) commitFileContribution(contribution);
   };
-  const queueFile = async (canonical: string, relativePath: string, stat: Stats): Promise<void> => {
+  const queueFile = async (
+    canonical: string,
+    relativePath: string,
+    stat: Stats,
+    parent?: StableTreeParent,
+  ): Promise<void> => {
     if (pendingFiles.length > 0 && pendingBytes + stat.size > PI_PACKAGE_FINGERPRINT_IN_FLIGHT_BYTES) {
       await flushPendingFiles();
     }
-    pendingFiles.push({ canonical, relativePath, stat });
+    pendingFiles.push({ canonical, relativePath, stat, parent });
     pendingBytes += stat.size;
     if (pendingBytes >= PI_PACKAGE_FINGERPRINT_IN_FLIGHT_BYTES) await flushPendingFiles();
   };
 
-  const visit = async (canonical: string, relativePath: string, before: Stats): Promise<void> => {
+  const visit = async (
+    canonical: string,
+    relativePath: string,
+    before: Stats,
+    parent?: StableTreeParent,
+  ): Promise<void> => {
+    await assertParent(parent);
     assertSnapshotBudget(budget);
     if (!isWithinConfinement(root, canonical)) throw new Error(escapedMessage);
     const name = relativePath || '.';
 
     if (before.isDirectory()) {
+      await assertStableTreeParent(root, canonical, before, changedMessage);
       if (budget.activeDirectories.has(canonical)) {
         throw new Error('Pi extension fingerprint contains a cyclic link');
       }
       budget.activeDirectories.add(canonical);
+      const childParent = { path: canonical, stat: before };
       try {
         updatePackageFingerprintField(hash, `directory:${name}:${before.mode & 0o777}`);
         const entries = (await fs.readdir(canonical)).sort();
@@ -3462,6 +3493,7 @@ async function fingerprintPiPackageTree(
           offset < entries.length;
           offset += PI_PACKAGE_FINGERPRINT_CONCURRENCY
         ) {
+          await assertParent(childParent);
           const prepared = await Promise.all(
             entries.slice(offset, offset + PI_PACKAGE_FINGERPRINT_CONCURRENCY).map(async (entry) => {
               const child = await resolveStableTreeEntry(
@@ -3477,16 +3509,19 @@ async function fingerprintPiPackageTree(
               };
             }),
           );
+          await assertParent(childParent);
           for (const { child, childPath } of prepared) {
             accountEntry(child.canonicalPath, child.stat);
             if (child.stat.isFile()) {
-              await queueFile(child.canonicalPath, childPath, child.stat);
+              await queueFile(child.canonicalPath, childPath, child.stat, childParent);
             } else {
               await flushPendingFiles();
-              await visit(child.canonicalPath, childPath, child.stat);
+              await visit(child.canonicalPath, childPath, child.stat, childParent);
+              await assertParent(childParent);
             }
           }
           await flushPendingFiles();
+          await assertParent(childParent);
         }
         const [after, finalEntries] = await Promise.all([
           fs.lstat(canonical),
@@ -3502,7 +3537,7 @@ async function fingerprintPiPackageTree(
     }
     if (!before.isFile()) throw new Error('Pi extension fingerprint contains a special file');
 
-    await queueFile(canonical, name, before);
+    await queueFile(canonical, name, before, parent);
     await flushPendingFiles();
   };
 
