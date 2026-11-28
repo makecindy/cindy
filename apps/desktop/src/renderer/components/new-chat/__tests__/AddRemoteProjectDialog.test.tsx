@@ -31,17 +31,19 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+function stubReadySshHost() {
+  vi.stubGlobal('electronAPI', {
+    remoteSsh: {
+      list: async () => ({
+        hosts: [{ status: 'ready', config: { id: 'audit', user: 'test', hostname: 'example.test' } }],
+      }),
+    },
+  });
+}
+
 describe('remote project mode selection', () => {
   it('browses lazily, clears the old path on return, and locks both modes while adding', async () => {
-    vi.stubGlobal('electronAPI', {
-      remoteSsh: {
-        list: async () => ({
-          hosts: [
-            { status: 'ready', config: { id: 'audit', user: 'test', hostname: 'example.test' } },
-          ],
-        }),
-      },
-    });
+    stubReadySshHost();
     // The production code reads window.electronAPI; this stub never connects to a remote.
     const onProjectAdded = vi.fn();
     render(<AddRemoteProjectDialog open onOpenChange={vi.fn()} onProjectAdded={onProjectAdded} />);
@@ -82,6 +84,42 @@ describe('remote project mode selection', () => {
       path: '/home/test',
     });
   });
+});
+
+it.each([
+  { source: 'directory row', manual: false, expectedPath: '/srv/project ' },
+  { source: 'manually edited input', manual: true, expectedPath: '/srv/project' },
+])('uses the SSH path from the $source when adding a project', async ({ manual, expectedPath }) => {
+  stubReadySshHost();
+  mocks.listDir.mockResolvedValueOnce({
+    resolvedPath: '/srv',
+    parent: '/',
+    entries: [
+      { name: 'project', kind: 'dir', childPath: '/srv/project' },
+      { name: 'project ', kind: 'dir', childPath: '/srv/project ' },
+    ],
+  });
+  mocks.statPath.mockImplementationOnce(async (path: string) => ({ kind: 'dir', resolvedPath: path }));
+  const onProjectAdded = vi.fn();
+  render(<AddRemoteProjectDialog open onOpenChange={vi.fn()} onProjectAdded={onProjectAdded} />);
+
+  await waitFor(() => expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('ssh:audit'));
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('radio', { name: 'newChat.addRemoteProject.tabBrowse' }));
+  const rows = await screen.findAllByRole('button', { name: 'project' });
+  const spacedRow = rows.find((row) => row.textContent === 'project ');
+  if (!spacedRow) throw new Error('The directory row with a trailing space was not listed');
+  fireEvent.click(spacedRow);
+  const input = screen.getByPlaceholderText('~/projects/my-repo') as HTMLInputElement;
+  expect(input.value).toBe('/srv/project ');
+  if (manual) fireEvent.change(input, { target: { value: '  /srv/project  ' } });
+
+  fireEvent.click(screen.getByRole('button', { name: 'newChat.addRemoteProject.add' }));
+  await waitFor(() => expect(onProjectAdded).toHaveBeenCalledWith({
+    kind: 'ssh',
+    hostId: 'audit',
+    path: expectedPath,
+  }));
 });
 
 it('locks the move folder picker to the task host and never falls back to another computer', async () => {
