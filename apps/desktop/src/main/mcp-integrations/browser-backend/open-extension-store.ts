@@ -12,6 +12,22 @@ export interface UserBrowserProcessState {
   normalRunning: boolean;
   /** Whether a main browser process of the same browser is running with a different --user-data-dir (e.g. Cindy dedicated browser). */
   customProfileRunning: boolean;
+  /** macOS-only: PIDs of running normal-profile main browser processes. */
+  normalPids?: number[];
+  /**
+   * Whether the running normal-profile browser currently has at least one real browser window.
+   * - `true`: at least one window exists (visible or minimized).
+   * - `false`: macOS 0-window Dock shell whose Profile was unloaded by Chromium's
+   *   DestroyProfileOnBrowserClose; reopening via `open -g -a` without `-n` wakes the Profile safely.
+   * - `undefined`: not determined (non-macOS, browser stopped, or window probe unavailable);
+   *   callers treat `undefined` conservatively as having windows.
+   */
+  hasWindow?: boolean;
+}
+
+export interface ProcessCommandEntry {
+  pid?: number;
+  commandLine: string;
 }
 
 export interface OpenExtensionStoreDeps {
@@ -29,6 +45,17 @@ export interface OpenExtensionStoreDeps {
     browser: InstalledChromium,
     platform: NodeJS.Platform,
   ) => Promise<string[] | null>;
+  /** Override PID + command-line listing for tests. */
+  listProcesses?: (
+    browser: InstalledChromium,
+    platform: NodeJS.Platform,
+  ) => Promise<ProcessCommandEntry[] | null>;
+  /** Override macOS CoreGraphics window-existence probe for tests. */
+  hasBrowserWindow?: (
+    pids: readonly number[],
+    browser: InstalledChromium,
+    platform: NodeJS.Platform,
+  ) => Promise<boolean | undefined>;
 }
 
 const LINUX_BINARY_NAMES: Record<ChromiumKind, readonly string[]> = {
@@ -137,40 +164,59 @@ function matchesBrowserMainExecutable(
 }
 
 /**
- * Pure classifier over OS process command lines: distinguishes a running normal-profile
+ * Pure classifier over OS process entries: distinguishes a running normal-profile
  * user browser from a dedicated-profile instance (e.g. Cindy's `external` Chrome launched
  * with `--user-data-dir=<cindy-runtime>`). Helper/renderer/GPU/crashpad child processes
  * (`--type=...`) are ignored.
  */
-export function classifyChromiumProcesses(
-  commandLines: readonly string[],
+export function classifyChromiumProcessEntries(
+  entries: readonly ProcessCommandEntry[],
   browser: InstalledChromium,
   platform: NodeJS.Platform = process.platform,
 ): UserBrowserProcessState {
   let normalRunning = false;
   let customProfileRunning = false;
+  const normalPids = new Set<number>();
   const expectedDefaultDir = normalizeProfileDir(browser.userDataDir, platform);
 
-  for (const line of commandLines) {
-    const { matched, rest } = matchesBrowserMainExecutable(line, browser, platform);
+  for (const entry of entries) {
+    const { matched, rest } = matchesBrowserMainExecutable(entry.commandLine, browser, platform);
     if (!matched) continue;
     if (CHILD_PROCESS_FLAG_RE.test(rest)) continue;
     const customDir = extractUserDataDir(rest);
-    if (!customDir) {
+    if (!customDir || normalizeProfileDir(customDir, platform) === expectedDefaultDir) {
       normalRunning = true;
-    } else if (normalizeProfileDir(customDir, platform) === expectedDefaultDir) {
-      normalRunning = true;
+      if (typeof entry.pid === 'number' && Number.isSafeInteger(entry.pid) && entry.pid > 0) {
+        normalPids.add(entry.pid);
+      }
     } else {
       customProfileRunning = true;
     }
   }
+  return {
+    normalRunning,
+    customProfileRunning,
+    ...(normalPids.size > 0 ? { normalPids: [...normalPids] } : {}),
+  };
+}
+
+export function classifyChromiumProcesses(
+  commandLines: readonly string[],
+  browser: InstalledChromium,
+  platform: NodeJS.Platform = process.platform,
+): Pick<UserBrowserProcessState, 'normalRunning' | 'customProfileRunning'> {
+  const { normalRunning, customProfileRunning } = classifyChromiumProcessEntries(
+    commandLines.map((commandLine) => ({ commandLine })),
+    browser,
+    platform,
+  );
   return { normalRunning, customProfileRunning };
 }
 
-function defaultListProcessCommandLines(
+function defaultListProcesses(
   browser: InstalledChromium,
   platform: NodeJS.Platform,
-): Promise<string[] | null> {
+): Promise<ProcessCommandEntry[] | null> {
   if (platform === 'win32') {
     const exeName = path.win32.basename(browser.executablePath);
     if (!/^[a-zA-Z0-9._-]+$/.test(exeName)) return Promise.resolve(null);
@@ -184,27 +230,95 @@ function defaultListProcessCommandLines(
         { timeout: 3_000, maxBuffer: 4 * 1024 * 1024 },
         (error, stdout) => {
           if (error) return resolve(null);
-          resolve(stdout.split(/\r?\n/).filter((line) => line.trim().length > 0));
+          resolve(
+            stdout
+              .split(/\r?\n/)
+              .filter((line) => line.trim().length > 0)
+              .map((commandLine) => ({ commandLine })),
+          );
         },
       );
     });
   }
   const psBin = platform === 'darwin' ? '/bin/ps' : 'ps';
+  const psArgs = platform === 'darwin' ? ['-axo', 'pid=,args='] : ['-axo', 'args='];
   return new Promise((resolve) => {
     execFile(
       psBin,
-      ['-axo', 'args='],
+      psArgs,
       { timeout: 3_000, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout) => {
         if (error) return resolve(null);
-        resolve(stdout.split(/\r?\n/).filter((line) => line.trim().length > 0));
+        const entries: ProcessCommandEntry[] = [];
+        for (const raw of stdout.split(/\r?\n/)) {
+          const line = raw.trim();
+          if (!line) continue;
+          if (platform === 'darwin') {
+            const match = /^(\d+)\s+(.+)$/.exec(line);
+            if (!match) continue;
+            entries.push({ pid: Number(match[1]), commandLine: match[2] });
+          } else {
+            entries.push({ commandLine: line });
+          }
+        }
+        resolve(entries);
+      },
+    );
+  });
+}
+
+/**
+ * macOS zero-TCC window-existence probe via CoreGraphics (`CGWindowListCopyWindowInfo`).
+ * Distinguishes a real browser window (visible or minimized: layer 0, alpha > 0, >= 100x100)
+ * from Chromium's 1x1 sentinel and menu-bar overlay strips, without invoking AppleScript/TCC
+ * Automation prompts. Returns `undefined` when indeterminate so callers fail conservatively.
+ */
+function defaultHasBrowserWindow(
+  pids: readonly number[],
+  _browser: InstalledChromium,
+  platform: NodeJS.Platform,
+): Promise<boolean | undefined> {
+  if (platform !== 'darwin') return Promise.resolve(undefined);
+  const validPids = pids.filter((p) => Number.isSafeInteger(p) && p > 0);
+  if (validPids.length === 0) return Promise.resolve(undefined);
+  const script =
+    'ObjC.import("CoreGraphics"); ObjC.import("Foundation");' +
+    `const pids = new Set([${validPids.join(',')}]);` +
+    'const ref = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionAll, $.kCGNullWindowID);' +
+    'if (!ref) { "unknown"; } else {' +
+    '  const arr = ObjC.deepUnwrap(ObjC.castRefToObject(ref));' +
+    '  if (!Array.isArray(arr)) { "unknown"; } else {' +
+    '    const found = arr.some(w => {' +
+    '      if (!w || !pids.has(Number(w.kCGWindowOwnerPID))) return false;' +
+    '      if (Number(w.kCGWindowLayer) !== 0) return false;' +
+    '      if (!(Number(w.kCGWindowAlpha) > 0)) return false;' +
+    '      const b = w.kCGWindowBounds;' +
+    '      return Number(b && b.Width || 0) >= 100 && Number(b && b.Height || 0) >= 100;' +
+    '    });' +
+    '    found ? "yes" : "no";' +
+    '  }' +
+    '}';
+  return new Promise((resolve) => {
+    execFile(
+      '/usr/bin/osascript',
+      ['-l', 'JavaScript', '-e', script],
+      { timeout: 3_000, maxBuffer: 64 * 1024 },
+      (error, stdout) => {
+        if (error) return resolve(undefined);
+        const out = stdout.trim();
+        if (out === 'yes') return resolve(true);
+        if (out === 'no') return resolve(false);
+        return resolve(undefined);
       },
     );
   });
 }
 
 export async function inspectUserBrowserProcesses(
-  deps: Pick<OpenExtensionStoreDeps, 'platform' | 'resolveBrowser' | 'listProcessCommandLines'>,
+  deps: Pick<
+    OpenExtensionStoreDeps,
+    'platform' | 'resolveBrowser' | 'listProcessCommandLines' | 'listProcesses' | 'hasBrowserWindow'
+  >,
 ): Promise<UserBrowserProcessState> {
   let browser: InstalledChromium;
   try {
@@ -213,15 +327,35 @@ export async function inspectUserBrowserProcesses(
     return { normalRunning: false, customProfileRunning: false };
   }
   const platform = deps.platform ?? process.platform;
-  const list = deps.listProcessCommandLines ?? defaultListProcessCommandLines;
-  const lines = await list(browser, platform).catch(() => null);
-  if (!lines) return { normalRunning: false, customProfileRunning: false };
-  return classifyChromiumProcesses(lines, browser, platform);
+  const entries = deps.listProcesses
+    ? await deps.listProcesses(browser, platform).catch(() => null)
+    : deps.listProcessCommandLines
+      ? await deps
+          .listProcessCommandLines(browser, platform)
+          .then((lines) => (lines ? lines.map((commandLine) => ({ commandLine })) : null))
+          .catch(() => null)
+      : await defaultListProcesses(browser, platform).catch(() => null);
+  if (!entries) return { normalRunning: false, customProfileRunning: false };
+  const state = classifyChromiumProcessEntries(entries, browser, platform);
+  if (state.normalRunning && platform === 'darwin') {
+    const pids = state.normalPids ?? [];
+    const probe = deps.hasBrowserWindow ?? (pids.length > 0 ? defaultHasBrowserWindow : undefined);
+    if (probe) {
+      const hasWindow = await probe(pids, browser, platform).catch(() => undefined);
+      if (typeof hasWindow === 'boolean') {
+        return { ...state, hasWindow };
+      }
+    }
+  }
+  return state;
 }
 
 /** Whether the user's normal-profile Chromium browser is currently running. */
 export async function isUserBrowserRunning(
-  deps: Pick<OpenExtensionStoreDeps, 'platform' | 'resolveBrowser' | 'listProcessCommandLines'>,
+  deps: Pick<
+    OpenExtensionStoreDeps,
+    'platform' | 'resolveBrowser' | 'listProcessCommandLines' | 'listProcesses' | 'hasBrowserWindow'
+  >,
 ): Promise<boolean> {
   const state = await inspectUserBrowserProcesses(deps);
   return state.normalRunning;
@@ -275,8 +409,12 @@ export async function openExtensionStoreInUserBrowser(
  * Use normal profile startup so extensions initialize too. Never use --user-data-dir or a debugging port here.
  *
  * macOS nuances:
- * - If the normal-profile browser is already running, do NOT spawn a duplicate instance (using `-n`
- *   causes ProcessSingleton conflicts, Dock flashing, and crashes).
+ * - If the normal-profile browser is already running with an open window (or window state is unknown),
+ *   do NOT spawn a duplicate instance (using `-n` causes ProcessSingleton conflicts, Dock flashing, and crashes).
+ * - If the normal-profile browser is running with 0 windows (`hasWindow === false`), macOS kept the
+ *   process in the Dock while Chromium's DestroyProfileOnBrowserClose unloaded the Profile and all
+ *   extensions. Sending `open -g -a <appBundle>` WITHOUT `-n` safely reopens the existing instance in
+ *   the background so it creates a window and reloads the Profile + extensions without a duplicate process.
  * - Only pass `-n` on macOS when a dedicated-profile instance of the same `.app` bundle (e.g. Cindy's
  *   external browser) is running while the normal-profile browser is NOT running, so LaunchServices
  *   cannot swallow the launch into the dedicated profile.
@@ -287,24 +425,31 @@ export async function startUserBrowser(deps: OpenExtensionStoreDeps): Promise<vo
   try { browser = deps.resolveBrowser(); }
   catch { throw new Error('未找到可用的 Chrome / Edge，请先安装浏览器。'); }
   const platform = deps.platform ?? process.platform;
-  const processState = deps.inspectProcesses
-    ? await deps.inspectProcesses(browser, platform).catch(() => ({
-        normalRunning: false,
-        customProfileRunning: false,
-      }))
+  const processState: UserBrowserProcessState = deps.inspectProcesses
+    ? await deps.inspectProcesses(browser, platform).catch(
+        (): UserBrowserProcessState => ({
+          normalRunning: false,
+          customProfileRunning: false,
+        }),
+      )
     : await inspectUserBrowserProcesses({
         platform,
         resolveBrowser: () => browser,
         listProcessCommandLines: deps.listProcessCommandLines,
+        listProcesses: deps.listProcesses,
+        hasBrowserWindow: deps.hasBrowserWindow,
       });
-  if (processState.normalRunning) return;
+  const wakeZeroWindowMac =
+    platform === 'darwin' && processState.normalRunning && processState.hasWindow === false;
+  if (processState.normalRunning && !wakeZeroWindowMac) return;
   const appBundle = platform === 'darwin' ? /^(.*?\.app)\//.exec(browser.executablePath)?.[1] : undefined;
   const launch = deps.launch ?? defaultLaunch;
   try {
     if (appBundle) {
-      const openArgs = processState.customProfileRunning
-        ? ['-g', '-n', '-a', appBundle]
-        : ['-g', '-a', appBundle];
+      const openArgs =
+        !wakeZeroWindowMac && processState.customProfileRunning
+          ? ['-g', '-n', '-a', appBundle]
+          : ['-g', '-a', appBundle];
       await launch('/usr/bin/open', openArgs);
     } else {
       await launch(browser.executablePath, ['--start-minimized']);
