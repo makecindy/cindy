@@ -427,13 +427,21 @@ function whyText(result: Extract<HostModelGroupResult, { outcome: 'routed' }>, t
       return left !== null && reset
         ? t('models.modelGroups.why.expiringQuota', { left, reset })
         : t('models.modelGroups.why.expiring');
+    case 'usageHabit':
+      return left !== null
+        ? t('models.modelGroups.why.usageHabitQuota', { left })
+        : t('models.modelGroups.why.usageHabit');
+    case 'autoBalance':
+      return left !== null
+        ? t('models.modelGroups.why.autoBalanceQuota', { left })
+        : t('models.modelGroups.why.autoBalance');
     case 'soonest':
       return result.limitedUntilMs
         ? t('models.modelGroups.why.soonestUntil', { reset: formatReset(result.limitedUntilMs, locale) })
         : t('models.modelGroups.why.soonest');
     case 'headroom':
       return left !== null ? t('models.modelGroups.why.headroomQuota', { left }) : t('models.modelGroups.why.headroom');
-    case 'order': case 'rotate': case 'only': case 'cheapest': case 'cheapestFree': case 'drain': case 'drainNext': case 'weighted':
+    case 'order': case 'rotate': case 'only': case 'cheapest': case 'cheapestFree': case 'drain': case 'drainNext': case 'weighted': case 'lessBusy': case 'paygFallback':
       return t(`models.modelGroups.why.${result.why}`);
     default:
       return '';

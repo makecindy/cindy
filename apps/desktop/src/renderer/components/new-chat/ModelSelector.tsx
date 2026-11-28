@@ -1665,10 +1665,23 @@ function ModelSelectorContentView({
     : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
   // 供应商路由在面板里就是一个普通供应商(sourceRouteProviders.ts)：草稿(onAttach)与进行中的任务(onPickMerged)、
   // 本机与远程控制被控端自身的目录均生效；切去浏览「其他电脑」时只停用右侧列表，左栏本机/宿主区仍保持稳定。
-  const homeSourceRouteConfig = ((!!modelGroupsProp?.onAttach && !!onUnifiedSelectProp) || !!modelGroupsProp?.onPickMerged)
+  // 打开面板即冻结 Auto 优先级快照（Snapshot on Open）：面板展开期间后台刷新绝不重排，避免鼠标悬停点击前跳行。
+  const rawHomeSourceRouteConfig = ((!!modelGroupsProp?.onAttach && !!onUnifiedSelectProp) || !!modelGroupsProp?.onPickMerged)
     && !providersOverride && !sshCatalogProviders
     ? modelGroupsProp?.config ?? null
     : null;
+  const frozenAutoPrioritiesRef = useRef<Record<string, number> | null | undefined>(undefined);
+  if (frozenAutoPrioritiesRef.current === undefined) {
+    frozenAutoPrioritiesRef.current = rawHomeSourceRouteConfig?.autoModelPriorities ?? null;
+  } else if (frozenAutoPrioritiesRef.current === null && rawHomeSourceRouteConfig?.autoModelPriorities) {
+    frozenAutoPrioritiesRef.current = rawHomeSourceRouteConfig.autoModelPriorities;
+  }
+  const homeSourceRouteConfig = useMemo(() => {
+    if (!rawHomeSourceRouteConfig) return null;
+    const frozen = frozenAutoPrioritiesRef.current;
+    if (frozen === rawHomeSourceRouteConfig.autoModelPriorities) return rawHomeSourceRouteConfig;
+    return { ...rawHomeSourceRouteConfig, ...(frozen ? { autoModelPriorities: frozen } : { autoModelPriorities: undefined }) };
+  }, [rawHomeSourceRouteConfig]);
   const sourceRoutesListed = !!homeSourceRouteConfig && !remoteBrowse;
   const sourceRouteConfig = sourceRoutesListed ? homeSourceRouteConfig : null;
   const sourceRouteCatalogHostId = remoteAgent?.catalogHostDeviceId ?? homeDeviceId;

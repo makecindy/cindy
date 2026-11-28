@@ -25,6 +25,10 @@ import {
 import type { ModelGroupRecovery } from '../../../desktop/src/main/maker-ipc/sessionRuntimeFallback.js';
 import type { RunModelGroupBeforeSendSessionRow } from '../../../desktop/src/main/model-groups/applyTurnRouting.js';
 import {
+  createAutoUsageProfileStore,
+  readLocalAutoUsageSamples,
+} from '../../../desktop/src/main/model-groups/autoUsageProfile.js';
+import {
   createModelGroupHandlers,
   type ModelGroupHandlersPorts,
 } from '../../../desktop/src/main/model-groups/handlersCore.js';
@@ -135,6 +139,11 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
     };
   }
 
+  const autoUsageProfileStore = createAutoUsageProfileStore({
+    scope: () => activeOwnerScopeKey(),
+    readSamples: (sinceMs, nowMs) => readLocalAutoUsageSamples(sinceMs, nowMs),
+  });
+
   const runtime = createModelGroupRuntime({
     scope: () => activeOwnerScopeKey(),
     localViews: () => ports.listProviderViews(),
@@ -145,6 +154,13 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
       return ports.listLocalAgents().includes(makerAgent);
     },
     quotaWindows: async () => new Map(),
+    usageProfile: (options) => (options?.dryRun ? autoUsageProfileStore.readForPreview(200) : autoUsageProfileStore.peek()),
+    autoModelPriorities: () => {
+      const priorities = autoUsageProfileStore.peek()?.modelPriorities;
+      return priorities && Object.keys(priorities).length > 0 ? priorities : undefined;
+    },
+    onCommitPick: (candidate) => autoUsageProfileStore.recordPick(candidate),
+    onDispose: () => autoUsageProfileStore.dispose(),
     pricing: () => ports.readPricing(),
     readSession: readSwitchOfferSessionRow,
     isShared: () => false,

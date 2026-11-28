@@ -163,7 +163,15 @@ export function modelGroupsConfigFromRemote(raw: unknown): ModelGroupsConfig {
  * 真实原因放在 pickWhy；新版先读 pickWhy(modelGroupResolveResultFromRemote)。
  */
 const LEGACY_WHY: Partial<Record<ModelGroupTraceWhy, ModelGroupTraceWhy>> = {
-  drain: 'order', drainNext: 'order', headroom: 'expiring', weighted: 'rotate',
+  drain: 'order',
+  drainNext: 'order',
+  headroom: 'expiring',
+  weighted: 'rotate',
+  usageHabit: 'expiring',
+  autoBalance: 'expiring',
+  lessBusy: 'expiring',
+  paygFallback: 'order',
+  paygReserve: 'standby',
 };
 
 type WithPickWhy<T> = T & { pickWhy?: ModelGroupTraceWhy };
@@ -293,6 +301,12 @@ export interface ModelGroupsConfig {
   autoSources?: Record<string, ModelGroupSource[]>;
   /** 用户给自动供应商路由加的例外：键是路由 id。 */
   autoExceptions?: Record<string, ModelGroupException[]>;
+  /**
+   * 仅本机主进程内存下发的 Auto 展示优先级（规范化模型 ID -> 0..1 相对权重）：
+   * 用于模型选择器在 Auto 合并路由下把平时高频模型排到靠前位置；
+   * 绝不落盘（normalizeModelGroupsConfig 忽略）、绝不跨 device-link 下发（modelGroupsConfigForRemote 忽略）。
+   */
+  autoModelPriorities?: Record<string, number>;
 }
 
 /** 用了这个模式的任务出问题时是否自动换来源(默认开)。 */
@@ -345,15 +359,18 @@ export interface ModelGroupRouteNote {
 export type ModelGroupTraceState = 'picked' | 'standby' | 'skipped';
 /**
  * picked：expiring / order / rotate / cheapest / drain / headroom / weighted 对应选法(cheapestFree = 还有订阅配额，不另外花钱；
- * drainNext = 上一个用完或用不了，换到了它)；
+ * drainNext = 上一个用完或用不了，换到了它；usageHabit = 自动模式下结合本机平时用量优先选它；autoBalance = 自动模式下按余量与均衡分担；
+ * lessBusy = 自动模式下其他来源正在跑任务，先用空闲的它；paygFallback = 订阅与共享不可用，按量付费来源兜底)；
  * only = 只有它能用；soonest = 全都用完了，选最早恢复的。
- * standby：这次没轮到。skipped：off = 已停用；unavailable = 没连接或模型已不可选；limited = 额度用完；
+ * standby：这次没轮到；paygReserve = 按量付费来源，订阅与共享不可用时再兜底。
+ * skipped：off = 已停用；unavailable = 没连接或模型已不可选；limited = 额度用完；
  * tight = 5 小时额度快满、离重置还早；noVision = 消息里有图片而它看不了图。
  */
 export type ModelGroupTraceWhy =
   | 'expiring' | 'order' | 'rotate' | 'cheapest' | 'cheapestFree' | 'only' | 'soonest'
   | 'drain' | 'drainNext' | 'headroom' | 'weighted'
-  | 'standby'
+  | 'usageHabit' | 'autoBalance' | 'lessBusy' | 'paygFallback'
+  | 'standby' | 'paygReserve'
   | 'off' | 'unavailable' | 'limited' | 'tight' | 'noVision';
 
 export interface ModelGroupTraceQuota {

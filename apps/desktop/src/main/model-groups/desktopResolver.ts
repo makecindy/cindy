@@ -2,8 +2,10 @@
  * 智能路由运行时的桌面装配(architecture-invariants §2 & §5)：
  * 所有依赖顶层静态导入，所有端口调用期转发；纯 Node 核心逻辑在 runtimeCore.ts。
  */
+import { isSessionActivityRunning } from '@cindy/maker-shared/session-activity';
 import type { ProviderView } from '@cindy/model-providers';
 import type { ModelGroupAgentKind, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
+import { getAgentIslandService } from '../agent-island/service.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getPluginModelPickerAgents, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
@@ -12,6 +14,7 @@ import { getGoalController } from '../goal-host/index.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import * as pluginEnginesIpc from '../maker-ipc/pluginEnginesIpc.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
 import { getProviderGroupRouter } from '../provider-group/runtime.js';
@@ -22,33 +25,76 @@ import { readDeviceProviderCatalog, readRemotePluginEngines } from '../remote-ag
 import { readSubscriptionPoolScheduling } from '../subscription-accounts/runtime.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { createAutoUsageProfileStore, readLocalAutoUsageSamples } from './autoUsageProfile.js';
 import type { ModelGroupInnerQuota } from './pick.js';
 import { modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
 import { createModelGroupRuntime } from './runtimeCore.js';
 
 /** 选路时让额度总览保持采集这么久；面板没开时它平时不采集。 */
 const QUOTA_LEASE_MS = 5 * 60_000;
-/** 等一份新额度最多这么久，等不到就用已有的；不让新任务卡在读额度上。 */
+/** 显式「试一下」最多等这么久取新鲜快照。 */
 const QUOTA_WAIT_MS = MODEL_GROUP_REMOTE_WAIT_MS;
+/** 正式选路冷启动（完全无缓存）最多等这么久，不让发消息白等 2 秒。 */
+const QUOTA_COLD_WAIT_MS = 400;
+/** 已有这么新的额度快照时直接 0ms 返回，后台静默刷新（Stale-While-Revalidate）。 */
+const QUOTA_STALE_OK_MS = 5 * 60_000;
 const INNER_GROUP_TTL_MS = 60_000;
 const innerGroups = new Map<string, { at: number; value: Promise<ModelGroupInnerQuota | null> }>();
 
-async function quotaWindows(options?: { cached?: boolean }) {
+const autoUsageProfileStore = createAutoUsageProfileStore({
+  scope: () => activeOwnerScopeKey(),
+  readSamples: (sinceMs, nowMs) => readLocalAutoUsageSamples(sinceMs, nowMs),
+});
+
+async function quotaWindows(options?: { cached?: boolean; dryRun?: boolean }) {
   const overview = getQuotaOverviewService();
   overview.lease(QUOTA_LEASE_MS);
-  const build = await overview.fresh(options?.cached ? 0 : QUOTA_WAIT_MS);
+  const existing = overview.latest();
+  const age = existing ? Date.now() - existing.builtAtMs : Number.POSITIVE_INFINITY;
+  let build = existing;
+  if (options?.cached) {
+    if (!existing || existing.stale || age >= QUOTA_STALE_OK_MS) void overview.fresh(0);
+  } else if (existing && !existing.stale && age < QUOTA_STALE_OK_MS && !options?.dryRun) {
+    // 近期已有新鲜快照：0ms 直接用，后台异步刷新供下次使用，消灭选路卡顿。
+    void overview.fresh(0);
+  } else {
+    build = await overview.fresh(options?.dryRun ? QUOTA_WAIT_MS : QUOTA_COLD_WAIT_MS);
+  }
   const byProvider = new Map<string, (ModelGroupTraceQuota & { scopedTo?: string | null })[]>();
   for (const source of build?.input.sources ?? []) {
     if (source.kind !== 'subscription' || (source.device && source.lastSeenAtMs != null)) continue;
     const location = source.shared ? source.id : source.device?.id;
-    byProvider.set(modelGroupQuotaKey(location, source.providerId), source.windows.map((window) => ({
+    const mapped = source.windows.map((window) => ({
       usedPercent: window.usedPercent,
       resetAtMs: window.resetsAtMs,
       windowMs: window.windowMinutes * 60_000,
       ...(window.kind === 'scoped' ? { scopedTo: window.label ?? null } : {}),
-    })));
+    }));
+    const key = modelGroupQuotaKey(location, source.providerId);
+    // 防止同 key 下无窗口的空条目把前面已有读数的条目覆盖成空。
+    if (mapped.length > 0 || !byProvider.has(key)) byProvider.set(key, mapped);
   }
   return byProvider;
+}
+
+/** O(1) 纯内存估算某来源此刻正在运行的本机任务数，不查 SQLite。 */
+function runningCountForSource(target: { providerId: string; agentDeviceId?: string | null }): number {
+  const activities = getAgentIslandService()?.getSessionActivitySnapshots();
+  if (!activities || activities.length === 0) return 0;
+  const routes = autoUsageProfileStore.peek()?.sessionRoutes;
+  const wantDevice = target.agentDeviceId ?? null;
+  let count = 0;
+  for (const activity of activities) {
+    if (!isSessionActivityRunning(activity)) continue;
+    const cachedRoute = routes?.get(activity.sessionId);
+    const providerId = hasSessionProvider(activity.sessionId)
+      ? getSessionProvider(activity.sessionId)
+      : cachedRoute?.providerId ?? null;
+    if (providerId !== target.providerId) continue;
+    const deviceId = cachedRoute?.agentDeviceId ?? null;
+    if (deviceId === wantDevice) count += 1;
+  }
+  return count;
 }
 
 function innerQuota(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null> {
@@ -122,6 +168,14 @@ export const desktopModelGroupRuntime = createModelGroupRuntime({
   }),
   quotaWindows: (options) => quotaWindows(options),
   innerQuota: (source) => innerQuota(source),
+  usageProfile: (options) => (options?.dryRun ? autoUsageProfileStore.readForPreview(200) : autoUsageProfileStore.peek()),
+  autoModelPriorities: () => {
+    const priorities = autoUsageProfileStore.peek()?.modelPriorities;
+    return priorities && Object.keys(priorities).length > 0 ? priorities : undefined;
+  },
+  runningCount: (source) => runningCountForSource(source),
+  onCommitPick: (candidate) => autoUsageProfileStore.recordPick(candidate),
+  onDispose: () => autoUsageProfileStore.dispose(),
   remoteInvocable: (providerId) => isRemoteProviderInvocationAllowed(providerId),
   locations: () => readWorkerAgentLocations({ favoriteSources: true }),
   remoteViews: (agentDeviceId) => readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId),
@@ -143,3 +197,6 @@ export const refreshAutoModelGroupRoutes = desktopModelGroupRuntime.refreshAutoM
 export const readModelGroupRecoveryOffer = desktopModelGroupRuntime.readModelGroupRecoveryOffer;
 export const evaluateDesktopModelGroupBeforeSend = desktopModelGroupRuntime.evaluateTurnRouting;
 export const pickModelGroupRoute = desktopModelGroupRuntime.pickModelGroupRoute;
+export const warmDesktopAutoUsageProfile = (): void => {
+  void autoUsageProfileStore.peek();
+};

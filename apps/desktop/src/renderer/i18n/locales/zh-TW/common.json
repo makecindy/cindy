@@ -23372,7 +23372,15 @@
       "exceptionImage": "訊息裡有圖片，只在能看圖的來源裡選",
       "exceptionImageFallback": "訊息裡有圖片，但沒有能看圖的來源，照常選",
       "exceptionHours": "這個時段改走「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "根據你平時的用量優先選它",
+      "usageHabitQuota": "根據你平時的用量優先選它（還剩 {{left}}% 配額）",
+      "autoBalance": "其他來源配額偏緊或已有任務，優先用它分擔",
+      "autoBalanceQuota": "綜合餘量與負載優先選它（還剩 {{left}}% 配額）",
+      "lessBusy": "其他來源正在執行任務，先用空閒的它",
+      "paygFallback": "訂閱與共享暫不可用，改用按量付費來源兜底",
+      "paygReserve": "按量付費來源，其餘來源不可用時再兜底",
+      "standbyQuotaNeutral": "還剩 {{left}}% 配額，{{reset}} 重設，這次沒輪到"
     },
     "settings": {
       "autoSwitch": {

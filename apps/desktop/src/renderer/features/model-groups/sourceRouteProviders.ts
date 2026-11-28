@@ -53,6 +53,33 @@ export interface SourceRouteProviders {
 const agentOf = (kind: 'cc' | 'codex' | 'pi'): AgentKind => (kind === 'cc' ? 'claude-code' : kind);
 const memberKey = (agentDeviceId: string | null | undefined, providerId: string) => `${agentDeviceId ?? ''}\u0000${providerId}`;
 
+function canonicalAutoPriorityModelId(modelId: string): string {
+  const trimmed = modelId.trim().toLowerCase();
+  const slash = trimmed.lastIndexOf('/');
+  return slash >= 0 && slash < trimmed.length - 1 ? trimmed.slice(slash + 1) : trimmed;
+}
+
+/** Auto(expiring) 合并路由下按本机用量优先级将高频模型排到靠前位置；无用量记录的模型保持原有目录顺序。 */
+function sortAutoModelsByPriority<T extends { id: string }>(
+  list: T[],
+  priorities: Record<string, number> | undefined,
+): T[] {
+  if (!priorities || list.length < 2) return list;
+  const scoreOf = (id: string) => {
+    const score = priorities[canonicalAutoPriorityModelId(id)];
+    return typeof score === 'number' && Number.isFinite(score) && score > 0 ? score : 0;
+  };
+  let anyScored = false;
+  const indexed = list.map((item, index) => {
+    const score = scoreOf(item.id);
+    if (score > 0) anyScored = true;
+    return { item, index, score };
+  });
+  if (!anyScored) return list;
+  indexed.sort((a, b) => b.score - a.score || a.index - b.index);
+  return indexed.map((entry) => entry.item);
+}
+
 export function withSourceRouteProviders(
   providers: ProviderView[],
   config: ModelGroupsConfig | null | undefined,
@@ -126,6 +153,12 @@ export function withSourceRouteProviders(
     }
     const agents = Object.keys(models) as AgentKind[];
     if (members.length === 0 || agents.length === 0) continue;
+    if (route.strategy === 'expiring' && config.autoModelPriorities) {
+      for (const agent of agents) {
+        const list = models[agent];
+        if (list) models[agent] = sortAutoModelsByPriority(list, config.autoModelPriorities);
+      }
+    }
     const base = members[0].provider;
     const lead = members[0];
     if (lead) usageMembers.set(id, { provider: lead.provider, agentDeviceId: lead.agentDeviceId ?? null });
@@ -251,6 +284,9 @@ export function withSourceRoutePluginEngines(
       byRoute.set(child.id, id);
     }
     if (models.length === 0 && !allowDefault) continue;
+    const orderedModels = route.strategy === 'expiring' && config.autoModelPriorities
+      ? sortAutoModelsByPriority(models, config.autoModelPriorities)
+      : models;
     // 优先以可用成员为底：首个成员暂停或不可用时，不把整个合并路由标成不可用并隐藏仍可用的其余成员。
     const base = members.find((member) => isMemberUsable(member) && member.hidden !== true)
       ?? members.find(isMemberUsable)
@@ -262,7 +298,7 @@ export function withSourceRoutePluginEngines(
       deviceId: undefined,
       deviceName: undefined,
       name: label ? label(route.name, members.length) : route.name,
-      models,
+      models: orderedModels,
       defaultModelAllowed: allowDefault,
       availability: hasUsableCandidate
         ? (isPluginEngineSelectable(base) ? base.availability : { state: 'available' })

@@ -29,9 +29,11 @@ import {
   pluginEngineKeyFromProviderId,
   type PluginEngineView,
 } from '../../shared/pluginEngines.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { GHOST_REMOTE_AGENT_MODELS } from '../cindy-brain/ghostAgentModels.js';
 import { isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { applyRouteWeightStep, type RouteWeightStep } from '../provider-group/scheduler.js';
+import type { AutoUsageProfileSnapshot } from './autoUsageProfile.js';
 import {
   pickModelGroupCandidate,
   type ModelGroupCandidateFacts,
@@ -64,7 +66,16 @@ export interface ModelGroupResolverDeps {
    * 各订阅来源当前的额度窗口，键是 modelGroupQuotaKey：本机的按供应商连接 ID，别的电脑上的再加那台的设备 id。
    * 本机连接的额度不会拿去给别的电脑上同 ID 的连接用。
    */
-  quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
+  quotaWindows(options?: { cached?: boolean; dryRun?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
+  /**
+   * 本机近 14 天用量画像（纯内存读，绝不上传）：
+   * 正式选路时同步 0ms 返回；仅 dryRun（「试一下」）冷启动时允许短等预热。
+   */
+  usageProfile?(options?: { dryRun?: boolean }): AutoUsageProfileSnapshot | null | Promise<AutoUsageProfileSnapshot | null>;
+  /** 某来源此刻正在运行的任务数（纯内存 O(1) 读，0 表示空闲）。 */
+  runningCount?(source: { providerId: string; agentDeviceId?: string | null }): number;
+  /** 本次选路正式采用后的回调（用于增量更新内存用量画像）。 */
+  onCommitPick?(candidate: { providerId: string; agentDeviceId?: string | null; model: string }): void;
   /**
    * 本机来源背后是电脑组或几个账号时，内层按它自己的选法下一个会接任务的那一个的额度事实(pick.ts 的
    * ModelGroupInnerQuota)；不是这种来源、读不到时为 null。别的电脑与分享来的来源不问(只用对方开放的额度)。
@@ -211,6 +222,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     deps.recordDecision?.(item.selection, item.result);
     if (item.result.outcome === 'routed' && item.routeId) {
       lastPicked.set(`${item.scope}\u0000${item.routeId}`, modelGroupCandidateKey(item.result.route));
+      deps.onCommitPick?.(item.result.route);
       const key = `${item.scope}\u0000${item.routeId}`;
       // 选路之后改了来源或权重：这一步是按旧比例算的，不记，按新配置从头开始。
       const routeNow = item.weightStep && deps.config().routes.find((route) => route.id === item.routeId);
@@ -266,6 +278,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     cachedQuota = false,
     remoteInvocableOnly = false,
     sshHostId?: string,
+    dryRun = false,
   ): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
     // 供应商路由展开出来的路由在选择器里是普通模型行：思考深度与 Fast 用用户在那里选的；路由自己设了思考深度时以它为准。
@@ -281,8 +294,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const sshCodexPromise = hasSshCodex
       ? within(Promise.resolve().then(() => deps.sshCodexViews!(sshHostId!)), deps.remoteWaitMs ?? MODEL_GROUP_REMOTE_WAIT_MS).catch(() => null)
       : Promise.resolve(null);
-    // cachedQuota(只为显示)：用手头的读数，不等一份新的。
-    const quota = await deps.quotaWindows(cachedQuota ? { cached: true } : undefined).catch(() => new Map<string, never[]>());
+    // cachedQuota(只为显示)：用手头的读数，不等一份新的；dryRun(「试一下」)允许取新快照。
+    const quota = await deps.quotaWindows(
+      cachedQuota || dryRun ? { ...(cachedQuota ? { cached: true } : {}), ...(dryRun ? { dryRun: true } : {}) } : undefined,
+    ).catch(() => new Map<string, never[]>());
     const pricing = route.strategy === 'cheapest' && deps.pricing ? await deps.pricing().catch(() => null) : null;
     const sshCodex = await sshCodexPromise;
     const installed = new Map<string, boolean>();
@@ -337,6 +352,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           && !!modelEntry?.efforts?.includes(wantedEffort);
         const detail = engine?.reportedModelDetails?.find((item) => item.modelId === candidate.model);
         const acceptsImage = detail?.imageInput === true;
+        const running = deps.runningCount
+          ? deps.runningCount({ providerId: candidate.providerId, agentDeviceId: agentDeviceId ?? null })
+          : 0;
         return {
           available,
           ...(effortSupported ? { effort: wantedEffort } : {}),
@@ -344,6 +362,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           sourceName,
           windows: windows && windows.length > 0 ? windows : null,
           ...(route.strategy === 'cheapest' ? { price: null } : {}),
+          ...(running > 0 ? { running } : {}),
           acceptsImage,
         };
       }
@@ -383,6 +402,11 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           // SSH 原生 Codex 以远端 SSH 主机目录与远端就绪态为准，不要求本机登录 openai 或安装本机 codex。
           ? !!sshCodex && isPluginModelPickerRouteAvailable(exact, sshCodex, ['codex'])
           : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents));
+      const isShare = !!agentDeviceId && isProviderShareAgentDeviceId(agentDeviceId);
+      const payAsYouGo = !isShare && (view?.access?.kind === 'api' || view?.id === 'xd');
+      const running = deps.runningCount
+        ? deps.runningCount({ providerId: candidate.providerId, agentDeviceId: agentDeviceId ?? null })
+        : 0;
       return {
         available,
         ...(available && wantedEffort && isPluginModelPickerRouteAvailable(
@@ -395,6 +419,8 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         sourceName: view?.name ?? candidate.providerId,
         windows: windows && windows.length > 0 ? windows : null,
         ...(inner ? { inner } : {}),
+        ...(payAsYouGo ? { payAsYouGo: true } : {}),
+        ...(running > 0 ? { running } : {}),
         ...(route.strategy === 'cheapest'
           ? { price: agentDeviceId ? remoteListedPrice(view, model) : listedPrice(view, agent, model, pricing) }
           : {}),
@@ -428,10 +454,24 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     // 为另一台电脑跑 Agent 时只认允许被远程调用的连接：别的连接在这次选路里按没有连接处理。
     const remoteInvocable = (view: ProviderView) => (deps.remoteInvocable ? deps.remoteInvocable(view.id) : view.remoteInvocationEnabled === true);
     const views = request.remoteInvocableOnly ? allViews.filter(remoteInvocable) : allViews;
-    const facts = await inspect(route, views, request.context, request.cachedQuota === true, request.remoteInvocableOnly === true, request.sshHostId);
+    const [facts, usageProfile] = await Promise.all([
+      inspect(
+        route,
+        views,
+        request.context,
+        request.cachedQuota === true,
+        request.remoteInvocableOnly === true,
+        request.sshHostId,
+        request.dryRun === true,
+      ),
+      route.strategy === 'expiring' && deps.usageProfile
+        ? Promise.resolve(deps.usageProfile({ dryRun: request.dryRun === true })).catch(() => null)
+        : Promise.resolve(null),
+    ]);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
       weightCounters: countersFor(`${scope}\u0000${route.id}`, weightSignature(target.route)),
+      usageProfile,
     });
     const exceptions: ModelGroupAppliedException[] = [
       ...via,

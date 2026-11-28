@@ -12,6 +12,7 @@ import type { ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import { isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { createLogger } from '../logger.js';
 import { recordModelGroupDecision } from './decisionLog.js';
+import type { AutoUsageProfileSnapshot } from './autoUsageProfile.js';
 import type { ModelGroupInnerQuota } from './pick.js';
 import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
 import { readModelGroupBindingForDispatch, readModelGroupSessionBinding } from './sessionBindings.js';
@@ -40,8 +41,13 @@ export interface ModelGroupRuntimePorts {
   pluginEngines?(): readonly PluginEngineView[];
   localAgents(): readonly string[];
   harnessInstalled(agent: string, agentDeviceId?: string): Promise<boolean>;
-  quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
+  quotaWindows(options?: { cached?: boolean; dryRun?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
   innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null>;
+  usageProfile?(options?: { dryRun?: boolean }): AutoUsageProfileSnapshot | null | Promise<AutoUsageProfileSnapshot | null>;
+  autoModelPriorities?(): Record<string, number> | undefined;
+  runningCount?(source: { providerId: string; agentDeviceId?: string | null }): number;
+  onCommitPick?(candidate: { providerId: string; agentDeviceId?: string | null; model: string }): void;
+  onDispose?(): void;
   remoteInvocable?(providerId: string): boolean;
   locations?(): Promise<{
     status?: 'complete' | 'degraded';
@@ -204,6 +210,9 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     harnessInstalled: (agent, agentDeviceId) => ports.harnessInstalled(agent, agentDeviceId),
     quotaWindows: (options) => ports.quotaWindows(options),
     innerQuota: ports.innerQuota ? (source) => ports.innerQuota!(source) : undefined,
+    usageProfile: ports.usageProfile ? (options) => ports.usageProfile!(options) : undefined,
+    runningCount: ports.runningCount ? (source) => ports.runningCount!(source) : undefined,
+    onCommitPick: ports.onCommitPick ? (candidate) => ports.onCommitPick!(candidate) : undefined,
     locations: ports.locations ? () => ports.locations!() : undefined,
     remoteViews: ports.remoteViews ? (agentDeviceId) => ports.remoteViews!(agentDeviceId) : undefined,
     remotePluginEngines: ports.remotePluginEngines ? (agentDeviceId) => ports.remotePluginEngines!(agentDeviceId) : undefined,
@@ -274,6 +283,11 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     };
   }
 
+  function autoModelPriorities(): Record<string, number> | undefined {
+    const map = ports.autoModelPriorities?.();
+    return map && Object.keys(map).length > 0 ? map : undefined;
+  }
+
   function dispose(): void {
     remoteCatalogs = null;
     remoteReading = null;
@@ -281,11 +295,13 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     refreshing = null;
     refreshedAt = 0;
     resolver.dispose();
+    ports.onDispose?.();
   }
 
   return {
     resolver,
     localProviderView,
+    autoModelPriorities,
     refreshLocalPluginEngines,
     refreshAutoModelGroupRoutes,
     readModelGroupRecoveryOffer,

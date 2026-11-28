@@ -27,7 +27,8 @@ const FIELD_MAX = 256;
 const WHY_KNOWN: Record<ModelGroupTraceWhy, true> = {
   expiring: true, order: true, rotate: true, cheapest: true, cheapestFree: true, only: true, soonest: true,
   drain: true, drainNext: true, headroom: true, weighted: true,
-  standby: true, off: true, unavailable: true, limited: true, tight: true, noVision: true,
+  usageHabit: true, autoBalance: true, lessBusy: true, paygFallback: true,
+  standby: true, paygReserve: true, off: true, unavailable: true, limited: true, tight: true, noVision: true,
 };
 const WHY = Object.keys(WHY_KNOWN) as ModelGroupTraceWhy[];
 

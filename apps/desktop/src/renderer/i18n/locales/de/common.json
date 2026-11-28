@@ -23463,7 +23463,15 @@
       "exceptionImage": "Die Nachricht enthält Bilder, daher wurden nur Quellen berücksichtigt, die Bilder sehen können",
       "exceptionImageFallback": "Die Nachricht enthält Bilder, aber keine Quelle kann Bilder sehen – daher wie üblich gewählt",
       "exceptionHours": "In diesem Zeitraum wird stattdessen „{{name}}“ verwendet",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Basierend auf deiner üblichen Nutzung bevorzugt gewählt",
+      "usageHabitQuota": "Basierend auf deiner üblichen Nutzung bevorzugt gewählt (noch {{left}} % Kontingent)",
+      "autoBalance": "Übernimmt Last, da andere Quellen knapp oder ausgelastet sind",
+      "autoBalanceQuota": "Nach Kontingent und Auslastung bevorzugt gewählt (noch {{left}} % Kontingent)",
+      "lessBusy": "Andere Quellen führen Aufgaben aus, daher startet diese freie Quelle zuerst",
+      "paygFallback": "Abos und geteilte Quellen nicht verfügbar – Ausweichen auf nutzungsbasierte Quelle",
+      "paygReserve": "Nutzungsbasierte Reserve; wird nur genutzt, wenn andere Quellen ausfallen",
+      "standbyQuotaNeutral": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – diesmal nicht gewählt"
     },
     "settings": {
       "autoSwitch": {

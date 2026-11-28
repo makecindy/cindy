@@ -23690,7 +23690,15 @@
       "exceptionImage": "A mensagem tem imagens, então só foram consideradas as fontes que conseguem vê-las",
       "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte consegue vê-las, então escolheu como de costume",
       "exceptionHours": "Neste horário, usa “{{name}}” no lugar",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Escolhida primeiro com base no seu uso habitual",
+      "usageHabitQuota": "Escolhida primeiro com base no seu uso habitual ({{left}}% de cota restante)",
+      "autoBalance": "Assumindo a carga enquanto outras fontes estão apertadas ou ocupadas",
+      "autoBalanceQuota": "Balanceada por folga de cota e carga ({{left}}% de cota restante)",
+      "lessBusy": "Outras fontes estão executando tarefas, então esta livre vai primeiro",
+      "paygFallback": "Assinaturas e fontes compartilhadas indisponíveis; usando pagamento por uso",
+      "paygReserve": "Reserva de pagamento por uso; usada apenas quando outras fontes não estiverem disponíveis",
+      "standbyQuotaNeutral": "Restam {{left}}% da cota, redefinida {{reset}}; não escolhida desta vez"
     },
     "settings": {
       "autoSwitch": {
