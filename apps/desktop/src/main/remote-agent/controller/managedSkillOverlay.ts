@@ -10,7 +10,7 @@
  *
  * 这里只在托管 Skill 目录的直接上级(`<影子目录>/.agents/skills`)这一层补齐：项目里没有这个目录时按空目录
  * 回答，walk 的结果里加上本任务托管 Skill 的目录与文件(文件清单与带过去时同一套规则，见 managedSkillDigest；
- * 只列名字，内容照常经路径映射与权限上限读这台的文件)。个人 Skill、项目文件与其余目录的回包都不改。
+ * 只列名字，内容照常经路径映射与权限上限读这台的文件)。项目共用 .claude/skills 时也沿用该虚拟根。
  */
 import { listManagedSkillFiles } from '../managedSkillDigest';
 
@@ -23,7 +23,7 @@ export interface ManagedSkillOverlay {
 
 /** 要补齐结果的一条请求(按对方路径记，回包投影成对方路径后处理)。 */
 export type ManagedSkillOverlayRequest =
-  | { method: 'fs/getMetadata' | 'fs/canonicalize'; uri: string; path: string }
+  | { method: 'fs/getMetadata' | 'fs/canonicalize'; uri: string; path: string; linkTarget?: string }
   | { method: 'fs/walk'; uri: string; path: string; options: WalkOptions; overlays: ManagedSkillOverlay[] };
 
 interface WalkOptions {
@@ -85,7 +85,13 @@ export function managedSkillOverlayRequest(
     return dir.slice(0, dir.lastIndexOf('/')) === target;
   });
   if (!below.length) return null;
-  if (method !== 'fs/walk') return { method, uri, path: target };
+  if (method !== 'fs/walk') {
+    const suffix = '/.agents/skills';
+    const linkTarget = method === 'fs/canonicalize' && record.sandbox == null && target.endsWith(suffix)
+      ? target.slice(0, -suffix.length) + '/.claude/skills'
+      : undefined;
+    return { method, uri, path: target, linkTarget };
+  }
   const options = record.options && typeof record.options === 'object' ? record.options as Record<string, unknown> : {};
   return {
     method,
@@ -141,7 +147,15 @@ export async function applyManagedSkillOverlay(request: ManagedSkillOverlayReque
   const rest = { ...reply };
   delete rest.error;
   if (request.method !== 'fs/walk') {
-    if (!error) return reply;
+    if (!error) {
+      // A hosted skill root is a virtual union. Keep its logical name when the
+      // project shares the Claude directory so Codex scans the existing mount.
+      // The scan still reaches the native exec-server through its usual gate.
+      const result = reply.result as { path?: unknown } | undefined;
+      return request.linkTarget && typeof result?.path === 'string' && uriPath(result.path) === request.linkTarget
+        ? { ...reply, result: { ...result, path: request.uri } }
+        : reply;
+    }
     return {
       ...rest,
       result: request.method === 'fs/getMetadata'

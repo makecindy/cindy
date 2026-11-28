@@ -451,4 +451,17 @@ describe('managed Skills in the agent project Skill directory (#13718)', () => {
       ]);
     } finally { relay.close(); }
   });
+
+  it('keeps the existing hosted Skill mount when the project shares its Claude directory (#13749)', async () => {
+    const { relay, send, reply, shadow, project, uri } = managedSetup();
+    const logical = uri(`${shadow}/.agents/skills`);
+    const canonical = uri(`${shadow}/.claude/skills`);
+    const native = { result: { path: uri(`${project}/.claude/skills`) } };
+    try {
+      send({ id: 1, method: 'fs/canonicalize', params: { path: logical, sandbox: null } });
+      expect(await reply(1, native)).toEqual({ id: 1, result: { path: logical } });
+      send({ id: 2, method: 'fs/canonicalize', params: { path: canonical, sandbox: null } });
+      expect(await reply(2, native)).toEqual({ id: 2, result: { path: canonical } });
+    } finally { relay.close(); }
+  });
 });
