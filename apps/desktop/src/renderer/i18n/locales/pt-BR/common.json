@@ -14112,7 +14112,8 @@
             "reasonAgentLogin": "é preciso entrar com as credenciais do {{agentKind}} primeiro",
             "message": "⚠️ Esta conversa do Telegram usa o provedor “{{provider}}” ({{model}}), mas {{reason}}.",
             "attachedHint": "Corrija a autenticação no desktop em Configurações → Provedores e depois é só continuar enviando mensagens.",
-            "detachedHint": "Altere a “Configuração de novas conversas” e depois é só continuar enviando mensagens. Se esta sessão tiver um modelo escolhido à parte, envie `/model` para escolher de novo."
+            "detachedHint": "Altere a “Configuração de novas conversas” e depois é só continuar enviando mensagens. Se esta sessão tiver um modelo escolhido à parte, envie `/model` para escolher de novo.",
+            "modelUnavailable": "⚠️ O provedor “{{provider}}” não oferece o modelo desta tarefa ({{model}}). Envie /model para escolher um modelo para esta tarefa ou /new para iniciar um novo contexto com as configurações padrão do canal."
           }
         },
         "error": {

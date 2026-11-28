@@ -14112,7 +14112,8 @@
             "reasonAgentLogin": "vous devez d'abord vous connecter avec les identifiants {{agentKind}}",
             "message": "⚠️ Cette conversation Telegram utilise le fournisseur « {{provider}} » ({{model}}), mais {{reason}}.",
             "attachedHint": "Corrigez l'authentification sur le bureau dans Paramètres → Fournisseurs, puis continuez simplement à envoyer des messages.",
-            "detachedHint": "Modifiez « Configuration des nouvelles conversations », puis continuez simplement à envoyer des messages. Si un modèle a été choisi spécifiquement pour cette session, envoyez `/model` pour le choisir à nouveau."
+            "detachedHint": "Modifiez « Configuration des nouvelles conversations », puis continuez simplement à envoyer des messages. Si un modèle a été choisi spécifiquement pour cette session, envoyez `/model` pour le choisir à nouveau.",
+            "modelUnavailable": "⚠️ Le fournisseur « {{provider}} » ne propose pas le modèle de cette tâche ({{model}}). Envoyez /model pour choisir un modèle pour cette tâche, ou /new pour démarrer un nouveau contexte avec les paramètres par défaut du canal."
           }
         },
         "error": {

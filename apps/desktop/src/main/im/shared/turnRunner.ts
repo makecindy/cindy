@@ -1262,7 +1262,7 @@ export function createTurnRunner(
             ui.agent.authMissing?.({ ...created.missingAuth, attached: false }) ??
             ui.agent.apiKeyMissing;
           const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
-          if (!consumed) await replyMissingAuth(userId, created.missingAuth, scopeKey);
+          if (!consumed) await replyMissingAuth(userId, created.missingAuth, scopeKey, text);
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -1419,11 +1419,15 @@ export function createTurnRunner(
         if (args.queueMode === 'internal') {
           const authStatus = { ...auth, agentKind: authRow.agentKind as AgentKind, model: authRow.model };
           const text =
-            ui.agent.authMissing?.({ ...authStatus, attached: authNoticeAttached }) ??
+            ui.agent.authMissing?.({
+              ...authStatus,
+              attached: authNoticeAttached,
+              canStartNewContext: !authNoticeAttached && !target.notificationReply && args.requesterIsOwner === true,
+            }) ??
             ui.agent.apiKeyMissing;
           const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
           if (!consumed) {
-            await replyMissingAuth(userId, authStatus, scopeKey, authNoticeAttached);
+            await replyMissingAuth(userId, authStatus, scopeKey, text);
           }
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
@@ -1554,10 +1558,14 @@ export function createTurnRunner(
             const authStatus = { ...auth, agentKind: refreshed.agentKind as AgentKind, model: refreshed.model };
             if (args.queueMode === 'internal') {
               const text =
-                ui.agent.authMissing?.({ ...authStatus, attached: target.attached }) ??
+                ui.agent.authMissing?.({
+                  ...authStatus,
+                  attached: target.attached,
+                  canStartNewContext: !authNoticeAttached && !target.notificationReply && args.requesterIsOwner === true,
+                }) ??
                 ui.agent.apiKeyMissing;
               const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
-              if (!consumed) await replyMissingAuth(userId, authStatus, scopeKey, target.attached);
+              if (!consumed) await replyMissingAuth(userId, authStatus, scopeKey, text);
             }
             await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
             return { kind: 'rejected', reason: 'missing_auth' };
@@ -2040,10 +2048,14 @@ export function createTurnRunner(
             const authStatus = { ...auth, agentKind: landed.agentKind as AgentKind, model: landed.model };
             if (item.turn.queueMode === 'internal') {
               const text =
-                ui.agent.authMissing?.({ ...authStatus, attached }) ??
+                ui.agent.authMissing?.({
+                  ...authStatus,
+                  attached,
+                  canStartNewContext: !attached && !item.turn.notificationReply && item.requesterIsOwner === true,
+                }) ??
                 ui.agent.apiKeyMissing;
               const consumed = (await item.onEarlyReject?.('missing_auth', text)) ?? false;
-              if (!consumed) await replyMissingAuth(userId, authStatus, item.turn.scopeKey, attached);
+              if (!consumed) await replyMissingAuth(userId, authStatus, item.turn.scopeKey, text);
             }
             // 文案已在上面按缺授权发过(外部队列由调用方消费), 这里只走收口。
             await handleSendPreDispatchFailure(state, userId, {
@@ -2811,15 +2823,14 @@ export function createTurnRunner(
   async function replyMissingAuth(
     userId: string,
     auth: ImAuthRouteStatus & { agentKind: EngineKind; model: string },
-    scopeKey?: string,
-    attached = false,
+    scopeKey: string | undefined,
+    message: string,
   ): Promise<void> {
     log.info(
       `no auth configured for agent=${auth.agentKind} provider=${auth.providerId ?? 'default'} ` +
         `missing=${auth.missing} userId=...${userId.slice(-8)} — agent NOT invoked`,
     );
     try {
-      const message = ui.agent.authMissing?.({ ...auth, attached }) ?? ui.agent.apiKeyMissing;
       await im.sendText(userId, message, { threadTs: scopeKey });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

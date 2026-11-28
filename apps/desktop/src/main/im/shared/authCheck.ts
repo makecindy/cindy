@@ -33,6 +33,8 @@ export type ImAuthCheckResult = { ok: boolean; missing: ImAuthMissing | null };
 export interface ImAuthRouteStatus extends ImAuthCheckResult {
   providerId: string | null;
   providerLabel: string | null;
+  /** The selected provider is connected but does not offer this chat model. */
+  providerModelUnavailable?: boolean;
 }
 
 export interface ImAuthCheckDeps {
@@ -150,10 +152,13 @@ export async function checkImRouteAuthDetailed(
     : undefined;
   const effectiveProvider =
     explicitProvider ?? (resolution.kind === 'provider' ? resolution.provider : undefined);
+  const providerModelUnavailable = resolution.kind === 'explicit-invalid'
+    && explicitProvider?.connected === true && explicitProvider.agents.includes(row.agentKind);
   return {
     ...result,
     providerId: row.providerId ?? effectiveProvider?.id ?? null,
     providerLabel: effectiveProvider?.name ?? null,
+    ...(providerModelUnavailable ? { providerModelUnavailable: true } : {}),
   };
 }
 
