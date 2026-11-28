@@ -111,7 +111,26 @@ const mocks = vi.hoisted(() => ({
   pluginEngineSubscriptions: [] as boolean[],
 }));
 
-// 本机插件引擎(docs/plans/acp-plugin-bridge.md)：只在弹窗要读引擎列表时给出一个可用引擎。
+// 本机与远端插件引擎(docs/plans/acp-plugin-bridge.md)：只在弹窗要读引擎列表时给出一个可用引擎。
+vi.mock('@/hooks/usePickerPluginEngines', () => ({
+  usePickerPluginEngines: (opts: { enabled?: boolean } = {}) => {
+    const enabled = opts.enabled ?? true;
+    mocks.pluginEngineSubscriptions.push(enabled);
+    const engines = enabled ? [{
+      key: 'dsh-acp:dsh', providerId: 'acp-plugin:dsh-acp:dsh', ghostId: 'dsh-acp', harnessId: 'dsh', name: 'DSH',
+      availability: { state: 'available' }, models: [{ id: 'dsh-pro', displayName: 'DSH Pro' }],
+      permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }], defaultPermissionMode: 'ask',
+    }] : [];
+    return {
+      engines,
+      hasSources: engines.length > 0,
+      readCatalogue: () => {},
+      findEngine: (providerId: string | null | undefined) =>
+        engines.find((e) => e.providerId === providerId) ?? null,
+    };
+  },
+}));
+
 vi.mock('@/hooks/usePluginEngines', () => ({
   usePluginEngines: (enabled = true) => {
     mocks.pluginEngineSubscriptions.push(enabled);
@@ -3080,7 +3099,7 @@ describe('local Worker project selection', () => {
     fireEvent.click(await screen.findByRole('option', {name: 'main'}));
     fireEvent.click(screen.getByRole('button', {name: 'Create'}));
     expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({worktree: {sourceBranch: 'main'}}));
-    expect(branchButton.textContent).toBe('main');
+    expect(screen.getByRole('button', {name: 'newChat.branchChip.label'}).textContent).toContain('main');
   });
   // #12391: Git can shorten a local origin/main to the same label as the remote.
   // Click each real picker group and verify it submits the corresponding ref.
@@ -3096,8 +3115,8 @@ describe('local Worker project selection', () => {
     expect(window.electronAPI.worktreeListBranches).not.toHaveBeenCalled();
     fireEvent.click(branchButton);
     const branchGroup = await screen.findByRole('group', {name: `newChat.branchSync.${group}Group`});
-    fireEvent.click(within(branchGroup).getByRole('option', {name: 'origin/main'}));
-    expect(branchButton.textContent).toBe('origin/main');
+    fireEvent.click(within(branchGroup).getByRole('option', {name: /origin\/main/}));
+    expect(screen.getByRole('button', {name: 'newChat.branchChip.label'}).textContent).toContain('origin/main');
     expect(screen.getByText('orca.workerProject.splitWarning origin/main')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', {name: 'Create'}));
     const sourceBranch = group === 'local' ? 'refs/heads/origin/main' : 'refs/remotes/origin/main';

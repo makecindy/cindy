@@ -1,5 +1,7 @@
 import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
+import { describeExternalLink, externalLinkLabel } from '@cindy/maker-shared/external-link';
+import { GITHUB_LINK_CHIP_CLASS, GithubLinkChipBody, type GithubLinkInfo } from './GithubLinkChip';
 import { SettingsLinkChip } from './SettingsLinkChip';
 import '@/styles/chatContentDirection.css';
 import { VideoSitePreview } from './VideoSitePreview';
@@ -441,6 +443,12 @@ interface MarkdownRendererProps {
    * 的不显示，也不会加载任何外部图片。只与 `allowPrivilegedLinks={false}` 一起使用。
    */
   resolveImageSrc?: (src: string) => string | null;
+  /**
+   * 群聊正文：裸写的 http(s) 链接（链接文字就是地址本身）改显示短标签——GitHub 用
+   * `owner/repo#12` 等官方短写法，其它站点显示站点加缩短后的路径；悬停 title 给完整地址。
+   * 作者手写的 `[文字](地址)` 不受影响。只从地址推导，不发任何请求。
+   */
+  readableBareLinks?: boolean;
   /**
    * doc 模式专用 opt-in: 在每个 block 元素根上写入 `data-source-line="<N>"`,
    * N = 该节点在源码里的 1-based 起始行号 (取自 mdast `node.position.start.line`)。
@@ -1565,6 +1573,18 @@ export function QuestionReferenceText({ text, onPreviewOpenChange }: { text: str
   </>;
 }
 
+/**
+ * An autolinked URL whose text is the address itself: GitHub objects become an inline chip,
+ * other sites a short label. null keeps the author's own text.
+ */
+function readableBareLink(href: string, children: ReactNode): { label: string; github: GithubLinkInfo | null } | null {
+  const text = nodeToText(children).trim();
+  if (text !== href && `http://${text}` !== href && `https://${text}` !== href) return null;
+  const info = describeExternalLink(href);
+  if (!info) return null;
+  return { label: externalLinkLabel(info), github: info.kind === 'github' ? info : null };
+}
+
 function MarkdownTargetLink({
   href,
   children,
@@ -1580,6 +1600,7 @@ function MarkdownTargetLink({
   remoteMediaOrigin,
   sessionId,
   showFileIcon,
+  githubChip,
 }: {
   href?: string;
   children: ReactNode;
@@ -1603,6 +1624,8 @@ function MarkdownTargetLink({
   remoteMediaOrigin?: RemoteMediaOrigin;
   /** 当前会话 id;就位时外链 / html 文件左键弹"打开方式"菜单。 */
   sessionId?: string;
+  /** Bare GitHub URL rendered as an inline chip (readableBareLinks); the anchor keeps every action. */
+  githubChip?: GithubLinkInfo | null;
 }) {
   const { t } = useTranslation();
   const openWith = useOpenWithMenu({ sessionId });
@@ -1764,10 +1787,11 @@ function MarkdownTargetLink({
   const prLink =
     allowPrivilegedLinks && target.kind === 'external' ? parsePrLinkUrl(target.href) : null;
   const effectiveSessionId = sessionId ?? fileCtx.sessionId;
+  const chip = githubChip && target.kind === 'external' ? githubChip : null;
   const renderAnchor = (prHoverProps?: PrLinkHoverTriggerProps) => (
     <a
       href={target.href}
-      className={MARKDOWN_LINK_CLASS}
+      className={chip ? GITHUB_LINK_CHIP_CLASS : MARKDOWN_LINK_CLASS}
       onKeyDown={activateInlineLinkFromKeyboard}
       onClick={(event) => {
         prHoverProps?.onDismiss();
@@ -1785,6 +1809,8 @@ function MarkdownTargetLink({
         else inlineMenu.onContextMenu(e);
       }}
       {...anchorProps}
+      // The PR hover popover already shows the details; a native tooltip would stack on it.
+      title={prLink ? undefined : (anchorProps.title as string | undefined)}
       onPointerEnter={(event) => {
         (anchorProps.onPointerEnter as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
         prHoverProps?.onPointerEnter(event);
@@ -1798,7 +1824,7 @@ function MarkdownTargetLink({
         prHoverProps?.onPointerDown(event);
       }}
     >
-      {children}
+      {chip ? <GithubLinkChipBody link={chip} sessionId={effectiveSessionId} /> : children}
     </a>
   );
 
@@ -1896,6 +1922,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   currentSessionTitle,
   allowPrivilegedLinks = true,
   resolveImageSrc,
+  readableBareLinks = false,
   emitSourceLines = false,
   remoteMediaOrigin: remoteMediaOriginProp,
   enableDocumentGallery = false,
@@ -2257,6 +2284,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             />
           );
         }
+        const bare = readableBareLinks && href ? readableBareLink(href, children) : null;
         return (
           <MarkdownTargetLink
             href={targetHref}
@@ -2266,13 +2294,14 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             setLightboxSrc={setLightboxSrc}
             setTextLightboxFile={setTextLightboxFile}
             setModelLightboxPath={setModelLightboxPath}
-            anchorProps={safeProps}
+            anchorProps={bare ? { ...safeProps, title: href } : safeProps}
+            githubChip={bare?.github}
             allowPrivilegedLinks={allowPrivilegedLinks}
             fromBarePath={fromBarePath}
             remoteMediaOrigin={remoteMediaOrigin}
             sessionId={currentSessionId}
           >
-            {children}
+            {bare ? bare.label : children}
           </MarkdownTargetLink>
         );
       },
@@ -2286,6 +2315,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       currentSessionTitle,
       allowPrivilegedLinks,
       resolveImageSrc,
+      readableBareLinks,
       remoteMediaOrigin,
       remoteMediaOriginProp,
       resolveMediaInWorkspace,

@@ -10,7 +10,7 @@ import { retryRemoteSyncRead } from '@/device-link/remoteSyncTask';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { remoteSessionStore } from './remoteSessionStore';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
-import { useNewSessionCreationTask } from './newSessionCreation';
+import { useNewSessionCreationTask, usePendingHostDialogueCreation } from './newSessionCreation';
 import { SessionEntryStatus } from './SessionEntryRecovery';
 import { useCachedCompanionSession } from './useCachedCompanionSession';
 import { forgetRemoteResource } from '@/device-link/remoteResourceCache';
@@ -52,9 +52,10 @@ export function CindyMakeSessionGate({ sessionId, deviceId: routeDeviceId, child
     && (!deviceId || session.deviceLinkDeviceId === deviceId))?.source, [deviceId, sessionId]);
   const knownSource = useSyncExternalStore(remoteSessionStore.subscribe, readSource);
   const task = useNewSessionCreationTask(sessionId);
-  const localCreation = task?.sessionId === sessionId && task.deviceId === deviceId
-    && (task.status === 'running' || task.status === 'create-failed') ? task : null;
-  const creationBlocked = localCreation !== null;
+  const pendingDialogueCreation = usePendingHostDialogueCreation(sessionId, deviceId);
+  const localCreation = (task?.sessionId === sessionId && task.deviceId === deviceId
+    && (task.status === 'running' || task.status === 'create-failed')) || pendingDialogueCreation;
+  const creationBlocked = localCreation;
   const [attempt, setAttempt] = useState(0);
   const scope = JSON.stringify([sessionId, deviceId, accountGeneration]);
   const key = JSON.stringify([sessionId, deviceId, accountGeneration, connectionEpoch, relayStatus, presence, focused, foreground, attempt]);

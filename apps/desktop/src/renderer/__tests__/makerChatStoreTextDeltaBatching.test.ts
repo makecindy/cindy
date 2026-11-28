@@ -6,6 +6,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { handleInvoke, type DeviceLinkIpcDeps } from '../../main/device-link/ipc';
+import { extractIpcError } from '../../shared/ipcError';
 import { GHOST_SETUP_MAX_INTERACTION_STEPS, GHOST_SETUP_MAX_STEPS } from '../../shared/ghost';
 import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared/agentInputQueue';
 import type { Message, Session } from '@/lib/ccAgent.types';
@@ -172,7 +174,7 @@ const getPendingInteractions = vi.fn<
   >
 >(async () => []);
 const deviceLinkInvoke =
-  vi.fn<(deviceId: string, channel: string, args: unknown[]) => Promise<unknown>>();
+  vi.fn<(deviceId: string, channel: string, args: unknown[], scheduling?: unknown) => Promise<unknown>>();
 
 const input = {
   getProjection: vi.fn(async (sessionId: string) => projection(sessionId)),
@@ -2682,13 +2684,13 @@ describe('makerChatStore text delta batching', () => {
     }
 
     expect(notifyCount).toBe(0);
+
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(1);
     expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({
       clientId: 'thinking-flood',
       content: 'x'.repeat(999),
     });
-
-    vi.advanceTimersByTime(32);
-    expect(notifyCount).toBe(1);
     unsubscribe();
   });
 
@@ -5256,9 +5258,10 @@ describe('makerChatStore text delta batching', () => {
     expect(sentTexts).toEqual(['before clear', 'after clear']);
   });
 
-  // Unit regression: a controller's own queued send can be withdrawn on the host.
-  // A missed withdrawal push must also clear the provisional bubble on the next snapshot.
-  it.each(['dispatch', 'withdraw', 'late withdrawal', 'missed withdrawal'] as const)('reconciles a remote queue head after %s', async (outcome) => {
+  // Unit regression: a missed withdrawal push must clear the provisional bubble
+  // after a queue snapshot and an exact history miss. Exercise the real desktop
+  // invoke adapter so a structured Host miss cannot turn into INTERNAL.
+  it.each(['dispatch', 'withdraw', 'late withdrawal', 'missed withdrawal', 'Host history miss'] as const)('reconciles a remote queue head after %s', async (outcome) => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
       sessionId: SESSION_ID,
@@ -5269,12 +5272,33 @@ describe('makerChatStore text delta batching', () => {
       isRunning: true,
     });
     let queued: AgentInputQueuedMessage | undefined;
-    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+    let historyError: ReturnType<typeof extractIpcError> = null;
+    const missedWithdrawal = outcome === 'missed withdrawal' || outcome === 'Host history miss';
+    deviceLinkInvoke.mockImplementation(async (deviceId, channel, args) => {
       if (channel === 'maker:input:enqueue') {
         queued = args[1] as AgentInputQueuedMessage;
         return projection(SESSION_ID, { pendingQueue: [queued] });
       }
-      if (channel === 'local-db:messages:around-client-id') throw new Error('[NOT_FOUND] Message 不存在');
+      if (channel === 'local-db:messages:around-client-id') {
+        const deps = {
+          getState: () => ({ disabledControlDeviceIds: [] }),
+          invoke: async () => ({
+            ok: false,
+            error: {
+              code: outcome === 'Host history miss' ? 'NOT_FOUND' : 'IPC_ERROR',
+              message: '[NOT_FOUND] Message 不存在',
+            },
+          }),
+        } as unknown as DeviceLinkIpcDeps;
+        try {
+          return await handleInvoke(deps, deviceId, channel, args);
+        } catch (error) {
+          // Electron's invoke bridge transports the message, not custom Error fields.
+          const received = new Error(`Error invoking remote method: ${String(error)}`);
+          historyError = extractIpcError(received);
+          throw received;
+        }
+      }
       if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
       throw new Error(`unexpected remote channel: ${channel}`);
     });
@@ -5293,14 +5317,15 @@ describe('makerChatStore text delta batching', () => {
     expect(clientId).toBeTruthy();
 
     if (outcome === 'late withdrawal') onInputProjection?.(projection(SESSION_ID));
-    onInputProjection?.(projection(SESSION_ID, outcome === 'missed withdrawal' ? {
+    onInputProjection?.(projection(SESSION_ID, missedWithdrawal ? {
       queueSnapshot: { host: 'restarted', sequence: 1, dispatchClientId: null },
     } : outcome === 'dispatch' ? {} : {
       withdrawnQueueClientIds: [clientId!],
     }));
-    if (outcome === 'missed withdrawal') {
+    if (missedWithdrawal) {
       vi.advanceTimersByTime(10_000);
       await flushPromises();
+      expect(historyError).toEqual({ code: 'NOT_FOUND', message: 'Message 不存在' });
     }
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toHaveLength(0);
     if (outcome !== 'dispatch') {
@@ -5320,6 +5345,147 @@ describe('makerChatStore text delta batching', () => {
     const messages = makerChatStore.getSnapshot(SESSION_ID).messages;
     expect(messages.filter((message) => message.clientId === clientId)).toHaveLength(1);
     expect(messages[0]?.isPendingPersist).toBeUndefined();
+  });
+
+  // Unit regression through the real desktop outbox and main invoke decoder.
+  // One uncertain input and its successor distinguish a wire miss from the old
+  // IPC_ERROR envelope; deleting the local row must never resend it.
+  it.each(['delete', 'structured miss', 'occupied projection', 'legacy miss', 'v1 retry', 'legacy history'] as const)(
+    'keeps remote outbox FIFO and the original client ID on %s', async (scenario) => {
+      remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+      const enqueued: AgentInputQueuedMessage[] = [];
+      let wireMiss = false;
+      let legacyEnvelope = false;
+      const legacyRead = vi.fn();
+      const makeProjection = () => projection(SESSION_ID, {
+        ...(scenario === 'v1 retry' ? { inputDeliveryVersion: 1 } : {}),
+        ...(scenario === 'occupied projection' && wireMiss && enqueued[0] ? {
+          queueSnapshot: { host: 'host', sequence: 1, dispatchClientId: enqueued[0].clientId },
+        } : {}),
+      });
+      deviceLinkInvoke.mockImplementation(async (device, channel, args, scheduling) => {
+        if (channel === 'maker:input:get-projection') return makeProjection();
+        if (channel === 'maker:input:enqueue') {
+          enqueued.push(args[1] as AgentInputQueuedMessage);
+          if (enqueued.length === 1) throw new Error('[DEVICE_LINK_INVOKE_TIMEOUT] enqueue reply lost');
+          return makeProjection();
+        }
+        if (channel === 'local-db:messages:around-client-id') {
+          if (!wireMiss) throw new Error('[DEVICE_LINK_INVOKE_TIMEOUT] lookup reply lost');
+          const deps = {
+            getState: () => ({ disabledControlDeviceIds: [] }),
+            invoke: async () => ({ ok: false, error: {
+              code: scenario === 'legacy history' ? 'CHANNEL_NOT_ALLOWED' : legacyEnvelope ? 'IPC_ERROR' : 'NOT_FOUND',
+              message: scenario === 'legacy history' ? "channel 'local-db:messages:around-client-id' not allowed remotely" : '[NOT_FOUND] Message 不存在',
+            } }),
+          } as unknown as DeviceLinkIpcDeps;
+          return handleInvoke(deps, device, channel, args, scheduling);
+        }
+        if (channel === 'local-db:messages:view') {
+          legacyRead();
+          if (scenario !== 'legacy history' || !wireMiss || !enqueued[0]) return null;
+          const row = { id: 'stored-row', sessionId: SESSION_ID, clientId: enqueued[0].clientId,
+            role: 'user', rowid: 1, content: 'first', createdAt: '2026-10-01T00:00:01.000Z' };
+          return { version: 1, hasMore: true, nextCursor: 'older', items: [
+            { type: 'messages', messages: [{ ...row, sessionId: 'other-task' }, row] },
+          ] };
+        }
+        throw new Error(`unexpected remote channel: ${channel}`);
+      });
+      const send = (text: string) => makerChatStore.sendMessage(SESSION_ID, text, MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR);
+      await send('first');
+      await flushPromises();
+      await send('second');
+      await flushPromises();
+      const id = enqueued[0]!.clientId;
+      const draft = () => makerChatStore.getSnapshot(SESSION_ID).pendingQueue;
+      if (scenario === 'v1 retry') {
+        // Fresh v1 projection permits one automatic retry of the original ID.
+        // A lost first reply must not leave the successor waiting forever.
+        expect(enqueued.map(item => item.text)).toEqual(['first', 'first', 'second']);
+        expect(enqueued[1]?.clientId).toBe(id);
+        expect(enqueued[1]?.durableDelivery).toBe(true);
+        expect(draft().some(row => row.clientId === id && row.remoteDelivery?.state === 'unconfirmed')).toBe(false);
+        return;
+      }
+      expect(enqueued.map(item => item.text)).toEqual(['first']);
+      expect(draft().map(row => row.remoteDelivery?.state)).toEqual(['unconfirmed', 'waiting']);
+
+      if (scenario === 'delete') {
+        makerChatStore.discardRemotePendingMessage(SESSION_ID, id, { state: 'unconfirmed' });
+        expect(enqueued.map(item => item.text)).toEqual(['first']);
+        const delivery = draft()[0]!.remoteDelivery!;
+        expect(delivery.state).toBe('unconfirmed');
+        if (delivery.state === 'unconfirmed') makerChatStore.discardRemotePendingMessage(SESSION_ID, id, delivery);
+        await flushPromises();
+        expect(enqueued.map(item => item.text)).toEqual(['first', 'second']);
+        expect(draft().some(row => row.clientId === id)).toBe(false);
+        emitDbMessageCreated({ clientId: id, role: 'user', content: 'first', createdAt: '2026-10-01T00:00:01.000Z' });
+        expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(row => row.clientId === id)).toHaveLength(1);
+        return;
+      }
+
+      const legacyReadsBeforeRecheck = legacyRead.mock.calls.length;
+      wireMiss = true;
+      legacyEnvelope = scenario === 'legacy miss';
+      await makerChatStore.retryRemotePendingMessage(SESSION_ID, id);
+      if (scenario === 'legacy history') {
+        await flushPromises();
+        expect(enqueued.map(item => item.text)).toEqual(['first', 'second']);
+        expect(draft().some(row => row.clientId === id)).toBe(false);
+        expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(row => row.clientId === id)).toHaveLength(1);
+        return;
+      }
+      if (scenario === 'occupied projection' || scenario === 'legacy miss') {
+        expect(draft()[0]?.remoteDelivery?.state).toBe('unconfirmed');
+        expect(enqueued.map(item => item.text)).toEqual(['first']);
+        expect(legacyRead).toHaveBeenCalledTimes(legacyReadsBeforeRecheck);
+        return;
+      }
+      expect(draft()[0]?.remoteDelivery?.state).toBe('failed');
+      expect(enqueued.map(item => item.text)).toEqual(['first']);
+      await makerChatStore.retryRemotePendingMessage(SESSION_ID, id);
+      await flushPromises();
+      expect(enqueued.map(item => item.text)).toEqual(['first', 'first', 'second']);
+      expect(enqueued[1]?.clientId).toBe(id);
+      expect(legacyRead).toHaveBeenCalledTimes(legacyReadsBeforeRecheck);
+    },
+  );
+
+  it('keeps a definitive rejection with its reason ahead of the next remote message', async () => {
+    const sent: string[] = [];
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    deviceLinkInvoke.mockImplementation(async (_device, channel, args) => {
+      if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
+      if (channel === 'maker:input:enqueue') {
+        const text = (args[1] as AgentInputQueuedMessage).text;
+        sent.push(text);
+        if (text === 'first') throw new Error("Error invoking remote method 'device-link:invoke': Error: session is not active");
+        return projection(SESSION_ID);
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+    const send = (text: string) => makerChatStore.sendMessage(SESSION_ID, text, MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR);
+    await send('first');
+    await flushPromises();
+    await send('second');
+    const [head, tail] = makerChatStore.getSnapshot(SESSION_ID).pendingQueue;
+    expect(head?.remoteDelivery).toEqual({ state: 'failed', refusal: 'taskInactive' });
+    expect(tail?.remoteDelivery).toEqual({ state: 'waiting' });
+    expect(sent).toEqual(['first']);
+  });
+
+  it('shows the existing localized explanation for another pre-accept refusal', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    deviceLinkInvoke.mockImplementation(async (_device, channel) => {
+      if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
+      if (channel === 'maker:input:enqueue') throw new Error('[REMOTE_DISABLED] control is closed');
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+    await makerChatStore.sendMessage(SESSION_ID, 'first', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue[0]?.remoteDelivery)
+      .toEqual({ state: 'failed', refusal: 'other' });
   });
 
   // Unit regression: restart notifications can arrive during the initial read.
@@ -6114,10 +6280,11 @@ describe('makerChatStore text delta batching', () => {
     expect(queued).toBeUndefined();
   });
 
-  it('rolls back only the failed device-link optimistic item when reconciliation is empty', async () => {
+  it('keeps an ambiguous input without repeating the write after reconnect', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const enqueue = vi.fn(() => { throw new Error('[DEVICE_LINK_NOT_CONNECTED] reply lost'); });
     deviceLinkInvoke.mockImplementation(async (_deviceId, channel) => {
-      if (channel === 'maker:input:enqueue') throw new Error('definitely failed');
+      if (channel === 'maker:input:enqueue') return enqueue();
       if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
       throw new Error(`unexpected remote channel: ${channel}`);
     });
@@ -6133,12 +6300,16 @@ describe('makerChatStore text delta batching', () => {
       ),
     ).resolves.toBe(true);
     await flushPromises();
-    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toHaveLength(0);
+    onDeviceLinkStatusChanged?.({ status: 'online' });
+    await flushPromises();
+    expect(enqueue).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue[0]?.remoteDelivery)
+      .toEqual({ state: 'unconfirmed' });
     expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
-    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('definitely failed');
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
   });
 
-  it('keeps a remote message locally on NOT_CONNECTED and pumps it after relay recovery', async () => {
+  it('keeps a remote message locally when known offline and pumps it after relay recovery', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
       sessionId: SESSION_ID,
@@ -6156,7 +6327,7 @@ describe('makerChatStore text delta batching', () => {
       if (channel === 'maker:input:enqueue') {
         enqueueCount += 1;
         queued = args[1] as AgentInputQueuedMessage;
-        if (!online) throw new Error('[NOT_CONNECTED] target offline');
+        if (!online) throw new Error('[DEVICE_LINK_DEVICE_OFFLINE] target offline');
         return projection(SESSION_ID, { pendingQueue: [queued] });
       }
       if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
@@ -6199,7 +6370,6 @@ describe('makerChatStore text delta batching', () => {
 
   // #6530: the specific source-access error must release the outbox into editable draft recovery.
   it.each([
-    ['permission denied', false],
     ['[DEVICE_LINK_MEDIA_ACCESS_DENIED] Cannot read the source attachment.', false],
     // #6530 / r4322420405: the source failure proves no dispatch even if the target goes offline.
     ['[DEVICE_LINK_MEDIA_ACCESS_DENIED] Cannot read the source attachment.', true],
@@ -6225,7 +6395,7 @@ describe('makerChatStore text delta batching', () => {
       if (channel === 'maker:input:enqueue') {
         enqueueAttempts += 1;
         queued = args[1] as AgentInputQueuedMessage;
-        if (enqueueAttempts === 1) throw new Error('[NOT_CONNECTED] target offline');
+        if (enqueueAttempts === 1) throw new Error('[DEVICE_LINK_DEVICE_OFFLINE] target offline');
         throw new Error(failure);
       }
       if (channel === 'maker:input:get-projection') {
@@ -6673,7 +6843,7 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
-  it('settles multiple permanent failures through composer callbacks in FIFO order', async () => {
+  it('settles multiple attachment preparation failures through composer callbacks in FIFO order', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     let enqueueAttempts = 0;
     const permanentlyFailedClientIds: string[] = [];
@@ -6681,9 +6851,9 @@ describe('makerChatStore text delta batching', () => {
     deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
       if (channel === 'maker:input:enqueue') {
         enqueueAttempts += 1;
-        if (enqueueAttempts === 1) throw new Error('[NOT_CONNECTED] target offline');
+        if (enqueueAttempts === 1) throw new Error('[DEVICE_LINK_DEVICE_OFFLINE] target offline');
         permanentlyFailedClientIds.push((args[1] as AgentInputQueuedMessage).clientId);
-        throw new Error('permission denied');
+        throw new Error('[DEVICE_LINK_MEDIA_ACCESS_DENIED] Cannot read the source attachment.');
       }
       if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
       throw new Error(`unexpected remote channel: ${channel}`);
@@ -7826,7 +7996,7 @@ describe('makerChatStore text delta batching', () => {
       expect(deviceId).toBe('device-1');
       if (channel === 'maker:input:enqueue') {
         const item = args[1] as AgentInputQueuedMessage;
-        if (!online) throw new Error('[DEVICE_OFFLINE] target offline');
+        if (!online) throw new Error('[DEVICE_LINK_DEVICE_OFFLINE] target offline');
         sentTexts.push(item.text);
         return projection(SESSION_ID, { pendingQueue: [item] });
       }

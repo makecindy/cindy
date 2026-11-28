@@ -24,8 +24,8 @@ import {
   Info,
   Layers,
   Plug,
-  Waypoints,
   RefreshCw,
+  Sparkles,
   Target,
   X,
 } from 'lucide-react';
@@ -888,7 +888,7 @@ function PluginModelRouteCard({ data }: { data?: Partial<PluginModelRouteNote> }
   return (
     <div className="flex items-start gap-2 py-0.5 text-12 leading-[1.5] text-[var(--text-tertiary)]">
       {data.outcome !== 'routed' ? <Info size={13} className="mt-[3px] shrink-0" aria-hidden />
-        : data.source === 'model-group' ? <Waypoints size={13} className="mt-[3px] shrink-0" aria-hidden />
+        : data.source === 'model-group' ? <Sparkles size={13} className="mt-[3px] shrink-0" aria-hidden />
         : <Plug size={13} className="mt-[3px] shrink-0" aria-hidden />}
       <span className="min-w-0">
         {data.outcome === 'routed' ? (

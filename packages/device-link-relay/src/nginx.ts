@@ -112,6 +112,7 @@ function parse(file: string, source: string): Directive[] {
     const nodes: Directive[] = [];
     while (cursor < tokens.length && tokens[cursor].kind !== '}') {
       const first = tokens[cursor++];
+      if (first.kind !== 'word') fail('Invalid Nginx directive', first.start);
       const args: string[] = [];
       while (cursor < tokens.length && tokens[cursor].kind === 'word') args.push(tokens[cursor++].value);
       const delimiter = tokens[cursor++];
@@ -131,6 +132,7 @@ function parse(file: string, source: string): Directive[] {
       nodes.push(node);
     }
     if (nested && tokens[cursor++]?.kind !== '}') fail('Unclosed Nginx block', opening?.start ?? source.length, opening?.value);
+    if (!nested && cursor < tokens.length) fail('Invalid Nginx directive', tokens[cursor].start);
     return nodes;
   }
   return block(false);

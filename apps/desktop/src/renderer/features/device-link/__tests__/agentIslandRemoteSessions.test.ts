@@ -10,6 +10,7 @@ import { agentIslandCompletionToken, buildAgentIslandDisplayState, createAgentIs
 import { normalizeActivityText } from '../../../../main/agent-island/activityTextStream';
 import { SessionActivityRelay } from '../../../../main/agent-island/sessionActivityRelay';
 import { MACHINE_ALL, MACHINE_LOCAL } from '../selectedMachineStore';
+import { remoteProjectsStore } from '../remoteProjectsStore';
 
 function remoteSession(id: string, deviceId: string, overrides: Partial<Session> = {}): Session {
   return {
@@ -313,5 +314,63 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
         readActivity,
       ),
     ).toEqual([]);
+  });
+
+  // #13473: activity can remain in the mirror or arrive after an archive. Only restoring
+  // the task should make that activity eligible for the island again.
+  it('keeps archived remote errors off the island until the task is restored', () => {
+    clearRemoteSessionActivity();
+    const state = createAgentIslandState();
+    const deviceId = 'device-a';
+    remoteProjectsStore.setDeviceSessions(
+      deviceId,
+      'Mac device-a',
+      [remoteSession('a-1', deviceId), remoteSession('a-2', deviceId)],
+      'active',
+    );
+    try {
+      for (const sessionId of ['a-1', 'a-2']) {
+        applyRemoteSessionActivity(deviceId, {
+          sessionId,
+          phase: 'error',
+          attention: true,
+          compactDetail: 'Session closed before the current turn delivered a terminal event',
+        });
+      }
+      const sync = () => syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(
+        buildAgentIslandRemoteSessionInputs(
+          remoteProjectsStore.getVisibleMergedRemoteSessions(),
+          MACHINE_ALL,
+          getRemoteSessionActivity,
+        ),
+      )!, 2_000);
+      const cardIds = () => buildAgentIslandDisplayState(state, 2_000).sessions
+        .map((session) => session.sessionId)
+        .sort();
+      sync();
+      expect(cardIds()).toEqual(['a-1', 'a-2']);
+
+      remoteProjectsStore.applyPatch(deviceId, 'a-1', { status: 'archived' });
+      // The error activity outlives the archive, exactly like the truncated turn does.
+      expect(getRemoteSessionActivity('a-1', deviceId)?.phase).toBe('error');
+      sync();
+      expect(cardIds()).toEqual(['a-2']);
+
+      applyRemoteSessionActivity(deviceId, {
+        sessionId: 'a-1',
+        phase: 'error',
+        attention: true,
+        compactDetail: 'Late terminal event',
+      });
+      sync();
+      expect(cardIds()).toEqual(['a-2']);
+
+      remoteProjectsStore.applyPatch(deviceId, 'a-1', { status: 'active' });
+      sync();
+      expect(cardIds()).toEqual(['a-1', 'a-2']);
+    } finally {
+      remoteProjectsStore.removeDevice(deviceId);
+      clearRemoteSessionActivity();
+    }
   });
 });

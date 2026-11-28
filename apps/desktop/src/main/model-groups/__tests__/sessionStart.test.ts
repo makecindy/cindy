@@ -119,4 +119,35 @@ describe('a mode picks the first source of a new task and is settled when its fi
     expect(await start.exists('daily')).toBe(true);
     expect(await createModelGroupSessionStart(ports({ outcome: 'missing', groupName: 'Gone', trace: [] }).value).exists('gone')).toBe(false);
   });
+
+  // 2026-11-28 回归：拆平后的单账号选路在 attach 时必须调用 pinLocalSource 固定账号槽位，
+  // 且 dispatched 直接写明已含账号名的说明、不再等待内层 innerChoice。
+  it('pins the picked local accountId on attach and skips innerChoice when already flattened', async () => {
+    const pinned: Array<{ sessionId: string; route: { providerId: string; accountId?: string } }> = [];
+    const innerChoice = vi.fn(async () => 'should-not-run');
+    const base = ports({
+      outcome: 'routed',
+      decisionId: 'dec-flat',
+      groupName: 'OpenAI',
+      route: { agentKind: 'codex', providerId: 'openai', accountId: 'second', model: 'gpt-6.2' },
+      modelName: 'GPT-6.2',
+      sourceName: 'OpenAI · second@example.com',
+      why: 'expiring',
+      quota: null,
+      trace: [],
+    });
+    const start = createModelGroupSessionStart({
+      ...base.value,
+      pinLocalSource: (sessionId, route) => { pinned.push({ sessionId, route }); },
+      innerChoice,
+    });
+    const prepared = await start.prepare('src:openai-gpt', { keptModelName: 'gpt-saved' });
+    expect(prepared?.route).toMatchObject({ providerId: 'openai', accountId: 'second' });
+    start.attach('s-flat', prepared!.token);
+    expect(pinned).toEqual([{ sessionId: 's-flat', route: { providerId: 'openai', accountId: 'second' } }]);
+    expect(base.calls.bind.mock.calls[0]?.[2]).toContain('acct:second');
+    start.dispatched('s-flat', 'user-1');
+    expect(innerChoice).not.toHaveBeenCalled();
+    expect(base.calls.writeNote.mock.calls[0]?.[1]?.modelName).toBe('GPT-6.2 · OpenAI · second@example.com');
+  });
 });

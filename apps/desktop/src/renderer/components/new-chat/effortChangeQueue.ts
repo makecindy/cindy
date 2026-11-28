@@ -30,7 +30,8 @@ export interface EffortChangeCoordinator {
 
 export interface EffortChangePipeline {
   persist(sessionId: string, effort: Effort): Promise<unknown>;
-  applyRuntime: ApplyRuntimeEffort;
+  /** Omit when persist also commits the live runtime in Main. */
+  applyRuntime?: ApplyRuntimeEffort;
   onCommitted(sessionId: string, effort: Effort): void;
 }
 
@@ -188,6 +189,10 @@ export function enqueueEffortChange(
     await pipeline.persist(sessionId, effort);
     coordinator.setCommittedEffort(sessionId, effort);
     pipeline.onCommitted(sessionId, effort);
-    coordinator.publishRuntimeEffort(sessionId, effort, pipeline.applyRuntime);
+    if (pipeline.applyRuntime) {
+      coordinator.publishRuntimeEffort(sessionId, effort, pipeline.applyRuntime);
+    } else {
+      coordinator.suppressRuntimeEffort(sessionId);
+    }
   });
 }

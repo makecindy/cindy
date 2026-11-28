@@ -96,10 +96,11 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
           return status;
         } }) };
   };
-  /** Only on a service that advertises linked shares; a native V2 resource with that ID always wins. */
-  function linkedShare(state: ReturnType<SharingStorage['read']>, kind: string, id: string) {
+  /** Only on a service that advertises linked shares; a native V2 resource with that ID always wins.
+   * Scoped to `networkId` so another account linking a known V1 share ID in its own network never blocks the real host. */
+  function linkedShare(state: ReturnType<SharingStorage['read']>, kind: string, id: string, networkId: string) {
     if (!options.linkedProviderShares || kind !== 'provider-share') return undefined;
-    const row = state.linkedShares?.find(l => l.shareId === id && l.removedAt === undefined);
+    const row = state.linkedShares?.find(l => l.shareId === id && l.networkId === networkId && l.removedAt === undefined);
     return row && !state.shares.some(s => s.shareId === id) && !state.bindings.some(b => b.kind === 'provider-share' && b.resourceId === id) ? row : undefined;
   }
   async function linkShare(actor: SharingActor, shareId: string): Promise<{ shareId: string; linked: true }> {
@@ -109,7 +110,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
       if (s.shares.some(p => p.shareId === shareId) || s.bindings.some(b => b.kind === 'provider-share' && b.resourceId === shareId))
         throw new AppError('PROVIDER_SHARE_LINK_CONFLICT', 409, 'The share already belongs to this service');
       const rows = s.linkedShares = pruneTombstones(s.linkedShares ?? []);
-      const existing = rows.find(l => l.shareId === shareId);
+      const existing = rows.find(l => l.shareId === shareId && l.networkId === actor.networkId);
       if (existing?.removedAt !== undefined) {
         // Linked again after a removal: continue from its generation, never reuse one an old lease still carries.
         if (rows.filter(l => l.networkId === actor.networkId && l.removedAt === undefined).length >= MAX_LINKED_SHARES_PER_NETWORK)
@@ -118,8 +119,8 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
           linkedAt: host.now(), generation: nextGeneration(existing.generation) });
         delete existing.removedAt; return;
       }
-      if (existing && (existing.networkId !== actor.networkId || existing.ownerAccountId !== actor.accountId))
-        throw new AppError('PROVIDER_SHARE_LINK_CONFLICT', 409, 'The share is linked by another network');
+      if (existing && existing.ownerAccountId !== actor.accountId)
+        throw new AppError('PROVIDER_SHARE_LINK_CONFLICT', 409, 'The share is linked by another account');
       // Another computer of the account now hosts it: a new generation, so the previous host's leases stay withdrawn.
       if (existing) {
         if (existing.hostDeviceId !== actor.deviceId) { existing.hostDeviceId = actor.deviceId; existing.generation = nextGeneration(existing.generation); }
@@ -176,8 +177,8 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
   function check(d: Pick<Delegation, 'kind' | 'resourceId' | 'networkId' | 'hostDeviceId' | 'guestDeviceId' | 'scope'>, state: ReturnType<SharingStorage['read']>): boolean {
     // A linked V1 share has no member book here: its host device signs only guests its V1 share admits,
     // and removing the link withdraws every lease at once (`changed` closes their sessions).
-    const linked = linkedShare(state, d.kind, d.resourceId);
-    if (linked) return linked.networkId === d.networkId && linked.hostDeviceId === d.hostDeviceId && d.scope?.memberVersion === linked.generation;
+    const linked = linkedShare(state, d.kind, d.resourceId, d.networkId);
+    if (linked) return linked.hostDeviceId === d.hostDeviceId && d.scope?.memberVersion === linked.generation;
     const binding = state.bindings.find(b => b.kind === d.kind && b.resourceId === d.resourceId && b.networkId === d.networkId);
     if (!binding) return false;
     if (d.kind === 'shared-task') {
@@ -265,11 +266,10 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
         const kind = input.kind, resourceId = text(input.resourceId), memberId = text(input.memberId);
         if ((kind !== 'shared-task' && kind !== 'provider-share') || !ID_PATTERN.test(resourceId) || !ID_PATTERN.test(memberId))
           throw invalidParams('Invalid resource');
-        const linked = linkedShare(host.storage.read(), kind, resourceId);
+        const linked = linkedShare(host.storage.read(), kind, resourceId, actor.networkId);
         if (linked) {
           // The member book is the V1 share's. Stage the possession-proved CSR for the host device, which
           // signs it only for a guest its own V1 share admits; the relay pins the account and device.
-          if (linked.networkId !== actor.networkId) throw notFound();
           const now = host.now();
           const waiting = host.requests().filter(r => r.networkId === linked.networkId && r.kind === 'provider-share'
             && r.resourceId === resourceId && r.expiresAt > now);

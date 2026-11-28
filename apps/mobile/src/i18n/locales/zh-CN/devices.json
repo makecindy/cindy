@@ -393,6 +393,7 @@
       "sortHeading": "任务排序",
       "projectOrderHeading": "项目排序",
       "projectOrderManualTip": "长按项目行拖动调整顺序，组内任务仍按上面的排序。",
+      "pinnedOrderManualTip": "长按置顶任务拖动调整顺序。",
       "statusHeading": "任务状态",
       "showDeviceTasks": "查看任务",
       "openDevice": "打开",
@@ -524,7 +525,8 @@
           "all": "全部",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "插件引擎"
         },
         "lastActivity": {
           "1d": "1 天",

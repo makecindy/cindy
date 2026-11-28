@@ -75,6 +75,19 @@ export interface SchedulerWaitingSchedule {
   waitingSince: number;
 }
 
+/** 连续顺延、尚未真正执行的任务（原因见 lastReason）。 */
+export interface SchedulerDeferredSchedule {
+  scheduleId: string;
+  scheduleName: string;
+  targetSessionId?: string;
+  /** 本轮连续被顺延的次数（>= 1）。 */
+  count: number;
+  /** 本轮连续顺延开始的时间戳（毫秒）。 */
+  firstAt: number;
+  /** 最近一次顺延原因（如 'session-running' / 'user-active' / 'queue-wait-timeout'）。 */
+  lastReason?: string;
+}
+
 /**
  * Scheduler 的瞬时运行快照。通过 IPC 查询并在变化时推送给 renderer；不写数据库。
  */
@@ -92,6 +105,8 @@ export interface SchedulerRuntimeSnapshot {
   maxConcurrentRuns: number;
   inFlightRuns: SchedulerInflightRun[];
   waitingSchedules: SchedulerWaitingSchedule[];
+  /** 当前处于连续顺延状态的调度列表；旧端快照可能省略。 */
+  deferredSchedules?: SchedulerDeferredSchedule[];
 }
 
 /**
@@ -245,6 +260,8 @@ export type PreRunHookDecision = 'run' | 'skip' | 'block';
 export interface PreRunHookRunResult {
   /** Explicit successful check, including a healthy no-work skip. Optional for old hooks. */
   checkSucceeded?: true;
+  /** Transient auto-retrying precheck failure suppressed within its grace window (born read, no notify/bump). */
+  transientQuiet?: true;
   /** Optional structured PR check output, annotated on the executing host. */
   prCheckDiagnosis?: unknown;
   status: PreRunHookRunStatus;
@@ -394,6 +411,8 @@ export interface Schedule {
   createdAt: number;
   updatedAt: number;
   lastFiredAt?: number;
+  /** Persistent generation of the schedule used to distinguish replan receipts across instances. */
+  scheduleRevision?: number;
   /** 上一次终态完成（success/failed/aborted）的时间戳。从未跑完过 = undefined。 */
   lastFinishedAt?: number;
   nextFireAt?: number;
@@ -571,7 +590,7 @@ export interface ListFilter {
 export type SchedulerEvent =
   | { type: 'fired'; scheduleId: string; runId: string; silent?: boolean }
   | { type: 'completed'; scheduleId: string; runId: string; sessionId: string; silenced?: boolean }
-  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string }
+  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string; silenced?: boolean }
   /**
    * In-flight run 已被标记静默。该事件早于后续 agent done/completed 收口,
    * 消费方用它抑制普通 session completion attention；completed.silenced

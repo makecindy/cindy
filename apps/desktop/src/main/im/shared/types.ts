@@ -55,7 +55,7 @@ export interface ImLaneProjectDefaults {
   /** 项目设置的权限档; 路由键自己没单独设置权限时用它。null = 项目的档位不可用, 回到渠道设置。 */
   permissionMode: PermissionMode | null;
   /** 按这一行解析新任务的路由; 模型不可用时抛错(同插件与官方机器人)。 */
-  resolve(providerSnapshot?: ProviderView[] | null): Promise<ResolvedImSessionDefaults>;
+  resolve(providerSnapshot?: ProviderView[] | null, options?: { dryRun?: boolean }): Promise<ResolvedImSessionDefaults>;
 }
 
 /** 按路由键覆写的新任务模型路由(见 ImSessionNamespace.routeOverrideFor)。 */
@@ -65,6 +65,7 @@ export interface ImLaneRouteOverride {
   providerId: string | null;
   agentDeviceId: string | null;
   effort: ImDefaultEffort | '';
+  modelGroup?: string | null;
 }
 
 /**
@@ -130,8 +131,13 @@ export interface ImSessionNamespace {
    * 已存在行的权限归 owner 管(`/permission`)。
    * `projectPermissionMode`: 新任务落在路由键绑定的项目里时, 那个项目设置的权限档
    * (laneProjectDefaultsFor); 渠道按自己的优先级决定是否采用。
+   * `botContextId`: 这一行所属的机器人(按群设置按机器人分组)。
    */
-  permissionModeFor?(userId: string, projectPermissionMode?: PermissionMode | null): PermissionMode | null;
+  permissionModeFor?(
+    userId: string,
+    projectPermissionMode?: PermissionMode | null,
+    botContextId?: string,
+  ): PermissionMode | null;
   /**
    * 按路由键覆写新任务的模型路由(个人飞书 bot 的按群设置: 群 / 话题 lane → 该群固定的
    * Agent、模型、来源、执行位置与推理强度)。返回 null/缺省 = 用渠道「新对话配置」。

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import { addImports } from '../overlay-imports.mjs';
 
 const virtualId = 'virtual:cindy-cloud-maintenance';
 const bootstrap = 'apps/desktop/src/main/bootstrap-electron.ts';
@@ -38,12 +39,13 @@ export function transformMaintenanceSource(code, relative) {
     // controllers, the quit chain's outcome, and activity sampling.
     const marker = '    const stopStatus = startInstanceStatus(';
     assert.equal(code.split(marker).length, 2, 'Maintenance activity integration changed');
-    return `/* cloud-maintenance-v1 */\nimport { cloudMaintenance, cloudMaintenanceQuit, configureMaintenanceActivity } from '${virtualId}';\n`
-      + `import { readMaintenanceActivity } from 'virtual:cindy-cloud-task-activity';\n`
-      + `import { connectInstanceMaintenance as connectCloudMaintenance } from './instance-runtime/maintenance.js';\n`
-      + `import { observeQuitSteps as observeCloudQuitSteps } from './lifecycle.js';\n`
-      + code.replace(marker, `    connectCloudMaintenance(cloudMaintenance);\n    observeCloudQuitSteps(cloudMaintenanceQuit);\n`
-        + `    configureMaintenanceActivity(readMaintenanceActivity);\n${marker}`);
+    return '/* cloud-maintenance-v1 */\n' + addImports(code.replace(marker, `    connectCloudMaintenance(cloudMaintenance);\n    observeCloudQuitSteps(cloudMaintenanceQuit);\n`
+        + `    configureMaintenanceActivity(readMaintenanceActivity);\n${marker}`), relative, [
+      `import { cloudMaintenance, cloudMaintenanceQuit, configureMaintenanceActivity } from '${virtualId}';`,
+      "import { readMaintenanceActivity } from 'virtual:cindy-cloud-task-activity';",
+      "import { connectInstanceMaintenance as connectCloudMaintenance } from './instance-runtime/maintenance.js';",
+      "import { observeQuitSteps as observeCloudQuitSteps } from './lifecycle.js';",
+    ]);
   }
   if (relative === 'packages/maker-scheduler/src/engine/scheduler.ts') {
     // An unfinished Once claim computes no wake; the gate keeps an undefined wake unchanged.
@@ -71,7 +73,7 @@ export function transformMaintenanceSource(code, relative) {
   walk(source);
   assert.deepEqual([...found].sort(), Object.keys(required).sort(), `Maintenance entry drift: ${relative}`);
   for (const edit of edits.sort((a,b) => b.start-a.start)) code = code.slice(0,edit.start) + edit.text + code.slice(edit.end);
-  return `/* cloud-maintenance-v1 */\nimport { cloudMaintenance } from '${virtualId}';\n${code}`;
+  return '/* cloud-maintenance-v1 */\n' + addImports(code, relative, [`import { cloudMaintenance } from '${virtualId}';`]);
 }
 export function cloudMaintenancePlugin({ sourceRoot, expectedRegion, onTransform = () => {} }) {
   const seen = new Set();

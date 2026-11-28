@@ -860,6 +860,78 @@ it.each([true, false])('reports the relay route, request timeouts and UDP traffi
 });
 
 /** 测试价值
+ * - 生产入口与可观察结果：经中转时 NativeChannel 在控制流上告诉对方自己到中转走 UDP 还是 WebSocket（`{"relayVia":…}`），
+ *   变了再说一次；对方说的进 `pathMetrics().peerRelayVia`，远程连接拓扑据此在经中转的线上写对方那一段。
+ * - Bug／规则依据：2026-11-27 用户反馈经中转的设备线重复标注本机的传输方式。协议约定见 docs/dev-rules/protocol-compatibility/agent-net-udp-relay.md「告诉对方自己那一段」。
+ * - 现有覆盖缺口：控制流此前只有候选、会话宣告与选路偏好，没有这一项。
+ * - 最小失败输入：带 `path-routing` 的引擎替身、一条经中转的连接；本机中转 UDP 先通后断；对方先发旧节点也发的候选，
+ *   再发 `{"relayVia":"websocket"}`，再发一行不认识的值。
+ * - tier：unit，真实 NativeTransport/NativeChannel，引擎用替身，假计时器。
+ */
+it('tells the peer how this side reaches the relay, again when that changes, and keeps what the peer says about its own leg', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  const written = new Map<number, Buffer[]>();
+  let nextStream = 0, relayUp = true;
+  let inbound: { events: unknown[]; data: Array<{ stream: number; data: string }> } = { events: [], data: [] };
+  const peerLine = (line: unknown, first = false) => ({ stream: 71, data: Buffer.concat([
+    first ? Buffer.from([0x43]) : Buffer.alloc(0), Buffer.from(`${typeof line === 'string' ? line : JSON.stringify(line)}\n`)]).toString('base64url') });
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      let value: unknown = true;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: 40000,
+        features: ['path-routing', 'relay-udp-v2'] };
+      if (command.op === 'poll') {
+        value = { packets: [], relayUdp: relayUp, connections: [{ id: 5, established: true, dead: false, closedByPeer: false, unacked: false,
+          remoteKey: remote.transportKey, path: { link: 1 }, ...inbound, rttUs: 2000, sent: 0, received: 0, rotations: 0 }] };
+        inbound = { events: [], data: [] };
+      }
+      if (command.op === 'openStream') value = ++nextStream;
+      if (command.op === 'write') {
+        const bytes = Buffer.from(command.data as string, 'base64url');
+        written.set(command.stream as number, [...(written.get(command.stream as number) ?? []), bytes]);
+        value = bytes.length;
+      }
+      return value as T;
+    }, async destroy() {},
+  };
+  const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, send() {}, onDatagram() {}, close() {} });
+  const credentials = { session: Uint8Array.of(1), key: Uint8Array.of(2) };
+  const channels: PeerChannel[] = [];
+  const transport = await NativeTransport.create(engine, { admit: () => true, admittedPeers: () => [{ id: key, relayId: remote.deviceId }],
+    relayIdOf: () => remote.deviceId, onIncoming: (channel) => { channels.push(channel); },
+    relay: { deviceId: local.deviceId, uplink: uplink as never, udpCredentials: () => credentials as never }, relayUdpServer: 'relay.example.test:3478' },
+  undefined, true);
+  // What this side wrote on its control stream after the kind byte, one JSON value per line.
+  const sentRelayLegs = () => {
+    const control = [...written].find(([, chunks]) => chunks[0]?.[0] === 0x43)?.[1] ?? [];
+    return Buffer.concat(control).subarray(1).toString().split('\n').filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>).filter((line) => 'relayVia' in line);
+  };
+  try {
+    await vi.advanceTimersByTimeAsync(1_100);
+    const channel = channels[0]!;
+    expect(transport.relayRoute()?.via).toBe('udp');
+    expect(sentRelayLegs()).toEqual([{ relayVia: 'udp' }]);
+    expect(channel.pathMetrics!().peerRelayVia).toBeNull();
+
+    inbound = { events: [{ kind: 'open', stream: 71 }], data: [peerLine({ candidates: [] }, true), peerLine({ relayVia: 'websocket' })] };
+    await vi.advanceTimersByTimeAsync(20);
+    expect(channel.pathMetrics!().peerRelayVia).toBe('websocket');
+    inbound = { events: [], data: [peerLine({ relayVia: 'carrier-pigeon' })] };
+    await vi.advanceTimersByTimeAsync(20);
+    expect(channel.pathMetrics!().peerRelayVia).toBe('websocket');
+
+    // This side's relay UDP stopped carrying data: the next reprobe round says so, once.
+    relayUp = false;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(transport.relayRoute()?.via).toBe('websocket');
+    expect(sentRelayLegs()).toEqual([{ relayVia: 'udp' }, { relayVia: 'websocket' }]);
+  } finally { await transport.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
  * - 生产入口与可观察结果：NativeTransport 的连接在引擎收走排队字节时调 `onDrain`；PortableSocket 据此在整体积压回落到 128 KB
  *   以下时发 drain，电脑端 Main 的 Device Link 马上发下一大帧（worker.ts `reportBuffered`）。
  * - Bug 依据：2026-11-23 迁移前审计：原生连接只在自己的积压从 128 KB 以上落到以下时才调；几条连接各自不到 128 KB、加起来超过时，

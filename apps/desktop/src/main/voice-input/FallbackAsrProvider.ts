@@ -93,6 +93,8 @@ export class FallbackAsrProvider implements AsrProvider {
    * controller attempt (and log) recovery on providers that cannot recover.
    */
   recover?: () => Promise<void>;
+  /** Assigned in start() only when the committed provider supports proactive session rotation. */
+  rotateSession?: () => Promise<void>;
 
   constructor(candidates: FallbackAsrCandidate[], options: FallbackAsrProviderOptions = {}) {
     if (candidates.length === 0) {
@@ -384,6 +386,9 @@ export class FallbackAsrProvider implements AsrProvider {
       this.activeKind = candidate.kind;
       this.recover = provider.recover
         ? () => this.recoverActiveProvider(provider, candidate.kind)
+        : undefined;
+      this.rotateSession = provider.rotateSession
+        ? () => provider.rotateSession!()
         : undefined;
       markVoiceInputProviderSuccess('asr', candidate.kind);
       if (attempt.connectedEvent) {

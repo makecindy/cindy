@@ -8,8 +8,11 @@
  *   直连比中转慢至少 clamp(25ms, 中转×25%, 50ms) 时切中转；直连恢复到比中转慢 ≤ 15ms 时切回直连；
  *   常规切换 30 秒冷却，若当前线路严重劣化（慢 ≥ 2 倍且差 ≥ 100ms）则跳过冷却立即切换。
  * - 两端的偏好经控制流同步（`{"pathPreference":…,"autoRelay":…}`）：一端指定了就按它，两端都自动时任一端要中转就走中转。
+ * - 两端各自到中转走 UDP 还是 WebSocket 也经控制流告诉对方（`{"relayVia":"udp"|"websocket"}`，2026-11-27 用户要求：
+ *   拓扑图经中转的线上写对方那一段的走法，本机那一段写在本机到中转的线上）。控制流一准备好就说一次，之后每轮重验时
+ *   发现变了再说；旧节点不认识这个字段，照旧忽略，这一端也就一直不知道对方那段怎么走。
  */
-import type { PathPreference, PeerPathMetrics } from './types.js';
+import type { PathPreference, PeerPathMetrics, RelayRoute } from './types.js';
 
 /** 备用路径（直连时测中转，或优先中转时测直连）的首次与定期测速间隔。 */
 export const STANDBY_INITIAL_MEASURE_MS = 2_000;
@@ -93,6 +96,12 @@ export interface PathRoutePort<R> {
   setPreferRelay(prefer: boolean): void;
   /** One line on the control stream. */
   writeControl(line: string): void;
+  /** How this computer's relayed datagrams reach the relay now (types.ts `RelayRoute`); null without a relay. */
+  localRelayVia?(): RelayRoute['via'] | null;
+}
+
+function isRelayVia(value: unknown): value is RelayRoute['via'] {
+  return value === 'udp' || value === 'websocket';
 }
 
 export class PathRouter<R> {
@@ -110,6 +119,9 @@ export class PathRouter<R> {
   private autoPreferRelay = false;
   private peerAutoPreferRelay = false;
   private lastAutoSwitchAt = Number.NEGATIVE_INFINITY;
+  /** What this side last told the peer about its relay leg, and what the peer last told this side about its own. */
+  private announcedRelayVia: RelayRoute['via'] | null = null;
+  private peerRelayVia: RelayRoute['via'] | null = null;
   private reprobe: ReturnType<typeof setInterval> | null = null;
   private standbyMeasure: ReturnType<typeof setInterval> | null = null;
   private initialStandbyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -119,6 +131,7 @@ export class PathRouter<R> {
   /** 还在走中转时每隔一阵再验证一轮，并定期轻测备用路径往返。连接关闭时调 `stop`。 */
   start(): void {
     this.reprobe = setInterval(() => {
+      this.announceRelayVia();
       if (this.localPreference === 'auto') this.evaluateAutoRoute(true);
       if (this.port.path() === 'relay' && !this.effectivePreferRelay()) this.probeCandidates();
     }, this.reprobeMs);
@@ -161,6 +174,23 @@ export class PathRouter<R> {
     this.applyRoutePreference(true);
   }
 
+  /** A control-stream message: how the peer's datagrams reach the relay now (`relayVia`); other fields are not this. */
+  onPeerRelayVia(message: { relayVia?: unknown }): void {
+    if (isRelayVia(message.relayVia)) this.peerRelayVia = message.relayVia;
+  }
+
+  /**
+   * Tells the peer how this side reaches the relay, when that changed since it was last told. The transport calls it once its
+   * control stream is written (its first byte says what the stream is), then every reprobe round checks again.
+   */
+  announceRelayVia(): void {
+    if (this.port.closed()) return;
+    const via = this.port.localRelayVia?.() ?? null;
+    if (via === null || via === this.announcedRelayVia) return;
+    this.announcedRelayVia = via;
+    this.port.writeControl(`${JSON.stringify({ relayVia: via })}\n`);
+  }
+
   private announcePathPreference(): void {
     if (this.port.closed()) return;
     this.port.writeControl(`${JSON.stringify({ pathPreference: this.localPreference, autoRelay: this.autoPreferRelay })}\n`);
@@ -195,6 +225,7 @@ export class PathRouter<R> {
         directRttMs: activeRtt ?? this.freshRtt(this.measuredDirectRttMs, this.measuredDirectAt, now),
         relayRttMs,
         preference: this.localPreference,
+        peerRelayVia: this.peerRelayVia,
       };
     }
     if (active === 'relay') {
@@ -208,12 +239,14 @@ export class PathRouter<R> {
         directRttMs,
         relayRttMs: activeRtt ?? this.freshRtt(this.measuredRelayRttMs, this.measuredRelayAt, now),
         preference: this.localPreference,
+        peerRelayVia: this.peerRelayVia,
       };
     }
     return {
       directRttMs: this.freshRtt(this.measuredDirectRttMs, this.measuredDirectAt, now),
       relayRttMs: this.freshRtt(this.measuredRelayRttMs, this.measuredRelayAt, now),
       preference: this.localPreference,
+      peerRelayVia: this.peerRelayVia,
     };
   }
 

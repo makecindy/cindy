@@ -14,7 +14,13 @@ export function useInitialPaint(shouldDefer: () => boolean, placeholder?: RefObj
     const morph = placeholder?.current?.closest('[data-morph-side]');
     const content = morph?.firstElementChild;
     const waitForShell = () => {
-      if (content && Number(getComputedStyle(content).opacity) < 0.5) {
+      // Mounting a large catalog during the size transition blocks its
+      // remaining frames. Reduced motion has no transition to wait for.
+      const resizing = morph?.getAnimations?.().some(animation =>
+        animation instanceof CSSTransition &&
+        (animation.transitionProperty === 'width' || animation.transitionProperty === 'height'),
+      );
+      if (resizing || (content && Number(getComputedStyle(content).opacity) < 0.5)) {
         frame = requestAnimationFrame(waitForShell);
       } else {
         painted();

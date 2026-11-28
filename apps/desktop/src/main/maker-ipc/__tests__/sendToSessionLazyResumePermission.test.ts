@@ -10,6 +10,11 @@ import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
 import { withRemoteAccountReads } from '../../subscription-accounts/remotePreflight.js';
+import { createSessionHandoffHandler, type SessionHandoffSendResult } from '../sessionHandoffCore.js';
+import {
+  assertSessionNotRestarting, sendToSessionLocks, trackSendToSessionLockRun, SessionRestartInProgressError,
+  waitForSendToSessionLock, withSessionRestartLock,
+} from '../sendToSessionLock.js';
 /**
  * #5788:插件 errand 派活走 sendToSessionInternal 的 lazy-resume 时,必须按会话落库的
  * 权限档恢复,不能落到 main 侧通路的缺省 bypass。否则插件任务被提权,errand 复用判定也会
@@ -269,6 +274,7 @@ function botTaskDispatchHarness(
     assertReviewExternalInputAllowed: asyncNoop,
     syncBotLanePermission: asyncNoop,
     reconcileBotModelRoute: asyncNoop,
+    runDesktopModelGroupBeforeSend: async () => ({ switched: false }),
     scheduledModelScope: { restore: asyncNoop },
     refreshBotCapabilityEpochBeforeSend: asyncNoop,
     assertSessionNotRestarting: noop,
@@ -323,6 +329,50 @@ function botTaskDispatchHarness(
   });
   return { ...loadBotTaskDispatch(scope), scope: stubs, bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
 }
+
+// Guard tier: run the installed sendToSessionInternal closure with the real
+// restart fence and receiving handoff core. Existing restart tests only check the lock.
+it('settles a created handoff refused at the desktop restart fence', async () => {
+  const id = '22222222-2222-4222-8222-222222222222';
+  const enqueue = vi.fn();
+  const h = botTaskDispatchHarness({}, {}, {
+    assertSessionNotRestarting, sendToSessionLocks, trackSendToSessionLockRun,
+    waitForSendToSessionLock, SessionRestartInProgressError, enqueueSendToSessionMessage: enqueue,
+  });
+  let releaseRestart!: () => void;
+  let enterRestart!: () => void;
+  const entered = new Promise<void>(resolve => { enterRestart = resolve; });
+  const restarting = withSessionRestartLock(id, () => new Promise<void>(resolve => {
+    releaseRestart = resolve;
+    enterRestart();
+  }));
+  await entered;
+  let receiptValid = true;
+  const validate = vi.fn(async (_peer: string, input: { release?: boolean }) => {
+    if (input.release) receiptValid = false;
+    return input.release === true || receiptValid;
+  });
+  const create = vi.fn().mockResolvedValue({ ok: true, targetSessionId: id });
+  const handle = createSessionHandoffHandler({
+    create, validate,
+    send: async params => h.sendToSessionInternal({ ...params }) as Promise<SessionHandoffSendResult>,
+  });
+  const request = {
+    action: 'create', sessionId: id, create: { permissionMode: 'ask' },
+    taskActionReceipt: 'desktop-restart-receipt', message: 'First message',
+    sender: { sessionId: 'source' },
+  };
+  try {
+    await expect(handle('sender-device', request)).resolves.toMatchObject({ ok: false, errorCode: 'CREATED_NOT_DELIVERED' });
+    expect(validate).toHaveBeenCalledWith('sender-device', expect.objectContaining({ release: true }), undefined);
+    await expect(handle('sender-device', request)).resolves.toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(create).toHaveBeenCalledOnce();
+    expect(enqueue).not.toHaveBeenCalled();
+  } finally {
+    releaseRestart();
+    await restarting;
+  }
+});
 
 // Unit/guard: execute the same service closure as Agent tools. A plugin has no task to
 // impersonate; its approved input carries one Host source for both saved labels and model notes.
@@ -1154,4 +1204,59 @@ describe('unbound Codex pre-send history wiring', () => {
     expect(order).toEqual(['durable-handoff', 'cancel-wait']);
     expect(failover).not.toHaveBeenCalled();
   });
+});
+
+// 依据：send_to_session create 分支在省略 working_dir 时此前缺省落到 bypassPermissions，
+// 使 ask / auto / plan 会话借创建独立子任务（或解耦任务）静默提权；
+// 既有测试只覆及插件显式传 inheritSourcePermissionMode:true 与跨电脑创建；
+// 最小失败输入：dispatcher 权限为 ask/auto/plan 且未传 workingDir / inheritSourcePermissionMode。tier: guard。
+describe('sendToSessionInternal create non-escalating permission inheritance', () => {
+  it.each(['ask', 'auto', 'plan', 'bypassPermissions'] as const)(
+    'inherits dispatcher permissionMode=%s without silently escalating to bypassPermissions',
+    async (sourceMode) => {
+      const openSessionCalls: Array<Record<string, unknown>> = [];
+      const dbChain = {
+        from: () => dbChain,
+        where: () => dbChain,
+        limit: async () => [{ id: 'source', title: 'Source', permissionMode: sourceMode, effort: 'medium', fastMode: false, providerId: 'anthropic' }],
+      };
+      const h = botTaskDispatchHarness({}, {}, {
+        getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+        openSession: async (input: { body: Record<string, unknown> }, run: (row: Record<string, unknown>, assertCurrent: () => void) => Promise<unknown>) => {
+          openSessionCalls.push(input.body);
+          const row = { id: 'created-task', ...input.body };
+          const value = await run(row, () => {});
+          return { row, value };
+        },
+        broadcastSessionCreated: () => {},
+        readClaudeApiKey: () => 'fixture-key',
+        getProviderRoutingContext: async () => ({
+          availability: { 'claude-code': [{ id: 'anthropic', name: 'Anthropic', models: ['claude-opus-fixture'] }], codex: [], pi: [] },
+          resolveDefaultProviderIdForModel: () => 'anthropic',
+        }),
+        maker: {
+          getSession: () => undefined,
+          getSessionMeta: async () => ({
+            id: 'source',
+            agentKind: 'claude-code',
+            workDir: '/tmp/fixture/source',
+            projectDir: null,
+            workspaceKind: 'dialogue',
+            model: 'claude-opus-fixture',
+            remoteHostId: null,
+          }),
+          getCapabilities: () => ({ availableModels: [{ id: 'claude-opus-fixture' }] }),
+        },
+      });
+      const res = await h.sendToSessionInternal({
+        dispatcherSessionId: 'source',
+        message: 'Follow PR #122 in an independent task',
+        title: '#122 Fix deadlock',
+      });
+      expect(res).toMatchObject({ ok: true, wakeKind: 'created' });
+      expect(openSessionCalls).toHaveLength(1);
+      expect(openSessionCalls[0]?.permissionMode).toBe(sourceMode);
+      expect(h.bootstrapped[0]?.permissionMode).toBe(sourceMode);
+    },
+  );
 });
