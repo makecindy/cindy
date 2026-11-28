@@ -1957,7 +1957,7 @@ describe('mobileRealtimeAsrProvider', () => {
     });
 
     const openAiUpdate = buildSessionUpdateMessage(
-      'gpt-realtime-whisper',
+      'gpt-4o-transcribe',
       'en',
       24000,
       'openai-transcription-manual',
@@ -1966,10 +1966,16 @@ describe('mobileRealtimeAsrProvider', () => {
     expect(
       (openAiUpdate.session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
     ).toEqual({
-      model: 'gpt-realtime-whisper',
+      model: 'gpt-4o-transcribe',
       language: 'en',
       prompt: 'PostgreSQL, Cindy. 排查线上数据库',
     });
+    const whisperUpdate = buildSessionUpdateMessage(
+      'gpt-realtime-whisper', 'en', 24000, 'openai-transcription-manual', hints,
+    );
+    expect(
+      (whisperUpdate.session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+    ).toEqual({ model: 'gpt-realtime-whisper', language: 'en' });
 
     FakeSocket.instances = [];
     const provider = volcengineProvider({

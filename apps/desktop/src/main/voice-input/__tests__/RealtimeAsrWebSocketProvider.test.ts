@@ -759,7 +759,7 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
     }
   });
 
-  it('includes Qwen corpus.text and OpenAI transcription.prompt in session.update only when recognitionHints exist', () => {
+  it('includes hints only in supported session.update fields and omits prompt for gpt-realtime-whisper', () => {
     const hints = {
       hotwords: ['PostgreSQL', 'Cindy'],
       recentContext: ['检查数据库连接'],
@@ -787,7 +787,7 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
       .not.toHaveProperty('corpus');
 
     const openAiWithHints = buildSessionUpdateMessage(
-      'gpt-realtime-whisper',
+      'gpt-4o-transcribe',
       'en',
       24_000,
       'openai-transcription-manual',
@@ -796,10 +796,16 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
     expect(
       (openAiWithHints.session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
     ).toEqual({
-      model: 'gpt-realtime-whisper',
+      model: 'gpt-4o-transcribe',
       language: 'en',
       prompt: 'PostgreSQL, Cindy. 检查数据库连接',
     });
+    const whisperWithHints = buildSessionUpdateMessage(
+      'gpt-realtime-whisper', 'en', 24_000, 'openai-transcription-manual', hints,
+    );
+    expect(
+      (whisperWithHints.session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+    ).toEqual({ model: 'gpt-realtime-whisper', language: 'en' });
   });
 
   it('sends an updated session.update on a prewarmed socket when recognitionHints change', async () => {

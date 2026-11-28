@@ -3,6 +3,7 @@ import {
   buildOpenAiTranscriptionPrompt,
   buildQwenAsrCorpusText,
   buildVolcengineSaucCorpusContext,
+  supportsOpenAiRealtimeTranscriptionPrompt,
   type AsrEvent,
   type AsrProvider,
   type AsrRecognitionHints,
@@ -1347,7 +1348,9 @@ export function buildSessionUpdateMessage(
       },
     };
   }
-  const prompt = buildOpenAiTranscriptionPrompt(recognitionHints);
+  const prompt = supportsOpenAiRealtimeTranscriptionPrompt(model)
+    ? buildOpenAiTranscriptionPrompt(recognitionHints)
+    : undefined;
   return {
     type: 'session.update',
     session: {

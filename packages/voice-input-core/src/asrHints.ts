@@ -218,6 +218,11 @@ export function buildOpenAiTranscriptionPrompt(
     : prompt;
 }
 
+/** The realtime whisper model rejects transcription.prompt during session.update. */
+export function supportsOpenAiRealtimeTranscriptionPrompt(model: string): boolean {
+  return model.trim().split('/').at(-1)?.toLowerCase() !== 'gpt-realtime-whisper';
+}
+
 /**
  * Selects bounded keyterms for ElevenLabs Scribe v2 Realtime (`keyterms` query
  * params). Uses personal dictionary terms only (never full history sentences),
