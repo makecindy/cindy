@@ -236,6 +236,23 @@ describe('AgentActionRow — 行主文案', () => {
     expect(screen.queryByText('chat.agentActionRow.verb.ran')).toBeNull();
   });
 
+  it('ACP 把整条命令当工具名时:标签单行截断但保留完整原文供悬停', () => {
+    // ACP 引擎会把整条多行命令直接当工具名上报（#13720 同源场景）。这类行没有
+    // description/command 可供 fullTitle，标签被 CSS 截断后用户读不到末行，
+    // 仓库 UI 审计也会记一条「truncated without title」。
+    const command = "python3 - <<'PY'\nprint('sample')\nPY";
+    render(
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        message: mkTool('t1', command, {}),
+      }),
+    );
+    // 多行文本用正则取（testing-library 的默认归一化会把换行折成空格，字符串匹配对不上）。
+    const label = screen.getByText(/python3 - <<'PY'/);
+    expect(label.textContent).toBe(command);
+    expect(label.className).toContain('truncate');
+    expect(label.getAttribute('title')).toBe(command);
+  });
+
   it('工作动作模式:Bash 首行保留 description，命令原文收进点击详情', () => {
     render(
       createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
