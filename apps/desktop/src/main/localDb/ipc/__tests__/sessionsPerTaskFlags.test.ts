@@ -56,7 +56,10 @@ vi.mock('../../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
-vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: h.notifyAgentIslandSessionPatch }));
+vi.mock('../../agentIslandSessionPatch', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../agentIslandSessionPatch')>(),
+  notifyAgentIslandSessionPatch: h.notifyAgentIslandSessionPatch,
+}));
 vi.mock('../sessionCreatedBroadcast', () => ({ emitSessionCreated: h.emitSessionCreated }));
 vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../../sessionTaskSummary.js', () => ({ backfillPinnedSessionSummaries: vi.fn() }));

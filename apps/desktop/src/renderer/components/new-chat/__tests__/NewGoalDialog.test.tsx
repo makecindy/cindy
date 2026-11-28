@@ -3,12 +3,35 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createIpcError } from '../../../../shared/ipc-errors';
+import { goalApiFor } from '@/lib/makerTransport';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { NewGoalDialog } from '../NewGoalDialog';
 import { WorktreeCreatingOverlay } from '../WorktreeCreatingOverlay';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/makerTransport', () => ({ goalApiFor: vi.fn(), readBackgroundTaskOutputTailFor: vi.fn() }));
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+vi.mock('@/features/device-link/stickySessionOrigin', () => ({ getStickySessionDeviceId: vi.fn() }));
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.resetAllMocks(); });
+
+// Cloud status gap 7 / component unit: submit through the actual remote task
+// dialog; previous tests only covered local draft callback failures.
+it.each([
+  [createIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', "channel 'maker:goal:set' not allowed remotely"),
+    'logic.errors.remoteCapabilityUnavailable'],
+  [createIpcError('NOT_FOUND', 'goal not found'), 'goal.newGoalDialog.failed'],
+])('shows localized copy for a remote goal rejection', async (error, expected) => {
+  vi.mocked(getStickySessionDeviceId).mockReturnValue('remote-device');
+  const setGoal = vi.fn().mockRejectedValue(error);
+  vi.mocked(goalApiFor).mockReturnValue({
+    setGoal, clearGoal: vi.fn(), pauseGoal: vi.fn(), resumeGoal: vi.fn(),
+    updateGoal: vi.fn(), getGoalStatus: vi.fn(),
+  });
+  render(<NewGoalDialog open sessionId="remote-session" onOpenChange={vi.fn()} initialObjective="Keep the goal" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'goal.newGoalDialog.start' }));
+  expect(await screen.findByText(expected)).toBeTruthy();
+  expect(screen.queryByText(error.message)).toBeNull();
+  expect(setGoal).toHaveBeenCalledOnce();
+});
 
 // #7395 review: exercise the real dialog after a handled picker failure.
 // The existing route tests inject goal creation and cannot observe its error UI.

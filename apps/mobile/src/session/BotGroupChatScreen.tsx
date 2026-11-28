@@ -1,4 +1,5 @@
 import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
+import type { ResolveChatServerMedia } from '@/chat/chatServerClient';
 import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { canMentionAllInBotGroup, interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupWorkRow } from './BotGroupWorkArea';
@@ -117,6 +118,7 @@ import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
 import { CompanionEntering } from './CompanionEntering';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupComposer, type BotGroupComposerHandle, type BotGroupSendInput } from './BotGroupComposer';
+import { BotGroupAssistantDeviceCard } from './BotGroupAssistantDeviceCard';
 import { BotGroupAuthorAvatar } from './BotGroupAuthorAvatar';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { MessageListVisibilityContext, useMessageListItemVisible, useScrollViewMessageVisibility } from './messageListVisibility';
@@ -1042,6 +1044,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       </View> : null}
       <BotGroupTopicImageShare key={shareScope} selectionScope={shareScope} messages={selectedMessages} allIds={shareableIds}
         resolveMedia={chat.media} onBusyChange={setImageShareBusy} />
+      {!imageSelectionActive && !threadRootId && group.assistantDeviceWaits?.length ? <BotGroupAssistantDeviceCard group={group} online={composerEditable} act={chat.act} /> : null}
       <View style={selectedImages ? styles.hiddenComposer : undefined} testID="botGroup.composerContainer">
         <BotGroupComposer ref={composerRef} conversationKind={direct ? 'direct' : undefined} pullThrough={composerPullThrough} allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={replyControls?.participate} maskIndicator={replyControls?.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={composerEditable}
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
@@ -1255,7 +1258,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   identityFor: BotGroupIdentityLookup;
   /** Reads a picture attached to a message from the computer. */
   resolveMedia: ResolveRemoteMediaFn;
-  resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>;
+  resolveServerMedia?: ResolveChatServerMedia;
   loadOlder?: () => void;
   loadingOlder?: boolean;
   continuing: boolean;
@@ -1412,7 +1415,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
           </View>
         )}
         <CompanionEntering id={key} createdAt={message.createdAt} kind={message.authorKind === 'user' ? 'send' : 'reply'}>
-        <BotGroupTimelineItem onChooseComputer={group.assistantComputers && !group.assistantDeviceId ? onChooseComputer : undefined} groupId={group.id} footer={selectedImages || queued || message.kind !== 'message' || message.deleted ? undefined : <View style={[styles.messageFooter, ownMessage && styles.ownMessageFooter]}>
+        <BotGroupTimelineItem onChooseComputer={group.assistantComputers && !group.assistantDeviceId ? onChooseComputer : undefined} groupId={group.id} historyRevision={group.historyRevision} footer={selectedImages || queued || message.kind !== 'message' || message.deleted ? undefined : <View style={[styles.messageFooter, ownMessage && styles.ownMessageFooter]}>
         {onOpenThread && !message.threadRootId && !message.threadShare ?
           <BotGroupThreadEntry message={message} identityFor={identityFor} onPress={() => onOpenThread(message)} />
         : null}
@@ -1482,12 +1485,13 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
 });
 
 function BotGroupTimelineItem({
-  groupId, message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, mentionContext, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
+  groupId, historyRevision, message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, mentionContext, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
   plan, planMessages, runningSince, planActionable, planReassignable, planPending, onPlanAction, onEditStep, onPlanAutoContinue, onOpenDiagram, onChooseComputer, onMentionBot, interactive = true, active = true,
   joinedNames, joinedExpanded = false, onToggleJoinedExpanded,
 }: {
   onChooseComputer?: () => void;
   groupId: string;
+  historyRevision?: string;
   onOpenDiagram?: (source: string) => void;
   onMentionBot?: (botId: string) => void;
   interactive?: boolean;
@@ -1509,7 +1513,7 @@ function BotGroupTimelineItem({
   mentionLabels: readonly string[];
   mentionContext: BotGroupMentionContext;
   resolveMedia: ResolveRemoteMediaFn;
-  resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>;
+  resolveServerMedia?: ResolveChatServerMedia;
   canContinue: boolean;
   continuing: boolean;
   onContinue(): void;
@@ -1592,7 +1596,7 @@ function BotGroupTimelineItem({
   const attachments = authoredShare?.attachments ?? message.attachments ?? [];
   const renderAttachments = (align: 'left' | 'right') => {
     if (!attachments.length) return null;
-    return <BotGroupMessageAttachments messageId={authoredShare?.messageId ?? message.id} roomId={groupId} attachments={attachments}
+    return <BotGroupMessageAttachments messageId={authoredShare?.messageId ?? message.id} roomId={groupId} historyRevision={historyRevision} attachments={attachments}
       align={align} onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />;
   };
   const shareFooter = authoredShare ? <>
@@ -1670,7 +1674,7 @@ function BotGroupTimelineItem({
           {quoteDisplay ? <BotGroupQuote display={quoteDisplay} onPress={onLocateQuote} /> : null}
           <View style={styles.botMessageContent}>
             {renderAttachments('left')}
-            {message.threadShare && !authoredShare ? <BotGroupThreadShare groupId={groupId} messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.threadShare.messageId}`} active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
+            {message.threadShare && !authoredShare ? <BotGroupThreadShare groupId={groupId} historyRevision={historyRevision} messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.threadShare.messageId}`} active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
               : content.trim() ? <BotGroupMarkdownText readOnly={!!message.threadShare} messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.id}`} richContent active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
           </View>
           {/* A task this teammate started from the group; mine is live, another owner's is a snapshot.

@@ -22,6 +22,7 @@ import { sessions, messages } from '../localDb/schema';
 import * as schema from '../localDb/schema';
 import { createDbClientForHandle } from '../localDb/client/createDbClientForHandle';
 import { createDbClient, type DbClient } from '../localDb/client/DbClient';
+import { createDbTransportError, DB_TRANSPORT_OUTCOME_UNKNOWN } from '../localDb/client/DbTransport';
 import { buildDbWorkerBundle } from '../localDb/__tests__/dbWorkerTestUtils';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -120,7 +121,7 @@ vi.mock('../maker-host/provider-route.js', () => ({
 
 // fake drizzle: select 链返回 thenable。写入侧 MR2.2 后走 DbClient.tx。
 // 每个 select() 调用按入栈顺序消费 selectQueue 的下一个返回值。
-type SelectStep = unknown[];
+type SelectStep = unknown[] | Error;
 const selectQueue: SelectStep[] = [];
 let messageDb: ReturnType<typeof drizzle> | null = null;
 let snapshotClient: DbClient | null = null;
@@ -142,6 +143,7 @@ const fakeDb = {
   select: vi.fn((projection?: Record<string, unknown>) => {
     if (messageDb && projection && Object.keys(projection).length <= 5) return messageDb.select(projection as never);
     const next = selectQueue.shift() ?? [];
+    if (next instanceof Error) throw next;
     return makeChain(next);
   }),
 };
@@ -388,6 +390,15 @@ describe('forkSessionAtMessage', () => {
               : { workerScriptPath: await buildDbWorkerBundle(path.join(root, 'worker')) }),
           });
         }
+        if (change === 'unchanged') {
+          // #13643: commit to SQLite and lose only the receipt. The caller must still
+          // receive the child with its copied prefix, including on a same-ID retry.
+          const commit = snapshotClient.tx.bind(snapshotClient);
+          vi.spyOn(snapshotClient, 'tx').mockImplementationOnce(async (name, args) => {
+            await commit(name, args);
+            throw createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'committed fork reply lost');
+          });
+        }
         let resume!: () => void;
         let entered!: () => void;
         const waiting = new Promise<void>(resolve => { entered = resolve; });
@@ -539,6 +550,46 @@ describe('forkSessionAtMessage', () => {
       pruneSessionContextWindowBudget('src-session');
     }
   });
+
+  // #13643, unit: a single native fork loses its transaction reply. Definite-failure
+  // coverage cannot detect a committed child being reported as an orphan or losing its budget.
+  it.each(['missing', 'different parent', 'different thread', 'read failure', 'strip committed'])(
+    'reconciles a lost fork receipt: %s', async outcome => {
+      const strip = outcome === 'strip committed';
+      const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
+      const prior = makeMessageRow({ id: 'assistant', role: 'assistant', createdAt: 2500,
+        agentMeta: JSON.stringify({ uuid: 'prior' }) });
+      selectQueue.push([makeSourceRow(strip ? { agentKind: 'codex' } : {})], strip ? [] : [target], [prior]);
+      writeSessionContextWindowBudget('src-session', 262_144);
+      const lost = createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'fork reply lost');
+      let childId = '';
+      txMock.mockImplementationOnce((_name, args) => {
+        const { newSession } = args as { newSession: ReturnType<typeof makeSourceRow> };
+        childId = newSession.id;
+        if (outcome === 'read failure') {
+          selectQueue.push(new Error('read failed'));
+        } else {
+          selectQueue.push(outcome === 'missing' ? [] : [makeSourceRow({
+            ...newSession,
+            ...(outcome === 'different parent' ? { parentSessionId: 'other' } : {}),
+            ...(outcome === 'different thread' ? { sdkSessionId: 'other' } : {}),
+          })]);
+        }
+        return Promise.reject(lost);
+      });
+      const fork = strip ? forkSessionStripEncrypted('src-session') : forkSessionAtMessage('src-session', 'target-user');
+      if (strip) {
+        const result = await fork;
+        expect(result.id).toBe(childId);
+        expect(result.parentSessionId).toBe('src-session');
+      } else {
+        await expect(fork).rejects.toBe(lost);
+      }
+      expect(readSessionContextWindowBudget(childId)).toBe(262_144);
+      expect(txMock).toHaveBeenCalledTimes(1);
+      expect(forkSdkSessionMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('inherits the task context-window budget on a strip-encrypted Codex fork too', async () => {
     const first = makeMessageRow({ id: 'user-1', role: 'user', createdAt: 1000 });

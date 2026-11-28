@@ -151,10 +151,15 @@ function Fixture() {
           tokenSpeed={ctx.data.headerRate ? { rate: 64, average: 64, tokens: 1280, elapsedMs: 20000, streaming: true } : undefined}
           centeredSlot={ctx.data.headerCenter ? <span className="flex h-8 items-center px-2" data-header-center>验收计划</span> : undefined}
           inputWidth="100%" composerHeaderRef={setHeaderTarget} />}
+        {ctx.data.dispatchNormalRoute && <UserMessage workingDir="/fixture" content="Normal message without fallback"
+          pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} allowPrivilegedLinks={false}
+          dispatchRoute={{ agentKind: 'acp', model: 'fixture-chat',
+            providerId: 'acp-plugin:fixture:engine', agentDeviceId: null, engineName: 'Fixture Engine' }} />}
         {ctx.data.switchPreparation === 'failed' && <UserMessage workingDir="/fixture" content="Continue the task"
           pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} allowPrivilegedLinks={false}
           dispatchRoute={{ agentKind: ctx.data.dispatchPluginSource ? 'acp' : 'pi', model: 'fixture-chat',
             providerId: ctx.data.dispatchPluginSource ? 'acp-plugin:fixture:engine' : 'xd', agentDeviceId: null,
+            ...(ctx.data.dispatchPluginSource ? { engineName: 'Fixture Engine' } : {}),
             selected: { agentKind: 'codex', model: 'fixture-chat', providerId: 'openai', agentDeviceId: null },
             switchError: '[DEVICE_LINK_TIMEOUT] Target preparation timed out' }} />}
         {ctx.data.headerStack && <div data-header-goal><GoalIndicator sessionId="fixture-companion" /></div>}

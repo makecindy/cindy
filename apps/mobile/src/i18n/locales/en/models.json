@@ -144,7 +144,13 @@
       "exceptionImage": "The message has images, so only sources that can see images were considered",
       "exceptionImageFallback": "The message has images, but no source can see images, so it picked as usual",
       "exceptionHours": "During this time, it uses “{{name}}” instead",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Picked first based on your usual usage",
+      "usageHabitQuota": "Picked first based on your usual usage ({{left}}% quota left)",
+      "autoBalance": "Taking load while other sources are tight or busy",
+      "autoBalanceQuota": "Balanced by quota headroom and load ({{left}}% quota left)",
+      "lessBusy": "Other sources are running tasks, so this idle one goes first",
+      "paygFallback": "Subscriptions and shared sources are unavailable, falling back to pay-as-you-go"
     },
     "picker": {
       "switched": "“{{name}}” switched this task to {{model}}",

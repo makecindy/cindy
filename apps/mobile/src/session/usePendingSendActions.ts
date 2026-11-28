@@ -6,7 +6,7 @@ import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGe
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { getCurrentMobileOutboxRecords, mobileDurableOutbox } from './mobileDurableOutbox';
 import { endOutboxBackgroundSend } from './outboxBackgroundSend';
-import { isDurableOutboxUnsent } from './durableOutbox';
+import { hasUncreatedHostSession, isDurableOutboxUnsent } from './durableOutbox';
 import { remoteSessionStore } from './remoteSessionStore';
 import type { PendingSendBubbleActions } from './PendingSendBubble';
 import type { QueuedRemoteMessage } from './types';
@@ -37,7 +37,7 @@ export function usePendingOutboxActions({
       return;
     }
     if (record.state !== 'failed') return;
-    if (record.creation && !record.prepared && !record.template) {
+    if (hasUncreatedHostSession(record)) {
       const owner = getMobileAuthOwner();
       void mobileDurableOutbox.update(record, { suspended: true }).then(() => {
         if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) {
@@ -48,26 +48,39 @@ export function usePendingOutboxActions({
     }
     setQueueSelectedClientId(null);
     void mobileDurableOutbox.update(record, {
-      state: record.prepared && !record.retryAfterConfirmedMiss ? 'confirming' : 'queued', error: undefined,
+      state: 'queued',
+      error: undefined,
+      // A stored failure can predate the exact history check. The runner must
+      // prove absence on the original task before retrying the original ID.
+      ...(isDurableOutboxUnsent(record) ? {} : { retryAfterConfirmedMiss: true }),
     }).catch((err) => setError(formatRemoteError(err)));
   }, [deviceId, deviceName, findDurableOutboxRecord, outboxSessionAliveRef, router, sessionId, setError, setQueueSelectedClientId]);
   const removeOutboxItem = useCallback((clientId: string) => {
     const record = findDurableOutboxRecord(clientId);
-    if (!record || record.historyConfirmation) return;
+    if (!record || record.historyConfirmation === 'requested') return;
+    const unconfirmed = record.historyConfirmation === 'unconfirmed';
+    const owner = getMobileAuthOwner();
     // Until creation succeeds, this row also owns the recovery form for every later message.
-    if (record.creation && !record.prepared && !record.template) {
+    if (hasUncreatedHostSession(record)) {
       setError(t('session.outbox.creationRecoveryRequired'));
       return;
     }
     // 删除发送失败的消息不可撤销:先确认(破坏性按钮),确认后才真正移除。
     const confirmRemove = () => {
+      if (!isMobileAuthOwnerCurrent(owner) || outboxSessionAliveRef.current !== sessionId
+          || findDurableOutboxRecord(clientId) !== record) return;
       setQueueSelectedClientId(null);
-      const owner = getMobileAuthOwner();
       const remove = async () => {
-        endOutboxBackgroundSend(record);
-        if (isDurableOutboxUnsent(record)) {
+        if (unconfirmed) {
+          await mobileDurableOutbox.discardUnconfirmed(record);
+          endOutboxBackgroundSend(record);
+        } else if (isDurableOutboxUnsent(record)) {
+          endOutboxBackgroundSend(record);
           await mobileDurableOutbox.update(record, { state: 'host-owned', cleanupOutcome: 'cancelled', cancelRequested: true, error: undefined });
-        } else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' });
+        } else {
+          endOutboxBackgroundSend(record);
+          await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' });
+        }
       };
       void remove().catch((err) => {
         if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) setError(formatRemoteError(err));
@@ -75,7 +88,7 @@ export function usePendingOutboxActions({
     };
     Alert.alert(
       t('session.outbox.deleteConfirmTitle'),
-      t('session.outbox.deleteConfirmBody'),
+      t(unconfirmed ? 'session.outbox.deleteUnconfirmedBody' : 'session.outbox.deleteConfirmBody'),
       [
         { text: t('session.common.cancel'), style: 'cancel' },
         { text: t('session.common.delete'), style: 'destructive', onPress: confirmRemove },
