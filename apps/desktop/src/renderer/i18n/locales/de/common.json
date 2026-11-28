@@ -15670,7 +15670,9 @@
     "connectionInterrupted": "Die Sprachverbindung wurde unterbrochen. Prüfe dein Netzwerk und versuche es erneut.",
     "recognitionStalled": "Die Spracherkennung liefert keine Ergebnisse mehr. Versuche es erneut.",
     "transcriptKept": "{{message}} Der bisher erkannte Text wurde beibehalten — du kannst ihn direkt bearbeiten.",
-    "transcriptKeptOverlay": "{{message}} Der bisher erkannte Text wurde beibehalten — kopiere ihn, um fortzufahren."
+    "transcriptKeptOverlay": "{{message}} Der bisher erkannte Text wurde beibehalten — kopiere ihn, um fortzufahren.",
+    "retryRecognition": "Erneut erkennen",
+    "recordAgain": "Neu aufnehmen"
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT-Anmeldung nicht mehr gültig",

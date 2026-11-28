@@ -1,6 +1,14 @@
 import WebSocket from 'ws';
 import type { ClientRequest, IncomingMessage } from 'node:http';
-import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core';
+import {
+  asrRecognitionHintsFingerprint,
+  buildOpenAiTranscriptionPrompt,
+  buildQwenAsrCorpusText,
+  type AsrEvent,
+  type AsrProvider,
+  type AsrRecognitionHints,
+  type AudioTrace,
+} from '@cindy/voice-input-core';
 import type { VoiceInputRealtimeProtocolProfile } from '../../shared/voiceInputAsrProfiles.js';
 import { createLogger } from '../logger.js';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
@@ -16,6 +24,7 @@ export type RealtimeAsrWebSocketProviderOptions = {
   accessTokenProvider: () => Promise<string | null>;
   connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>;
   sourceLanguage?: string;
+  recognitionHints?: AsrRecognitionHints;
   model?: string;
   realtimeUrl?: string;
   extraHeaders?: Record<string, string>;
@@ -82,6 +91,7 @@ type WarmRealtimeSession = {
   credentialCacheKey: string;
   model: string;
   languageCode: string | undefined;
+  hintsFingerprint: string;
   pcmSampleRate: number;
   protocolProfile: VoiceInputRealtimeProtocolProfile;
   createdAt: number;
@@ -172,10 +182,11 @@ function warmConfigKey(
   credentialCacheKey: string,
   model: string,
   languageCode: string | undefined,
+  hintsFingerprint: string,
   pcmSampleRate: number,
   protocolProfile: VoiceInputRealtimeProtocolProfile,
 ): string {
-  return `${connectionKey}::credential-${credentialCacheKey}::${model}::${languageCode ?? ''}::pcm-${pcmSampleRate}::${protocolProfile}`;
+  return `${connectionKey}::credential-${credentialCacheKey}::${model}::${languageCode ?? ''}::hints-${hintsFingerprint}::pcm-${pcmSampleRate}::${protocolProfile}`;
 }
 
 function isExistingWarmMatch(
@@ -184,6 +195,7 @@ function isExistingWarmMatch(
   credentialCacheKey: string,
   model: string,
   languageCode: string | undefined,
+  hintsFingerprint: string,
   pcmSampleRate: number,
   protocolProfile: VoiceInputRealtimeProtocolProfile,
 ): boolean {
@@ -192,6 +204,7 @@ function isExistingWarmMatch(
   if (existing.credentialCacheKey !== credentialCacheKey) return false;
   if (existing.model !== model) return false;
   if (existing.languageCode !== languageCode) return false;
+  if (existing.hintsFingerprint !== hintsFingerprint) return false;
   if (existing.pcmSampleRate !== pcmSampleRate) return false;
   if (existing.protocolProfile !== protocolProfile) return false;
   if (existing.socket.readyState === WebSocket.CLOSING) return false;
@@ -204,6 +217,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
   const model = options.model ?? OPENAI_REALTIME_WHISPER_MODEL;
   const sourceLanguage = options.sourceLanguage ?? 'auto';
   const languageCode = openAiLanguageCode(sourceLanguage);
+  const hintsFingerprint = asrRecognitionHintsFingerprint(options.recognitionHints);
   const pcmSampleRate = options.pcmSampleRate ?? DEFAULT_REALTIME_PCM_SAMPLE_RATE;
   const protocolProfile = options.protocolProfile ?? 'openai-transcription-manual';
   const credentialCacheKey = options.credentialCacheKey ?? '';
@@ -213,6 +227,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
     credentialCacheKey,
     model,
     languageCode,
+    hintsFingerprint,
     pcmSampleRate,
     protocolProfile,
   );
@@ -224,6 +239,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
     credentialCacheKey,
     model,
     languageCode,
+    hintsFingerprint,
     pcmSampleRate,
     protocolProfile,
   )) {
@@ -249,6 +265,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
       credentialCacheKey,
       model,
       languageCode,
+      hintsFingerprint,
       pcmSampleRate,
       protocolProfile,
     )) {
@@ -266,6 +283,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
       model,
       sourceLanguage,
       languageCode,
+      hintsFingerprint,
       pcmSampleRate,
       protocolProfile,
     );
@@ -285,6 +303,7 @@ function takeWarmRealtimeSession(
   credentialCacheKey: string,
   model: string,
   sourceLanguage: string,
+  hintsFingerprint: string,
   pcmSampleRate: number,
   protocolProfile: VoiceInputRealtimeProtocolProfile,
 ): TakenWarmRealtimeSession | null {
@@ -316,7 +335,7 @@ function takeWarmRealtimeSession(
   const languageCode = openAiLanguageCode(sourceLanguage);
   return {
     socket: warm.socket,
-    needsSessionUpdate: warm.languageCode !== languageCode,
+    needsSessionUpdate: warm.languageCode !== languageCode || warm.hintsFingerprint !== hintsFingerprint,
     ageMs: Date.now() - warm.createdAt,
   };
 }
@@ -329,6 +348,7 @@ function createWarmRealtimeSession(
   model: string,
   sourceLanguage: string,
   languageCode: string | undefined,
+  hintsFingerprint: string,
   pcmSampleRate: number,
   protocolProfile: VoiceInputRealtimeProtocolProfile,
 ): Promise<void> {
@@ -448,7 +468,13 @@ function createWarmRealtimeSession(
         }, KEEPALIVE_PING_INTERVAL_MS);
       };
       const onOpen = (): void => {
-        socket.send(JSON.stringify(buildSessionUpdateMessage(model, sourceLanguage, pcmSampleRate, protocolProfile)));
+        socket.send(JSON.stringify(buildSessionUpdateMessage(
+          model,
+          sourceLanguage,
+          pcmSampleRate,
+          protocolProfile,
+          options.recognitionHints,
+        )));
       };
       const onPong = (): void => {
         clearPongTimeout();
@@ -509,6 +535,7 @@ function createWarmRealtimeSession(
         credentialCacheKey,
         model,
         languageCode,
+        hintsFingerprint,
         pcmSampleRate,
         protocolProfile,
         createdAt: Date.now(),
@@ -541,9 +568,11 @@ export function buildSessionUpdateMessage(
   sourceLanguage: string,
   pcmSampleRate = DEFAULT_REALTIME_PCM_SAMPLE_RATE,
   protocolProfile: VoiceInputRealtimeProtocolProfile = 'openai-transcription-manual',
+  recognitionHints?: AsrRecognitionHints,
 ): Record<string, unknown> {
   const language = openAiLanguageCode(sourceLanguage);
   if (protocolProfile === 'qwen-asr-server-vad') {
+    const corpusText = buildQwenAsrCorpusText(recognitionHints);
     // DashScope realtime ASR is not wire-compatible with OpenAI's nested
     // transcription session schema. It also uses DashScope's audio format
     // label (`pcm`) rather than OpenAI's `pcm16`; LiteLLM passes this value
@@ -560,6 +589,7 @@ export function buildSessionUpdateMessage(
         sample_rate: pcmSampleRate,
         input_audio_transcription: {
           ...(language ? { language } : {}),
+          ...(corpusText ? { corpus: { text: corpusText } } : {}),
         },
         turn_detection: {
           type: 'server_vad',
@@ -569,6 +599,7 @@ export function buildSessionUpdateMessage(
       },
     };
   }
+  const prompt = buildOpenAiTranscriptionPrompt(recognitionHints);
   return {
     type: 'session.update',
     session: {
@@ -579,6 +610,7 @@ export function buildSessionUpdateMessage(
           transcription: {
             model,
             ...(language ? { language } : {}),
+            ...(prompt ? { prompt } : {}),
           },
           turn_detection: null,
         },
@@ -622,6 +654,8 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private readonly accessTokenProvider: () => Promise<string | null>;
   private readonly connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
+  private readonly hintsFingerprint: string;
   private readonly model: string;
   private readonly realtimeUrl: string;
   private activeRealtimeUrl: string;
@@ -696,6 +730,8 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     this.connectionProvider = options.connectionProvider;
     this.onAuthorizationRejected = options.onAuthorizationRejected;
     this.sourceLanguage = options.sourceLanguage ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
+    this.hintsFingerprint = asrRecognitionHintsFingerprint(options.recognitionHints);
     this.model = options.model ?? OPENAI_REALTIME_WHISPER_MODEL;
     this.pcmSampleRate = options.pcmSampleRate ?? DEFAULT_REALTIME_PCM_SAMPLE_RATE;
     this.protocolProfile = options.protocolProfile ?? 'openai-transcription-manual';
@@ -768,6 +804,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       this.credentialCacheKey,
       this.model,
       this.sourceLanguage,
+      this.hintsFingerprint,
       this.pcmSampleRate,
       this.protocolProfile,
     );
@@ -1152,6 +1189,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       this.sourceLanguage,
       this.pcmSampleRate,
       this.protocolProfile,
+      this.recognitionHints,
     ));
   }
 

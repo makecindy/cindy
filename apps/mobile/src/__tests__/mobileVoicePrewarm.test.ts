@@ -5,6 +5,11 @@ import { ApiError } from '@/api/client';
 const prewarmMobileRealtimeAudio = vi.fn();
 const createProvider = vi.fn();
 
+vi.mock('@/auth/secureStorage', () => ({
+  getSecureItem: vi.fn(async () => null),
+  setSecureItem: vi.fn(async () => undefined),
+  deleteSecureItem: vi.fn(async () => undefined),
+}));
 vi.mock('@/session/mobileRealtimeAudio', () => ({
   prewarmMobileRealtimeAudio: (...args: unknown[]) => prewarmMobileRealtimeAudio(...args),
 }));

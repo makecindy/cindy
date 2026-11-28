@@ -52,6 +52,7 @@ function pageCleanup(page: string, recording: boolean, starting: boolean) {
     voicePermissionRequestAbortRef: { current: { abort } },
     voicePermissionRequestInFlightRef: { current: starting },
     voiceStartupSeqRef: { current: 1 },
+    voiceRetryRunSeqRef: { current: 0 },
     voiceStartupInFlightRef: { current: starting },
     voiceStopInFlightRef: { current: false },
     voiceRecordingActiveRef: { current: recording },

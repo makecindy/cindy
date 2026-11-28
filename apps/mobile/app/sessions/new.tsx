@@ -394,9 +394,11 @@ import {
 } from '@/session/mobileVoiceCue';
 import {
   createMobileVoiceControllerSession,
+  replayMobileVoiceAudio,
   type MobileVoiceControllerSession,
 } from '@/session/mobileVoiceController';
 import { createMobileSpeakerGate, warmMobileSpeakerFilter } from '@/session/mobileSpeakerFilter';
+import { useMobileFailedVoiceRetry } from '@/session/useMobileFailedVoiceRetry';
 import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
 import {
   createMobileVoiceDictionaryLearningTracker,
@@ -1110,6 +1112,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [voiceStartPending, setVoiceStartPending] = useState(false);
   const [voiceState, setVoiceStateInternal] = useState<MobileVoiceState>('idle');
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const failedVoiceRetry = useMobileFailedVoiceRetry(selectedDeviceId ?? undefined);
+  const voiceRetryRunSeqRef = useRef(0);
   const {
     visible: voiceSpeakerFiltered,
     show: showVoiceSpeakerFiltered,
@@ -2009,6 +2013,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   }, []);
 
   const cancelVoiceForDeviceSwitch = useCallback(() => {
+    voiceRetryRunSeqRef.current += 1;
+    failedVoiceRetry.clear();
     voicePermissionRequestSeqRef.current += 1;
     voicePermissionRequestAbortRef.current?.abort();
     voicePermissionRequestAbortRef.current = null;
@@ -2024,7 +2030,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setVoiceError(null);
     discardPendingPrewarm();
     if (controller) void controller.cancel().catch(() => undefined);
-  }, [setVoiceState]);
+  }, [failedVoiceRetry, setVoiceState]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -3392,6 +3398,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       || voiceState === 'listening'
       || voiceIsProcessing
     ) return;
+    const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    failedVoiceRetry.clear();
     setVoiceError(null);
     clearVoiceSpeakerFiltered();
     let permissionRequestSeq: number | null = null;
@@ -3543,6 +3551,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
           setVoiceState('error');
           setVoiceError(message);
         },
+        onRetainedFailedAudio: (audio) => {
+          if (voiceRetryRunSeqRef.current === retryRunSeq) {
+            failedVoiceRetry.retain(audio);
+          }
+        },
         // No start cue on mobile: playing a cue via expo-audio during capture
         // re-activates the AVAudioSession and stalls the record tap (see
         // mobileVoiceCue.ts). Only the end cue, which plays after capture stops,
@@ -3605,11 +3618,114 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     }
-  }, [clearVoiceSpeakerFiltered, openLink, selectedDeviceId, setFirstMessageDraft, showVoiceSpeakerFiltered, voiceIsProcessing, voiceState]);
+  }, [clearVoiceSpeakerFiltered, failedVoiceRetry, openLink, selectedDeviceId, setFirstMessageDraft, showVoiceSpeakerFiltered, voiceIsProcessing, voiceState]);
 
   const finishVoiceRecording = useCallback(async (): Promise<string | null> => {
     return finishNewSessionVoiceRecording({ voiceStopInFlightRef, voiceControllerSessionRef, voiceRecordingActiveRef, voiceState, voiceStartupSeqRef, voiceStartupInFlightRef, firstMessageSelectionRef, firstMessageInputRef, setVoiceState, setVoiceError, requestAnimationFrame, formatRemoteError });
   }, [voiceState]);
+
+  const retryFailedVoiceRecording = useCallback(async () => {
+    if (
+      voicePermissionRequestInFlightRef.current
+      || voiceStartupInFlightRef.current
+      || voiceStopInFlightRef.current
+      || voiceRecordingActiveRef.current
+      || voiceState === 'listening'
+      || voiceIsProcessing
+    ) return;
+    if (!selectedDeviceId) return;
+    const retained = failedVoiceRetry.peek();
+    if (!retained) return;
+    const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    voiceStopInFlightRef.current = true;
+    setVoiceError(null);
+    clearVoiceSpeakerFiltered();
+    setVoiceState('submitting');
+    try {
+      const credential = createMobileCindyVoiceCredential(selectedDeviceId);
+      const voiceContext = new MobileCindyVoiceRunContext(
+        () => auth.getAccessToken(),
+        () => auth.refreshAccessToken(),
+        auth.apiFetch,
+        credential.settings?.language,
+        CINDY_MANAGED_REFINER_PROVIDER,
+      );
+      const [localVoiceInputHistory] = await Promise.all([
+        getMobileVoiceInputHistoryForHost(selectedDeviceId, credential.settings?.voiceInputHistory).catch(() => undefined),
+        hydrateMobileVoiceDictionary(selectedDeviceId).catch(() => undefined),
+      ]);
+      if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+      const currentDraft = firstMessageRef.current;
+      const initialSelection = { ...firstMessageSelectionRef.current };
+      const selectionBefore = takeRefinementContextTail(currentDraft.slice(0, initialSelection.start));
+      const selectionAfter = currentDraft.slice(initialSelection.end, initialSelection.end + 1200);
+      voiceStopGestureSelectionGuardRef.current = false;
+      voiceSelectionUserOwnedRef.current = false;
+      voicePendingSelectionEchoesRef.current = [];
+      await replayMobileVoiceAudio({
+        audio: retained,
+        credential,
+        requestedAt: Date.now(),
+        connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
+        refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
+          voiceContext.createRefinerTarget(providerId, options),
+        refineRequestBudget: () => voiceContext.refineRequestBudget(),
+        warmRefiner: (warmInput: { system: string; user: unknown; promptCacheKey: string }) =>
+          voiceContext.warmRefiner(warmInput),
+        initialDraft: currentDraft,
+        initialSelection,
+        refinementContext: {
+          selectionBefore: selectionBefore || undefined,
+          selectedText: currentDraft.slice(initialSelection.start, initialSelection.end).slice(0, 1200) || undefined,
+          selectionAfter: selectionAfter || undefined,
+        },
+        localVoiceInputHistory,
+        readCurrentDraft: () => firstMessageRef.current,
+        onDraftChanged: (text, selection, replacement) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          publishNewSessionVoiceDraft(voiceSelectionInput, text, selection, replacement);
+        },
+        onStateChanged: (next) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          setVoiceState(next);
+        },
+        onError: (message) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          setVoiceState('error');
+          setVoiceError(message);
+        },
+        recordHistory: (text) => recordMobileVoiceInputHistoryForHost(selectedDeviceId, text),
+        updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(selectedDeviceId, entryId, text),
+        onRefinementApplied: (refinementInput) => {
+          const uiLanguage = currentMobileVoiceUiLanguage();
+          voiceDictionaryLearningTrackerRef.current?.captureRefinedInsertion({
+            ...refinementInput,
+            uiLanguage,
+            sourceLanguage: resolveMobileVoiceRefinementSourceLanguage(
+              credential.settings?.language,
+              uiLanguage,
+            ),
+          });
+        },
+      });
+      if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+      failedVoiceRetry.clear();
+      setVoiceState('done');
+      setVoiceError(null);
+      requestAnimationFrame(() => {
+        firstMessageInputRef.current?.setNativeProps({
+          selection: firstMessageSelectionRef.current,
+        });
+      });
+    } catch (err) {
+      if (voiceRetryRunSeqRef.current === retryRunSeq) {
+        setVoiceState('error');
+        setVoiceError(formatRemoteError(err));
+      }
+    } finally {
+      voiceStopInFlightRef.current = false;
+    }
+  }, [auth, clearVoiceSpeakerFiltered, failedVoiceRetry, selectedDeviceId, setVoiceState, voiceIsProcessing, voiceState]);
 
   const openVoiceSettings = useCallback(() => {
     void Linking.openSettings().catch((err) => {
@@ -6093,6 +6209,19 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                     >
                       <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
                     </Pressable>
+                  ) : failedVoiceRetry.canRetry && voiceError && !voiceIsBusy && !voiceStartPending ? (
+                    <Pressable
+                      accessibilityLabel={t('composer.voice.retryRecognition')}
+                      accessibilityRole="button"
+                      hitSlop={10}
+                      onPress={() => { void retryFailedVoiceRecording(); }}
+                      style={({ pressed }) => [styles.voiceRetryButton, pressed && styles.pressed]}
+                      testID="newSession.voiceRetryButton"
+                    >
+                      <Text numberOfLines={1} style={styles.voiceRetryButtonText}>
+                        {t('composer.voice.retryRecognition')}
+                      </Text>
+                    </Pressable>
                   ) : null}
                 </View>
               ) : null}
@@ -7357,6 +7486,23 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: MOBILE_COMPOSER_CONTROL_SIZE,
     justifyContent: 'center',
     width: MOBILE_COMPOSER_CONTROL_SIZE,
+  },
+  voiceRetryButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 0,
+    justifyContent: 'center',
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  voiceRetryButtonText: {
+    color: colors.textPrimary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
   },
   voiceDraftOverlay: {
     ...StyleSheet.absoluteFill,

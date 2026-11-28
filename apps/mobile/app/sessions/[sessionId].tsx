@@ -656,9 +656,11 @@ import {
 } from '@/session/mobileVoiceCue';
 import {
   createMobileVoiceControllerSession,
+  replayMobileVoiceAudio,
   type MobileVoiceControllerSession,
 } from '@/session/mobileVoiceController';
 import { createMobileSpeakerGate, warmMobileSpeakerFilter } from '@/session/mobileSpeakerFilter';
+import { useMobileFailedVoiceRetry } from '@/session/useMobileFailedVoiceRetry';
 import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
 import {
   createMobileVoiceDictionaryLearningTracker,
@@ -1578,6 +1580,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       || voiceState === 'submitting' || voiceState === 'refining',
   });
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const failedVoiceRetry = useMobileFailedVoiceRetry(`${deviceId ?? ''}:${sessionId}`);
+  const voiceRetryRunSeqRef = useRef(0);
   const {
     visible: voiceSpeakerFiltered,
     show: showVoiceSpeakerFiltered,
@@ -5869,6 +5873,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ) return;
     // 开始语音输入和打字一样，是要发消息的信号。
     prewarmAgentOnTyping();
+    const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    failedVoiceRetry.clear();
     voiceStopAfterStartRef.current = false;
     setVoiceError(null);
     clearVoiceSpeakerFiltered();
@@ -6025,6 +6031,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             setVoiceState('error');
             setVoiceError(message);
           },
+          onRetainedFailedAudio: (audio) => {
+            if (voiceRetryRunSeqRef.current === retryRunSeq) {
+              failedVoiceRetry.retain(audio);
+            }
+          },
           // No start cue on mobile: playing a cue via expo-audio during capture
           // re-activates the AVAudioSession and stalls the record tap (see
           // mobileVoiceCue.ts). Only the end cue, which plays after capture
@@ -6105,7 +6116,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     }
-  }, [clearVoiceSpeakerFiltered, deviceId, openLink, prewarmAgentOnTyping, renderItems, showVoiceSpeakerFiltered, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
+  }, [clearVoiceSpeakerFiltered, deviceId, failedVoiceRetry, openLink, prewarmAgentOnTyping, renderItems, showVoiceSpeakerFiltered, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
     const controller = voiceControllerSessionRef.current;
@@ -6121,6 +6132,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return;
     }
 
+    voiceRetryRunSeqRef.current += 1;
+    failedVoiceRetry.clear();
     voiceStartupSeqRef.current += 1;
     voiceControllerSessionRef.current = null;
     voiceStartupInFlightRef.current = false;
@@ -6135,7 +6148,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     setVoiceError(null);
     discardPendingPrewarm();
     if (controller) void controller.cancel().catch(() => undefined);
-  }, [setVoiceState]);
+  }, [failedVoiceRetry, setVoiceState]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -6172,6 +6185,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       voicePermissionRequestAbortRef.current = null;
       voicePermissionRequestInFlightRef.current = false;
       voiceStartupSeqRef.current += 1;
+      voiceRetryRunSeqRef.current += 1;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;
       voiceRecordingActiveRef.current = false;
@@ -6245,6 +6259,109 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       voiceStopInFlightRef.current = false;
     }
   }, [attachments.length, t, voiceState]);
+
+  const retryFailedVoiceRecording = useCallback(async () => {
+    if (
+      voicePermissionRequestInFlightRef.current
+      || voiceStartupInFlightRef.current
+      || voiceStopInFlightRef.current
+      || voiceRecordingActiveRef.current
+      || voiceState === 'listening'
+      || voiceIsProcessing
+    ) return;
+    if (!deviceId) return;
+    const retained = failedVoiceRetry.peek();
+    if (!retained) return;
+    const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    voiceStopInFlightRef.current = true;
+    const caretPlacementSeq = ++voiceCaretPlacementSeqRef.current;
+    setVoiceCaretPlacementPending(true);
+    setVoiceError(null);
+    clearVoiceSpeakerFiltered();
+    setVoiceState('submitting');
+    try {
+      const credential = createMobileCindyVoiceCredential(deviceId);
+      const voiceContext = new MobileCindyVoiceRunContext(
+        () => auth.getAccessToken(),
+        () => auth.refreshAccessToken(),
+        auth.apiFetch,
+        credential.settings?.language,
+        CINDY_MANAGED_REFINER_PROVIDER,
+      );
+      const [localVoiceInputHistory] = await Promise.all([
+        getMobileVoiceInputHistoryForHost(deviceId, credential.settings?.voiceInputHistory).catch(() => undefined),
+        hydrateMobileVoiceDictionary(deviceId).catch(() => undefined),
+      ]);
+      if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+      const initialDraft = draftRef.current;
+      const initialDocument = composerDocumentRef.current;
+      const input = composerInputRef.current;
+      const initialSelection = input?.getSelection(initialDraft)
+        ?? { start: initialDraft.length, end: initialDraft.length };
+      const latestDraft = await replayMobileVoiceAudio({
+        audio: retained,
+        credential,
+        requestedAt: Date.now(),
+        connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
+        refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
+          voiceContext.createRefinerTarget(providerId, options),
+        refineRequestBudget: () => voiceContext.refineRequestBudget(),
+        warmRefiner: (warmInput: { system: string; user: unknown; promptCacheKey: string }) =>
+          voiceContext.warmRefiner(warmInput),
+        initialDraft,
+        initialSelection,
+        refinementContext: buildMobileVoiceSessionRefinementContext(initialDraft, renderItems, initialSelection),
+        localVoiceInputHistory,
+        readCurrentDraft: () => draftRef.current,
+        onDraftChanged: (text, selection, replacement) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          if (selection) input?.rememberSelection(text, selection);
+          writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });
+        },
+        onStateChanged: (next) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          setVoiceState(next);
+        },
+        onError: (message) => {
+          if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+          setVoiceState('error');
+          setVoiceError(message);
+        },
+        recordHistory: (text) => recordMobileVoiceInputHistoryForHost(deviceId, text),
+        updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(deviceId, entryId, text),
+        onRefinementApplied: (refinementInput) => {
+          const uiLanguage = currentMobileVoiceUiLanguage();
+          voiceDictionaryLearningTrackerRef.current?.captureRefinedInsertion({
+            ...refinementInput,
+            uiLanguage,
+            sourceLanguage: resolveMobileVoiceRefinementSourceLanguage(
+              credential.settings?.language,
+              uiLanguage,
+            ),
+          });
+        },
+      });
+      if (voiceRetryRunSeqRef.current !== retryRunSeq) return;
+      failedVoiceRetry.clear();
+      setVoiceState('done');
+      setVoiceError(null);
+      const insertionEnd = composerInputRef.current?.getSelection(latestDraft).end ?? latestDraft.length;
+      requestAnimationFrame(() => {
+        if (input && composerInputRef.current === input && draftRef.current === latestDraft) {
+          input.applyDocumentAndSetSelection(composerDocumentRef.current, insertionEnd);
+        }
+        if (voiceCaretPlacementSeqRef.current === caretPlacementSeq) setVoiceCaretPlacementPending(false);
+      });
+    } catch (err) {
+      if (voiceCaretPlacementSeqRef.current === caretPlacementSeq) setVoiceCaretPlacementPending(false);
+      if (voiceRetryRunSeqRef.current === retryRunSeq) {
+        setVoiceState('error');
+        setVoiceError(formatRemoteError(err));
+      }
+    } finally {
+      voiceStopInFlightRef.current = false;
+    }
+  }, [auth, clearVoiceSpeakerFiltered, deviceId, failedVoiceRetry, renderItems, setVoiceState, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const openVoiceSettings = useCallback(() => {
     void Linking.openSettings().catch((err) => {
@@ -12267,6 +12384,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 voiceCaretPlacementPending={voiceCaretPlacementPending}
                 voiceError={voiceError}
                 voiceSpeakerFiltered={voiceSpeakerFiltered}
+                canRetryVoice={failedVoiceRetry.canRetry}
+                retryVoiceRecording={retryFailedVoiceRecording}
                 composerVoiceHoldArmed={composerVoiceHoldArmed}
                 setComposerVoiceHoldArmed={setComposerVoiceHoldArmed}
                 modelSheetOpen={modelSheetOpen}
@@ -13194,6 +13313,8 @@ interface SessionComposerInputProps {
   voiceError: string | null;
   /** The voiceprint filter just muted someone else's speech. */
   voiceSpeakerFiltered: boolean;
+  canRetryVoice: boolean;
+  retryVoiceRecording: () => void;
   composerVoiceHoldArmed: boolean;
   setComposerVoiceHoldArmed: (value: boolean) => void;
   modelSheetOpen: boolean;
@@ -13227,7 +13348,7 @@ interface SessionComposerInputProps {
 function SessionComposerInput({
   promptRecommendation,
   onDismissPromptRecommendation,
-  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, voiceSpeakerFiltered, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
+  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, voiceSpeakerFiltered, canRetryVoice, retryVoiceRecording, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
   onPasteImages, onDragActiveChange, onInputTopLayout, composerPullThrough, renderControls,
 }: SessionComposerInputProps) {
@@ -13600,6 +13721,19 @@ function SessionComposerInput({
                       >
                         <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
                       </RouteActionButton>
+                    ) : canRetryVoice && voiceError && !voiceIsBusy && !voiceStartPending ? (
+                      <Pressable
+                        accessibilityLabel={t('composer.voice.retryRecognition')}
+                        accessibilityRole="button"
+                        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+                        onPress={retryVoiceRecording}
+                        style={({ pressed }) => [styles.voiceRetryButton, pressed && styles.voiceRetryButtonPressed]}
+                        testID="session.voiceRetryButton"
+                      >
+                        <Text numberOfLines={1} style={styles.voiceRetryButtonText}>
+                          {t('composer.voice.retryRecognition')}
+                        </Text>
+                      </Pressable>
                     ) : null}
                   </View>
                 ) : null}
@@ -14870,6 +15004,26 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: 28,
     justifyContent: 'center',
     width: 28,
+  },
+  voiceRetryButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 0,
+    justifyContent: 'center',
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  voiceRetryButtonPressed: {
+    opacity: 0.7,
+  },
+  voiceRetryButtonText: {
+    color: colors.textPrimary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
   },
   // 语音按钮撑满 VoicePillWidthFrame,宽度由外框的过渡驱动;裁剪保证展开初段
   // 红点 + 计时尚未装下时不会溢出盖住左邻控件。

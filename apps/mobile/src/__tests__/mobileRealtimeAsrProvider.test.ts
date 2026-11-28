@@ -1937,4 +1937,73 @@ describe('mobileRealtimeAsrProvider', () => {
     await runScenario('hello', 'hello world', 'hello world', 'hello hello world');
     await runScenario('hello', 'hello', 'hello', 'hello hello');
   });
+
+  it('forwards personal dictionary hotwords and recent context to Qwen, OpenAI, and Volcengine mobile providers', async () => {
+    const hints = {
+      hotwords: ['PostgreSQL', 'Cindy'],
+      recentContext: ['排查线上数据库'],
+    };
+
+    const qwenUpdate = buildSessionUpdateMessage(
+      'qwen3-asr-flash-realtime',
+      'zh-CN',
+      16000,
+      'qwen-asr-server-vad',
+      hints,
+    );
+    expect((qwenUpdate.session as { input_audio_transcription: Record<string, unknown> }).input_audio_transcription).toEqual({
+      language: 'zh',
+      corpus: { text: 'PostgreSQL, Cindy\n排查线上数据库' },
+    });
+
+    const openAiUpdate = buildSessionUpdateMessage(
+      'gpt-realtime-whisper',
+      'en',
+      24000,
+      'openai-transcription-manual',
+      hints,
+    );
+    expect(
+      (openAiUpdate.session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+    ).toEqual({
+      model: 'gpt-realtime-whisper',
+      language: 'en',
+      prompt: 'PostgreSQL, Cindy. 排查线上数据库',
+    });
+
+    FakeSocket.instances = [];
+    const provider = volcengineProvider({
+      credential: credential({
+        asr: {
+          provider: 'litellm-volcengine-sauc-asr',
+          model: 'volcengine-sauc-asr',
+          auth: 'api-key',
+          mode: 'provider-native-websocket',
+          pcmSampleRate: 16000,
+          protocolProfile: 'volcengine-sauc-duration',
+          resourceId: 'volc.seedasr.sauc.duration',
+        },
+      }),
+      recognitionHints: hints,
+      websocketFactory: FakeSocket,
+      flushTimeoutMs: 10,
+    });
+    const started = provider.start();
+    await waitForFakeSocketCount(1);
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    await started;
+    const initialBytes = new Uint8Array(socket.sent[0] as ArrayBuffer);
+    const payloadLength = new DataView(initialBytes.buffer, initialBytes.byteOffset, initialBytes.byteLength).getUint32(4, false);
+    const { ungzip } = await import('pako');
+    const decoded = JSON.parse(new TextDecoder().decode(ungzip(initialBytes.slice(8, 8 + payloadLength)))) as {
+      request?: { corpus?: { context?: string } };
+    };
+    expect(JSON.parse(decoded.request?.corpus?.context ?? '{}')).toEqual({
+      hotwords: [{ word: 'PostgreSQL' }, { word: 'Cindy' }],
+      context_type: 'dialog_ctx',
+      context_data: [{ text: '排查线上数据库' }],
+    });
+    await provider.stop();
+  });
 });

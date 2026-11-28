@@ -1,16 +1,23 @@
 import {
   BufferedAsrProvider,
   DictationRefiner,
+  FailedVoiceAudioAccumulator,
+  buildAsrRecognitionHints,
+  hasAsrRecognitionHints,
   hasPcmSound,
+  shouldRetainFailedVoiceAudio,
+  sliceRetainedAudioForReplay,
   VoiceInputController,
   VoiceTimelineLogger,
   type AsrProvider,
+  type AsrRecognitionHints,
   type AudioGate,
   type AudioTrace,
   type DictationRefinementContext,
   type EditableRange,
   type RefineRequestBudget,
   type RefinementResult,
+  type RetainedFailedVoiceAudio,
   type VoiceInputErrorCode,
   type VoiceInputDraftSource,
   type VoiceInputState,
@@ -104,6 +111,11 @@ type MobileVoiceControllerOptions = {
   onDraftChanged: (draft: string, selection?: MobileVoiceSelection, replacement?: MobileVoiceDraftInsertion) => void;
   onStateChanged?: (state: VoiceInputState) => void;
   onError?: (message: string) => void;
+  /**
+   * Called when a run with audible speech fails to produce a transcript due to
+   * network/ASR errors (never on silent takes, user cancel, or mic errors).
+   */
+  onRetainedFailedAudio?: (audio: RetainedFailedVoiceAudio) => void;
   onReadyForStartCue?: () => void;
   onReadyForEndCue?: () => void;
   recordHistory?: (text: string) => string | null | void | Promise<string | null | void>;
@@ -147,8 +159,13 @@ export function createMobileVoiceControllerSession(
   // abandoned mid-handshake tears the just-opened socket down instead of
   // leaking it. Without it, the default fallback provider silently drops every
   // chunk appended before its inner provider is chosen.
+  const recognitionHints = buildMobileAsrRecognitionHints(
+    options.credential.hostDeviceId,
+    options.localVoiceInputHistory,
+  );
   const asr = new BufferedAsrProvider(options.asr ?? createMobileAsrProvider(options.credential, {
     connectionProvider: options.connectionProvider,
+    recognitionHints,
   }));
   const refiner = options.refiner === undefined
     ? createMobileRefiner(options.credential, {
@@ -229,6 +246,26 @@ export function createMobileVoiceControllerSession(
   // (including background noise) keeps the normal path.
   let soundDetected = false;
   let audioLevels = new MobileVoiceAudioLevels();
+  const failedAudioAccumulator = new FailedVoiceAudioAccumulator({
+    sampleRate: options.credential.asr.pcmSampleRate ?? 16_000,
+  });
+  let failedAudioRetainedEmitted = false;
+  const emitRetainedFailedAudioIfEligible = (flags?: { captureFailed?: boolean; cancelled?: boolean }): void => {
+    if (failedAudioRetainedEmitted) return;
+    const eligible = shouldRetainFailedVoiceAudio({
+      hasSound: soundDetected && failedAudioAccumulator.hasSound,
+      transcriptLanded: Boolean(voiceInsertion),
+      cancelled: Boolean(flags?.cancelled || currentRunPhase() === 'cancelled'),
+      captureFailed: Boolean(flags?.captureFailed || audioFailureError),
+    });
+    const snapshot = eligible
+      ? failedAudioAccumulator.snapshot(controller.id || `mobile-voice-${Date.now()}`)
+      : null;
+    failedAudioAccumulator.clear();
+    if (!snapshot) return;
+    failedAudioRetainedEmitted = true;
+    options.onRetainedFailedAudio?.(snapshot);
+  };
   let runStartedAt = Date.now();
   const runTag = (): string => shortRunId(controller.id);
   const recordTimeline = createMobileVoiceTimelineRecorder({ provider: options.credential.asr.provider });
@@ -455,6 +492,7 @@ export function createMobileVoiceControllerSession(
       onSubmitted(text, segment) {
         const range = publishText(text, [segment.id], 'immediate');
         if (range) {
+          failedAudioAccumulator.clear();
           // A pause-time refinement may already be the submitted text; learning
           // still compares against the raw transcript it was based on.
           submittedTextForLearning = segment.basedOnText ?? text;
@@ -499,6 +537,7 @@ export function createMobileVoiceControllerSession(
           ? mobileVoiceTranscriptKeptError(cause)
           : cause;
         controllerError = new Error(localizedMessage);
+        emitRetainedFailedAudioIfEligible();
         options.onError?.(localizedMessage);
       },
     },
@@ -511,6 +550,8 @@ export function createMobileVoiceControllerSession(
       listeningPendingCaptureLive = false;
       soundDetected = false;
       audioLevels = new MobileVoiceAudioLevels();
+      failedAudioAccumulator.clear();
+      failedAudioRetainedEmitted = false;
       audioStopping = null;
       captureStopRequestedAt = undefined;
       runStartedAt = options.requestedAt ?? Date.now();
@@ -550,6 +591,7 @@ export function createMobileVoiceControllerSession(
             // later flush post-stop speech/noise.
             if (captureTornDown() && !(runPhase === 'stopping' && chunk.drained)) return false;
             audioLevels.append(chunk.pcm16, chunk.trace.sampleRate ?? options.credential.asr.pcmSampleRate ?? 16_000);
+            failedAudioAccumulator.append(chunk.pcm16);
             if (!soundDetected && hasPcmSound(chunk.pcm16)) soundDetected = true;
             if (runPhase === 'running') markCaptureLive(chunk.trace, chunk.timestampSource);
             controller.appendAudio(chunk.pcm16, chunk.trace);
@@ -596,6 +638,7 @@ export function createMobileVoiceControllerSession(
           stopAudio = null;
           await stop().catch(() => undefined);
         }
+        emitRetainedFailedAudioIfEligible();
         await controller.cancel().catch(() => undefined);
         logMobileVoiceFailure('start failed', 'asr', asrStartError);
         throw redactMobileVoiceError(asrStartError, options.credential);
@@ -650,6 +693,7 @@ export function createMobileVoiceControllerSession(
         // Audio already sent is not recalled. 'cancelled' also lets a start()
         // still awaiting the handshake return quietly.
         runPhase = 'cancelled';
+        failedAudioAccumulator.clear();
         cancelPendingDraftPublish();
         await controller.cancel().catch(() => undefined);
         notifyReadyForEndCue();
@@ -668,6 +712,7 @@ export function createMobileVoiceControllerSession(
         // instead of returning a "successful" empty draft the caller shows as
         // done, and don't submit against an already-cancelled controller.
         runPhase = 'failed';
+        emitRetainedFailedAudioIfEligible({ captureFailed: Boolean(audioFailureError) });
         await controller.cancel().catch(() => undefined);
         throw redactMobileVoiceError(
           asrStartError ?? audioFailureError ?? new Error('Realtime voice capture was interrupted during startup.'),
@@ -678,6 +723,7 @@ export function createMobileVoiceControllerSession(
       await controller.stop();
       if (state === 'error' || controllerError) {
         runPhase = 'failed';
+        emitRetainedFailedAudioIfEligible();
         throw controllerError ?? new Error(i18n.t('composer.voice.incomplete'));
       }
       if (state === 'submitting' || state === 'refining') await waitForDone(doneWaiters);
@@ -693,6 +739,7 @@ export function createMobileVoiceControllerSession(
       // opening later) is handled by BufferedAsrProvider when controller.cancel()
       // reaches its stop().
       runPhase = 'cancelled';
+      failedAudioAccumulator.clear();
       try {
         if (stopAudio) {
           const stop = stopAudio;
@@ -716,6 +763,7 @@ export function createMobileVoiceControllerSession(
     if (runPhase !== 'running' && runPhase !== 'stopping') return;
     runPhase = 'failed';
     audioFailureError = error;
+    failedAudioAccumulator.clear();
     logMobileVoiceFailure('capture failed', 'microphone', error);
     cancelPendingDraftPublish();
     state = 'error';
@@ -884,4 +932,70 @@ function waitForDone(waiters: Array<() => void>): Promise<void> {
   return new Promise((resolve) => {
     waiters.push(resolve);
   });
+}
+
+function buildMobileAsrRecognitionHints(
+  hostDeviceId: string,
+  localVoiceInputHistory?: MobileVoiceInputHistorySource,
+): AsrRecognitionHints | undefined {
+  const history = typeof localVoiceInputHistory === 'function'
+    ? localVoiceInputHistory()
+    : localVoiceInputHistory;
+  const hints = buildAsrRecognitionHints({
+    dictionaryEntries: readCachedMobileVoiceDictionary(hostDeviceId),
+    recentHistory: history,
+    recentHistoryOrder: 'newest-first',
+  });
+  return hasAsrRecognitionHints(hints) ? hints : undefined;
+}
+
+export type MobileVoiceReplayOptions = Omit<
+  MobileVoiceControllerOptions,
+  'startAudio' | 'audioGate' | 'onRetainedFailedAudio' | 'onReadyForStartCue' | 'onReadyForEndCue'
+> & {
+  audio: RetainedFailedVoiceAudio;
+};
+
+/**
+ * Replays locally retained PCM16 audio through ASR + refinement without opening
+ * the microphone. Resolves with the updated draft on success, or rejects with a
+ * redacted localized error if recognition fails again (leaving the caller free
+ * to keep the audio for another retry until TTL or a new take).
+ */
+export async function replayMobileVoiceAudio(
+  options: MobileVoiceReplayOptions,
+): Promise<string> {
+  const chunks = sliceRetainedAudioForReplay(options.audio);
+  const startAudio: StartRealtimeAudio = async ({ onChunk }) => {
+    const baseAt = Date.now();
+    for (const item of chunks) {
+      onChunk({
+        pcm16: item.pcm,
+        trace: {
+          capturedAt: baseAt,
+          convertedAt: baseAt,
+          chunkIndex: item.chunkIndex,
+          sampleRate: options.audio.sampleRate,
+          durationMs: item.durationMs,
+        },
+      });
+    }
+    return async () => undefined;
+  };
+  const session = createMobileVoiceControllerSession({
+    ...options,
+    startAudio,
+    onStateChanged: (next) => {
+      // Never flash 'listening' while replaying a cached recording.
+      options.onStateChanged?.(next === 'listening' ? 'submitting' : next);
+    },
+  });
+  options.onStateChanged?.('submitting');
+  try {
+    await session.start();
+    return await session.stop();
+  } catch (error) {
+    await session.cancel().catch(() => undefined);
+    throw error;
+  }
 }

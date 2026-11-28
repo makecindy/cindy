@@ -775,8 +775,7 @@ export function BotGroupComposer({
       <div className={cn(BOT_GROUP_COMPOSER_COLUMN, thread && 'max-w-none')}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
         <FieldVoiceInputNotice
-          error={voice.lastError}
-          speakerFiltered={Boolean(voice.speakerFiltered)}
+          {...voice.noticeProps}
           className="mb-2"
         />
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}

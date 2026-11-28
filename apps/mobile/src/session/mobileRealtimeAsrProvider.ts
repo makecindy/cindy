@@ -1,4 +1,13 @@
-import { StopSoundActivity, type AsrEvent, type AsrProvider, type AudioTrace } from '@cindy/voice-input-core';
+import {
+  StopSoundActivity,
+  buildOpenAiTranscriptionPrompt,
+  buildQwenAsrCorpusText,
+  buildVolcengineSaucCorpusContext,
+  type AsrEvent,
+  type AsrProvider,
+  type AsrRecognitionHints,
+  type AudioTrace,
+} from '@cindy/voice-input-core';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { redactMobileVoiceCredentialText } from '@/session/mobileVoiceCredentialRedaction';
 import { isMobileVoiceRateLimited } from '@/session/mobileVoiceInput';
@@ -13,6 +22,7 @@ type MobileRealtimeProtocolProfile =
 type MobileRealtimeAsrProviderOptions = {
   credential: StoredMobileVoiceCredential;
   sourceLanguage?: string;
+  recognitionHints?: AsrRecognitionHints;
   websocketFactory?: WebSocketFactory;
   connectTimeoutMs?: number;
   flushTimeoutMs?: number;
@@ -240,6 +250,7 @@ function mobileAsrCredentialChain(
 export class MobileRealtimeAsrProvider implements AsrProvider {
   private readonly credential: StoredMobileVoiceCredential;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
   private readonly websocketFactory: WebSocketFactory;
   private readonly connectTimeoutMs: number;
   private readonly flushTimeoutMs: number;
@@ -272,6 +283,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
   constructor(options: MobileRealtimeAsrProviderOptions) {
     this.credential = options.credential;
     this.sourceLanguage = options.sourceLanguage ?? this.credential.settings?.language ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
     this.websocketFactory = options.websocketFactory ?? (globalThis.WebSocket as unknown as WebSocketFactory);
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.flushTimeoutMs = options.flushTimeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
@@ -455,6 +467,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
       this.sourceLanguage,
       this.pcmSampleRate,
       this.protocolProfile,
+      this.recognitionHints,
     ));
   }
 
@@ -802,6 +815,7 @@ type VolcengineFlushReason = 'final_response' | 'transport_closed' | 'transport_
 export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   private readonly credential: StoredMobileVoiceCredential;
   private readonly sourceLanguage: string;
+  private readonly recognitionHints?: AsrRecognitionHints;
   private readonly websocketFactory: WebSocketFactory;
   private readonly connectTimeoutMs: number;
   private readonly flushTimeoutMs: number;
@@ -834,6 +848,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   constructor(options: MobileRealtimeAsrProviderOptions) {
     this.credential = options.credential;
     this.sourceLanguage = options.sourceLanguage ?? this.credential.settings?.language ?? 'auto';
+    this.recognitionHints = options.recognitionHints;
     this.websocketFactory = options.websocketFactory ?? (globalThis.WebSocket as unknown as WebSocketFactory);
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.flushTimeoutMs = options.flushTimeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS;
@@ -1041,6 +1056,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   private sendInitialRequest(): void {
     const socket = this.socket;
     if (!socket) return;
+    const corpusContext = buildVolcengineSaucCorpusContext(this.recognitionHints);
     sendBinary(socket, encodeVolcengineFullClientRequest({
       user: { uid: 'xdt-maker' },
       audio: {
@@ -1061,6 +1077,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
         ...(this.sourceLanguage && this.sourceLanguage.toLowerCase() !== 'auto'
           ? { language: this.sourceLanguage }
           : {}),
+        ...(corpusContext ? { corpus: { context: corpusContext } } : {}),
       },
     }));
   }
@@ -1306,9 +1323,11 @@ export function buildSessionUpdateMessage(
   sourceLanguage: string,
   pcmSampleRate: number,
   protocolProfile: MobileRealtimeProtocolProfile,
+  recognitionHints?: AsrRecognitionHints,
 ): Record<string, unknown> {
   const language = openAiLanguageCode(sourceLanguage);
   if (protocolProfile === 'qwen-asr-server-vad') {
+    const corpusText = buildQwenAsrCorpusText(recognitionHints);
     return {
       event_id: buildRealtimeEventId('session_update'),
       type: 'session.update',
@@ -1318,6 +1337,7 @@ export function buildSessionUpdateMessage(
         sample_rate: pcmSampleRate,
         input_audio_transcription: {
           ...(language ? { language } : {}),
+          ...(corpusText ? { corpus: { text: corpusText } } : {}),
         },
         turn_detection: {
           type: 'server_vad',
@@ -1327,6 +1347,7 @@ export function buildSessionUpdateMessage(
       },
     };
   }
+  const prompt = buildOpenAiTranscriptionPrompt(recognitionHints);
   return {
     type: 'session.update',
     session: {
@@ -1337,6 +1358,7 @@ export function buildSessionUpdateMessage(
           transcription: {
             model,
             ...(language ? { language } : {}),
+            ...(prompt ? { prompt } : {}),
           },
           turn_detection: null,
         },

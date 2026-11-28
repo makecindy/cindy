@@ -758,6 +758,107 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('includes Qwen corpus.text and OpenAI transcription.prompt in session.update only when recognitionHints exist', () => {
+    const hints = {
+      hotwords: ['PostgreSQL', 'Cindy'],
+      recentContext: ['检查数据库连接'],
+    };
+
+    const qwenWithHints = buildSessionUpdateMessage(
+      'qwen3-asr-flash-realtime',
+      'zh-CN',
+      16_000,
+      'qwen-asr-server-vad',
+      hints,
+    );
+    expect((qwenWithHints.session as { input_audio_transcription: Record<string, unknown> }).input_audio_transcription).toEqual({
+      language: 'zh',
+      corpus: { text: 'PostgreSQL, Cindy\n检查数据库连接' },
+    });
+
+    const qwenWithoutHints = buildSessionUpdateMessage(
+      'qwen3-asr-flash-realtime',
+      'zh-CN',
+      16_000,
+      'qwen-asr-server-vad',
+    );
+    expect((qwenWithoutHints.session as { input_audio_transcription: Record<string, unknown> }).input_audio_transcription)
+      .not.toHaveProperty('corpus');
+
+    const openAiWithHints = buildSessionUpdateMessage(
+      'gpt-realtime-whisper',
+      'en',
+      24_000,
+      'openai-transcription-manual',
+      hints,
+    );
+    expect(
+      (openAiWithHints.session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+    ).toEqual({
+      model: 'gpt-realtime-whisper',
+      language: 'en',
+      prompt: 'PostgreSQL, Cindy. 检查数据库连接',
+    });
+  });
+
+  it('sends an updated session.update on a prewarmed socket when recognitionHints change', async () => {
+    invalidatePrewarmedRealtimeAsrWebSocketSession();
+    const server = new WebSocketServer({ port: 0 });
+    const sessionUpdates: Array<Record<string, unknown>> = [];
+    let socket: WebSocket | undefined;
+    let provider: RealtimeAsrWebSocketProvider | undefined;
+    server.on('connection', (connected) => {
+      socket = connected;
+      connected.on('message', (data) => {
+        const parsed = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (parsed.type === 'session.update') {
+          sessionUpdates.push(parsed);
+          connected.send(JSON.stringify({ type: 'session.updated' }));
+        }
+      });
+    });
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      const realtimeUrl = `ws://127.0.0.1:${address.port}/v1/realtime`;
+
+      await prewarmRealtimeAsrWebSocketSession({
+        accessTokenProvider: async () => 'test-key',
+        realtimeUrl,
+        model: 'qwen3-asr-flash-realtime',
+        sourceLanguage: 'zh-CN',
+        pcmSampleRate: 16_000,
+        protocolProfile: 'qwen-asr-server-vad',
+        recognitionHints: { hotwords: ['OldTerm'], recentContext: [] },
+      });
+      expect(sessionUpdates).toHaveLength(1);
+
+      provider = new RealtimeAsrWebSocketProvider({
+        accessTokenProvider: async () => 'test-key',
+        realtimeUrl,
+        model: 'qwen3-asr-flash-realtime',
+        sourceLanguage: 'zh-CN',
+        pcmSampleRate: 16_000,
+        protocolProfile: 'qwen-asr-server-vad',
+        recognitionHints: { hotwords: ['NewTerm'], recentContext: [] },
+      });
+      provider.onEvent(() => {});
+      await provider.start();
+
+      expect(sessionUpdates).toHaveLength(2);
+      expect(
+        (sessionUpdates[1].session as { input_audio_transcription: { corpus?: { text: string } } })
+          .input_audio_transcription.corpus,
+      ).toEqual({ text: 'NewTerm' });
+    } finally {
+      invalidatePrewarmedRealtimeAsrWebSocketSession();
+      await provider?.stop();
+      socket?.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
 
 function makePcmChunk(): ArrayBuffer {
