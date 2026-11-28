@@ -424,7 +424,18 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          # Keep runner-only stores separate from jobs installing the full
+          # packaging matrix, or their cache hits still need those downloads.
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+
+      # Only this x64 unit-test job needs the runner's native dependencies.
+      # Set the checkout's config so later pnpm run commands keep the same
+      # selection instead of automatically reinstalling the packaging matrix.
+      - name: Select Windows x64 unit-test dependencies
+        shell: pwsh
+        run: pnpm.cmd config set --location=project --json supportedArchitectures '{\"os\":[\"win32\"],\"cpu\":[\"x64\"],\"libc\":[\"glibc\"]}'
 
       # setup-node restores the package store. pnpm keeps its lockfile verification
       # result separately and checks the lockfile and active policies on reuse.
