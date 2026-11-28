@@ -15243,6 +15243,7 @@
       },
       "credentialSwitchDeferred": "模型来源已切换，将在当前任务结束后生效。",
       "effortRuntimeDirty": "推理强度还在更新，稍等一下再发送",
+      "tooManyTaskReferences": "一条消息最多可包含 {{max}} 个任务引用，请移除多余的任务链接",
       "steerNotSent": "未发送，暂时无法插话，草稿已保留",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "credentialSwitchFailed": "模型来源切换失败，请重新选择。",

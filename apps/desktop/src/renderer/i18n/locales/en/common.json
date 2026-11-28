@@ -15298,6 +15298,7 @@
       },
       "credentialSwitchDeferred": "Model provider switched — it takes effect after the current task finishes.",
       "effortRuntimeDirty": "Reasoning effort is still updating. Wait a moment, then send again.",
+      "tooManyTaskReferences": "A message can include up to {{max}} task references. Remove the extra task links.",
       "steerNotSent": "Message not sent. Steer is temporarily unavailable; your draft has been kept.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "credentialSwitchFailed": "Model provider switch failed. Choose the model again.",

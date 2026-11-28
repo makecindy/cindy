@@ -15417,6 +15417,7 @@
       },
       "credentialSwitchDeferred": "Fornecedor de modelos alterado — a alteração entra em vigor quando a tarefa atual terminar.",
       "effortRuntimeDirty": "O esforço de raciocínio ainda está a ser atualizado. Aguarde um momento e volte a enviar.",
+      "tooManyTaskReferences": "Uma mensagem pode incluir até {{max}} referências a tarefas. Remova as ligações que excedem o limite.",
       "steerNotSent": "Mensagem não enviada. O encaminhamento está temporariamente indisponível; o rascunho foi mantido.",
       "credentialSwitchApplied": "A mudança de fornecedor de modelos já está em vigor.",
       "credentialSwitchFailed": "A mudança de fornecedor de modelos falhou. Escolha novamente o modelo.",
