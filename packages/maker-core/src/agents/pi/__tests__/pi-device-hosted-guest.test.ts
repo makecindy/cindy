@@ -235,6 +235,8 @@ describe('Pi device-hosted guest sessions', () => {
       expect(args).toEqual(expect.arrayContaining([
         '--no-approve', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files',
       ]));
+      // 受邀者的工具面由 guest gate 收紧，不得用 +codemode 扩回来。
+      expect(args).not.toContain('--tools');
       // 受邀者的说明文件扩展排在 bridge 之前；项目扩展不加载。
       expect(repeatedArgValues(args, '--extension')).toEqual([
         path.posix.join(extensionsDir, CINDY_GUEST_CONTEXT_EXTENSION_FILENAME),

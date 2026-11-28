@@ -263,6 +263,15 @@ export interface PiTranslateContext {
   rewriteToolResultText?: (text: string) => string;
   /** toolCallId → toolName for the in-flight Pi tool, so end events can gate rewrites. */
   toolNamesByCallId: Map<string, string>;
+  /**
+   * codemode 脚本内部发起的调用：Pi 对它们同样发 start/end，但它们不是 transcript
+   * 的一步——结果已折进父 codemode 的 details.calls，再单独落一条就成了并行假象。
+   */
+  nestedToolCallIds: Set<string>;
+  /** 正在执行的 codemode 调用 id。 */
+  runningCodemodeIds: Set<string>;
+  /** 当前助手消息声明的 toolCallId，用来区分顶层调用与 codemode 内部调用。 */
+  declaredToolCallIds: Set<string>;
   pendingWorkerDispatches: Set<string>;
   workerDispatched: boolean;
   /**
@@ -362,6 +371,9 @@ export function createPiTranslateContext(
     delegatedUsageIncompleteTaskIds: new Set(),
     subagentToolCalls: new Map(),
     toolNamesByCallId: new Map(),
+    nestedToolCallIds: new Set(),
+    runningCodemodeIds: new Set(),
+    declaredToolCallIds: new Set(),
     pendingWorkerDispatches: new Set(),
     workerDispatched: false,
     pendingAssistantError: null,
@@ -471,6 +483,9 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   ctx.compactTurnGeneration = null;
   ctx.subagentToolCalls.clear();
   ctx.toolNamesByCallId.clear();
+  ctx.nestedToolCallIds.clear();
+  ctx.runningCodemodeIds.clear();
+  ctx.declaredToolCallIds.clear();
   ctx.pendingWorkerDispatches.clear();
   ctx.workerDispatched = false;
 }
@@ -1042,6 +1057,10 @@ function translatePiEventInternal(
     case 'message_end': {
       const message = event.message as PiAssistantMessage | undefined;
       if (!message || message.role !== 'assistant') return;
+      ctx.declaredToolCallIds.clear();
+      for (const block of (message.content ?? []) as { type?: string; id?: string }[]) {
+        if (block?.type === 'toolCall' && typeof block.id === 'string' && block.id) ctx.declaredToolCallIds.add(block.id);
+      }
       if (message.cindyCacheRecoveryHandled === true) ctx.cacheRecoveryHandled = true;
       const pendingPriceVariant = ctx.pendingPriceVariants.shift();
       const reportedPriceVariant = priceVariantFromServiceTier(message.usage?.service_tier);
@@ -1165,7 +1184,12 @@ function translatePiEventInternal(
       const toolUseId = String(event.toolCallId ?? '');
       const toolName = String(event.toolName ?? 'tool');
       const toolArgs = (event.args as Record<string, unknown>) ?? {};
+      if (toolUseId && ctx.runningCodemodeIds.size > 0 && !ctx.declaredToolCallIds.has(toolUseId)) {
+        ctx.nestedToolCallIds.add(toolUseId);
+        return;
+      }
       if (toolUseId) ctx.toolNamesByCallId.set(toolUseId, toolName);
+      if (toolUseId && toolName === 'codemode') ctx.runningCodemodeIds.add(toolUseId);
       if (toolUseId && toolName === 'cindy_mcp_call_tool'
           && toolArgs.server === 'cindy_orca' && toolArgs.tool === 'send_to_worker') {
         ctx.pendingWorkerDispatches.add(toolUseId);
@@ -1229,6 +1253,8 @@ function translatePiEventInternal(
     }
 
     case 'tool_execution_update': {
+      const updateToolUseId = String(event.toolCallId ?? '');
+      if (updateToolUseId && ctx.nestedToolCallIds.has(updateToolUseId)) return;
       // 子代理卡的实时状态:`subagent` 工具用 pi 原生的 onUpdate 流上报 tokens /
       // 工具调用数 / 耗时(卡片的 tool_use / tool_result 由 start / end 分支承载)。
       // 其它工具的流式中间结果照旧忽略 —— 载荷不带标记时 parse 返回 null。
@@ -1264,6 +1290,11 @@ function translatePiEventInternal(
 
     case 'tool_execution_end': {
       const toolUseId = String(event.toolCallId ?? '');
+      if (toolUseId && ctx.nestedToolCallIds.delete(toolUseId)) {
+        ctx.toolNamesByCallId.delete(toolUseId);
+        return;
+      }
+      if (toolUseId) ctx.runningCodemodeIds.delete(toolUseId);
       const isError = event.isError === true;
       const rawText = toolResultFullText(event.result);
       const toolName = String(

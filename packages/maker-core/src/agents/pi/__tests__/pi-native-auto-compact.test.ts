@@ -184,22 +184,26 @@ describe("Pi native settings", () => {
       baseDelayMs: 2000,
       provider: { maxRetries: 0 },
     };
+    const defaultTools = ["+codemode"];
     expect(JSON.parse(buildPiSettingsJsonContent(128_000, 75))).toEqual({
+      defaultTools,
       transport: "sse",
       retry,
       compaction: { reserveTokens: 32_000 },
     });
     expect(JSON.parse(buildPiSettingsJsonContent(200_000, 75))).toEqual({
+      defaultTools,
       transport: "sse",
       retry,
       compaction: { reserveTokens: 50_000 },
     });
     expect(JSON.parse(buildPiSettingsJsonContent(100_000, 75))).toEqual({
+      defaultTools,
       transport: "sse",
       retry,
       compaction: { reserveTokens: 25_000 },
     });
-    expect(JSON.parse(buildPiSettingsJsonContent(128_000))).toEqual({ transport: "sse", retry });
+    expect(JSON.parse(buildPiSettingsJsonContent(128_000))).toEqual({ defaultTools, transport: "sse", retry });
   });
 });
 

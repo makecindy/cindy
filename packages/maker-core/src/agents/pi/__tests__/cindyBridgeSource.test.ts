@@ -185,6 +185,112 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   expect(gate.blocks('subagent')).toBe(true);
 });
 
+it('asks once per concurrent tool call and never lets an unanswered call through', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const handlerStart = source.indexOf("  pi.on('tool_call', async");
+  const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
+  const decisions: unknown[] = [];
+  const compiled = ts.transpileModule(
+    source.slice(handlerStart, handlerEnd) + '\nresult = true;',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const sandbox: Record<string, unknown> = {
+    pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
+    result: undefined,
+    guestToolGate: null,
+    JSON, Set, Promise, path,
+    process: { env: {} },
+    PERMISSION_TITLE: 'cindy:permission',
+    TURN_CHANGE_CAPTURE_TITLE: 'cindy:turn-change-capture',
+    PERMISSION_ALLOW: 'allow',
+    SUBAGENT_RUN_DIR_ENV: 'CINDY_PI_SUBAGENT_RUN_DIR',
+    CINDY_HOSTED: null,
+    CINDY_MCP_LIST_TOOLS: 'cindy_mcp_list_tools',
+    CINDY_MCP_CALL_TOOL: 'cindy_mcp_call_tool',
+    CINDY_DIRECT_BOT_TOOLS: new Set<string>(),
+    CINDY_LIST_MACHINES_TOOL: 'list_machines',
+    CINDY_ASYNC_QUESTION_TOOL: 'ask_user_question_async',
+    CINDY_MANAGE_QUESTIONS_TOOL: 'manage_user_questions',
+    CINDY_INPUT_HANDOFF_TOOL: 'request_input_handoff',
+    CINDY_BOT_MEMORY_TOOL: 'cindy_memory',
+    toolsDisabledForTurn: () => false,
+    currentPermissionState: () => ({ reviewOnly: false, mode: 'default', writableRoots: [] }),
+    normalizeReviewReadInput: () => true,
+    READONLY_BUILTINS: new Set(['read', 'grep', 'find', 'ls']),
+    FILE_WRITE_BUILTINS: new Set(['edit', 'write']),
+    bashInputReadEvidence: () => ({ targets: ['/home/u/.ssh/id_rsa'], unresolved: false }),
+    powershellInputReadEvidence: () => ({ targets: [], unresolved: false }),
+    collectReadonlyCredentialEvidence: (name: string) => (name === 'read'
+      ? { paths: ['/home/u/.ssh/id_rsa'], touchesCredential: true }
+      : { paths: [], touchesCredential: false }),
+    collectResolvedCredentialPaths: (paths: string[]) => paths,
+    commandReadsProcessEnviron: () => false,
+    touchesCredentialPath: (paths: string[]) => paths.some((entry) => entry.endsWith('id_rsa')),
+    resolvedCredentialEvidenceForHost: () => ['/home/u/.ssh/id_rsa'],
+    isInsideRoot: () => false,
+    resolveFileWriteTargetPath: () => null,
+    isCindyShellTool: (name: unknown) => name === 'bash' || name === 'powershell',
+    resolveWritableRootsForHost: () => [],
+    mcpGateway: { resolveHookedCall: () => undefined },
+    permissionDenialReason: (decision: unknown) => { decisions.push(decision); return 'blocked by Cindy'; },
+  };
+  runInNewContext(compiled, sandbox);
+  const toolCall = handlers.get('tool_call')!;
+  const makeCtx = (answer: string) => {
+    const asks: unknown[] = [];
+    return {
+      asks,
+      ctx: {
+        isIdle: () => true,
+        ui: {
+          confirm: async () => true,
+          input: async (_title: string, payload: string) => {
+            asks.push(JSON.parse(payload));
+            // 让两次并发询问真的重叠：谁把它串行化成单槽，这里就只会收到一次。
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return typeof answer === 'function' ? (answer as any)(payload) : answer;
+          },
+        },
+      },
+    };
+  };
+
+  // ① 并发两次凭据读取：各自询问一次，互不覆盖。
+  const first = makeCtx('allow');
+  const second = makeCtx('allow');
+  const events = [
+    { toolName: 'bash', toolCallId: 'call-a', input: { command: 'cat ~/.ssh/id_rsa' } },
+    { toolName: 'bash', toolCallId: 'call-b', input: { command: 'cat ~/.ssh/id_rsa' } },
+  ];
+  const results = await Promise.all([
+    toolCall(events[0], first.ctx),
+    toolCall(events[1], second.ctx),
+  ]);
+  expect(first.asks).toHaveLength(1);
+  expect(second.asks).toHaveLength(1);
+  expect(results).toEqual([undefined, undefined]);
+  expect(decisions).toEqual([]);
+
+  // ② 一个批准一个拒绝：拒绝的那次被拦下，批准的那次照常放行。
+  const allowed = makeCtx('allow');
+  const denied = makeCtx('user-deny');
+  const mixed = await Promise.all([
+    toolCall({ toolName: 'bash', toolCallId: 'call-c', input: { command: 'cat ~/.ssh/id_rsa' } }, allowed.ctx),
+    toolCall({ toolName: 'bash', toolCallId: 'call-d', input: { command: 'cat ~/.ssh/id_rsa' } }, denied.ctx),
+  ]);
+  expect(mixed[0]).toBeUndefined();
+  expect(mixed[1]).toEqual({ block: true, reason: 'blocked by Cindy' });
+  expect(decisions).toEqual(['user-deny']);
+
+  // ③ 只读工具读到凭据也不能绕过审批。
+  const readonly = makeCtx('auto-review-deny');
+  const blocked = await toolCall({ toolName: 'read', toolCallId: 'call-e', input: { path: '/home/u/.ssh/id_rsa' } }, readonly.ctx);
+  expect(readonly.asks).toHaveLength(1);
+  expect(blocked).toEqual({ block: true, reason: 'blocked by Cindy' });
+  expect(decisions).toEqual(['user-deny', 'auto-review-deny']);
+});
+
 const canLinkFile = (() => {
   const root = mkdtempSync(path.join(tmpdir(), 'cindy-bridge-file-link-probe-'));
   try {
@@ -484,6 +590,23 @@ function loadReviewSearchHelpers(
   return context as ReviewSearchHelpers;
 }
 
+function loadRejectedToolCallFilter(): (
+  payload: any,
+  rejectedIds: Set<string>,
+) => any {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function dropRejectedToolCalls(');
+  const end = source.indexOf("pi.on('before_provider_request'", start);
+  if (start < 0 || end <= start) {
+    throw new Error('rejected tool call filter was not found in the generated bridge');
+  }
+  return new Function(
+    `${ts.transpileModule(source.slice(start, end), {
+      compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
+    }).outputText}; return dropRejectedToolCalls;`,
+  )() as (payload: any, rejectedIds: Set<string>) => any;
+}
+
 // #9705, unit: execute the generated settings snapshot and bash factory call.
 // Existing timeout/environment tests never supplied native shell settings.
 it.each([
@@ -666,7 +789,7 @@ describe('cindy-bridge extension source', () => {
   it('executes the registered native provider request hook and preserves explicit ceilings', async () => {
     const helperStart = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function reserveLargeCompletionHeadroom(');
     const helperEnd = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function boundedChatToolIds(', helperStart);
-    const hookStart = CINDY_BRIDGE_EXTENSION_SOURCE.lastIndexOf("pi.on('before_provider_request'");
+    const hookStart = CINDY_BRIDGE_EXTENSION_SOURCE.lastIndexOf('const REJECTED_TOOL_CALL_LIMIT');
     const hookEnd = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('  const mcpGateway', hookStart);
     const hook = CINDY_BRIDGE_EXTENSION_SOURCE.slice(hookStart, hookEnd);
     const compiled = ts.transpileModule(
@@ -1663,6 +1786,48 @@ describe('cindy-bridge extension source', () => {
       command: 'ls',
       timeout: 12,
     });
+  });
+
+  it('drops only the tool calls Pi rejected locally from the outgoing payload (pi#12150)', () => {
+    const filter = loadRejectedToolCallFilter();
+    const rejected = new Set(['call_bad']);
+    const anthropic = {
+      model: 'x',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'go' }] },
+        { role: 'assistant', content: [
+          { type: 'text', text: 'trying' },
+          { type: 'tool_use', id: 'call_bad', name: 'codemode', input: { '': '' } },
+        ] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_bad', content: 'invalid' }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'call_ok', name: 'bash', input: { command: 'ls' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_ok', content: 'a.txt' }] },
+      ],
+    };
+    const out = filter(anthropic, rejected);
+    expect(out.messages.map((message: any) => message.role)).toEqual([
+      'user', 'assistant', 'assistant', 'user',
+    ]);
+    // rejected 调用及其配对结果都被剪掉；另一对原样保留。
+    expect(JSON.stringify(out)).not.toContain('call_bad');
+    expect(JSON.stringify(out)).toContain('call_ok');
+    // 不改写输入。
+    expect(JSON.stringify(anthropic)).toContain('call_bad');
+
+    // OpenAI chat：assistant.tool_calls 与 role=tool 结果同时清理。
+    const chat = {
+      messages: [
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_bad', type: 'function' }] },
+        { role: 'tool', tool_call_id: 'call_bad', content: 'invalid' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_ok', type: 'function' }] },
+      ],
+    };
+    expect(filter(chat, rejected).messages).toEqual([
+      { role: 'assistant', content: null, tool_calls: [{ id: 'call_ok', type: 'function' }] },
+    ]);
+
+    // 未拒绝过任何调用时不触碰 payload（同一对象返回）。
+    expect(filter(anthropic, new Set())).toBe(anthropic);
   });
 
   it('registers the native PowerShell overlay on Windows when Pi exports its factory', () => {
