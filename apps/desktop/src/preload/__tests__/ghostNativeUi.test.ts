@@ -17,7 +17,10 @@ const boundary = vi.hoisted(() => ({
   invoke: vi.fn(),
 }));
 vi.mock('electron', () => ({
-  contextBridge: { exposeInMainWorld: (_name: string, sdk: Sdk) => { boundary.sdk = sdk; } },
+  contextBridge: {
+    exposeInMainWorld: (_name: string, sdk: Sdk) => { boundary.sdk = sdk; },
+    executeInMainWorld: <T, A extends unknown[]>({ func, args }: { func: (...args: A) => T; args: A }) => func(...args),
+  },
   ipcRenderer: { invoke: boundary.invoke, on: (_name: string, receive: typeof boundary.receive) => { boundary.receive = receive; } },
 }));
 import '../ghostPreload';
