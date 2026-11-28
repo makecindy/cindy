@@ -13937,7 +13937,8 @@
             "reasonAgentLogin": "须先以 {{agentKind}} 凭证登录",
             "message": "⚠️ 今 Telegram 言谈用供方「{{provider}}」（{{model}}），然{{reason}}。",
             "attachedHint": "请于桌面端 规制 → 模型供方 修复认证，然后径续遣讯。",
-            "detachedHint": "改「新言谈配置」后径续遣讯即可；若当前差事曾另择模型，请遣 `/model` 重择之。"
+            "detachedHint": "改「新言谈配置」后径续遣讯即可；若当前差事曾另择模型，请遣 `/model` 重择之。",
+            "modelUnavailable": "⚠️ 供方「{{provider}}」无此任务所用模型（{{model}}）。发送 /model 为此任务另选模型，或发送 /new，依频道预设另起上下文。"
           }
         },
         "error": {

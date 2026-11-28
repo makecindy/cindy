@@ -53,8 +53,11 @@ export const ui = {
     runtimeError: (errMsg: string) => tg('agent.runtimeError', { error: errMsg.slice(0, 200) }),
     sendInternalError: (errMsg: string) => tg('agent.sendInternalError', { error: errMsg }),
     get apiKeyMissing() { return tg('agent.apiKeyMissing'); },
-    authMissing: ({ providerLabel, providerId, missing, agentKind, model, attached }) => {
+    authMissing: ({ providerLabel, providerId, missing, agentKind, model, attached, providerModelUnavailable, canStartNewContext }) => {
       const provider = providerLabel ?? providerId ?? tg('agent.authMissing.currentProvider');
+      if (agentKind === 'pi' && providerModelUnavailable && canStartNewContext) {
+        return tg('agent.authMissing.modelUnavailable', { provider, model });
+      }
       const reason =
         missing === 'gateway-key'
           ? tg('agent.authMissing.reasonGatewayKey')

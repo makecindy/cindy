@@ -13995,7 +13995,8 @@
             "reasonAgentLogin": "you need to sign in with {{agentKind}} credentials first",
             "message": "⚠️ This Telegram chat uses the provider “{{provider}}” ({{model}}), but {{reason}}.",
             "attachedHint": "Fix the authentication in desktop under Settings → Providers, then just keep sending messages.",
-            "detachedHint": "Update “New Conversation Configuration”, then just keep sending messages. If this session has its own model selected, send `/model` to pick again."
+            "detachedHint": "Update “New Conversation Configuration”, then just keep sending messages. If this session has its own model selected, send `/model` to pick again.",
+            "modelUnavailable": "⚠️ The provider “{{provider}}” doesn’t offer this task’s model ({{model}}). Send /model to choose a model for this task, or send /new to start a new context with the channel defaults."
           }
         },
         "error": {

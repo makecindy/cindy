@@ -440,6 +440,9 @@ export interface ImUiTextPack {
       providerId: string | null;
       providerLabel: string | null;
       missing: string | null;
+      providerModelUnavailable?: boolean;
+      /** Sender can use /new on this channel-owned task. */
+      canStartNewContext?: boolean;
       /** 接管 desktop session 时为 true；此时 /new 不会重置被接管的会话。 */
       attached?: boolean;
     }) => string;

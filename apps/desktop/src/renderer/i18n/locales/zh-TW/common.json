@@ -13937,7 +13937,8 @@
             "reasonAgentLogin": "需要先登入 {{agentKind}} 憑證",
             "message": "⚠️ 目前 Telegram 對話使用供應商「{{provider}}」（{{model}}），{{reason}}。",
             "attachedHint": "請在 desktop 的 設定 → 模型供應商 中修復驗證後，直接繼續傳送訊息。",
-            "detachedHint": "修改「新對話配置」後直接繼續傳送訊息即可；若目前任務單獨選過模型，請傳送 `/model` 重新選擇。"
+            "detachedHint": "修改「新對話配置」後直接繼續傳送訊息即可；若目前任務單獨選過模型，請傳送 `/model` 重新選擇。",
+            "modelUnavailable": "⚠️ 供應商「{{provider}}」不提供目前任務使用的模型（{{model}}）。傳送 /model 為目前任務選擇模型，或傳送 /new，依頻道預設設定開始新的上下文。"
           }
         },
         "error": {

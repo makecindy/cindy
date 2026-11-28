@@ -13995,7 +13995,8 @@
             "reasonAgentLogin": "du musst dich zuerst mit den {{agentKind}}-Anmeldedaten anmelden",
             "message": "⚠️ Dieser Telegram-Chat nutzt den Anbieter „{{provider}}“ ({{model}}), aber {{reason}}.",
             "attachedHint": "Behebe die Authentifizierung am Desktop unter Einstellungen → Anbieter und sende dann einfach weiter Nachrichten.",
-            "detachedHint": "Passe die „Konfiguration für neue Unterhaltungen“ an und sende dann einfach weiter Nachrichten. Wenn für diese Sitzung ein eigenes Modell gewählt wurde, sende `/model`, um neu zu wählen."
+            "detachedHint": "Passe die „Konfiguration für neue Unterhaltungen“ an und sende dann einfach weiter Nachrichten. Wenn für diese Sitzung ein eigenes Modell gewählt wurde, sende `/model`, um neu zu wählen.",
+            "modelUnavailable": "⚠️ Der Anbieter „{{provider}}“ bietet das Modell dieser Aufgabe ({{model}}) nicht an. Sende /model, um ein Modell für diese Aufgabe auszuwählen, oder /new, um mit den Standardeinstellungen des Kanals einen neuen Kontext zu starten."
           }
         },
         "error": {
