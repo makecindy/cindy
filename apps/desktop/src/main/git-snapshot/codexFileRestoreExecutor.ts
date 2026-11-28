@@ -46,6 +46,7 @@ export interface CodexFileRestoreExecutionResult {
 }
 
 interface CodexFileRestoreExecutorDeps {
+  assertWriteAllowed?: () => void;
   gitExec: (args: readonly string[], cwd?: string) => Promise<GitExecResult>;
   createRollbackId: () => string;
   createShadowSavepoint: (
@@ -60,6 +61,7 @@ interface CodexFileRestoreExecutorDeps {
 }
 
 export interface CodexFileRestoreLockedRollbackHooks<T> {
+  assertWriteAllowed?: () => void;
   commitThreadRollback: (execution: CodexFileRestoreExecutionResult | null) => Promise<T>;
   onCompensationError?: (error: unknown, execution: CodexFileRestoreExecutionResult) => void;
 }
@@ -99,13 +101,16 @@ export async function executeCodexFileRestorePlanWithThreadRollback<T>(
   }
 
   return enqueueGitRepoWrite(plan.repoRoot, async () => {
-    const fileRestore = await executeCodexFileRestorePlanLocked(plan, deps);
+    hooks.assertWriteAllowed?.();
+    const guardedDeps = { ...deps, assertWriteAllowed: hooks.assertWriteAllowed };
+    const fileRestore = await executeCodexFileRestorePlanLocked(plan, guardedDeps);
     try {
       return { fileRestore, threadRollback: await hooks.commitThreadRollback(fileRestore) };
     } catch (err) {
+      hooks.assertWriteAllowed?.();
       if (fileRestore.restoredFiles.length > 0 || fileRestore.deletedFiles.length > 0) {
         try {
-          await compensateCodexFileRestoreExecutionLocked(fileRestore, sessionId, deps);
+          await compensateCodexFileRestoreExecutionLocked(fileRestore, sessionId, guardedDeps);
         } catch (compErr) {
           hooks.onCompensationError?.(compErr, fileRestore);
         }
@@ -136,6 +141,7 @@ async function executeCodexFileRestorePlanLocked(
 
   await ensureNoActiveGitOperation(plan.repoRoot, d);
 
+  d.assertWriteAllowed?.();
   let preRollback: ShadowSavepointResult;
   try {
     // Full worktree snapshot first: every byte the restore may overwrite is
@@ -201,6 +207,7 @@ async function executeCodexFileRestorePlanLocked(
   try {
     applied = await makeWorktreeMatchCommit(plan.repoRoot, plan.baselineCommit, affectedPaths, d);
   } catch (err) {
+    d.assertWriteAllowed?.();
     // Best-effort self-heal: put the affected files back to the pre-rollback
     // state so a partial apply never leaves a half-restored worktree.
     await makeWorktreeMatchCommit(plan.repoRoot, preRollbackCommit, affectedPaths, d).catch(
@@ -221,6 +228,7 @@ async function executeCodexFileRestorePlanLocked(
 
   // The marker is bookkeeping only; its failure must not undo a successful
   // restore. Compensation is keyed on restored/deleted files, not on it.
+  d.assertWriteAllowed?.();
   const rollbackCommit = await d
     .createShadowMarker(plan.repoRoot, {
       sessionId: plan.sessionId,
@@ -267,6 +275,7 @@ async function compensateCodexFileRestoreExecutionLocked(
   } catch (err) {
     throw toRewindGitFailed(err);
   }
+  d.assertWriteAllowed?.();
   await d
     .createShadowMarker(execution.repoRoot, {
       sessionId,
@@ -332,6 +341,7 @@ async function makeWorktreeMatchCommit(
   deps: CodexFileRestoreExecutorDeps,
 ): Promise<WorktreeApplyResult> {
   const pathspecs = paths.map((p) => `:(literal)${p}`);
+  deps.assertWriteAllowed?.();
   const worktreeTree = await deps.writeWorktreeTree(repoRoot, paths);
 
   const toRestore: string[] = [];
@@ -419,11 +429,12 @@ async function makeWorktreeMatchCommit(
     // recursive: the path may be a directory in the worktree (e.g. a file →
     // directory conversion the target tree does not have). ENOTDIR means a
     // parent segment is a file again, so the old nested path is already gone.
+    deps.assertWriteAllowed?.();
     await fs.rm(realAbs, { recursive: true, force: true }).catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException).code === 'ENOTDIR') return;
       throw err;
     });
-    await pruneEmptyParents(repoReal, realAbs);
+    await pruneEmptyParents(repoReal, realAbs, deps.assertWriteAllowed);
   }
 
   if (toRestore.length > 0) {
@@ -432,12 +443,14 @@ async function makeWorktreeMatchCommit(
     // collisions first — contents are recoverable from the pre-rollback
     // savepoint.
     for (const { realAbs } of collisionsToClear) {
+      deps.assertWriteAllowed?.();
       await fs.rm(realAbs, { recursive: true, force: true });
     }
     await withPathspecFile(
       toRestore.map((p) => `:(literal)${p}`),
-      (pathspecFile) =>
-        deps.gitExec(
+      (pathspecFile) => {
+        deps.assertWriteAllowed?.();
+        return deps.gitExec(
           [
             'restore',
             `--source=${targetCommit}`,
@@ -447,7 +460,8 @@ async function makeWorktreeMatchCommit(
             '--pathspec-file-nul',
           ],
           repoRoot,
-        ),
+        );
+      },
     );
   }
 
@@ -536,9 +550,10 @@ async function resolveRealPathInsideRepo(
 }
 
 /** Removes now-empty real parent directories left behind by file deletion. */
-async function pruneEmptyParents(repoReal: string, realFilePath: string): Promise<void> {
+async function pruneEmptyParents(repoReal: string, realFilePath: string, assertWriteAllowed?: () => void): Promise<void> {
   let dir = path.dirname(realFilePath);
   while (dir !== repoReal && dir.startsWith(repoReal + path.sep)) {
+    assertWriteAllowed?.();
     try {
       await fs.rmdir(dir);
     } catch {

@@ -413,6 +413,22 @@ describe('executeCodexFileRestorePlan', () => {
     expect(await readFile('grow.txt')).toBe(bigContent);
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
+  // PR 12344, real Git: the previous compensation case never revoked Host ownership.
+  // A Desktop edit between file restore and thread failure must survive.
+  it('preserves Desktop edits when the profile changes during rollback', async () => {
+    const { plan } = await seedTurnFixture();
+    let held = false;
+    await expect(executeCodexFileRestorePlanWithThreadRollback(plan, SESSION, {
+      assertWriteAllowed() { if (held) throw new Error('profile held'); },
+      async commitThreadRollback() {
+        held = true;
+        await writeFile('app.txt', 'Desktop edit');
+        throw new Error('profile held');
+      },
+    })).rejects.toThrow('profile held');
+    expect(await readFile('app.txt')).toBe('Desktop edit');
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
   it('compensates files back to the pre-restore state when thread rollback fails', async () => {
     const { plan } = await seedTurnFixture();
     const headBefore = await head();

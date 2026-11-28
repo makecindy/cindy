@@ -1424,6 +1424,14 @@ export function createTurnExecutor(deps) {
     },
     behindDurableWrites,
     enqueueDurableWrite(id, label, fn) { return historyFor(id).enqueueDurableWrite(label, fn); },
+    async drainSessionPersistence(id) {
+      const history = historyFor(id);
+      await history.drain();
+      if (history.hasFailedWrites()) {
+        throwIpcError('PRECONDITION_FAILED', 'Pending failed history writes must succeed before rewind');
+      }
+    },
+    setLastAssistantTranscriptUuid(id, uuid) { historyFor(id).setLastAssistantTranscriptUuid(id, uuid); },
     /** A task's event persistence, for the auto-resume runtime (auto-resume.ts) and the reply anchor. */
     autoResumeHistory: id => historyFor(id),
     // The coordinator's hooks for a user turn stored but not dispatched, as register.ts passes them:

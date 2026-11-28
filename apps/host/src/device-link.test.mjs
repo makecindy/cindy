@@ -225,6 +225,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   });
   // The real lifecycle, with createWorktree recording what the channel asks of it.
   const worktreeCreates = [];
+  const rewindCalls = [];
   const worktreeLifecycle = { ...createHostWorktreeLifecycle(profile), createWorktree: async (request, options) => {
     worktreeCreates.push({ request, options });
     return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
@@ -282,6 +283,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       throw new Error('Not part of this transport test');
     },
     closeRuntimeSession: async id => { closedSessions.push(id); },
+    rewind: {
+      preview: async (sessionId, clientId) => { rewindCalls.push(['preview', sessionId, clientId]); return { canRewind: true, filesChanged: [] }; },
+      commit: async (sessionId, clientId, opts) => { rewindCalls.push(['commit', sessionId, clientId, opts]); return { id: sessionId, status: 'active' }; },
+    },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
     profileHold: () => held,
     isSessionClaimed: async sessionId => {
@@ -403,6 +408,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(badField.ok, false);
   const badDiscard = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', discardWorktreeChanges: true }] });
   assert.equal(badDiscard.ok, false);
+  const rewindPreview = await clients[0].invoke('host', { channel: 'maker:rewind:preview', args: ['task', 'u1'] });
+  assert.deepEqual(rewindPreview, { ok: true, result: { canRewind: true, filesChanged: [] } });
+  const rewindCommit = await clients[0].invoke('host', { channel: 'maker:rewind:commit', args: ['task', 'u1', { requireLatestUser: true }] });
+  assert.deepEqual(rewindCommit, { ok: true, result: { id: 'task', status: 'active' } });
+  assert.deepEqual(rewindCalls, [['preview', 'task', 'u1'], ['commit', 'task', 'u1', { requireLatestUser: true }]]);
   const genTitle = await clients[0].invoke('host', { channel: 'maker:generate-title', args: [{ message: 'hello', agentKind: 'claude-code', sessionId: 'task' }] });
   assert.deepEqual(genTitle, { ok: true, result: { title: 'Gen title' } });
   const regenTitle = await clients[0].invoke('host', { channel: 'maker:regenerate-title', args: [{ sessionId: 'task' }] });

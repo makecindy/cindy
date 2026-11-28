@@ -755,6 +755,59 @@ export function createInputQueue(deps) {
       // This endpoint clears pending inputs, not persisted history. Only the
       // history service may advance the durable conversation clear boundary.
       clearSession: id => stop(id, { keepQueue: false }),
+      drainSessionPersistence: id => executor.drainSessionPersistence(id),
+      setLastAssistantTranscriptUuid: (id, uuid) => executor.setLastAssistantTranscriptUuid(id, uuid),
+      async withSessionInputStoppedForRewind(id, action, timeoutMs = 15_000) {
+        const lockId = 'session-rewind';
+        const state = stateFor(id);
+        if (state.rewindStopping) throw Object.assign(new Error('A rewind is already in progress for this session'), { code: 'SESSION_RUNNING' });
+        state.rewindStopping = true;
+        let releaseOnExit = true;
+        try {
+          await coordinator.ensureQueueRestored(id).catch(() => undefined);
+          if (!coordinator.isQueueRestored(id)) throw Object.assign(new Error('Failed to restore queued input before rewind'), { code: 'INTERNAL' });
+          coordinator.setInteractionLock(id, lockId, true, { preserveOnStop: true });
+          const deadline = Date.now() + Math.max(0, timeoutMs);
+          let stopDone = true;
+          let stopPromise = null;
+          if (coordinator.hasActiveTurnForRewind(id)) {
+            stopDone = false;
+            stopPromise = stop(id, { keepQueue: true, pauseQueue: true }).finally(() => { stopDone = true; });
+          } else {
+            coordinator.pausePendingQueueForRewind(id);
+          }
+          let stopped = false;
+          while (true) {
+            if (stopDone && !coordinator.hasActiveTurnForRewind(id)) { stopped = true; break; }
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) break;
+            if (!stopDone && stopPromise) {
+              await Promise.race([
+                stopPromise.catch(() => {}),
+                new Promise(resolve => setTimeout(resolve, Math.min(50, remaining))),
+              ]);
+            } else {
+              stopped = await coordinator.waitForRewindBoundaryIdle(id, remaining);
+              break;
+            }
+          }
+          if (!stopped) {
+            releaseOnExit = false;
+            void (stopPromise ? stopPromise.catch(() => {}) : Promise.resolve())
+              .then(() => coordinator.releaseRewindLockWhenIdle(id, lockId))
+              .finally(() => { state.rewindStopping = false; });
+            throw Object.assign(new Error('Timed out waiting for the session to stop before rewind'), { code: 'SESSION_RUNNING' });
+          }
+          if (stopPromise) await stopPromise;
+          return await action();
+        } finally {
+          coordinator.pausePendingQueueForRewind(id);
+          if (releaseOnExit) {
+            coordinator.setInteractionLock(id, lockId, false);
+            state.rewindStopping = false;
+          }
+        }
+      },
       /** The running turn's accepted input, as the desktop's Auto-review context reads it. */
       acceptedInputProvenance: id => coordinator.getAcceptedInputProvenance(id),
       whenTurnErrorPersisted: (id, persistId) => executor.whenTurnErrorPersisted?.(id, persistId) ?? Promise.resolve(),

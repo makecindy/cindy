@@ -174,6 +174,21 @@ describe('executeCodexFileRewindPlan', () => {
     expect(await refExists('refs/xdt/pre-rollback/rb-queued')).toBe(true);
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
+  // PR 12344, real Git: ownership can change behind a queued writer. A rejected
+  // Host rewind must leave HEAD and the protection refs untouched.
+  it('checks the profile again after waiting for the repository', async () => {
+    const rewindPlan = await plan(await editedSavepoint());
+    let held = false;
+    const takeover = enqueueGitRepoWrite(repoPath, async () => { held = true; });
+    const rewind = executeCodexFileRewindPlanWithThreadRollback(rewindPlan, 'sess-1', {
+      assertWriteAllowed() { if (held) throw new Error('profile held'); },
+      commitThreadRollback: async () => { throw new Error('unexpected thread rollback'); },
+    }, { createRollbackId: () => 'rb-held' });
+    await takeover;
+    await expect(rewind).rejects.toThrow('profile held');
+    expect(await refExists('refs/xdt/pre-rollback/rb-held')).toBe(false);
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
   it('keeps the repo write queue locked until thread rollback succeeds', async () => {
     const savepoint = await editedSavepoint();
     const rewindPlan = await plan(savepoint);
