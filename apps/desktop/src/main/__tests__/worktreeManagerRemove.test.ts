@@ -395,7 +395,7 @@ describe('removeWorktreeForSession', () => {
       expect(gitExecMock).toHaveBeenCalledWith(
         ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
         baseRepo,
-        { timeoutMs: 10_000, deadlineAtMs: 10_000 },
+        { avoidMacGitInstallPrompt: true, timeoutMs: 10_000, deadlineAtMs: 10_000 },
       );
     });
 

@@ -21,6 +21,7 @@ import { killProcessTree } from '../scheduler-host/proc-util';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { createLogger } from '../logger';
 import { DEFAULT_GIT_MAX_BUFFER } from './gitOutputLimits';
+import { resolveMacGitProbe } from './macGitProbe.js';
 import {
   beginExecFileDiagnostic,
   execFileWithDiagnostics,
@@ -77,6 +78,8 @@ export class GitExecError extends Error {
 export interface GitExecOpts {
   /** False for read-only probes: propagate ownership errors without changing global trust. Default true. */
   repairSafeDirectory?: boolean;
+  /** Directory discovery may run on window focus without an explicit Git action. */
+  avoidMacGitInstallPrompt?: boolean;
   /** 额外的环境变量, 会与 process.env 合并(后者优先级低)。常见: { LC_ALL: 'C' } */
   extraEnv?: Record<string, string>;
   /**
@@ -116,6 +119,39 @@ function remainingDeadlineMs(deadlineAtMs: number | undefined, args: readonly st
     });
   }
   return remaining;
+}
+
+async function discoverMacGit(
+  args: readonly string[],
+  cwd: string | undefined,
+  env: NodeJS.ProcessEnv,
+  opts: GitExecOpts,
+): Promise<string | null | undefined> {
+  const remaining = remainingDeadlineMs(opts.deadlineAtMs, args) ?? opts.timeoutMs;
+  const controller = new AbortController();
+  const signal = opts.signal ? AbortSignal.any([opts.signal, controller.signal]) : controller.signal;
+  signal.throwIfAborted();
+  const timer = remaining && remaining > 0 ? setTimeout(() => {
+    controller.abort(new GitExecError({
+      args, exitCode: null, stdout: '', stderr: 'Git discovery deadline exceeded', timedOut: true,
+    }));
+  }, remaining) : undefined;
+  let abort!: () => void;
+  const cancelled = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  try {
+    // The lookup subprocess is abortable. The shared xcode-select probe keeps
+    // its own budget so one caller's timeout does not invalidate its cache.
+    const selected = await Promise.race([cancelled, resolveMacGitProbe(cwd, env, signal)]);
+    signal.throwIfAborted();
+    remainingDeadlineMs(opts.deadlineAtMs, args);
+    return selected;
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', abort);
+  }
 }
 
 /** POSIX 超时后 SIGTERM → SIGKILL 的宽限期:给 git 留出清理 .lock 的时间窗。 */
@@ -275,11 +311,26 @@ function execDetachedGit(
 /**
  * 执行一次 git, 不做 dubious-ownership 自动重试(底层用)。
  */
-function execFileOnce(
+async function execFileOnce(
   args: readonly string[],
   cwd?: string,
   opts?: GitExecOpts,
 ): Promise<GitExecResult> {
+  const env = opts?.extraEnv ? { ...process.env, ...opts.extraEnv } : undefined;
+  let file = 'git';
+  if (process.platform === 'darwin' && opts?.avoidMacGitInstallPrompt) {
+    const selected = await discoverMacGit(args, cwd, env ?? process.env, opts);
+    if (selected === null) {
+      throw new GitExecError({
+        args,
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+        cause: Object.assign(new Error('Apple Git requires macOS developer tools'), { code: 'ENOENT' }),
+      });
+    }
+    file = selected ?? file;
+  }
   const pending = new Promise<GitExecResult>((resolve, reject) => {
     opts?.signal?.throwIfAborted();
     const remaining = remainingDeadlineMs(opts?.deadlineAtMs, args);
@@ -319,7 +370,7 @@ function execFileOnce(
     const spawnOptions: ExecFileOptions & { detached: boolean } = {
       cwd,
       maxBuffer: opts?.maxBuffer ?? DEFAULT_GIT_MAX_BUFFER,
-      env: opts?.extraEnv ? { ...process.env, ...opts.extraEnv } : undefined,
+      env,
       // POSIX 让 git 自成进程组长:超时收口可对**整组**发信号,连
       // git-remote-http/credential helper 后代一起;Windows 的 detached 语义是
       // 脱离控制台,树杀走 taskkill /T,不需要也不该开。
@@ -341,7 +392,7 @@ function execFileOnce(
     let child: ChildProcess;
     try {
       child = (process.platform === 'win32' ? execFile : execDetachedGit)(
-        'git',
+        file,
         [...args],
         spawnOptions,
         (err, stdout, stderr) => {
