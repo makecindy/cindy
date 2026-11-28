@@ -18734,6 +18734,7 @@
       "boundPluginEngineTaskLocationRecovery": "La automatización no puede ejecutarse en la ubicación del motor de complemento de la tarea vinculada. Cambia el motor de la tarea a un equipo compatible o vincula una tarea compatible.",
       "boundPluginEngineModelRecovery": "La configuración del modelo de la automatización no es compatible con el motor de complemento de la tarea vinculada. Configura la automatización para que use el modelo de la tarea.",
       "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
+      "sessionBusyRecovery": "La sesión de destino está ocupada y la instrucción no se envió. Cuando quede libre, selecciona «{{action}}».",
       "status": {
         "running": "En ejecución",
         "success": "Éxito",

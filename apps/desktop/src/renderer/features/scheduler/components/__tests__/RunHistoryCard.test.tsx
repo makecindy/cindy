@@ -180,6 +180,18 @@ describe('RunHistoryCard 前置检查结果', () => {
     expect(screen.queryByText('chat.unreadFailedScheduleBanner.text')).toBeNull();
   });
 
+  // Issue 12544, unit/DOM: both the failure and earlier saved skips need recovery copy.
+  it.each(['failed', 'skipped'] as const)('shows busy-session recovery for a %s run', (status) => {
+    const detail = '[SESSION_BUSY_BEFORE_DISPATCH] Target session was busy. The prompt was not sent.';
+    renderRun({ id: 'busy-before-dispatch', scheduleId: 'schedule-1', sessionId: 'busy-task',
+      firedAt: 1, finishedAt: 2, status,
+      ...(status === 'failed' ? { errorMsg: detail } : { readAt: 2, resultText: detail }),
+    });
+    expect(screen.getByText('scheduler.runs.sessionBusyRecovery')).toBeTruthy();
+    expect(screen.queryByText('scheduler.runs.queueWaitTimeoutRecovery')).toBeNull();
+    expect(screen.queryByText(/SESSION_BUSY_BEFORE_DISPATCH/)).toBeNull();
+  });
+
   // A failed model selection is persisted in errorMsg, not an agent message.
   // Verify this separate consumer also hides technical text behind details.
   it.each(['', 'scheduled task auto-resume failed: '])('shows switch guidance with expandable diagnostics in failed run history (%s)', (prefix) => {

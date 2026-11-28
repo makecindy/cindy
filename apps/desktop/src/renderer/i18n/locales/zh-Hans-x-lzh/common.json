@@ -18480,6 +18480,7 @@
       "boundPluginEngineTaskLocationRecovery": "所系差事之法器引擎所在不可行此自运。宜移其引擎至可用之电脑，或另系相容差事。",
       "boundPluginEngineModelRecovery": "自运所设模型与所系差事之法器引擎不合。宜设自运循差事之模型。",
       "queueWaitTimeoutRecovery": "排候逾时，提示词未发。待所系任务闲，按「{{action}}」补行。",
+      "sessionBusyRecovery": "所系差事方行，提示词未发。俟其闲，可点「{{action}}」复行。",
       "status": {
         "running": "方行",
         "success": "成",

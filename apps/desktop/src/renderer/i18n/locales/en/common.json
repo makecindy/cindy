@@ -18555,6 +18555,7 @@
       "boundPluginEngineTaskLocationRecovery": "The linked task’s plugin engine location cannot run this automation. Move the task’s engine to a supported computer or link a compatible task.",
       "boundPluginEngineModelRecovery": "The automation’s model settings do not match the linked task’s plugin engine. Set the automation to follow the task’s model.",
       "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
+      "sessionBusyRecovery": "The target session is busy, so the prompt wasn’t sent. Choose {{action}} when the session is idle.",
       "status": {
         "running": "Running",
         "success": "Success",

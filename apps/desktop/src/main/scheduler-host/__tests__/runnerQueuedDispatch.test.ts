@@ -3465,7 +3465,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
         providerId: 'openai',
         effort: 'high',
       }),
-      createFireContext(),
+      { ...createFireContext(), timed: true },
     );
 
     // 保留本轮:提示词进会话队列,恰好一次(旧实现这里是十几毫秒就记 failed)。
@@ -3509,7 +3509,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
           providerId: 'openai',
           effort: 'high',
         }),
-        createFireContext(),
+        { ...createFireContext(), timed: true },
       );
       await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
       await vi.advanceTimersByTimeAsync(
@@ -3531,9 +3531,14 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     }
   });
 
-  it('跨引擎的显式选择排队路径应用不了:维持原语义(可见失败,不排队)', async () => {
-    // 排队派发只热同步来源/模型/强度,跨引擎切换只有任务切换流程做得了 ——
-    // 那种情况不排队,避免用错引擎把提示词发出去。
+  // Issue 12544, unit: the real runner.fire cross-engine fallback cannot enqueue.
+  // A timer-fired one-shot with a confirmed local turn needs a pre-dispatch
+  // receipt and one failure notification. Queue-only busy stays generic.
+  it.each([
+    [true, '[SESSION_BUSY_BEFORE_DISPATCH]'],
+    [false, 'SESSION_RUNNING'],
+  ])('拒绝一次性跨引擎排队并保留失败提醒 (确认有运行中的回合: %s)', async (inTurn, errorCode) => {
+    mocks.isSessionInTurn.mockReturnValue(inTurn);
     const h = createSessionHarness(async () => ({ accepted: true })); // 会话是 claude-code
     const queue = createQueueHarness({ busy: true });
     const { runner, notifier } = createRunnerHarness(h.session, queue.deps, {
@@ -3542,6 +3547,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       },
     });
 
+    const onRunnerNotified = vi.fn();
     await expect(runner.fire(
       heartbeatSchedule({
         recurring: false,
@@ -3549,11 +3555,16 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
         modelAgentKind: 'codex',
         model: 'gpt-6.2-astra',
       }),
-      createFireContext(),
-    )).rejects.toThrow(/SESSION_RUNNING/);
+      { ...createFireContext(), timed: true, onRunnerNotified },
+    )).rejects.toThrow(errorCode);
 
     expect(queue.enqueueCalls).toHaveLength(0);
-    expect(notifier.notify).toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+    expect(onRunnerNotified).toHaveBeenCalledExactlyOnceWith('failure');
+    expect(notifier.notify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ notify: expect.objectContaining({ desktop: true }) }),
+      expect.objectContaining({ status: 'failed', errorMsg: expect.stringContaining(errorCode) }),
+    );
   });
 
   // #12544 review / unit: 本轮显式配了速度但没配 Fast 时,「标准速度」也是一个

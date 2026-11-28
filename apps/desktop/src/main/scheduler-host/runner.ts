@@ -1762,6 +1762,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
             }
             holder.releaseAgentSwitchLock?.();
             holder.releaseAgentSwitchLock = undefined;
+            // Keep the receipt only for confirmed local turns that cannot use the queue.
+            if (
+              ctx.timed && !schedule.recurring
+              && schedule.source !== 'bot' && schedule.targetSessionId === sessionId
+              && row.status === 'active' && !row.agentDeviceId && !row.remoteHostId
+              && !selection.agentDeviceId && this.runtime.isSessionInTurn(sessionId)
+            ) {
+              const errMsg = '[SESSION_BUSY_BEFORE_DISPATCH] Target session was busy. The prompt was not sent.';
+              await this.notifyFailureSilent(schedule, ctx, errMsg);
+              throw new Error(errMsg);
+            }
             return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
           }
           const liveSession = this.deps.maker.getSession(sessionId);

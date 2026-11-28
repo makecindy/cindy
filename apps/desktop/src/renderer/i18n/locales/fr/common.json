@@ -18734,6 +18734,7 @@
       "boundPluginEngineTaskLocationRecovery": "L’automatisation ne peut pas s’exécuter à l’emplacement du moteur de plugin de la tâche liée. Déplacez le moteur de la tâche vers un ordinateur pris en charge ou liez une tâche compatible.",
       "boundPluginEngineModelRecovery": "Les réglages du modèle de l’automatisation sont incompatibles avec le moteur de plugin de la tâche liée. Configurez l’automatisation pour qu’elle utilise le modèle de la tâche.",
       "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
+      "sessionBusyRecovery": "La session cible est occupée et l’invite n’a pas été envoyée. Sélectionnez « {{action}} » quand la session est libre.",
       "status": {
         "running": "En cours",
         "success": "Réussie",

@@ -18480,6 +18480,7 @@
       "boundPluginEngineTaskLocationRecovery": "연결된 작업의 플러그인 엔진 위치에서는 이 자동화를 실행할 수 없습니다. 작업의 엔진을 지원되는 컴퓨터로 옮기거나 지원되는 작업을 연결하세요.",
       "boundPluginEngineModelRecovery": "자동화의 모델 설정이 연결된 작업의 플러그인 엔진과 맞지 않습니다. 자동화가 작업의 모델을 따르도록 설정하세요.",
       "queueWaitTimeoutRecovery": "대기 시간이 초과되어 프롬프트가 전송되지 않았습니다. 대상 세션이 유휴 상태가 되면 {{action}}을 선택하여 실행하세요.",
+      "sessionBusyRecovery": "대상 세션이 실행 중이라 프롬프트를 보내지 않았습니다. 실행이 끝나면 ‘{{action}}’을 선택하세요.",
       "status": {
         "running": "실행 중",
         "success": "성공",

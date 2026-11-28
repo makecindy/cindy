@@ -18480,6 +18480,7 @@
       "boundPluginEngineTaskLocationRecovery": "紐づけたタスクのプラグインエンジンの実行場所では、この自動化を実行できません。タスクのエンジンを対応するコンピューターに移すか、対応するタスクに紐づけてください。",
       "boundPluginEngineModelRecovery": "自動化のモデル設定が、紐づけたタスクのプラグインエンジンに対応していません。自動化でタスクのモデルを使うように設定してください。",
       "queueWaitTimeoutRecovery": "待機時間を超えたため、プロンプトは送信されませんでした。対象のセッションが空いたら「{{action}}」で実行できます。",
+      "sessionBusyRecovery": "対象のセッションが実行中のため、プロンプトは送信されませんでした。実行が終わったら「{{action}}」を選択してください。",
       "status": {
         "running": "実行中",
         "success": "成功",

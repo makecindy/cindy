@@ -173,7 +173,9 @@ export function RunHistoryCard({
     : isScheduleActionExpired(run.errorMsg)
     ? `chat.unreadFailedScheduleBanner.${run.failureRecovered ? 'actionRecovered' : 'actionExpired'}`
     : errorCode ? `chat.remoteError.${errorCode}` : undefined;
-  const errorMessage = errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text');
+  const errorMessage = errorDetail?.startsWith('[SESSION_BUSY_BEFORE_DISPATCH] ')
+    ? t('scheduler.runs.sessionBusyRecovery', { action: t('scheduler.button.runNow') })
+    : errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text');
   // The specific reasons come from the bound-task check. The run identifies
   // the task, and its reference can supply a title,
   // but its current device cannot establish where this historical run failed.
@@ -437,7 +439,11 @@ export function RunHistoryCard({
               {t('scheduler.runs.queueWaitTimeoutRecovery', { action: t('scheduler.button.runNow') })}
             </span>
           )}
-          {run.resultText}
+          {run.resultText.startsWith('[SESSION_BUSY_BEFORE_DISPATCH] ') ? (
+            <span className="font-sans">
+              {t('scheduler.runs.sessionBusyRecovery', { action: t('scheduler.button.runNow') })}
+            </span>
+          ) : run.resultText}
         </p>
       )}
     </article>

@@ -18734,6 +18734,7 @@
       "boundPluginEngineTaskLocationRecovery": "A automatização não pode ser executada na localização do motor de plugin da tarefa associada. Mova o motor da tarefa para um computador compatível ou associe uma tarefa compatível.",
       "boundPluginEngineModelRecovery": "As definições de modelo da automatização não são compatíveis com o motor de plugin da tarefa associada. Configure a automatização para usar o modelo da tarefa.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes de a mensagem ser enviada. Quando a sessão de destino estiver livre, escolhe {{action}} para a executar.",
+      "sessionBusyRecovery": "A sessão de destino está ocupada e o pedido não foi enviado. Quando estiver livre, selecione «{{action}}».",
       "status": {
         "running": "Em execução",
         "success": "Sucesso",
