@@ -6,13 +6,13 @@ import {
   buildInboxHomeSections,
   buildMixedHomeRows,
   movePinnedItem,
+  reorderPinnedItemByDropIndex,
   HOME_MAIN_SECTION_KEY,
   homeFolderRowsShareRenderData,
   homeRowsShareRenderData,
   homeRowBefore,
   mergeAutomationItems,
   withMergedAutomationPriority,
-  type InboxTeammateEntry,
 } from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
@@ -77,6 +77,35 @@ describe('buildHomeSections', () => {
       false, false, { pinnedOrder })[0].data.map(row => row.key);
     expect(rows([a, b])).toEqual(['pinned:a', 'pinned:b']);
     expect(rows([a, pin('b', '2026-06-03')])).toEqual(['pinned:b', 'pinned:a']);
+  });
+
+  // Unit: reorderPinnedItemByDropIndex drives long-press drag reorder of pinned tasks.
+  // Existing movePinnedItem tests only cover adjacent +-1 steps, not arbitrary drop indices
+  // or cross-device slot retention when a visible subset is dragged.
+  it('reorders pinned tasks by drop index while preserving hidden-device slots and dropping stale generations', () => {
+    const pin = (id: string, date: string) => {
+      const item = listItem(id, date);
+      return { ...item, session: { ...item.session, pinnedAt: date } };
+    };
+    const a = pin('a', '2026-06-03');
+    const b = pin('b', '2026-06-02');
+    const c = pin('c', '2026-06-01');
+    const key = (id: string, date: string) => `${id}\0${date}`;
+    const hiddenOtherDevice = key('other', '2026-06-02');
+    const staleA = key('a', '2026-05-01');
+    const initial = [staleA, key('a', '2026-06-03'), hiddenOtherDevice, key('b', '2026-06-02'), key('c', '2026-06-01')];
+
+    // Dropping onto the same slot produces no change.
+    expect(reorderPinnedItemByDropIndex(initial, [a, b, c], 'a', 0)).toBeNull();
+
+    // Drag first pinned item past the last item; hidden other-device slot stays intact and staleA is pruned.
+    const movedDown = reorderPinnedItemByDropIndex(initial, [a, b, c], 'a', 2)!;
+    expect(movedDown).toEqual([key('b', '2026-06-02'), hiddenOtherDevice, key('c', '2026-06-01'), key('a', '2026-06-03')]);
+    const [pins] = buildHomeSections(presentation({ pinned: [a, b, c] }), false, false, {
+      pinnedSort: 'manual',
+      pinnedOrder: movedDown,
+    });
+    expect(pins.data.map((row) => row.key)).toEqual(['pinned:b', 'pinned:c', 'pinned:a']);
   });
 
   it('置顶收起时保留分区但清空 data(表头照常渲染,只折叠下属会话)', () => {
@@ -581,6 +610,32 @@ it('orders each inbox section by latest activity, whether or not a task is unrea
   expect(ids('inbox-archived')).toEqual(['new-read-done', 'old-unread-done']);
 });
 
+// 2026-11-27 user decision (task-inbox.md「分区与动作」): Done rows sort and display by archivedAt
+// (falling back to regular activity for legacy rows), while the regular list keeps lastActivityAt.
+it('sorts and displays inbox-archived rows by archivedAt with fallback for legacy rows', () => {
+  const archivedItem = (id: string, lastActivityAt: string, archivedAt: string | null) => ({
+    ...listItem(id, lastActivityAt),
+    session: { id, status: 'archived', lastActivityAt, archivedAt },
+  }) as unknown as RemoteSessionListItem;
+  const oldJustDone = archivedItem('old-just-done', '2026-11-20T00:00:00.000Z', '2026-11-27T10:00:00.000Z');
+  const recentEarlierDone = archivedItem('recent-earlier-done', '2026-11-27T09:00:00.000Z', '2026-11-27T09:30:00.000Z');
+  const legacyNoArchivedAt = archivedItem('legacy-done', '2026-11-27T09:45:00.000Z', null);
+  const home = presentation({ chats: [recentEarlierDone, oldJustDone, legacyNoArchivedAt] });
+  const empty = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const archivedSection = buildInboxHomeSections(home, new Set(), empty, Date.parse('2026-11-27T11:00:00.000Z'))
+    .find(section => section.key === 'inbox-archived')!;
+  const rows = archivedSection.data.flatMap(row => row.kind === 'session' ? [[row.item.session.id, row.item.lastActivityAt]] : []);
+  expect(rows).toEqual([
+    ['old-just-done', '2026-11-27T10:00:00.000Z'],
+    ['legacy-done', '2026-11-27T09:45:00.000Z'],
+    ['recent-earlier-done', '2026-11-27T09:30:00.000Z'],
+  ]);
+  // Regular home list retains the original activity timestamp unchanged.
+  const regularRows = buildHomeSections(home, false, false)[0].data
+    .flatMap(row => row.kind === 'session' ? [[row.item.session.id, row.item.lastActivityAt]] : []);
+  expect(regularRows.find(([id]) => id === 'old-just-done')?.[1]).toBe('2026-11-20T00:00:00.000Z');
+});
+
 // 2026-11-18 user decision: teammates' routine results filled the phone's inbox. Teammate tasks
 // (by the teammate filter's test) are listed only while they need the user or run.
 it('leaves idle teammate conversations out of the inbox until they need the user or run', () => {
@@ -603,35 +658,6 @@ it('leaves idle teammate conversations out of the inbox until they need the user
   signals.runningSessionIds.add('opened');
   expect(ids('inbox-inbox').sort()).toEqual(['mine', 'routine']);
   expect(ids('inbox-working')).toEqual(['opened']);
-});
-
-// 2026-11-20 user decision: a teammate's main conversation is one inbox row placed by whose turn
-// it is. Unit, through the real section builder; existing cases only cover teammate *tasks*.
-// Smallest failing input: an idle read teammate listed at all, or a snooze outliving new input.
-it('places teammate conversations by whose turn it is, ahead of tasks, and leaves idle ones out', () => {
-  const now = Date.parse('2026-11-20T08:00:00Z');
-  const iso = (ms: number) => new Date(ms).toISOString();
-  const home = presentation({ chats: [listItem('task', iso(now))] });
-  const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
-  const snooze = { snoozedUntil: iso(now + 3_600_000), snoozedAt: iso(now), userSendAt: null };
-  const teammates: InboxTeammateEntry[] = [
-    { key: 'idle', status: 'idle', snooze: null, activityAt: 9 },
-    { key: 'asks', status: 'awaiting', snooze: null, activityAt: 1 },
-    { key: 'replied', status: 'unread', snooze: null, activityAt: 2 },
-    { key: 'busy', status: 'running', snooze: null, activityAt: 3 },
-    { key: 'later', status: 'awaiting', snooze, activityAt: 4 },
-  ];
-  const rows = (at: number, list = teammates) => Object.fromEntries(buildInboxHomeSections(home, new Set(['inbox-working']), signals, at, list)
-    .map(section => [section.key, { count: section.count, keys: section.data.map(row => row.kind === 'teammate' ? row.teammate.key : row.key),
-      labels: section.data.flatMap(row => row.kind === 'teammate' && row.sourceLabel ? [row.sourceLabel] : []) }]));
-  const listed = rows(now);
-  expect(listed['inbox-inbox']).toMatchObject({ count: 3, keys: ['replied', 'asks', 'inbox::task'] });
-  // A collapsed section still counts its teammate.
-  expect(listed['inbox-working']).toMatchObject({ count: 1, keys: [] });
-  expect(listed['inbox-snoozed']).toMatchObject({ count: 1, keys: ['later'], labels: [new Date(now + 3_600_000).toLocaleString('zh-CN')] });
-  // The wake time passes, or the teammate's conversation receives new input first.
-  expect(rows(now + 3_600_000)['inbox-inbox'].keys).toContain('later');
-  expect(rows(now + 1, [{ ...teammates[4], snooze: { ...snooze, userSendAt: iso(now + 1) } }])['inbox-inbox'].keys).toContain('later');
 });
 
 it('puts a quiet followed task in working and returns it to inbox for results, waiting or pause', () => {
@@ -730,12 +756,12 @@ it('places a quiet Orca Lead in working when its Worker holds an active automati
   const idle = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
   const followingKeys = new Set([orcaLeadSessionKey('lead-1', 'mac-mini')]);
 
-  const quietSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), [], followingKeys);
+  const quietSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), followingKeys);
   expect(quietSections.find(s => s.key === 'inbox-working')?.count).toBe(1);
   expect(quietSections.find(s => s.key === 'inbox-inbox')?.count).toBe(0);
 
   lead.liveActivity = { attention: true, phase: 'completed' } as RemoteSessionListItem['liveActivity'];
-  const unreadSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), [], followingKeys);
+  const unreadSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), followingKeys);
   expect(unreadSections.find(s => s.key === 'inbox-inbox')?.count).toBe(1);
   expect(unreadSections.find(s => s.key === 'inbox-working')?.count).toBe(0);
 });

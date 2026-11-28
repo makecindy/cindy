@@ -22,7 +22,7 @@ export interface BotGroupMentionMember {
   nickname?: string | null;
 }
 
-/** A mention picked from the candidate list; `label` is the text after `@`. */
+/** An explicitly picked mention; `label` is the text after `@`. */
 export interface BotGroupTrackedMention {
   botId: string;
   label: string;
@@ -81,7 +81,6 @@ function typedTargets(entry: LabelEntry): { botIds: string[]; ambiguous: boolean
 function buildLabelEntries(
   members: readonly BotGroupMentionMember[],
   allLabels: readonly string[],
-  tracked: readonly BotGroupTrackedMention[],
   allBotLabels: readonly string[] = [],
 ): LabelEntry[] {
   const byLabel = new Map<string, LabelEntry>();
@@ -104,12 +103,6 @@ function buildLabelEntries(
       byLabel.set(label, entry);
     }
   }
-  // Keep an explicit pick even after it disappears from the live roster. This
-  // records intent, not membership: the host must reject unavailable targets.
-  for (const mention of tracked) {
-    const label = mention.label.trim();
-    if (label && !byLabel.has(label)) byLabel.set(label, { label, all: false, botIds: [], aliasIds: [] });
-  }
   // 最长优先：`@小满满` 不能先被 `@小满` 截走。
   return [...byLabel.values()].sort((a, b) => b.label.length - a.label.length);
 }
@@ -118,16 +111,51 @@ interface MentionToken {
   start: number;
   end: number;
   entry: LabelEntry;
+  picked?: true;
 }
 
-function scanMentionTokens(text: string, entries: readonly LabelEntry[]): MentionToken[] {
+function validPickedLabel(text: string, mention: BotGroupTrackedMention): string | undefined {
+  const { start } = mention;
+  const label = mention.label.trim();
+  return label && start >= 0 && isMentionStart(text, start)
+    && text.startsWith(`@${label}`, start) && endsAtBoundary(label, text[start + 1 + label.length])
+    ? label : undefined;
+}
+
+function scanMentionTokens(text: string, entries: readonly LabelEntry[], tracked: readonly BotGroupTrackedMention[] = []): MentionToken[] {
+  const pickedByStart = new Map<number, MentionToken>();
+  for (const mention of tracked) {
+    const label = validPickedLabel(text, mention);
+    if (!label) continue;
+    const start = mention.start;
+    const end = start + 1 + label.length;
+    const existing = pickedByStart.get(start);
+    if (existing?.end === end) existing.entry.botIds.push(mention.botId);
+    else if (!existing || end > existing.end) pickedByStart.set(start, {
+      start, end, picked: true, entry: { label, all: false, botIds: [mention.botId], aliasIds: [] },
+    });
+  }
+  // Reserve explicit spans before looking up typed names. A longer name may
+  // start before a pick, or at the pick and extend into the surrounding text.
+  return scanMentionRanges(text, entries, [...pickedByStart.values()].sort((a, b) => a.start - b.start));
+}
+
+/** Match within the gaps between already identified, ordered mention ranges. */
+function scanMentionRanges(text: string, entries: readonly LabelEntry[], reserved: readonly MentionToken[] = []): MentionToken[] {
+  let reservedIndex = 0;
   const tokens: MentionToken[] = [];
   let index = text.indexOf('@');
   while (index >= 0) {
     let next = index + 1;
-    if (isMentionStart(text, index)) {
+    while (reserved[reservedIndex] && reserved[reservedIndex]!.start < index) reservedIndex++;
+    const pick = reserved[reservedIndex];
+    if (pick?.start === index) {
+      tokens.push(pick);
+      next = pick.end;
+    } else if (isMentionStart(text, index)) {
       const entry = entries.find(
         (candidate) =>
+          (!pick || index + 1 + candidate.label.length <= pick.start) &&
           text.startsWith(candidate.label, index + 1) &&
           endsAtBoundary(candidate.label, text[index + 1 + candidate.label.length]),
       );
@@ -154,12 +182,10 @@ interface MentionInput {
  * name nobody (see `resolveBotGroupMentions`); the composer asks to pick from the list.
  */
 export function ambiguousBotGroupMentionLabels(text: string, input: MentionInput): string[] {
-  const tracked = input.tracked ?? [];
-  const entries = buildLabelEntries(input.members, input.allLabels, tracked, input.allBotLabels);
+  const entries = buildLabelEntries(input.members, input.allLabels, input.allBotLabels);
   const labels: string[] = [];
-  for (const token of scanMentionTokens(text, entries)) {
-    if (token.entry.all || token.entry.allBots || !typedTargets(token.entry).ambiguous) continue;
-    if (tracked.some(mention => mention.start === token.start && mention.label.trim() === token.entry.label)) continue;
+  for (const token of scanMentionTokens(text, entries, input.tracked)) {
+    if (token.picked || token.entry.all || token.entry.allBots || !typedTargets(token.entry).ambiguous) continue;
     if (!labels.includes(token.entry.label)) labels.push(token.entry.label);
   }
   return labels;
@@ -175,18 +201,14 @@ export function resolveBotGroupMentions(
   text: string,
   input: MentionInput,
 ): BotGroupMention {
-  const entries = buildLabelEntries(input.members, input.allLabels, input.tracked ?? [], input.allBotLabels);
+  const entries = buildLabelEntries(input.members, input.allLabels, input.allBotLabels);
   const botIds: string[] = [];
   let all = false;
   let allBots = false;
-  for (const token of scanMentionTokens(text, entries)) {
-    // A pick names that companion even when its name is also a 「所有人」 label; only the
-    // 「所有人」 option or a typed reserved word addresses everyone.
-    const picked = (input.tracked ?? []).filter(mention =>
-      mention.start === token.start && mention.label.trim() === token.entry.label);
-    if (token.entry.all && picked.length === 0) all = true;
-    if (token.entry.allBots && picked.length === 0) allBots = true;
-    for (const botId of picked.length ? picked.map(mention => mention.botId) : typedTargets(token.entry).botIds) {
+  for (const token of scanMentionTokens(text, entries, input.tracked)) {
+    if (token.entry.all) all = true;
+    if (token.entry.allBots) allBots = true;
+    for (const botId of token.picked ? token.entry.botIds : typedTargets(token.entry).botIds) {
       if (!botIds.includes(botId)) botIds.push(botId);
     }
   }
@@ -216,7 +238,7 @@ export function splitBotGroupRelaySteps(
   text: string,
   input: { members: readonly BotGroupMentionMember[]; allLabels: readonly string[]; allBotLabels?: readonly string[] },
 ): BotGroupRelayStep[] | null {
-  const tokens = scanMentionTokens(text, buildLabelEntries(input.members, input.allLabels, [], input.allBotLabels));
+  const tokens = scanMentionTokens(text, buildLabelEntries(input.members, input.allLabels, input.allBotLabels));
   if (!tokens.length) return null;
   // An @ that is not a teammate (renamed since it was picked) would drop or garble a step.
   if (/@\S/.test(text.slice(0, tokens[0]!.start))) return null;
@@ -263,10 +285,7 @@ export function retainBotGroupTrackedMentions(
     if (mention.start >= previousEnd) return [{ ...mention, start: mention.start + delta }];
     return []; // This particular token was edited or deleted, even if a namesake remains.
   });
-  const entries = buildLabelEntries(input.members, input.allLabels, tracked, input.allBotLabels);
-  const tokens = scanMentionTokens(text, entries);
-  return tracked.filter(mention => tokens.some(token =>
-    token.start === mention.start && token.entry.label === mention.label.trim()));
+  return tracked.filter(mention => validPickedLabel(text, mention));
 }
 
 /** The `@query` being typed right before the caret, if any. */
@@ -321,6 +340,19 @@ export interface BotGroupTextSegment {
   mention: boolean;
 }
 
+/** Find every possible range for one label, including nested occurrences. */
+export function botGroupMentionRanges(text: string, rawLabel: string): { start: number; end: number }[] {
+  const label = rawLabel.trim();
+  if (!label) return [];
+  const ranges: { start: number; end: number }[] = [];
+  const needle = `@${label}`;
+  for (let start = text.indexOf(needle); start >= 0; start = text.indexOf(needle, start + 1)) {
+    const end = start + needle.length;
+    if (isMentionStart(text, start) && endsAtBoundary(label, text[end])) ranges.push({ start, end });
+  }
+  return ranges;
+}
+
 /** Split message text so `@name` tokens can be shown as mention chips. */
 export function splitBotGroupMentionSegments(
   text: string,
@@ -331,7 +363,7 @@ export function splitBotGroupMentionSegments(
     .map((label) => ({ label, all: false, botIds: [], aliasIds: [] }));
   const segments: BotGroupTextSegment[] = [];
   let cursor = 0;
-  for (const token of scanMentionTokens(text, entries)) {
+  for (const token of scanMentionRanges(text, entries)) {
     if (token.start > cursor) segments.push({ text: text.slice(cursor, token.start), mention: false });
     segments.push({ text: text.slice(token.start, token.end), mention: true });
     cursor = token.end;

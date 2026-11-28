@@ -865,6 +865,7 @@ export function createTurnExecutor(deps) {
     // A model or engine the user picked lands when the message is sent, before the runtime is read
     // (makerSendTransaction.ts), with the desktop's steps (runtime-selection.ts).
     applyPendingAgentSwitch: deps.applyPendingAgentSwitch,
+    readDispatchRoute: deps.readDispatchRoute,
     prepareUnhealthySession: deps.prepareUnhealthySession,
     prepareRuntimeTurn(id, message, signal) {
       const turn = turns.get(id);
@@ -958,6 +959,9 @@ export function createTurnExecutor(deps) {
         deps.assertCurrent();
         turn?.check();
         await persistStartedSessionProvider(session, opts, assertAccess, runtimeOverride);
+        if (typeof opts.modelGroupStartToken === 'string' && opts.modelGroupStartToken) {
+          deps.onModelGroupSessionAttached?.(opts.id, opts.modelGroupStartToken);
+        }
         turn?.check();
         rememberLiveSessionSettings(session, opts);
         setSessionProvider(opts.id, opts.providerId ?? null);
@@ -1074,16 +1078,19 @@ export function createTurnExecutor(deps) {
       behindDurableWrites(id, `plan-seal-consume:${id}:${turnId}`, () => clearSealedCodexPlanState(id, turnId)),
     peekGoalInactiveNote: id => behindDurableWrites(id, `goal-inactive-read:${id}`, () => peekGoalInactiveNote(id)),
     // Which model ran a dispatched user turn, and a model-change card when it changed (turnModelAttribution.ts).
-    onModelDispatched: (id, clientId) => createTurnModelAttribution({
-      maker: deps.getMaker(), getSessionProvider,
-      captureDataOwnerBroadcastScope: () => deps.getOwner?.() ?? null,
-      isDataOwnerBroadcastScopeCurrent: owner => (deps.getOwner?.() ?? null) === owner && deps.isCurrent(),
-      enqueueDurableWrite: (label, write) => behindDurableWrites(id, label, write),
-      patchMessageAgentMeta: async (sessionId, messageClientId, patch) =>
-        (await patchMessageAgentMetaWithResultRow(getDbClient(), sessionId, messageClientId, patch)) !== null,
-      createDbMessage: (sessionId, body) => deps.persistMessage(sessionId, body),
-      log,
-    })(id, clientId),
+    onModelDispatched: (id, clientId) => {
+      deps.onModelGroupDispatched?.(id, clientId);
+      createTurnModelAttribution({
+        maker: deps.getMaker(), getSessionProvider,
+        captureDataOwnerBroadcastScope: () => deps.getOwner?.() ?? null,
+        isDataOwnerBroadcastScopeCurrent: owner => (deps.getOwner?.() ?? null) === owner && deps.isCurrent(),
+        enqueueDurableWrite: (label, write) => behindDurableWrites(id, label, write),
+        patchMessageAgentMeta: async (sessionId, messageClientId, patch) =>
+          (await patchMessageAgentMetaWithResultRow(getDbClient(), sessionId, messageClientId, patch)) !== null,
+        createDbMessage: (sessionId, body) => deps.persistMessage(sessionId, body),
+        log,
+      })(id, clientId);
+    },
     log,
   };
   const transaction = createMakerSendTransaction(transactionDeps);

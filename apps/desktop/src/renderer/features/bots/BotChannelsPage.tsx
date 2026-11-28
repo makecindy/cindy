@@ -395,8 +395,6 @@ function ConnectionGroups({ api, connectionId, botName, refreshVersion }: { api:
             aria-label={`${group.chatName || group.chatId} · ${t('bots.channels.groups.title')}`}
             value={group.activation}
             onValueChange={(mode) => setMode(group.chatId, mode)}
-            height={30}
-            optionHeight={24}
             optionClassName="text-11"
             options={(['mention', 'always'] as const).map((mode) => ({
               value: mode,

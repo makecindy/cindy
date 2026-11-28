@@ -521,6 +521,22 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.urls.some(url=>url.includes('/read'))).toBe(false);
   });
 
+  // Unit: an old @ original no longer depends on the bounded quote search.
+  // Read the exact message, without a timeline fetch or a read acknowledgement.
+  it('reads one current original for a historical mention on demand', async () => {
+    const originalId = execution.source_message_id;
+    const originalPath = `/conversations/${roomId}/messages/${originalId}`;
+    fixture.handle.mockImplementation(route => route === '/me'
+      ? { body: { actor: { id: selfId }, capabilities: { personalMask: 1, personalMentionHistory: 1 } } }
+      : route === originalPath ? { body: { id: originalId, deleted: false, author: { kind: 'human', name: 'Peer' },
+        content: [{ type: 'text', text: 'Current old message' }] } } : response(route));
+    expect(await service.chatServer!.mentions!({ groupId: roomId, originalId })).toMatchObject({
+      ok: true, original: { messageId: originalId, text: 'Current old message', deleted: false },
+    });
+    expect(fixture.handle.mock.calls.filter(([route]) => route.startsWith(`/conversations/${roomId}`))
+      .map(([route]) => route)).toEqual([originalPath]);
+  });
+
   // Unit: exercise the real transport and read.changed path. The former notification-only
   // tests had no persistent group attention consumer, so read/mute/reconnect could not be observed.
   it('projects one group reminder, follows server reads and mute, and restores reconnect history without alerting it', async () => {
@@ -1742,9 +1758,17 @@ describe('Chat Server result delivery and refresh', () => {
         members: [{ id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, state: 'joined', role }], messages: [], cursor: '1' } };
       return response(route);
     });
+    // #13603: selecting an unregistered folder reports the remedy without replacing the saved choice.
+    const validate = deps.validateProjectDir!;
+    deps.validateProjectDir = dir => dir === '/work/new'
+      ? Promise.resolve({ ok: false, errorCode: 'PROJECT_NOT_REGISTERED', message: '' })
+      : validate(dir);
     const patches = () => fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH').map(call => call[2]);
     expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true, folderRepository: { repo: 'makecindy/cindy', filled: true } });
     expect(patches()).toEqual([expect.objectContaining({ project: { kind: 'github', repo: 'makecindy/cindy' } })]);
+    expect(workspaceSettings.get(roomId)).toMatchObject({ projectDir: '/work/fork' });
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/new' }))
+      .toMatchObject({ ok: false, errorCode: 'PROJECT_NOT_REGISTERED' });
     expect(workspaceSettings.get(roomId)).toMatchObject({ projectDir: '/work/fork' });
     role = 'member';
     expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true });
@@ -2659,7 +2683,8 @@ describe('Chat Server result delivery and refresh', () => {
         await ask(4, 'Please check');
         expect(fixture.download.mock.calls).toEqual([2, 1].map(n => [roomId, file(n).mediaId]));
         expect(dispatched()[0]!.attachments).toEqual([downloaded(1)]);
-        expect(dispatched()[0]!.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        expect(notices()[0]?.[2].content[0].data).toEqual({ code: 'ATTACHMENTS_DOWNLOAD_FAILED' });
+        expect(dispatched()[0]!.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_DOWNLOAD_FAILED').replaceAll('{{name}}', 'Cindy'));
         expect(notices()).toHaveLength(1);
       });
 
@@ -2690,7 +2715,7 @@ describe('Chat Server result delivery and refresh', () => {
         expect(input.attachments).toEqual(expected);
         expect(fixture.download).toHaveBeenCalledTimes(expected.length);
         expect(notices()).toHaveLength(count === 1 ? 0 : 1);
-        if (count === 20) expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        if (count === 20) expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_LIMIT_REACHED').replaceAll('{{name}}', 'Cindy'));
       });
 
       it.each(['deleted', 'forbidden', 'missing', 'gone', 'other-thread', 'future'] as const)('does not deliver an unavailable quoted original: %s', async state => {
@@ -2723,7 +2748,7 @@ describe('Chat Server result delivery and refresh', () => {
         expect(input?.attachments).toEqual([downloaded(2)]);
         expect(verifiedOwnerRequestText(input.autoReviewUserText)).toContain('@Cindy read the lessons');
         expect(notices()).toHaveLength(failure === 'text-only' ? 0 : 1);
-        if (failure !== 'text-only') expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        if (failure !== 'text-only') expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_DOWNLOAD_FAILED').replaceAll('{{name}}', 'Cindy'));
         expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
       });
 
@@ -3122,7 +3147,8 @@ describe('Chat Server result delivery and refresh', () => {
         if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: replies, cursor: '1' } };
         if (route === `/conversations/${roomId}/messages?limit=100`) return { body: replies };
         if (route === `/conversations/${roomId}/executions`) return { body: [
-          { ...request(39, peerId), status: 'running' }, { ...request(40), status: 'needs_input' }] };
+          // Own turn claimed by one of this account's computers, now waiting for a confirmation there.
+          { ...request(39, peerId), status: 'running' }, { ...request(40), status: 'needs_input', executor: { deviceId: 'studio-device' } }] };
         return previous(route, method, body);
       });
       const result = await service.getGroup(roomId);
@@ -3150,6 +3176,72 @@ describe('Chat Server result delivery and refresh', () => {
       expect(result.group.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
       expect(result.group.round.canStop).toBe(requester === selfId && status === 'running');
       expect(result.group.teammateActivity?.phase).toBe('idle');
+    });
+
+    // bot-group-chat.md 第 9 节 (2026-11-28). Regression: a request held until its requester chose a computer
+    // showed every member a public notice and a running Cindy nobody else could stop, with no timeout.
+    // Unit: the real getGroup against the HTTP boundary; the server holds the turn as needs_input with no executor.
+    it.each([[selfId, true], [peerId, false]] as const)('keeps a request waiting for %s to choose a computer out of group activity', async (requester, own) => {
+      const source = message(60, requester, 'Sort out the weekly report');
+      const notice = (n: number, reason: 'unbound' | 'offline') => message(n, cindyId, '', { origin: 'bot', content: [{ type: 'card',
+        namespace: 'cindy.group-assistant', schemaRevision: 1, fallback: 'notice', data: { type: 'executor_unavailable', reason, requesterId: requester, sourceMessageId: source.id } }] });
+      const page = [source, notice(61, 'unbound'), notice(62, 'offline')];
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: page, cursor: '1' } };
+        if (route === `/conversations/${roomId}/messages?limit=100`) return { body: page };
+        if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(60, requester), status: 'needs_input' }] };
+        return previous(route, method, body);
+      });
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.group.round).toMatchObject({ status: 'idle', speakers: [], canStop: false, othersActive: false });
+      // The group row asks only the requester for attention.
+      expect(result.group.teammateActivity?.phase).toBe(own ? 'needs-interaction' : 'idle');
+      // The requester keeps the offline notice; the unbound one becomes their own card. Others see neither.
+      expect(result.group.messages.map(m => m.id)).toEqual(own ? [source.id, notice(62, 'offline').id] : [source.id]);
+      expect(result.group.assistantDeviceWaits).toEqual(own
+        ? [{ executionId: request(60).id, sourceMessageId: source.id, requestText: 'Sort out the weekly report' }] : undefined);
+    });
+
+    // #13638: the existing notice test always has a visible source in the same page.
+    // Unit: real group and thread reads return the pagination boundary for all-hidden pages.
+    it.each(['group', 'thread'])('retains the boundary of an all-hidden %s page', async scope => {
+      const root = message(1, peerId, 'Earlier message');
+      const threadRootId = scope === 'thread' ? root.id : null;
+      const hidden = Array.from({ length: threadRootId ? 50 : 1 }, (_, i) => message(100 - i, cindyId, '', {
+        threadRootId, origin: 'bot', content: [{ type: 'card', namespace: 'cindy.group-assistant', schemaRevision: 1,
+          fallback: 'notice', data: { type: 'executor_unavailable', reason: 'offline', requesterId: peerId, sourceMessageId: root.id } }],
+      }));
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [root, ...hidden], cursor: '100' } };
+        if (route.includes('/messages?')) return { body: hidden };
+        if (route.endsWith(`/messages/${root.id}`)) return { body: root };
+        return previous(route, method, body);
+      });
+      if (threadRootId) {
+        expect(await service.chatServer!.thread({ groupId: roomId, rootId: threadRootId }))
+          .toMatchObject({ ok: true, replies: [], hasMore: true, pageOldestSequence: 51 });
+      } else {
+        expect(await service.getGroup(roomId, { limit: 1 }))
+          .toMatchObject({ ok: true, group: { messages: [], hasMoreBefore: true, pageOldestSequence: 100 } });
+      }
+    });
+
+    // The card's cancel ends only this account's own request that has not started; a settled one needs no write.
+    it.each([[selfId, 'needs_input', { ok: true }], [peerId, 'needs_input', { ok: false, errorCode: 'ROLE_REQUIRED' }], [selfId, 'cancelled', { ok: true }]] as const)(
+      'cancels a waiting request of %s in %s only when it is its own', async (requester, status, expected) => {
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(60, requester), status }] };
+        if (route.includes('/control') && method === 'POST') return { body: { id: request(60).id, status: 'cancelled' } };
+        return previous(route, method, body);
+      });
+      const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'cancelAssistantDeviceWait', executionId: request(60).id } });
+      const stops = fixture.handle.mock.calls.filter(([route, method]) => method === 'POST' && route.startsWith(`/conversations/${roomId}/executions/${request(60).id}/control`));
+      expect(result).toEqual(expected);
+      expect(stops.map(([, , body]) => body.action)).toEqual(requester === selfId && status === 'needs_input' ? ['stop'] : []);
     });
 
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;
@@ -6554,6 +6646,15 @@ describe('Chat Server result delivery and refresh', () => {
       // An older page is history being scrolled, not the reader catching up.
       await service.chatServer!.thread({ groupId: roomId, rootId, before: 3, markRead: true });
       expect(writes()).toHaveLength(1);
+    });
+
+    it('exposes the server main readSequence on group detail when reads are present', async () => {
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [...shares, ...replies, root].sort((a, b) => Number(b.seq) - Number(a.seq)), cursor: '8', reads: [{ thread_key: 'main', read_seq: '2' }] } };
+        return threadResponse(route, method, body);
+      });
+      const detail = await service.getGroup(roomId);
+      expect(detail.ok && detail.group.readSequence).toBe('2');
     });
 
     // bot-group-chat.md §10「话题未读与提示」: following is the reader's own switch, kept by the server.

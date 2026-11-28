@@ -802,6 +802,7 @@ describe('session list', () => {
             title: 'T',
             snoozedUntil: '2026-11-12T09:00:00.000Z',
             snoozedAt: '2026-11-12T08:00:00.000Z',
+            archivedAt: '2026-11-12T10:00:00.000Z',
             createdAt: '2026-01-01T00:00:00.000Z',
             lastActivityAt: '2026-01-02T00:00:00.000Z',
             deviceLinkConnectionStatus: 'connected',
@@ -812,7 +813,11 @@ describe('session list', () => {
     const devices = await c.readSessionList();
     expect(devices).toHaveLength(1);
     expect(devices[0].sessions[0].lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
-    expect(devices[0].sessions[0]).toMatchObject({ snoozedUntil: '2026-11-12T09:00:00.000Z', snoozedAt: '2026-11-12T08:00:00.000Z' });
+    expect(devices[0].sessions[0]).toMatchObject({
+      snoozedUntil: '2026-11-12T09:00:00.000Z',
+      snoozedAt: '2026-11-12T08:00:00.000Z',
+      archivedAt: '2026-11-12T10:00:00.000Z',
+    });
     expect(devices[0].sessions[0]).not.toHaveProperty('deviceLinkConnectionStatus');
   });
 

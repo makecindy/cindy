@@ -288,6 +288,8 @@ Claude 订阅 Opus 5.5（Claude Code）、服务端指定的 Cindy Auto（Pi）�
 企业号池供应商（`source: organization`）中跟随被标为 Pi 新任务默认的 Auto 系列模型
 （预设 `auto` 或模型组 Auto `auto/<组ID>`），没有标记时（旧服务端）回退 Cindy AI 的预设 `auto`。
 只认 Auto 系列的标记：个人目录仍把旧 GLM 标为 Pi 默认，客户端不采纳，也不把 Auto 替换成固定型号。
+Cindy AI 权威目录以 `silentSwitch` 把该模型指定给唯一另一个引擎时，默认组合直接用那个引擎（模型 id 不变），
+记着原引擎加该模型的本机草稿（含手选）也随之换引擎，见[Model Access 静默切换引擎](protocol-compatibility/model-access-silent-switch.md)。
 服务端保证每个引擎只标一个默认；管理员恰在两次拉取之间改配置、两类来源短暂各标一个时，
 以 Cindy AI 为准，不取决于来源列表顺序。未手选的普通草稿记着 Cindy AI 或号池来源时，只有
 当前引擎在任一 Cindy 来源中存在服务端标为 `newSessionDefault` 的组 Auto（`auto/<组ID>`），
