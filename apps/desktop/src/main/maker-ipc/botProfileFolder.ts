@@ -328,7 +328,7 @@ function parseJsonOr<T>(raw: string, fallback: T, accept: (value: unknown) => bo
  * 所以现在：写入时剥掉，读取时也不返回，已有文件在下一次迁移时清理。
  */
 const VOLATILE_CONFIG_KEYS: readonly string[] = [
-  'harness', 'providerId', 'model', 'effort', 'fastMode',
+  'harness', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId',
   'modelOverride', 'modelChain', 'modelChainOverride',
 ];
 

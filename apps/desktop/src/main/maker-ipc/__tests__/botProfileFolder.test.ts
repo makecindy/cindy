@@ -252,7 +252,7 @@ describe('搬家', () => {
   // 模型路由在伙伴冻结快照与会话上，家不存、不读，老文件迁移时清理。
   it('模型路由不进家：播种时剥掉', async () => {
     await migrateBotProfileFolder(root, 'bot-a', { ...SEED, config: { ...SEED.config, harness: 'codex', providerId: 'openai',
-      model: 'gpt-6.1-sol', effort: 'medium', modelChain: [{ model: 'gpt-6.1-sol' }] } });
+      model: 'gpt-6.1-sol', effort: 'medium', modelChain: [{ model: 'gpt-6.1-sol' }], agentDeviceId: 'phone-device' } });
     const raw = JSON.parse(await fs.readFile(path.join(botProfileDir(root, 'bot-a'), 'config.json'), 'utf8'));
     expect(raw).toEqual(SEED.config);
   });
@@ -260,7 +260,7 @@ describe('搬家', () => {
   it('旧文件还没清理时，读取也不把模型名交出去', async () => {
     await fs.mkdir(botProfileDir(root, 'bot-a'), { recursive: true });
     await fs.writeFile(path.join(botProfileDir(root, 'bot-a'), 'config.json'),
-      JSON.stringify({ memory: true, harness: 'codex', model: 'gpt-6.1-sol' }));
+      JSON.stringify({ memory: true, harness: 'codex', model: 'gpt-6.1-sol', agentDeviceId: 'phone-device' }));
     expect((await readBotProfileFolder(root, 'bot-a')).config).toEqual({ memory: true });
   });
 
@@ -268,7 +268,7 @@ describe('搬家', () => {
     await fs.mkdir(botProfileDir(root, 'bot-a'), { recursive: true });
     const file = path.join(botProfileDir(root, 'bot-a'), 'config.json');
     await fs.writeFile(file, JSON.stringify({ memory: false, mcpServers: ['x'], harness: 'codex', providerId: 'openai',
-      model: 'gpt-6.1-sol', effort: 'medium', modelChain: [{ model: 'gpt-6.1-sol' }] }));
+      model: 'gpt-6.1-sol', effort: 'medium', modelChain: [{ model: 'gpt-6.1-sol' }], agentDeviceId: 'phone-device' }));
     await fs.writeFile(path.join(botProfileDir(root, 'bot-a'), 'SOUL.md'), '已经建好的家');
     const result = await migrateBotProfileFolder(root, 'bot-a', SEED);
     expect(result.seeded).toBe(false);
