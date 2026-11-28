@@ -95,6 +95,21 @@ describe('resolveAuth key-mode identityFile handling', () => {
   // SSH access to the person's own devices (decision 7): the dedicated key Cindy generates is an unencrypted
   // OpenSSH ed25519 key whose public half is the canonical one-line key the device enrolls; resolveAuth reads it
   // as direct key auth and ssh2 parses it back to the same public key. Unit tier (scratch file).
+  // ssh2 drops a leading zero byte of about one ed25519 key in 256 (found 2026-11-28: 17 of 5000 generated keys
+  // were `AAAAC3NzaC1lZDI1NTE5AAAAH…=`, a 31-byte key), which the device's enrollment and OpenSSH reject.
+  it('generates again when ssh2 returns a shortened ed25519 key', async () => {
+    const shortened = { public: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAH5cDVzorRC1b4Aih8nOS1HCvhqkWzQ8jZa4X6nbuQpQ= c', private: 'short' };
+    const good = await generateOpenSshEd25519KeyPair('c');
+    const calls: string[] = [];
+    const pair = await generateOpenSshEd25519KeyPair('c', async (comment) => {
+      calls.push(comment);
+      return calls.length === 1 ? shortened : { public: `${good.publicKey} c`, private: good.privateKey };
+    });
+    expect(calls).toHaveLength(2);
+    expect(pair).toEqual(good);
+    await expect(generateOpenSshEd25519KeyPair('c', async () => shortened)).rejects.toThrow('canonical ssh-ed25519');
+  });
+
   it('reads a generated dedicated ed25519 key as direct key auth', async () => {
     const pair = await generateOpenSshEd25519KeyPair('cindy-device-key');
     expect(pair.privateKey.startsWith('-----BEGIN OPENSSH PRIVATE KEY-----\n')).toBe(true);
