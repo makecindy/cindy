@@ -91,11 +91,16 @@ export function PluginManagementConfirmation(
   // offset to the same layout pass, and a correction can come at any later time. Without a consistent sample the
   // measured layout cannot show the source was on screen, so it never lets Allow answer: from the first display, in
   // every orientation, text size and iOS version, the main button is "Review source and permissions".
-  // Recorded at the press, read at the press (a ref, not the render): a press answers only for the consent reviewed.
+  // Recorded at the press, read at the press (a ref, not the render): Allow answers only for the consent reviewed.
   // Reviewed stays with the requestId: turning the phone or changing the text size afterwards keeps it reviewed (the
   // reviewed list is drawn anew for the new size, from its top: the source first); another consent starts again from the
-  // review step. Known limit: review and Allow are the same button in the same place, so the second tap of a quick double
-  // tap can land on Allow after the redraw (as in Android's compact layout); proposed to the maintainer, not handled here.
+  // review step.
+  // Review and Allow are separate controls that never share a place (maintainer review 06:44, by layout alone): the
+  // buttons are the same before and after the review step, in a footer at the bottom of a sheet whose height the step
+  // does not change. The bottom row is Reject and "Review source and permissions" (stacked: Review above Reject);
+  // "Allow and continue" is its own full-width row above them, unavailable until this consent is reviewed. Reviewed, the
+  // review button stays where it was, unavailable, with the same label (so the same size), so a second tap there, however
+  // soon, does nothing; Reject never moves.
   const requestId = consent?.requestId ?? null;
   const reviewedRef = useRef<string | null>(null);
   const [reviewedFor, setReviewedFor] = useState<string | null>(null);
@@ -104,7 +109,7 @@ export function PluginManagementConfirmation(
   // regular layout would leave the list a short strip under the pinned summary.
   const landscape = windowWidth > windowHeight;
   const compact = plan.mode === "compact" || reviewed || landscape;
-  const needsReview = !reviewed && info?.allowBlocked !== true;
+  const allowReady = reviewed && info?.allowBlocked !== true;
   // The pinned summary's content height, for this layout key only.
   const [summaryContent, setSummaryContent] = useState<{ for: string | null; height: number }>({ for: null, height: 0 });
   const summaryHeight = summaryContent.for === layoutKey ? summaryContent.height : 0;
@@ -123,44 +128,47 @@ export function PluginManagementConfirmation(
         {text}
       </Text>
     ) : null;
-  const answerButton = (accept: boolean) => (
-    <Button
-      key={String(accept)}
-      testID={"plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject")}
-      onPress={() => {
-        // This render's consent: a press from an earlier render answers nothing newer (usePluginConsent checks it too).
-        if (accept && (needsReview || reviewedRef.current !== requestId)) {
-          if (info?.allowBlocked === true || !requestId) return;
-          reviewedRef.current = requestId;
-          setReviewedFor(requestId);
-          return;
-        }
-        // A consent that can only be rejected never answers Allow, even reviewed (the button is disabled too).
-        if (accept && info?.allowBlocked === true) return;
-        answer(accept);
-      }}
-      modifiers={[
-        buttonStyle(accept ? "borderedProminent" : "bordered"),
-        ...(accept ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),
-        disabled(
-          !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
-            || (accept && info?.allowBlocked === true),
-        ),
-        frame({ maxWidth: Infinity, minHeight: 44 }),
-      ]}
-    >
-      <Text
+  const answerable = props.active && !props.state.busy && !props.state.answerHeld && props.state.online;
+  /** One answer control: `allow` (its own row), `review` / `reviewed` (the same place), `reject`. */
+  const answerButton = (kind: "allow" | "review" | "reviewed" | "reject") => {
+    const prominent = kind !== "reject";
+    return (
+      <Button
+        key={kind === "reviewed" ? "review" : kind}
+        testID={"plugins.management." + kind}
+        onPress={() => {
+          if (kind === "reject") { answer(false); return; }
+          if (kind === "review") {
+            // This render's consent; a second press of this consent's review does nothing more.
+            if (!requestId || reviewedRef.current === requestId) return;
+            reviewedRef.current = requestId;
+            setReviewedFor(requestId);
+            return;
+          }
+          // Allow: only for the consent reviewed (read at the press), never for one that can only be rejected.
+          if (kind === "allow" && requestId && reviewedRef.current === requestId && info?.allowBlocked !== true) answer(true);
+        }}
         modifiers={[
-          font({ textStyle: "subheadline", weight: "medium" }),
-          ...(accept ? [foregroundStyle(colors.ctaText)] : []),
-          // The label wraps rather than truncates at large text sizes.
-          fixedSize({ horizontal: false, vertical: true }),
+          buttonStyle(prominent ? "borderedProminent" : "bordered"),
+          ...(prominent ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),
+          disabled(!answerable || kind === "reviewed" || (kind === "allow" && !allowReady)),
+          frame({ maxWidth: Infinity, minHeight: 44 }),
         ]}
       >
-        {t("plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject"))}
-      </Text>
-    </Button>
-  );
+        <Text
+          modifiers={[
+            font({ textStyle: "subheadline", weight: "medium" }),
+            ...(prominent ? [foregroundStyle(colors.ctaText)] : []),
+            // The label wraps rather than truncates at large text sizes.
+            fixedSize({ horizontal: false, vertical: true }),
+          ]}
+        >
+          {t("plugins.management." + (kind === "reviewed" ? "review" : kind))}
+        </Text>
+      </Button>
+    );
+  };
+  const reviewSlot = answerButton(reviewed ? "reviewed" : "review");
   const summaryHeading = info?.highRisk ? (
     <Text
       testID="plugins.management.highRiskTitle"
@@ -237,15 +245,14 @@ export function PluginManagementConfirmation(
               </Overlay>
             </VStack>
           ) : null}
-          {stacked ? (
-            <VStack testID="plugins.management.actions" spacing={spacing.sm} modifiers={[forRequest("plugins.management.actions"), onGeometryChange(measure("actions"))]}>
-              {[true, false].map((accept) => answerButton(accept))}
-            </VStack>
-          ) : (
-          <HStack testID="plugins.management.actions" spacing={spacing.md} modifiers={[forRequest("plugins.management.actions"), onGeometryChange(measure("actions"))]}>
-            {[false, true].map((accept) => answerButton(accept))}
-          </HStack>
-          )}
+          <VStack testID="plugins.management.actions" spacing={spacing.sm} modifiers={[forRequest("plugins.management.actions"), onGeometryChange(measure("actions"))]}>
+            {answerButton("allow")}
+            {stacked ? (
+              <VStack testID="plugins.management.answerRow" spacing={spacing.sm}>{reviewSlot}{answerButton("reject")}</VStack>
+            ) : (
+              <HStack testID="plugins.management.answerRow" spacing={spacing.md}>{answerButton("reject")}{reviewSlot}</HStack>
+            )}
+          </VStack>
         </VStack>
       }
     >

@@ -67,7 +67,16 @@ export function PluginManagementConfirmation(
   const [crampedFor, setCrampedFor] = useState<string | null>(null);
   const cramped = fitKey !== null && crampedFor === fitKey;
   const compact = plan.mode === "compact" || reviewed || cramped;
-  const needsReview = compact && !reviewed && info?.allowBlocked !== true;
+  // Compact: review and Allow are separate controls that never share a place (maintainer review 06:44, by layout alone,
+  // the same as iOS). The buttons are the same before and after the review step, at the bottom of a sheet of fixed
+  // height (its maximum, which a compact sheet fills anyway), so the step moves nothing: the bottom row is Reject and
+  // "Review source and permissions" (stacked: Review above Reject), "Allow and continue" its own full-width row above
+  // them, unavailable until this consent is reviewed; reviewed, the review button stays where it was, unavailable, with
+  // the same label. Regular keeps Reject and Allow in one row; an Allow pressed before the layout confirms the regular
+  // layout turns the sheet compact, where that place becomes "Review" (a review, never an answer).
+  const reviewedRef = useRef<string | null>(null);
+  const requestId = consent?.requestId ?? null;
+  const allowReadyCompact = reviewed && info?.allowBlocked !== true;
   const list = useScrollOverflow(), summary = useScrollOverflow();
   const measuredAll = consentSheetMeasured(sizes, lineCount);
   useEffect(() => {
@@ -96,6 +105,42 @@ export function PluginManagementConfirmation(
   // Over the scroll area's lower edge while more is below: the sheet's own surface color (one token, so it follows light
   // and dark mode), with a scroll thumb in the `borderStrong` token that stays visible in both (dispatcher Q-1).
   const fade = (testID: string) => <ScrollFade testID={testID} color={colors.surfaceElevated} height={FADE_HEIGHT} />;
+  const answerable = props.active && !props.state.busy && !props.state.answerHeld && props.state.online;
+  /** One answer control: `allow` (compact: its own row; regular: beside Reject), `review` / `reviewed` (one place), `reject`. */
+  const answerButton = (kind: "allow" | "review" | "reviewed" | "reject") => {
+    const prominent = kind !== "reject";
+    const unavailable = !answerable || kind === "reviewed"
+      || (kind === "allow" && (info?.allowBlocked === true || (compact && !allowReadyCompact)));
+    return (
+      <Pressable
+        key={kind === "reviewed" ? "review" : kind}
+        testID={"plugins.management." + kind}
+        accessibilityRole="button"
+        disabled={unavailable}
+        // Regular: screen readers hear Allow unavailable until the check shows the identity block (no visual change).
+        accessibilityState={{ disabled: unavailable || (kind === "allow" && !compact && !allowReady) }}
+        onPress={() => {
+          if (kind === "reject") { answer(false); return; }
+          if (kind === "review") {
+            if (!requestId || reviewedRef.current === requestId) return;
+            reviewedRef.current = requestId;
+            setReviewedFor(requestId);
+            return;
+          }
+          if (kind !== "allow" || info?.allowBlocked === true) return;
+          if (compact) { if (requestId && reviewedRef.current === requestId) answer(true); return; }
+          if (!confirmedNow()) { if (fitKey) setCrampedFor(fitKey); return; }
+          answer(true);
+        }}
+        style={[styles.button, (stacked || (compact && kind === "allow")) && styles.stackedButton, prominent && styles.primary,
+          prominent && unavailable && styles.unavailable]}
+      >
+        <Text style={[styles.label, styles.buttonLabel, prominent && styles.primaryText]}>
+          {t("plugins.management." + (kind === "reviewed" ? "review" : kind))}
+        </Text>
+      </Pressable>
+    );
+  };
   return (
     <SheetModal
       nativePresentation
@@ -106,7 +151,7 @@ export function PluginManagementConfirmation(
       {/* Drawn anew for each consent, window size and text size (maintainer reviews 18:13, 18:20): both scroll areas
           start at their top and every size is reported again; redrawing the same consent keeps where the person was
           reading. */}
-      <View key={layoutKey ?? "none"} style={styles.sheet} testID="plugins.managementConfirmation">
+      <View key={layoutKey ?? "none"} style={[styles.sheet, compact && styles.compactSheet]} testID="plugins.managementConfirmation">
         <View style={styles.listArea}>
           <ScrollView ref={listRef} contentContainerStyle={[styles.content, list.thumbGutter]} testID="plugins.management.list" showsVerticalScrollIndicator={false}
             accessibilityHint={t("plugins.management.scrollHint")}
@@ -193,31 +238,12 @@ export function PluginManagementConfirmation(
             </View>
           </View>
         ) : null}
-        <View testID="plugins.management.actions" style={[styles.actions, stacked && styles.stackedActions]} onLayout={measure("actions")}>
-          {[false, true].map((accept) => (
-            <Pressable
-              key={String(accept)}
-              testID={"plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject")}
-              accessibilityRole="button"
-              disabled={
-                !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
-                || (accept && info?.allowBlocked === true)
-              }
-              // Screen readers hear it unavailable until the check shows the identity block (no visual change).
-              accessibilityState={{ disabled: !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
-                || (accept && (info?.allowBlocked === true || !allowReady)) }}
-              onPress={() => {
-                if (accept && needsReview) { setReviewedFor(consent!.requestId); return; }
-                if (accept && !compact && !confirmedNow()) { if (fitKey) setCrampedFor(fitKey); return; }
-                answer(accept);
-              }}
-              style={[styles.button, stacked && styles.stackedButton, accept && styles.primary, accept && info?.allowBlocked && styles.unavailable]}
-            >
-              <Text style={[styles.label, styles.buttonLabel, accept && styles.primaryText]}>
-                {t("plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject"))}
-              </Text>
-            </Pressable>
-          ))}
+        <View testID="plugins.management.actions" style={styles.footer} onLayout={measure("actions")}>
+          {compact ? answerButton("allow") : null}
+          <View testID="plugins.management.answerRow" style={[styles.actions, stacked && styles.stackedActions]}>
+            {answerButton("reject")}
+            {compact ? answerButton(reviewed ? "reviewed" : "review") : answerButton("allow")}
+          </View>
         </View>
       </View>
     </SheetModal>
@@ -233,6 +259,8 @@ const makeStyles = (c: ThemeColors) =>
       borderTopRightRadius: radius.container,
       padding: spacing.lg + spacing.xs,
     },
+    // Compact fills its maximum (it does not fit anyway), so the review step cannot move the buttons.
+    compactSheet: { height: "85%" },
     content: { gap: spacing.md, paddingBottom: spacing.md },
     identity: { gap: spacing.md },
     permission: { gap: spacing.xs },
@@ -280,6 +308,7 @@ const makeStyles = (c: ThemeColors) =>
       lineHeight: lineHeight.caption,
       color: c.textPrimary,
     },
+    footer: { gap: spacing.sm },
     actions: { flexDirection: "row", gap: spacing.sm },
     // Large text: Allow first, each button the full width, labels wrapping instead of truncating.
     stackedActions: { flexDirection: "column-reverse" },

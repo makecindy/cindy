@@ -361,6 +361,15 @@ function mount(component: any, props: any) {
  */
 /** The layout key a sheet's measured views carry (`consentLayoutKey`) for this consent at the mocked window and text size. */
 const layoutKeyOf = (requestId: string) => `${requestId}|${bridge.width}x${bridge.height}@${bridge.fontScale}`;
+/**
+ * Whether the consent sheet's Allow can be pressed now (maintainer review 06:44: Allow is its own control on both sheets,
+ * drawn and unavailable until this consent is reviewed in the compact layout and on iOS).
+ */
+function allowAvailable(): boolean {
+  const allow = bridge.props.get("plugins.management.allow");
+  if (!allow) return false;
+  return !(allow.disabled ?? allow.modifiers?.find((m: any) => m && "disabled" in m)?.disabled);
+}
 /** iOS: press "Review source and permissions" (the reviewed list then shows the source and summary first). */
 function reviewIOS() {
   act(() => bridge.props.get("plugins.management.review").onPress());
@@ -1498,7 +1507,7 @@ describe("older Host without a repository identity", () => {
     p.state.expectedConsent = expected;
     const { rerender } = mount(PluginManagementConfirmation, p);
     reviewIOS();
-    expect(bridge.props.has("plugins.management.allow"), "reviewed: Allow is offered").toBe(true);
+    expect(allowAvailable(), "reviewed: Allow is offered").toBe(true);
     // The same consent can no longer be allowed here (another source than the one chosen).
     p.state.expectedConsent = { ...expected, source: { kind: "local", sourceId: "SourceB_0123456789abcd" } };
     rerender({ ...p });
@@ -1830,7 +1839,7 @@ describe("pinned high-risk permission", () => {
       const items = () => [...bridge.props.values()].filter((p: any) => fiveLines.includes(p.children));
       items().forEach((item: any, index: number) => act(() => item.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: reviewLines[index] })));
       const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
-      expect({ allow: shown("plugins.management.allow"), review: shown("plugins.management.review") }).toEqual({ allow: false, review: true });
+      expect({ allow: allowAvailable(), review: shown("plugins.management.review") }).toEqual({ allow: false, review: true });
       reviewIOS();
       expect(sheetProps.controller.answer).not.toHaveBeenCalled();
       const ids = order(container);
@@ -1858,7 +1867,7 @@ describe("pinned high-risk permission", () => {
       const lines = () => parts().flatMap((child: any) => child?.props?.children ? [child.props.children].flat() : [child]).filter((child: any) => fiveLines.includes(child?.props?.children));
       lines().forEach((line: any, index: number) => act(() => line.props.onLayout({ nativeEvent: { layout: { height: reviewLines[index] } } })));
       const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
-      expect({ allow: shown("plugins.management.allow"), review: shown("plugins.management.review") }).toEqual({ allow: false, review: true });
+      expect({ allow: allowAvailable(), review: shown("plugins.management.review") }).toEqual({ allow: false, review: true });
       act(() => bridge.props.get("plugins.management.review").onPress());
       expect(sheetProps.controller.answer).not.toHaveBeenCalled();
       const ids = order(container);
@@ -1893,7 +1902,7 @@ describe("pinned high-risk permission", () => {
       bridge.fontScale = 1;
       const { container } = mount(Sheet, props(allFive));
       const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
-      expect({ allow: shown("plugins.management.allow"), review: shown("plugins.management.review") }).toEqual({ allow: true, review: false });
+      expect({ allow: allowAvailable(), review: shown("plugins.management.review") }).toEqual({ allow: true, review: false });
     });
   it("Android pins the summary above the buttons when the identity block and two items fit", () => {
     bridge.fontScale = 2;
@@ -1925,7 +1934,7 @@ describe("pinned high-risk permission", () => {
     expect(container.textContent).toBe(textBefore);
     expect(scroll().style.maxHeight).toBe(plan.mode === "regular" && plan.summaryLines);
     // Large text: the buttons stack, Allow on top (column-reverse), labels wrapping.
-    expect(bridge.props.get("plugins.management.actions").style).toContainEqual({ flexDirection: "column-reverse" });
+    expect(bridge.props.get("plugins.management.answerRow").style).toContainEqual({ flexDirection: "column-reverse" });
   });
   /* 测试价值（Android 复拍 2026-11-26，eb018bba36）
    * - 生产入口与可观察结果：Android 真实确认面板组件；观察主按钮是「查看来源和权限」还是「允许」（iOS 一律先查看，见下文 19:34）。
@@ -1947,10 +1956,10 @@ describe("pinned high-risk permission", () => {
       const lines = (Array.isArray(scroll().children) ? scroll().children : [scroll().children]).flat().filter(Boolean);
       lines.forEach((line: any) => act(() => line.props.onLayout({ nativeEvent: { layout: { height: 20 } } })));
       const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
-      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }, "the estimate says regular").toEqual({ review: false, allow: true });
+      expect({ review: shown("plugins.management.review"), allow: allowAvailable() }, "the estimate says regular").toEqual({ review: false, allow: true });
       act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: visible } } }));
       act(() => bridge.props.get("plugins.management.list").onContentSizeChange(390, 1200));
-      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") })
+      expect({ review: shown("plugins.management.review"), allow: allowAvailable() })
         .toEqual({ review: button === "review", allow: button === "allow" });
     });
   /* 测试价值（维护者 18:13：布局测量完成前「允许并继续」可写出；调度 2026-11-26：实测到达前的那一帧）
@@ -1982,7 +1991,7 @@ describe("pinned high-risk permission", () => {
         expect(shown("plugins.management.allow"), "nothing is drawn differently before the check").toBe(true);
         expect(bridge.props.get("plugins.management.allow").accessibilityState, "screen readers hear it unavailable").toMatchObject({ disabled: true });
         expect(pressAllow(p)).toBe(false);
-        expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+        expect({ review: shown("plugins.management.review"), allow: allowAvailable() }).toEqual({ review: true, allow: false });
       });
   }
   it.each([["Android", AndroidManagementConfirmation]] as const)(
@@ -2012,7 +2021,7 @@ describe("pinned high-risk permission", () => {
       third.state.receipt.consent.requestId = "request-3";
       rerender(third);
       layOutSheet({ identity: 1990, visible: 2000, content: 2400 });
-      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+      expect({ review: shown("plugins.management.review"), allow: allowAvailable() }).toEqual({ review: true, allow: false });
       act(() => bridge.props.get("plugins.management.review").onPress());
       expect(third.controller.answer, "review first, not an answer").not.toHaveBeenCalled();
       // A consent whose own sizes fit answers.
@@ -2064,7 +2073,7 @@ describe("pinned high-risk permission", () => {
       // the ScrollView's own content.
       const scrolling = platform === "iOS" ? inner + inset + 20 : inner;
       layOutSheet({ identity, visible, content: scrolling, innerContent: inner, other: lineHeight, listTop, contentTop: listTop + inset });
-      const regular = container.querySelector('[data-testid="plugins.management.allow"]') !== null;
+      const regular = allowAvailable() && container.querySelector('[data-testid="plugins.management.review"]') === null;
       const identityBottom = platform === "iOS" ? identityTop + identity : identity;
       const fade = scrolling > visible + 1 ? CONSENT_FADE_HEIGHT : 0;
       const fadeTop = (platform === "iOS" ? listTop : 0) + visible - fade;
@@ -2093,7 +2102,7 @@ describe("pinned high-risk permission", () => {
       const { container: other } = mount(Sheet, second);
       layOutSheet({ identity: 220, visible: 230, content: 450 });
       const shown = (id: string) => other.querySelector(`[data-testid="${id}"]`) !== null;
-      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+      expect({ review: shown("plugins.management.review"), allow: allowAvailable() }).toEqual({ review: true, allow: false });
     });
   it.each([["Android", AndroidManagementConfirmation]] as const)(
     "%s: every size in, then the same consent's list shortens (the pinned summary takes its measured height): Allow writes nothing, review first", (_platform, Sheet) => {
@@ -2106,7 +2115,7 @@ describe("pinned high-risk permission", () => {
       // The list shortens to 230.
       act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: 230 } } }));
       if (shown("plugins.management.allow")) expect(pressAllow(p), "the shortened list does not show the block above its fade").toBe(false);
-      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+      expect({ review: shown("plugins.management.review"), allow: allowAvailable() }).toEqual({ review: true, allow: false });
     });
   /* 测试价值（维护者 19:34：竖屏仍可能在来源未完整显示时作答；iOS 复拍 811ac92adc / b098aa578f / b2df9a9469：横屏直开官方来源，
    * 来源在渐隐里仍能作答）
@@ -2157,18 +2166,21 @@ describe("pinned high-risk permission", () => {
   };
   for (const build of [props, customProps])
     for (const [when, report] of Object.entries(reports))
-      it(`iOS (${build === props ? "Cindy market" : "custom market"}) ${when}: the main button is "Review source and permissions", pressing it (twice in one frame too) writes nothing; Allow answers only after it`, () => {
+      it(`iOS (${build === props ? "Cindy market" : "custom market"}) ${when}: the main button is "Review source and permissions", pressing it (twice in one frame too, and again at its place after the redraw) writes nothing; Allow, its own control, answers only after it`, () => {
         bridge.fontScale = 1;
         const p = build(allFive);
         const { container, rerender } = mount(PluginManagementConfirmation, p);
         const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
-        expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }, "from the first display").toEqual({ review: true, allow: false });
+        expect({ review: shown("plugins.management.review"), allow: allowAvailable() }, "from the first display").toEqual({ review: true, allow: false });
         report(rerender, p);
         // The correction arrives after any wait: nothing measured lets Allow answer.
-        expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+        expect({ review: shown("plugins.management.review"), allow: allowAvailable() }).toEqual({ review: true, allow: false });
         const press = bridge.props.get("plugins.management.review").onPress;
         act(() => { press(); press(); });
         expect(p.controller.answer, "review only shows the source and permissions first").not.toHaveBeenCalled();
+        // Maintainer review 06:44: the redrawn callback at the same place (the review button, now reviewed) answers nothing.
+        act(() => bridge.props.get("plugins.management.reviewed").onPress());
+        expect(p.controller.answer, "the review button's place after the redraw").not.toHaveBeenCalled();
         // Reviewed: the source and the high-risk summary come first, in a new list at its top; then Allow answers.
         const ids = order(container);
         expect(ids.indexOf("plugins.management.reviewLead")).toBeGreaterThanOrEqual(0);
@@ -2176,6 +2188,88 @@ describe("pinned high-risk permission", () => {
         act(() => bridge.props.get("plugins.management.allow").onPress());
         expect(p.controller.answer).toHaveBeenCalledWith(true);
       });
+  /* 测试价值（维护者 06:44：首击「查看」触发重绘后，立即调用原位置的新回调会作答；两端紧凑档都原位切换按钮）
+   * - 生产入口与可观察结果：两端真实确认面板组件；按钮区的结构（哪个控件在哪一行），在原位置跨重绘连点、再点「允许」时
+   *   是否写出 answer(true)、写出几次。
+   * - 依据：「查看」与「允许」是两个控件，「允许」单独一行在「拒绝 | 查看」那一行上方；查看前后按钮区结构不变（只换可用状态），
+   *   所以原位置的热区查看后仍是那个按钮（不可用），与「允许」不重叠；「拒绝」不动。只靠布局规则，不靠测量或计时。
+   * - 最小失败输入：查看后在原位置用新回调再按一下；30bcf99f59 上写出允许。tier: unit。
+   */
+  const footerShape = (root: HTMLElement) => {
+    const actions = root.querySelector('[data-testid="plugins.management.actions"]')!;
+    return [...actions.querySelectorAll("[data-testid]")].map((node) => [node.getAttribute("data-testid"),
+      node.parentElement?.closest("[data-testid]")?.getAttribute("data-testid")]);
+  };
+  const layouts = {
+    "side by side": { width: 390, height: 844, fontScale: 1 },
+    "stacked (large text)": { width: 375, height: 667, fontScale: 2 },
+    "stacked (AX5)": { width: 375, height: 667, fontScale: 3.1 },
+    "landscape, large text": { width: 844, height: 390, fontScale: 2 },
+  } as const;
+  for (const [platform, Sheet] of [["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)
+    for (const [name, window] of Object.entries(layouts))
+      it(`${platform} ${name}: taps at the review button's place, across redraws, stay pending; Allow is its own row above and answers once`, () => {
+        Object.assign(bridge, window);
+        const state = consentState(allFive);
+        const answer = vi.fn(() => { state.answerHeld = state.receipt.consent.requestId; });
+        const p = { state, controller: { getState: () => state, answer } as any, active: true, deviceName: "Mac" };
+        const { container } = mount(Sheet, p);
+        const slot = () => {
+          const row = container.querySelector('[data-testid="plugins.management.answerRow"]')!;
+          return [...row.children].map((node) => node.getAttribute("data-testid")!).find((id) => id !== "plugins.management.reject")!;
+        };
+        const press = (id: string) => act(() => bridge.props.get(id).onPress());
+        // Android opens regular (Allow beside Reject); an Allow pressed before the layout confirms it turns the sheet
+        // compact, and that place becomes "Review": a review, never an answer.
+        if (platform === "Android") { press(slot()); expect(answer).not.toHaveBeenCalled(); }
+        expect(slot()).toBe("plugins.management.review");
+        const before = footerShape(container);
+        // Allow: its own control, outside the row of Reject and Review, and unavailable before the review.
+        expect(before.find(([id]) => id === "plugins.management.allow")?.[1]).toBe("plugins.management.actions");
+        expect(allowAvailable()).toBe(false);
+        press("plugins.management.allow");
+        expect(answer, "Allow before the review").not.toHaveBeenCalled();
+        // The first tap reviews; every later tap at that place, each through the redrawn (new) callback, does nothing.
+        press(slot());
+        for (let tap = 0; tap < 3; tap++) press(slot());
+        expect(slot()).toBe("plugins.management.reviewed");
+        expect(answer, "taps at the review button's place after the redraw").not.toHaveBeenCalled();
+        expect(state.outcome).toBe("confirmation");
+        // The same controls in the same places: only which one is available changed (no layout moves them).
+        expect(footerShape(container)).toEqual(before.map(([id, parent]) => [id === "plugins.management.review" ? "plugins.management.reviewed" : id, parent]));
+        // Reject stayed where it was.
+        expect(footerShape(container).findIndex(([id]) => id === "plugins.management.reject")).toBe(before.findIndex(([id]) => id === "plugins.management.reject"));
+        // The other place: answers, once.
+        expect(allowAvailable()).toBe(true);
+        press("plugins.management.allow");
+        press("plugins.management.allow");
+        expect(answer).toHaveBeenCalledTimes(1);
+        expect(answer).toHaveBeenCalledWith(true);
+      });
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s: a consent that can only be rejected keeps Allow unavailable before and after the review; Reject answers", (platform, Sheet) => {
+      bridge.fontScale = 2; bridge.width = 375; bridge.height = 667;
+      const state = { ...consentState(allFive), expectedConsent: undefined } as any;
+      const answer = vi.fn();
+      const allowance = () => ({ allow: false, reason: "sourceMismatch" });
+      const p = { state, controller: { getState: () => state, answer, consentAllowance: allowance } as any, active: true, deviceName: "Mac" };
+      const { container } = mount(Sheet, p);
+      const press = (id: string) => act(() => bridge.props.get(id).onPress());
+      if (platform === "Android") press("plugins.management.allow");
+      if (container.querySelector('[data-testid="plugins.management.review"]')) press("plugins.management.review");
+      for (let tap = 0; tap < 3; tap++) press("plugins.management.allow");
+      expect(allowAvailable()).toBe(false);
+      expect(answer).not.toHaveBeenCalledWith(true);
+      press("plugins.management.reject");
+      expect(answer).toHaveBeenCalledWith(false);
+    });
+  it("Android compact fills its maximum height, so the review step cannot move the buttons", () => {
+    bridge.fontScale = 2;
+    mount(AndroidManagementConfirmation, props(allFive));
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    const sheet = [bridge.props.get("plugins.managementConfirmation").style].flat(3).filter(Boolean);
+    expect(sheet).toContainEqual({ height: "85%" });
+  });
   it("iOS: reviewed, then turned to landscape or a larger text size: still reviewed for that consent, the reviewed list drawn anew from its top", () => {
     bridge.fontScale = 1;
     const p = props(allFive);
@@ -2186,7 +2280,7 @@ describe("pinned high-risk permission", () => {
     bridge.width = 667; bridge.height = 375; bridge.fontScale = 1.6;
     rerender({ ...p });
     const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
-    expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: false, allow: true });
+    expect({ review: shown("plugins.management.review"), allow: allowAvailable() }).toEqual({ review: false, allow: true });
     expect(listId(), "a new reviewed list, from its top (the source first)").toBe(`plugins.management.reviewed:${layoutKeyOf("request")}`);
     expect(listId()).not.toBe(before);
     act(() => bridge.props.get("plugins.management.allow").onPress());
@@ -2202,7 +2296,7 @@ describe("pinned high-risk permission", () => {
     second.state.receipt.consent.requestId = "request-2";
     rerender(second);
     const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
-    expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+    expect({ review: shown("plugins.management.review"), allow: allowAvailable() }).toEqual({ review: true, allow: false });
     // The earlier sheet's Allow, pressed after the switch: it was for the first consent.
     second.controller.getState = () => second.state;
     act(() => lateAllow());
@@ -2362,12 +2456,13 @@ describe("pinned high-risk permission", () => {
       bridge.fontScale = 2.4;
       bridge.width = 800;
       const wide = mount(Sheet, props(allFive)).container;
-      const kind = (root: HTMLElement) => root.querySelector('[data-testid="plugins.management.actions"]')!.getAttribute("data-native");
-      if (platform === "Android") expect(bridge.props.get("plugins.management.actions").style).not.toContainEqual({ flexDirection: "column-reverse" });
+      // The row of Reject and the review button (Allow has its own row above it: maintainer review 06:44).
+      const kind = (root: HTMLElement) => root.querySelector('[data-testid="plugins.management.answerRow"]')!.getAttribute("data-native");
+      if (platform === "Android") expect(bridge.props.get("plugins.management.answerRow").style).not.toContainEqual({ flexDirection: "column-reverse" });
       else expect(kind(wide)).toBe("HStack");
       bridge.width = 375;
       const narrow = mount(Sheet, props(allFive)).container;
-      if (platform === "Android") expect(bridge.props.get("plugins.management.actions").style).toContainEqual({ flexDirection: "column-reverse" });
+      if (platform === "Android") expect(bridge.props.get("plugins.management.answerRow").style).toContainEqual({ flexDirection: "column-reverse" });
       else expect(kind(narrow)).toBe("VStack");
     });
   it("iOS compact moves the sheet title into the scrolled list and sizes the footer to its content (K-1, K-3)", () => {
