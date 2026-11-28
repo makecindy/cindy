@@ -3271,7 +3271,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     : null;
   const localModelIssueText = localModelIssue ? t(`ccAgent.draft.savedModel.${localModelIssue}`) : null;
 
-  // ─── 未发送任务(见 provisionalDraftTask.ts):开始输入就先在本机建出任务并预热 Agent,
+  // ─── 未发送任务(见 provisionalDraftTask.ts):开始输入就先在本机建出任务；直连时预热 Agent，
   // 清空输入就删掉,发送时直接接着用。只覆盖本机普通项目 / 对话草稿。
   const provisionalDraftArgs = useMemo<ProvisionalDraftCreateArgs | null>(() => {
     if (isDeviceLinkDraft || usesDeviceCatalog || localModelIssue) return null;
@@ -3319,6 +3319,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   ]);
   const provisionalDraftArgsRef = useRef(provisionalDraftArgs);
   provisionalDraftArgsRef.current = provisionalDraftArgs;
+  const provisionalDraftRoutingRef = useRef({ draft: savedDraft, awaitingRoute: !!effectiveDisplayModelGroup });
+  provisionalDraftRoutingRef.current = { draft: savedDraft, awaitingRoute: !!effectiveDisplayModelGroup };
   const provisionalTitleLabelsRef = useRef({ image: '', file: '' });
   provisionalTitleLabelsRef.current = {
     image: t('ccAgent.autoTitle.image'),
@@ -3357,7 +3359,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           sessionProviderId: args.providerId ?? null,
         });
       }
-      if (session.workingDir) {
+      // 路由尚未选号时只保留本地草稿。创建可能跨过用户改选，须在调用预热前复核当前选择，
+      // 包括草稿 store 已更新但组件还没重新渲染的间隙。
+      const routing = provisionalDraftRoutingRef.current;
+      if (session.workingDir && args === provisionalDraftArgsRef.current
+        && !routing.awaitingRoute && getDraft() === routing.draft) {
         makerChatStore.prewarmSession(
           session.id,
           args.model,

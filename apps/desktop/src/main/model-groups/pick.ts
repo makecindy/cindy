@@ -27,6 +27,13 @@ export interface ModelGroupInnerQuota {
   headroom: number | null;
 }
 
+export interface ModelGroupCandidateFactsOptions {
+  sshHostId?: string;
+  cachedQuota?: boolean;
+  /** Only this exact source may retain a merged alias while resuming its existing native thread. */
+  continuingSourceKey?: string;
+}
+
 export interface ModelGroupCandidateFacts {
   /**
    * 供应商已连接、模型现在可为新任务选用、对应引擎已安装；不在本机的来源还要求那个位置此刻能选、

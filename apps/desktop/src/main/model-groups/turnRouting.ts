@@ -22,7 +22,7 @@ import {
   type ModelGroupsConfig,
   type ModelGroupSelection,
 } from '../../shared/modelGroups.js';
-import { pickModelGroupCandidate, type ModelGroupCandidateFacts } from './pick.js';
+import { pickModelGroupCandidate, type ModelGroupCandidateFacts, type ModelGroupCandidateFactsOptions } from './pick.js';
 import { modelGroupRouteFor } from './routeFor.js';
 import type { ModelGroupSessionBinding } from './sessionBindings.js';
 import { isModelGroupRecoverySource } from './switchOffer.js';
@@ -41,6 +41,8 @@ export interface ModelGroupTurnCurrentRoute {
   effort?: string | null;
   fastMode?: boolean | 'ultrafast' | null;
   remoteHostId?: string | null;
+  /** 原生线程 ID；单有预热创建的 ID 不能证明这个来源已跑过。 */
+  sdkSessionId?: string | null;
   /** 上一轮结束时间(Unix ms)；首轮尚未跑完时为 null/undefined，不触发缓存过期重选。 */
   lastTurnEndedAt?: number | null;
   /** 当前已知上下文 token 数；用于尽量避免切到装不下的小窗口模型。 */
@@ -50,6 +52,8 @@ export interface ModelGroupTurnCurrentRoute {
 export interface ModelGroupTurnContext {
   hasImages?: boolean;
   autoResume?: boolean;
+  /** The owner is invoking an explicitly opened current source from another device. */
+  currentRemoteSourceAdmitted?: boolean;
   /** 如伙伴 profile 里配了 modelGroup，可作为会话无显式绑定时的托管来源。 */
   overrideSelection?: ModelGroupSelection | null;
 }
@@ -93,7 +97,7 @@ export interface ModelGroupTurnRoutingDeps {
   candidateFacts(
     route: ModelGroupRoute,
     context?: ModelGroupResolveRequest['context'],
-    options?: { sshHostId?: string; cachedQuota?: boolean },
+    options?: ModelGroupCandidateFactsOptions,
   ): Promise<ModelGroupCandidateFacts[]>;
   now(): number;
 }
@@ -160,6 +164,10 @@ export async function evaluateModelGroupBeforeSend(
       }
     : target.route;
 
+  // 新任务也有选路记录，预热还可能已分配 SDK ID；只有实际跑过的当前线程才能保留旧入口。
+  const hasRunNativeThread = !!current.sdkSessionId && Number.isFinite(current.lastTurnEndedAt)
+    && (current.lastTurnEndedAt ?? 0) > 0;
+  const continuingSourceKey = hasRunNativeThread || turn.currentRemoteSourceAdmitted ? currentKey : undefined;
   const facts = await deps.candidateFacts(
     route,
     {
@@ -167,7 +175,7 @@ export async function evaluateModelGroupBeforeSend(
       ...(current.effort ? { effort: current.effort } : {}),
       ...(current.fastMode ? { fastMode: current.fastMode } : {}),
     },
-    { ...(sshHostId ? { sshHostId } : {}), cachedQuota: true },
+    { ...(sshHostId ? { sshHostId } : {}), cachedQuota: true, continuingSourceKey },
   );
 
   // 用全量候选先跑一次只读 trace，精确判定当前来源是否不可用或已满额。

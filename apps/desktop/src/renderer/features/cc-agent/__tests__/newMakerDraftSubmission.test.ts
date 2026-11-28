@@ -89,7 +89,7 @@ function visit(node: ts.Node) {
   }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
     const name = ts.isIdentifier(node.name) ? node.name.text : '';
-    if (['createSession', 'sendWithPluginEngine', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
+    if (['createSession', 'openProvisionalDraftTask', 'sendWithPluginEngine', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
       callbacks[name] = node.initializer.arguments[0];
     }
   }
@@ -129,6 +129,39 @@ function executable(name: string) {
   executableCache.set(name, code);
   return code;
 }
+
+// 补足首页输入阶段：真实 typing callback 建本地临时任务，但尚未选路时不能调用预热。
+it.each(['direct', 'saved route', 'implicit route', 'changed during create'] as const)(
+  'respects the current routing selection before provisional prewarm (%s)', async (kind) => {
+    const args = { id: 'draft', agentKind: 'codex', model: 'gpt', effort: '', permissionMode: 'default', providerId: 'old-b' };
+    const renderedDraft = { modelGroup: null as null | { type: 'route'; id: string } };
+    let currentDraft = renderedDraft;
+    const provisionalDraftRoutingRef = { current: { draft: renderedDraft, awaitingRoute: kind === 'saved route' || kind === 'implicit route' } };
+    let finishCreate!: (row: { id: string; workingDir: string }) => void;
+    const created = new Promise<{ id: string; workingDir: string }>(resolve => { finishCreate = resolve; });
+    const ensureProvisionalDraftTask = vi.fn(() => created);
+    const prewarmSession = vi.fn();
+    const setSessionRuntime = vi.fn();
+    const open = runInNewContext(executable('openProvisionalDraftTask'), {
+      provisionalDraftArgsRef: { current: args }, provisionalDraftRoutingRef,
+      getDraft: () => currentDraft,
+      canOpenProvisionalDraftTask: () => true,
+      ensureProvisionalDraftTask, provisionalDraftTaskId: () => args.id,
+      provisionalDraftTaskGeneration: () => 1, provisionalSeededKeyRef: { current: null },
+      makerChatStore: { setSessionRuntime, prewarmSession }, dbToMakerAgentKind,
+      refreshProvisionalTitle: vi.fn(), getComposerDraftPresence: () => true,
+      armProvisionalEmptyCheck: vi.fn(), NEW_MAKER_DRAFT_KEY: 'draft',
+    });
+    open();
+    if (kind === 'changed during create') currentDraft = { modelGroup: { type: 'route', id: 'new-choice' } };
+    finishCreate({ id: args.id, workingDir: '/virtual/project' });
+    await created;
+    expect(ensureProvisionalDraftTask).toHaveBeenCalledWith(args);
+    expect(setSessionRuntime).toHaveBeenCalledOnce();
+    expect(prewarmSession.mock.calls).toEqual(kind === 'direct'
+      ? [[args.id, args.model, args.effort, args.permissionMode, '/virtual/project']] : []);
+  },
+);
 
 // #7395: execute the actual route wrapper with its real recovery controller.
 // Other cases inject createSession, so they cannot observe this error handoff.

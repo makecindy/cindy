@@ -170,8 +170,7 @@ describe('createModelGroupResolver', () => {
       scope: () => 'owner', now: () => NOW,
     });
     const request = { selection: { type: 'route', id: group.id } as const, dryRun };
-    // 历史任务恢复读取候选事实，不能仅因连接归并就把原有绑定视为失效。
-    expect((await resolver.candidateFacts(group))[0]).toMatchObject({ available: true });
+    expect((await resolver.candidateFacts(group))[0]).toMatchObject({ available: false });
     const withA = await resolver.resolve(request);
     expect(withA).toMatchObject({ outcome: 'routed', route: { providerId: 'openai', accountId: 'a' } });
     expect(withA.trace[0]).toMatchObject({ state: 'skipped', why: 'unavailable' });

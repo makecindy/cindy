@@ -23,7 +23,9 @@ import {
   type ModelGroupsConfig,
   type ModelGroupTraceQuota,
 } from '../../../shared/modelGroups.js';
+import type { ProviderView } from '@cindy/model-providers';
 import type { ModelGroupCandidateFacts } from '../pick.js';
+import { createModelGroupResolver, modelGroupQuotaKey } from '../resolver.js';
 import { computeModelGroupSwitchOffer, isModelGroupRecoverySource, type ModelGroupSwitchOfferSessionRow } from '../switchOffer.js';
 
 const paths = vi.hoisted(() => ({ file: '', owner: 'owner-1' as string | null }));
@@ -51,7 +53,7 @@ import {
   unbindModelGroupSession,
 } from '../sessionBindings.js';
 import { createModelGroupHandlers } from '../handlersCore.js';
-import { runModelGroupBeforeSend } from '../applyTurnRouting.js';
+import { runModelGroupBeforeSend, type RunModelGroupBeforeSendSessionRow } from '../applyTurnRouting.js';
 import { evaluateModelGroupBeforeSend } from '../turnRouting.js';
 import {
   applyPendingAgentSwitchIfIdle,
@@ -611,6 +613,74 @@ describe('model group session bindings', () => {
     expect(result.switched).toBe(committed);
     expect(bootstrapAccount.mock.calls).toEqual(committed ? [['second']] : []);
     expect(await readModelGroupRoutedAccount(sessionId, ROW.providerId!)).toBe(committed ? 'second' : 'first');
+  });
+
+  // 本机新任务首发不能把已归并旧 ID 当接手来源；只有原生线程已有轮次时才能保留当前旧来源。
+  // unit，实际 resolver → 持久路由绑定 → 发送前执行器；最小输入是 A 可选、B 关闭、B 的旧入口仍打开。
+  it.each(['saved', 'auto:openai'])('respects account switches at first dispatch of %s', async (id) => {
+    const a = { agentKind: 'codex', providerId: 'openai', accountId: 'a', model: 'gpt' } as const;
+    const oldB = { agentKind: 'codex', providerId: 'old-b', model: 'gpt' } as const;
+    const group: ModelGroupRoute = {
+      id, name: 'OpenAI', strategy: 'order',
+      candidates: [oldB, { ...a, accountId: 'b', off: true }, a],
+    };
+    const config = () => ({ routes: [group] });
+    const view = (providerId: string) => ({
+      id: providerId, name: providerId, connected: true, source: 'user', agents: ['codex'],
+      routing: { codex: { enabled: true } },
+      models: { codex: [{ id: 'gpt', name: 'GPT', efforts: [] }] },
+    }) as unknown as ProviderView;
+    const resolver = createModelGroupResolver({
+      config,
+      views: async () => [view('openai'), { ...view('old-b'), subscriptionPoolAlias: true }],
+      agents: () => ['codex'], harnessInstalled: async () => true,
+      localAccount: (_id, accountId) => ({ available: true, label: accountId }),
+      // 发前可能读到不同的 cached quota；即使 A 触发预检，也不能以关闭的 B 为后备。
+      quotaWindows: async (options) => new Map([
+        [modelGroupQuotaKey(undefined, 'openai', 'a'), used(options?.cached ? 100 : 10)],
+      ]),
+      scope: () => 'owner', now: () => NOW,
+    });
+    const selection = { type: 'route', id } as const;
+    const resolved = await resolver.resolve({ selection });
+    expect(resolved).toMatchObject({ outcome: 'routed', route: a });
+    if (resolved.outcome !== 'routed') throw new Error('Expected initial route');
+    bindModelGroupSession('new', selection, modelGroupCandidateKey(resolved.route), NOW);
+    bindModelGroupSession('old', selection, modelGroupCandidateKey(oldB), NOW - HOUR);
+    const applySameEngineRoute = vi.fn(async () => ({ persistedRoute: true }));
+    const performCrossSwitch = vi.fn(async () => ({ switched: true }));
+    const pinLocalSource = vi.fn();
+    const run = (sessionId: string, row: RunModelGroupBeforeSendSessionRow) =>
+      runModelGroupBeforeSend({
+        readSession: async () => row,
+        evaluateTurnRouting: (sid, current, turn) => evaluateModelGroupBeforeSend({
+          readBinding: readModelGroupBindingForDispatch, config,
+          candidateFacts: resolver.candidateFacts, now: () => NOW,
+        }, sid, current, turn),
+        applySameEngineRoute, performCrossSwitch, pinLocalSource,
+      }, sessionId);
+    expect(await run('new', { ...a, sdkSessionId: 'bootstrap-without-turn' })).toEqual({ switched: false });
+    expect(await readModelGroupRoutedAccount('new', 'openai')).toBe('a');
+    expect(pinLocalSource).not.toHaveBeenCalled();
+    expect(applySameEngineRoute).not.toHaveBeenCalled();
+    expect(performCrossSwitch).not.toHaveBeenCalled();
+
+    // 已执行的同线程旧绑定继续可用，即使 A 现在可接手。
+    const historyDeps: Parameters<typeof evaluateModelGroupBeforeSend>[0] = {
+      readBinding: readModelGroupBindingForDispatch, config,
+      candidateFacts: (route: ModelGroupRoute, context, options) => resolver.candidateFacts(route, context, { ...options, cachedQuota: false }),
+      now: () => NOW,
+    };
+    expect(await evaluateModelGroupBeforeSend(historyDeps, 'old', {
+      ...oldB, sdkSessionId: 'existing-thread', lastTurnEndedAt: NOW - 1,
+    })).toEqual({ action: 'keep', reason: 'cache-warm' });
+    expect(await evaluateModelGroupBeforeSend(historyDeps, 'old', {
+      ...oldB, sdkSessionId: 'bootstrap-without-turn',
+    })).toMatchObject({ action: 'switch', target: a });
+    // 同账号远程明确开放的当前入口不是新的接手目标，首轮照样能使用。
+    expect(await evaluateModelGroupBeforeSend(historyDeps, 'old', {
+      ...oldB, sdkSessionId: 'bootstrap-without-turn',
+    }, { currentRemoteSourceAdmitted: true })).toEqual({ action: 'keep', reason: 'cache-warm' });
   });
 
   it('persists detached state for companion sessions so bot profile modelGroup does not re-manage them', async () => {

@@ -35,6 +35,7 @@ import { applyRouteWeightStep, type RouteWeightStep } from '../provider-group/sc
 import {
   pickModelGroupCandidate,
   type ModelGroupCandidateFacts,
+  type ModelGroupCandidateFactsOptions,
   type ModelGroupInnerQuota,
 } from './pick.js';
 import { modelGroupRouteFor } from './routeFor.js';
@@ -276,7 +277,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     cachedQuota = false,
     remoteInvocableOnly = false,
     sshHostId?: string,
-    newSelection = false,
+    continuingSourceKey?: string,
   ): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
     // 供应商路由展开出来的路由在选择器里是普通模型行：思考深度与 Fast 用用户在那里选的；路由自己设了思考深度时以它为准。
@@ -369,10 +370,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           ? { views: sshCodex ?? [], agents: ['codex'] }
           : { views, agents };
       const view = catalog.views.find((item) => item.id === candidate.providerId);
-      // 本机新选路不能把归并旧连接视为独立来源，否则会绕过池内逐账号开关。
-      // 已绑定任务的恢复及远程授权目录仍沿用既有判据，不能因为 owner 的归并标记拒绝已开放的旧入口。
-      const mergedAlias = newSelection && !agentDeviceId && !sshHostId && !remoteInvocableOnly
-        && view?.subscriptionPoolAlias === true;
+      // 本机归并旧入口不参加新选路（也不能作为发前接手来源）；仅允许原线程继续用当前旧入口。
+      // 远程授权目录仍沿用既有判据，归并标记不能覆盖已开放的旧入口。
+      const mergedAlias = !agentDeviceId && !sshHostId && !remoteInvocableOnly
+        && view?.subscriptionPoolAlias === true && modelGroupCandidateKey(candidate) !== continuingSourceKey;
       const model = view?.models[agent]?.find((item) => item.id === candidate.model);
       const modelName = model?.name ?? candidate.model;
       const accountFact = !agentDeviceId && candidate.accountId && deps.localAccount
@@ -452,7 +453,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     // 为另一台电脑跑 Agent 时只认允许被远程调用的连接：别的连接在这次选路里按没有连接处理。
     const remoteInvocable = (view: ProviderView) => (deps.remoteInvocable ? deps.remoteInvocable(view.id) : view.remoteInvocationEnabled === true);
     const views = request.remoteInvocableOnly ? allViews.filter(remoteInvocable) : allViews;
-    const facts = await inspect(route, views, request.context, request.cachedQuota === true, request.remoteInvocableOnly === true, request.sshHostId, true);
+    const facts = await inspect(route, views, request.context, request.cachedQuota === true, request.remoteInvocableOnly === true, request.sshHostId);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
       weightCounters: countersFor(`${scope}\u0000${route.id}`, weightSignature(target.route)),
@@ -487,9 +488,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   async function candidateFacts(
     route: ModelGroupRoute,
     context?: ModelGroupResolveRequest['context'],
-    options?: { sshHostId?: string; cachedQuota?: boolean },
+    options?: ModelGroupCandidateFactsOptions,
   ): Promise<ModelGroupCandidateFacts[]> {
-    return inspect(route, await deps.views(), context, options?.cachedQuota === true, false, options?.sshHostId);
+    return inspect(route, await deps.views(), context, options?.cachedQuota === true, false, options?.sshHostId, options?.continuingSourceKey);
   }
 
   function dispose(): void {
