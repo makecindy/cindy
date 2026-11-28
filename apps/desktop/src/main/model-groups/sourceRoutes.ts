@@ -10,6 +10,8 @@ import {
   listedSourceFolds,
   recommendedAgentForModel,
   resolveWireModelId,
+  subscriptionAccountsWithin,
+  subscriptionModelsCoveredBy,
   unifiedModelKeyId,
   type AgentKind,
   type ProviderView,
@@ -106,12 +108,73 @@ const locationPluginEngines = (catalog: SourceCatalog, agentDeviceId: string | u
   (agentDeviceId ? catalog.remotePluginEngines?.get(agentDeviceId) ?? [] : catalog.pluginEngines ?? []);
 const locationAgents = (catalog: SourceCatalog, agentDeviceId: string | undefined) => (agentDeviceId ? REMOTE_AGENTS : catalog.agents);
 
+type FamilyMember = { id: string; name: string; view?: ProviderView; agentDeviceId?: string };
+
+const memberSourceKey = (member: Pick<FamilyMember, 'id' | 'agentDeviceId'>) =>
+  modelGroupSourceKey({ providerId: member.id, ...(member.agentDeviceId ? { agentDeviceId: member.agentDeviceId } : {}) });
+
+/**
+ * 与 expandSourceRoute 使用同一口径判断某个成员上的模型此刻能否实际运行(含本机/远端允许引擎、推荐引擎与 available)，
+ * 避免目录里有模型但保留方装不上或禁用了对应引擎时误删远端可用来源。
+ */
+function providerModelRunnable(
+  catalog: Pick<SourceCatalog, 'views' | 'agents' | 'available' | 'remote'>,
+  member: FamilyMember,
+): (providerId: string, model: { id: string; disabled?: boolean }, agent: AgentKind) => boolean {
+  const view = member.view;
+  if (!view) return () => false;
+  const views = locationViews(catalog as SourceCatalog, member.agentDeviceId);
+  const agents = locationAgents(catalog as SourceCatalog, member.agentDeviceId);
+  const allowed = agents.filter((agent): agent is AgentKind => agent in GROUP_KIND);
+  const allowedSet = new Set<AgentKind>(allowed);
+  return (_providerId, model, agent) => {
+    if (model.disabled || !allowedSet.has(agent)) return false;
+    const own = unifiedModelKeyId(model.id);
+    const recommended = recommendedAgentForModel(views as ProviderView[], view.id, own, { agents: allowed });
+    const agentKind = recommended ? GROUP_KIND[recommended] : undefined;
+    const wire = recommended ? resolveWireModelId(view, own, recommended) : null;
+    if (recommended !== agent || !agentKind || !wire) return false;
+    const candidate: ModelGroupCandidate = {
+      agentKind, providerId: view.id, model: wire,
+      ...(member.agentDeviceId ? { agentDeviceId: member.agentDeviceId } : {}),
+    };
+    return catalog.available(candidate, views, agents);
+  };
+}
+
+/**
+ * 同一份配额只算一个成员(2026-11-27 用户反馈)：自己电脑上的一个成员，账号全都已经在另一个未停用成员里(本机账号池有 A、B，
+ * 另一台电脑只登着 A)、且它实际可运行的模型那个成员也都能运行时，不再列它——经它跑用的还是那份配额，只会让按额度挑重复计算、
+ * 出问题时换到同一份已满的配额上。设置页与选择器那条合并规则只合账号完全相同的，管不到账号池。账号与可运行模型都相同时
+ * 留排在前面的(本机排在其他电脑前面)。账号只部分重叠的两边都留：各有对方没有的配额。已停用成员不作为保留方；分享来的读不到
+ * 账号身份、插件引擎无订阅账号池，均不参与。
+ */
+function withoutRepeatedAccounts(
+  members: readonly FamilyMember[],
+  catalog: Pick<SourceCatalog, 'views' | 'agents' | 'available' | 'remote'>,
+  offKeys: ReadonlySet<string>,
+): FamilyMember[] {
+  const own = (member: FamilyMember) => Boolean(member.view) && (!member.agentDeviceId || !isProviderShareAgentDeviceId(member.agentDeviceId));
+  const runnable = new Map(members.map((member, index) => [index, providerModelRunnable(catalog, member)]));
+  const covers = (outerIndex: number, innerIndex: number) => {
+    const outer = members[outerIndex];
+    const inner = members[innerIndex];
+    if (!own(outer) || !own(inner) || !outer.view || !inner.view) return false;
+    if (offKeys.has(memberSourceKey(outer))) return false;
+    return subscriptionAccountsWithin(inner.view, outer.view)
+      && subscriptionModelsCoveredBy(inner.view, outer.view, runnable.get(innerIndex), runnable.get(outerIndex));
+  };
+  return members.filter((_, index) => !members.some((_, at) => at !== index && covers(at, index)
+    && (at < index || !covers(index, at))));
+}
+
 /**
  * 同一家有两个以上能用的供应商时自动合成一条：本机的、其他电脑上的、别人分享来的都算(两个朋友各分享一个 Claude
- * 就是两个成员)。同一个登录在几处出现只算一个，用设置页、选择器同一条合并规则。名字用这一家里排在最前的那个的名字。
+ * 就是两个成员)。同一个登录在几处出现只算一个，用设置页、选择器同一条合并规则；账号已经全在另一个成员里的也不算
+ * (withoutRepeatedAccounts)。名字用这一家里排在最前的那个的名字。
  */
 export function buildAutoSourceRoutes(
-  catalog: Pick<SourceCatalog, 'views' | 'remote' | 'pluginEngines' | 'remotePluginEngines'>,
+  catalog: Pick<SourceCatalog, 'views' | 'agents' | 'available' | 'remote' | 'pluginEngines' | 'remotePluginEngines'>,
   config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources' | 'autoExceptions'>,
   /** 只要只剩一个能用成员的那几家(见 effectiveModelGroupsConfig 的 forSelected)。 */
   single = false,
@@ -120,10 +183,10 @@ export function buildAutoSourceRoutes(
   // 去重只在自己的电脑之间做(同一个登录在两台电脑上算一个)。别人分享来的各是各的账号，即使供应商同名也都算成员，
   // 与选择器一致：分享不参与这条合并规则。
   const folds = listedSourceFolds({ base: catalog.views, others: others.filter((other) => !isProviderShareAgentDeviceId(other.deviceId)) });
-  const families = new Map<string, { id: string; name: string; agentDeviceId?: string }[]>();
+  const families = new Map<string, FamilyMember[]>();
   const add = (view: ProviderView, agentDeviceId?: string) => {
     const family = usable(view) ? providerFamily(view) : null;
-    if (family) families.set(family, [...(families.get(family) ?? []), { id: view.id, name: view.name, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
+    if (family) families.set(family, [...(families.get(family) ?? []), { id: view.id, name: view.name, view, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
   };
   const addPluginEngine = (engine: PluginEngineView, agentDeviceId?: string) => {
     const ok = agentDeviceId ? usableRemotePluginEngine(engine) : usableLocalPluginEngine(engine);
@@ -142,11 +205,13 @@ export function buildAutoSourceRoutes(
   const hidden = new Set(config.hiddenAuto ?? []);
   const switchOff = new Set(config.autoSwitchOff ?? []);
   const routes: ModelGroupSourceRoute[] = [];
-  for (const [family, members] of families) {
-    if (single ? members.length !== 1 : members.length < 2) continue;
+  for (const [family, found] of families) {
     const id = `${MODEL_GROUP_AUTO_PREFIX}${family}`.slice(0, MODEL_GROUP_LIMITS.id);
     // 成员是谁仍按连接自动定；用户排过先后、填过权重、暂停过的，按他存的来(没排到的新成员排在后面)。
     const saved = config.autoSources?.[id] ?? [];
+    const offKeys = new Set(saved.filter((source) => source.off).map(modelGroupSourceKey));
+    const members = withoutRepeatedAccounts(found, catalog, offKeys);
+    if (single ? members.length !== 1 : members.length < 2) continue;
     const rank = new Map(saved.map((source, index) => [modelGroupSourceKey(source), { index, source }]));
     const detected = members.map(({ id: providerId, agentDeviceId }): ModelGroupSource => ({ providerId, ...(agentDeviceId ? { agentDeviceId } : {}) }));
     const ordered = detected

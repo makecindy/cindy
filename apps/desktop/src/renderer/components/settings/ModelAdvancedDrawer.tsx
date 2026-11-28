@@ -530,9 +530,13 @@ export function ModelAdvancedDrawer({
     }),
   );
   const fastSupport = planDetails ? planDetails.fast : primaryModel.supportsFastMode;
-  const ultrafastSupport = planDetails ? planDetails.ultrafast : chatAgents.includes('codex')
-    ? row.byAgent.codex?.supportsUltrafastMode
+  const codexModel = chatAgents.includes('codex') ? row.byAgent.codex : undefined;
+  const ultrafastSupport = planDetails ? planDetails.ultrafast : codexModel
+    ? codexModel.supportsUltrafastMode
     : false;
+  const ultrafastDeclaredUnavailable = !planDetails && provider.source === 'user' &&
+    provider.routing?.codex?.authStrategy === 'api-key-header' &&
+    codexModel?.userModelConfig?.supportsUltrafastMode === true && ultrafastSupport !== true;
   /**
    * 推理强度的存储是 per (agent, provider, model) 的。这里按显示轴同一条哲学
    * **一次写该模型全部可用引擎** —— 用户在这个面板里选的是「这个模型默认想多用力」,
@@ -1187,10 +1191,10 @@ export function ModelAdvancedDrawer({
                     </Row>
                     <Row label={t('newChat.modelSelector.speed.ultrafast')} muted>
                       <CapabilityValue
-                        state={ultrafastSupport}
-                        label={t(
-                          `settings.providers.models.advanced.${ultrafastSupport === true ? 'supported' : ultrafastSupport === false ? 'unsupported' : 'undeclared'}`,
-                        )}
+                        state={ultrafastDeclaredUnavailable ? false : ultrafastSupport}
+                        label={ultrafastDeclaredUnavailable
+                          ? t('settings.providers.models.advanced.ultrafastDeclaredUnavailable')
+                          : t(`settings.providers.models.advanced.${ultrafastSupport === true ? 'supported' : ultrafastSupport === false ? 'unsupported' : 'undeclared'}`)}
                       />
                     </Row>
                   </Section>

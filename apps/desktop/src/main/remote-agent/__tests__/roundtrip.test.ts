@@ -20,8 +20,8 @@ import type {
   StartSessionOptions,
   UserMessage,
 } from '@cindy/maker-core';
-import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Maker, Session,
-  openAcpSession, toSessionDispatchOutcome, TurnDispatchRejectedError, type AcpSession,
+import { AcpAgent, AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Maker, Session,
+  openAcpSession, toSessionDispatchOutcome, TurnDispatchRejectedError, type AcpLineTransport, type AcpSession,
   type CreateSessionOptions, type SessionMeta } from '@cindy/maker-core';
 import { createServer } from 'node:http';
 import { isProviderSharePeer, parseRemoteAgentPollResult, providerShareHostPeer } from '@cindy/device-link';
@@ -48,11 +48,13 @@ import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
 import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator';
 import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
 import { MAKER_INVOKE } from '../../maker-ipc/channels';
+import { applyLeadVendorOptions, createAcpLeadBriefingHandoff } from '../../maker-ipc/orcaSessionStartOptions';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
 import { sharedTurnReceipt } from '../sharedTurnValue.js';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
+import { sharedTaskRecoveryError } from '../../../shared/sharedTaskRecovery.js';
 import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, liveSharedTaskTarget,
   forgetSharedTaskAuthorization } from '../controller/providerShareTaskLocation';
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://continuity.test.invalid' }));
@@ -2253,6 +2255,49 @@ describe('a plugin engine of another computer', () => {
     await handle.close({ reason: 'navigation' });
     host.dispose();
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：startRemoteAgentSession('acp') 传 ensureWorktreeReady；验证远程 ACP 的
+  //   open/session/new 与 send(session/prompt) 不被未完成的后台 checkout 阻塞，直到远端执行首次工作树读取才等待。
+  // - 规则依据：远程 ACP 延迟 worktree 全量检出到首次 cindy_exec/executor 工具调用前。
+  // - 现有覆盖缺口：上述往返用例未验证 ensureWorktreeReady 在 open/send 与首次工具访问之间的时序。
+  // - 最小失败输入：ensureWorktreeReady 在 open/send 期间保持 pending，只有远端发起工作树读取后才 resolve。
+  // - tier：unit（进程内 fake ACP host + 真实 startRemoteAgentSession 往返）。
+  it('starts remote ACP without waiting for background checkout and gates only the first worktree tool call', async () => {
+    let releaseCheckout!: () => void;
+    let gateEntered!: () => void;
+    const checkoutReady = new Promise<void>((resolve) => { releaseCheckout = resolve; });
+    const enteredGate = new Promise<void>((resolve) => { gateEntered = resolve; });
+    const ensureWorktreeReady = vi.fn(async () => {
+      gateEntered();
+      await checkoutReady;
+    });
+    const { host } = createPluginEngineHost();
+    const handle = await startRemoteAgentSession('acp', {
+      sessionId: 'plugin-deferred-wt', workingDir: project, model: 'default', providerId: ENGINE, permissionMode: 'default',
+    }, { ...makeDeps(host), ensureWorktreeReady });
+    // Session open (session/new) completed while checkout is still running.
+    expect(ensureWorktreeReady).not.toHaveBeenCalled();
+
+    handle.setInteractionResolver(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+    const texts: string[] = [];
+    const reader = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'text') texts.push((event.data as { text: string }).text);
+        if (event.type === 'done') break;
+      }
+    })();
+    const sending = handle.send({ type: 'user', content: [{ type: 'text', text: 'hi' }] }, { messageUuid: 'deferred-1' });
+    await enteredGate;
+    expect(ensureWorktreeReady).toHaveBeenCalledWith('plugin-deferred-wt', expect.any(AbortSignal));
+    releaseCheckout();
+    await sending;
+    await reader;
+    expect(texts[0]).toBe('read:from-controller');
+
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
 });
 
 // Unit: provider-sharing direct-execution lease boundary (runtime review F1/F2).
@@ -2272,6 +2317,7 @@ describe('shared startup lease budget', () => {
     const target = providerShareHostPeer('startup-budget', 'executor-m');
     const generation = '11111111-1111-4111-8111-111111111111';
     const calls: Array<{ device: string; op: string; method?: string; model?: string; callId?: string; sessionId?: string; generation?: string; runId?: string }> = [];
+    const wireCalls: Array<{ method?: string; args: unknown }> = [];
     const runs = new Map<string, Run>();
     const sessions = new Map<string, string>();
     const disposed: string[] = [];
@@ -2283,7 +2329,7 @@ describe('shared startup lease budget', () => {
     let allocations = 0;
     const renewals = new Map<string, number>();
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
-    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
+    const state = { pluginEngine: false, device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
       startFailure: '', startFailureName: 'AgentStartupStoppedError', startedId: undefined as string | undefined, localFailure: '',
       startupEnd: undefined as { reason: string; idleReclaimed?: true } | undefined,
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
@@ -2293,7 +2339,7 @@ describe('shared startup lease budget', () => {
       directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false, rejectHandoff: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => {
-      const item = { t: 'started', handle: { id: state.startedId ?? 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } };
+      const item = { t: 'started', handle: { id: state.startedId ?? 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: state.pluginEngine ? ['setModel', 'setVendorOptions'] : ['setModel'], state: {} } };
       const end = state.startupEnd;
       if (end && end.reason !== 'missing') {
         run.onData(Buffer.from(`${JSON.stringify(item)}\n${JSON.stringify({ t: 'closed', ...end })}\n`), true);
@@ -2345,8 +2391,8 @@ describe('shared startup lease budget', () => {
         }
         if (state.delayCaps) { const ms = state.delayCaps; state.delayCaps = 0; await vi.advanceTimersByTimeAsync(ms); }
         return { ok: true, result: { version: 1, maxRuns: state.maxRuns, idleReclaimMinutes: state.idleReclaimMinutes, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
-          virtualWorkspace: true, directGuestExecution: true, ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
-          agents: [{ kind: 'codex', available: true }] } };
+          virtualWorkspace: true, directGuestExecution: true, ...(state.pluginEngine ? { pluginEngines: true, localApplication: true } : {}), ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
+          agents: [{ kind: 'codex', available: true }, ...(state.pluginEngine ? [{ kind: 'acp', available: true, providerId: 'acp-plugin:fixture:engine' }] : [])] } };
       }
       if (request.op === 'open') {
         if (state.rejectHandoff && request.payload?.json?.requireGroupSwitchToken) return { ok: false,
@@ -2367,6 +2413,7 @@ describe('shared startup lease budget', () => {
         if (run) emit(run, { t: 'closed', reason: 'closed' });
       }
       if (request.op === 'call') {
+        wireCalls.push({ method: request.method, args: request.payload?.json });
         const run = runs.get(request.runId!);
         if (run && !(state.holdSend && request.method === 'send') && !(state.holdModel && request.method === 'setModel')) {
           emit(run, { t: 'result', callId: request.callId, ok: true, value: null });
@@ -2399,7 +2446,7 @@ describe('shared startup lease budget', () => {
     historyOpenLink.mockResolvedValue(undefined);
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
-    return { owner, target, generation, state, calls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
+    return { owner, target, generation, state, calls, wireCalls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
       pendingClose, prepare, allocation, capsReply, emit, started, guestSwitch, renewals, start,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
@@ -2811,6 +2858,119 @@ describe('shared startup lease budget', () => {
       expect(liveDirectGuestSession('historical')).toBeNull();
     },
   );
+
+  // Unit, direct-execution §7: when restoring a historical direct task fails
+  // before open (e.g. original M offline or authorization stage fails after
+  // lease expiry), G asks O for an in-group switch token and hands off context
+  // silently instead of looping on the broken executor.
+  it.each(['authorization-unknown', 'capability-offline', 'owner-offline', 'allocation-denied', 'no-spare', 'revoked', 'cancelled', 'takeover'] as const)(
+    'switches a historical direct task in-group after pre-open restore failure: %s', async mode => {
+      const f = fixture(); f.state.duration = 60_000;
+      const restoreError = mode === 'authorization-unknown'
+        ? sharedTaskRecoveryError('authorization', 'unknown')
+        : mode === 'capability-offline'
+          ? sharedTaskRecoveryError('capability', 'offline', { code: 'DEVICE_OFFLINE' })
+          : mode === 'owner-offline'
+            ? sharedTaskRecoveryError('owner', 'offline', { code: 'DEVICE_OFFLINE' })
+            : mode === 'allocation-denied'
+              ? sharedTaskRecoveryError('allocation', 'denied')
+              : sharedTaskRecoveryError('authorization', 'unknown');
+      historyInvoke.mockImplementation(async (device: string, _channel: string, args: unknown[]) => {
+        const req = args[0] as { op: string };
+        if (req.op === 'direct-locate') {
+          if (mode === 'owner-offline') throw Object.assign(new Error('owner offline'), { code: 'DEVICE_OFFLINE' });
+          return { ok: true, result: { deviceId: 'executor-m', agentKind: 'codex' } };
+        }
+        if (req.op === 'allocate') throw restoreError;
+        return { ok: true, result: {} };
+      });
+      const row = { agentKind: 'codex', model: 'm', providerId: 'openai', agentDeviceId: f.owner,
+        sdkSessionId: 'native-only-on-m' as string | null, remoteHostId: null, status: 'active', workingDir: project };
+      const service = createProviderGroupService({
+        guestSwitch: f.guestSwitch, directGuestSession: liveDirectGuestSession,
+        readSessionRow: async () => row, readBinding: () => null, now: () => Date.now(), log: historyLogger,
+        router: { resetTurn() {} },
+      } as unknown as ProviderGroupServiceDeps);
+      await expect(f.open('historical-restore', f.owner, 'm', row.sdkSessionId!)).rejects.toThrow(restoreError.message);
+      const eligible = !['owner-offline', 'allocation-denied'].includes(mode);
+      expect(liveDirectGuestSession('historical-restore') !== null).toBe(eligible);
+      f.state.switchAvailable = mode !== 'no-spare';
+      f.state.pauseSwitch = ['revoked', 'cancelled', 'takeover'].includes(mode);
+      const pending = service.prepareGuestStartSwitch('historical-restore');
+      await flush();
+      if (mode === 'revoked') guestPermission.epoch++;
+      if (mode === 'cancelled') cancelPendingRemoteStart('historical-restore');
+      if (mode === 'takeover') service.noteUserAction('historical-restore');
+      f.allocation.resolve();
+      const recovery = await pending;
+      const canRecover = ['authorization-unknown', 'capability-offline'].includes(mode);
+      expect(!!recovery).toBe(canRecover);
+      if (eligible) {
+        expect(f.calls.filter(call => call.op === 'direct-switch')).toEqual([
+          expect.objectContaining({ device: f.owner, sessionId: 'historical-restore' }),
+        ]);
+      } else {
+        expect(f.calls.some(call => call.op === 'direct-switch')).toBe(false);
+      }
+      if (recovery) {
+        expect(recovery.isCurrent()).toBe(true);
+        let handoff = '';
+        await relocateForFreshStart({
+          getSessionRow: async () => ({ ...row }) as never,
+          listMessagesForHandoff: async () => [{ role: 'user', content: 'preserve cleanup context', createdAt: 1 }],
+          applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); },
+          setSessionProvider() {}, insertBoundaryMessage: vi.fn(async () => 'boundary'),
+          setPendingHandoff: (_id, text) => { handoff = text; },
+          applyResumeFallbackAtomically: async () => {}, log: historyLogger,
+        }, { sessionId: 'historical-restore', agentDeviceId: f.owner, providerId: 'openai', sharedRelocation: true,
+          assertCurrent: () => { if (!recovery.isCurrent()) throw new Error('recovery superseded'); } });
+        expect(row.sdkSessionId).toBeNull();
+        expect(handoff).toContain('preserve cleanup context');
+        recovery.dispose();
+        f.state.ready = true;
+        const handle = await f.open('historical-restore');
+        expect(f.calls.filter(call => call.op === 'open').at(-1)).toMatchObject({
+          device: f.owner,
+          payload: { json: { groupSwitchToken: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', options: { model: 'm' } } },
+        });
+        await handle.close();
+      } else {
+        expect(f.guestSwitch.takeForOpen('historical-restore')).toBeUndefined();
+      }
+      expect(liveDirectGuestSession('historical-restore')).toBeNull();
+    },
+  );
+
+  // Unit, direct-execution §7: switching away from a cached M1 grant must clear
+  // the process-local retained authorization so a later reopen cannot send M2's
+  // native history back to old M1.
+  it('clears a retained historical grant when a switched open hands off through O', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('retained-switch');
+    await first.close({ reason: 'navigation' });
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('offline'), { code: 'DEVICE_OFFLINE' }));
+    const row = { agentKind: 'codex', model: 'm', providerId: 'openai', agentDeviceId: f.owner,
+      sdkSessionId: 'native-only-on-m' as string | null, remoteHostId: null, status: 'active', workingDir: project };
+    const service = createProviderGroupService({
+      guestSwitch: f.guestSwitch, directGuestSession: liveDirectGuestSession,
+      readSessionRow: async () => row, readBinding: () => null, now: () => Date.now(), log: historyLogger,
+      router: { resetTurn() {} },
+    } as unknown as ProviderGroupServiceDeps);
+    await expect(f.open('retained-switch', f.owner, 'm', row.sdkSessionId!))
+      .rejects.toThrow('[SHARED_TASK_RECOVERY_offline] [SHARED_TASK_STAGE_capability]');
+    f.state.switchAvailable = true;
+    const recovery = await service.prepareGuestStartSwitch('retained-switch');
+    expect(recovery).not.toBeNull();
+    recovery!.dispose();
+    const switched = await f.open('retained-switch');
+    await switched.close({ reason: 'navigation' });
+    // After switching away from M1, O's direct-locate returns null (relayed task);
+    // reopening must NOT reuse M1's old in-memory retained grant.
+    historyInvoke.mockResolvedValueOnce({ ok: true, result: null });
+    const reopened = await f.open('retained-switch', f.owner, 'm', 'native-on-m2');
+    expect(f.calls.filter(call => call.op === 'open').at(-1)?.device).toBe(f.owner);
+    await reopened.close();
+  });
 
   it('does not turn a local preparation error into executor failure evidence', async () => {
     const f = fixture();
@@ -3399,6 +3559,72 @@ describe('shared startup lease budget', () => {
         await flush();
       }
     } finally { await handle.close(); }
+  });
+
+  // Integration: the real same-account proxy replays the cached briefing alongside
+  // revocation, whether promotion came before or after reclaim. In both cases the
+  // team is revoked before reconnect; an active team's replay is outside this test.
+  it.each([true, false])('keeps the replayed briefing out of the prompt after team revocation (promotion before reclaim=%s)', async beforeReclaim => {
+    const f = fixture();
+    Object.assign(f.state, { ready: true, pluginEngine: true });
+    const providerId = 'acp-plugin:fixture:engine';
+    const handle = await f.start({ agentKind: 'acp', deviceId: 'executor-m', options: {
+      sessionId: 'role-replay', workingDir: project, providerId, model: 'm',
+    } });
+    let target: AgentSessionHandle | undefined;
+    try {
+      const first = [...f.runs.values()].at(-1)!;
+      const reclaim = async () => {
+        f.emit(first, { t: 'closed', reason: 'ended', idleReclaimed: true });
+        await flush();
+      };
+      const handoff = createAcpLeadBriefingHandoff({ currentOwner: () => 'owner',
+        readActiveTeamId: async () => 'team', readRole: async () => 'lead' });
+      if (!beforeReclaim) await reclaim();
+      await applyLeadVendorOptions(handoff, { leadSessionId: 'role-replay', teamId: 'team', newTeam: true }, {
+        agentKind: 'acp', agentDeviceId: 'executor-m', workDir: project, setVendorOptions: handle.setVendorOptions!,
+      }, () => { throw new Error('remote promotion must not request local hydration'); });
+      expect(handoff.hasPending('role-replay')).toBe(false);
+      if (beforeReclaim) await reclaim();
+      await handle.setVendorOptions!({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+      await handle.send({ type: 'user', content: 'continue without the team' });
+      expect([...f.runs.values()].at(-1)!.runId).not.toBe(first.runId);
+      const patches = f.wireCalls.filter(call => call.method === 'setVendorOptions').map(call => (call.args as Record<string, unknown>[])[0]!);
+      expect(patches).toHaveLength(beforeReclaim ? 2 : 1);
+      const replay = patches.at(-1)!;
+      expect(replay).toEqual({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null, pluginEngineRoleBriefing: expect.any(String) });
+      if (beforeReclaim) expect(patches[0]).toEqual({ orcaRole: 'lead', orcaWorkflowId: 'team', orcaLeadSessionId: 'role-replay', pluginEngineRoleBriefing: replay.pluginEngineRoleBriefing });
+      const sends = f.wireCalls.filter(call => call.method === 'send');
+      expect(sends).toHaveLength(1);
+      const message = (sends[0]!.args as UserMessage[])[0]!;
+      expect(message.content).toBe('continue without the team');
+
+      const prompts: unknown[] = [];
+      const engine = new AcpAgent({
+        auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }),
+          logout: async () => {}, getAuthEnv: async () => ({}) },
+        runtimeConfig: {}, binaryPath: '', logger: historyLogger, clientInfo: { name: 'test', version: '1' },
+        endpoints: { connect: async () => {
+          let onLine: ((line: string) => void) | undefined;
+          const transport: AcpLineTransport = {
+            write(line) {
+              const { id, method, params } = JSON.parse(line);
+              const result = method === 'initialize' ? { protocolVersion: 1, agentCapabilities: {} }
+                : method === 'session/new' ? { sessionId: 'legacy-replay' } : { stopReason: 'end_turn' };
+              if (method === 'session/prompt') prompts.push(params.prompt);
+              queueMicrotask(() => onLine?.(JSON.stringify({ jsonrpc: '2.0', id, result })));
+            },
+            onLine(listener) { onLine = listener; return () => { onLine = undefined; }; },
+            onClose: () => () => {}, close: async () => {},
+          };
+          return transport;
+        } },
+      });
+      target = await engine.startSession({ workingDir: project, model: '', providerId });
+      await target.setVendorOptions!(replay);
+      await target.send(message);
+      expect(prompts).toEqual([[{ type: 'text', text: 'continue without the team' }]]);
+    } finally { await target?.close(); await handle.close(); }
   });
 
   // MCP heap regression: exercise the controller's real pool via a one-slot

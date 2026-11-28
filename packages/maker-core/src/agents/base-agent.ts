@@ -2231,6 +2231,12 @@ export interface StartSessionOptions {
    * the task cannot work without (collaboration Workers) travel this way. Other engines ignore it.
    */
   pluginEngineBriefing?: string;
+  /** Bind the host's pending discovery note to a successfully opened local ACP conversation. */
+  bindPluginEngineOrcaDiscoveryBriefing?: (
+    opened: { nativeId: string; fresh: boolean; hasOrca: boolean },
+  ) => (() => { text: string; onSent: () => void } | undefined) | undefined;
+  /** Host-owned role briefing that survives replacing a native session handle. */
+  readPluginEngineRoleBriefing?: () => { text: string; onSent: () => void } | undefined;
   /**
    * Plugin engines only: Cindy cannot tell the engine's own sub-agents from the engine itself.
    * true = the host trusts the engine as a whole, so its tool calls count as the task's own
