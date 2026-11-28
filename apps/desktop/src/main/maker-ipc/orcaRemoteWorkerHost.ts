@@ -7,6 +7,7 @@
  * 现有会话通道，本模块不涉及。
  */
 import {
+  ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
   ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
@@ -140,6 +141,10 @@ export interface OrcaRemoteWorkerHostDeps {
     agentDeviceId?: string | null;
     providerId?: string | null;
   }>;
+  /** null = live local handle; undefined = consult the persisted execution route. */
+  liveAgentDeviceId?(sessionId: string): string | null | undefined;
+  closeRuntime?(sessionId: string): Promise<void>;
+  captureOwner?(): () => void;
   writeRemoteLead(sessionId: string, lead: OrcaRemoteLead): Promise<void>;
   /** 同一任务 id 的 open / release 串行。 */
   withSessionLock<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
@@ -224,6 +229,36 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
       });
     },
 
+    async archive(raw: unknown): Promise<{ runtimeClosed: true }> {
+      const caller = requireCaller(deps.getCaller());
+      const assertOwner = deps.captureOwner?.();
+      const { sessionId } = parseOrcaRemoteWorkerReleaseRequest(raw);
+      return deps.withSessionLock(sessionId, async () => {
+        assertOwner?.();
+        const session = await deps.readSession(sessionId);
+        assertOwner?.();
+        if (!session) return { runtimeClosed: true };
+        const lead = session.orcaRemoteLead;
+        if (!lead || lead.leadDeviceId !== caller.controllerDeviceId) {
+          fail('NOT_FOUND', 'no remote worker from this device');
+        }
+        if (lead.releasedAt !== undefined) {
+          if (!lead.runtimeClosed) fail('PRECONDITION_FAILED', 'Worker was already released without a stop receipt');
+          return { runtimeClosed: true };
+        }
+        const liveDevice = deps.liveAgentDeviceId?.(sessionId);
+        const agentDevice = liveDevice === undefined ? session.agentDeviceId : liveDevice;
+        if (agentDevice) {
+          fail('UNSUPPORTED_CAPABILITY', 'Worker 使用另一台电脑上的 Agent，当前无法确认该电脑已停止 Agent。Worker 已保留，稍后可重试归档。');
+        }
+        if (!deps.closeRuntime) fail('UNSUPPORTED_CAPABILITY', 'Worker archive unavailable');
+        await deps.closeRuntime(sessionId);
+        assertOwner?.();
+        await deps.writeRemoteLead(sessionId, { ...lead, releasedAt: deps.now(), runtimeClosed: true });
+        return { runtimeClosed: true };
+      });
+    },
+
     async release(raw: unknown): Promise<{ released: boolean }> {
       const caller = requireCaller(deps.getCaller());
       const { sessionId } = parseOrcaRemoteWorkerReleaseRequest(raw);
@@ -253,5 +288,6 @@ export function registerOrcaRemoteWorkerHandlers(
   registry.handle(ORCA_REMOTE_WORKER_CAPS_CHANNEL, () => host.caps());
   registry.handle(ORCA_REMOTE_WORKER_MODELS_CHANNEL, (_event, raw) => host.models(raw));
   registry.handle(ORCA_REMOTE_WORKER_OPEN_CHANNEL, (_event, raw) => host.open(raw));
+  registry.handle(ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL, (_event, raw) => host.archive(raw));
   registry.handle(ORCA_REMOTE_WORKER_RELEASE_CHANNEL, (_event, raw) => host.release(raw));
 }

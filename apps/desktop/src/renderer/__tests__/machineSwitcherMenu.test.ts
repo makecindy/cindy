@@ -7,9 +7,9 @@
  * SidebarTopNav 不再有独立的远程机器行。为避免回退:
  *   - 范围标题由 MainListScopeHeader 渲染,ProjectsSection 与空态/占位分支共用;
  *     SidebarTopNav 不再 import / 渲染它;
- *   - 无远程设备时标题仍带箭头,菜单只留远程连接设置 / 侧边栏显示设置;
+ *   - 无远程设备时标题仍带箭头,菜单只留远程连接设置;
  *   - 点击展开(不再 hover 自动展开);段级收起同时取消;
- *   - 组件保留设备选择(单选 + 多选)+ 侧边栏显示设置 / 远程连接设置入口。
+ *   - 组件保留设备选择(单选 + 多选)+ 远程连接设置入口。
  *
  * 静态扫描风格(renderer 测试环境无 jsdom),与 sidebarUpperSingleButton.test.ts 一致。
  */
@@ -198,8 +198,8 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
 
     // 本轮确认的菜单统一带图标，分组入口直接表达侧栏组标题与缩进任务行。
     expect(filterSource).toContain('Icon={SidebarGroupsIcon}');
+    // 2026-11-28:项目排序并进「排序」子菜单,不再有自己的一级行与行首图标。
     expect(filterSource).toContain('Icon={ArrowDownWideNarrow}');
-    expect(filterSource).toContain('Icon={ListOrdered}');
   });
 
   // 2026-08-12 用户裁决:置顶段头的显示样式按钮显示**当前选中**的模式图标,
@@ -297,7 +297,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     );
     expect(selectItem).toMatch(/event\.preventDefault\(\);\s*onSelect\(\);/);
     expect(selectItem).not.toContain('keepOpen');
-    expect(filterSource).toContain('checked={groupDevice}');
+    expect(filterSource).toContain('checked: groupDevice');
     expect(filterSource).not.toContain("disabled={sortBy === 'manual'}");
   });
 
@@ -306,9 +306,10 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
     // 说明挂在选项表上(与 labelKey / Icon 同源),不在渲染处硬编码文案。
     expect(filterSource).toMatch(
-      /value: 'priority',\s*\n\s*labelKey: 'ccAgent\.sidebar\.filterSortBy\.priority',\s*\n\s*tipKey: 'ccAgent\.sidebar\.filterSortByTip\.priority',/,
+      /value: 'priority',\s*\n\s*labelKey: 'ccAgent\.sidebar\.filterSortBy\.priority',\s*\n\s*hintKey: 'ccAgent\.sidebar\.filterSortByHint\.priority',\s*\n\s*tipKey: 'ccAgent\.sidebar\.filterSortByTip\.priority',/,
     );
-    // recency / manual 名字自解释,不配说明——菜单不该变成说明书。
+    // recency / manual 名字自解释,不配悬停说明——菜单不该变成说明书。
+    // (2026-11-28 起每个排序选项行尾另有一句灰字 hintKey,悬停说明仍只给优先级。)
     expect(filterSource).not.toMatch(/filterSortBy\.recency',\s*\n?\s*tipKey/);
     expect(filterSource).not.toMatch(/filterSortBy\.manual',\s*\n?\s*tipKey/);
     // side="right":菜单贴侧栏右缘,提示往上下会压住相邻选项。
@@ -357,13 +358,12 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(filterSource).toContain('Icon={ListChecks}');
     expect(filterSource).toContain('Icon={Folder}');
     expect(filterSource).toContain('Icon={Bot}');
-    expect(filterSource).toContain('Icon={CalendarClock}');
+    // 2026-11-28:最近活跃改为小标题 + 一排分段按钮,不再是带图标的子菜单行。
     expect(filterSource).toContain('Icon={Info}');
   });
 
   it('空态 / 远程任务 loading-error / 设备目录 loading / 连接中占位都挂范围标题', () => {
     const headerSource = read('features', 'cc-agent', 'sidebar', 'MainListScopeHeader.tsx');
-    expect(headerSource).toContain('<MachineSwitcherMenu onOpenDisplaySettings=');
     expect(headerSource).not.toContain('filterActiveBadge');
     expect(headerSource).toContain('<SidebarFilterPopover');
     expect(projectsSectionSource).toContain('<MainListScopeHeader');
@@ -467,7 +467,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
 
   it('MachineSwitcherMenu 展开菜单无标题行、无 trigger tooltip', () => {
     // 「远程机器」标题行已移除(2026-07 用户定稿);有远程时菜单从「所有」开始,
-    // 无远程时从两个设置入口开始。trigger 也不包 <Tip>。
+    // 无远程时从远程连接设置开始。trigger 也不包 <Tip>。
     expect(menuSource).not.toContain('py-1.5 text-xs font-medium');
     expect(menuSource).not.toMatch(/<Tip\b/);
     expect(menuSource).not.toContain("from '@/components/ui/tooltip'");
@@ -544,9 +544,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('<Loader2 size={12} strokeWidth={1.8} />');
   });
 
-  it('MachineSwitcherMenu 保留设备选择 / 显示设置 / 远程设置入口;无远程时仍带箭头只留设置项', () => {
+  it('MachineSwitcherMenu 保留设备选择 / 远程设置入口;无远程时仍带箭头只留设置项', () => {
     // 段头恒在:无远程设备时不再退化成不可点的静态标题(旧 return <span>),
-    // 箭头保留,菜单只渲染两个设置入口、不出现设备列表。
+    // 箭头保留,菜单只渲染远程连接设置、不出现设备列表。
     expect(menuSource).not.toContain('if (!hasRemote) return null');
     expect(menuSource).not.toMatch(
       /if \(!hasRemote\) \{\s*\n\s*return <span className=\{SCOPE_TITLE_CLASS\}>/,
@@ -559,24 +559,13 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('MACHINE_LOCAL');
     expect(menuSource).toContain("navigate('/settings?tab=remote-control')");
     expect(menuSource).toContain('useMachineSwitcher');
-    // 范围菜单底部:远程连接设置在上、侧边栏显示设置在下;点后者后等本菜单关完
-    // 再开段头那份菜单,避免两个 Radix 菜单抢焦点把新开的立刻关掉。
-    expect(menuSource).toContain('onOpenDisplaySettings');
-    expect(menuSource).toContain("t('ccAgent.sidebar.organizeSidebar')");
-    expect(menuSource).toContain('window.setTimeout(() => onOpenDisplaySettings(), 0)');
     expect(menuSource).toContain('<MonitorCog size={14} strokeWidth={2}');
-    expect(menuSource).toContain('<SlidersHorizontal size={14} strokeWidth={2}');
     expect(menuSource).not.toContain('EllipsisVertical');
     // 设置项抽到 settingsItems:有远程时先画设备列表再 separator,再插入该片段;
-    // 无远程时菜单只有这一段。片段内部远程连接设置在上、显示设置在下。
+    // 无远程时菜单只有这一段。
     const settingsItemsIndex = menuSource.indexOf('{settingsItems}');
     const separatorIndex = menuSource.indexOf('<DropdownMenuSeparator');
     expect(settingsItemsIndex).toBeGreaterThan(separatorIndex);
-    const remoteSettingsIndex = menuSource.indexOf(
-      "t('ccAgent.sidebar.machineSwitcher.remoteSettings')",
-    );
-    const displaySettingsIndex = menuSource.indexOf("t('ccAgent.sidebar.organizeSidebar')");
-    expect(displaySettingsIndex).toBeGreaterThan(remoteSettingsIndex);
   });
 
   it('非会话视图选机器时切回会话视图(与新建 / 搜索行同惯例,Codex P2)', () => {

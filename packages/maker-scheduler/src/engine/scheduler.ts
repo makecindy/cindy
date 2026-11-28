@@ -1233,9 +1233,13 @@ export class Scheduler extends EventEmitter {
           for (const scheduleId of this.invalidScheduleIds) {
             if (!activeIds.has(scheduleId)) this.invalidScheduleIds.delete(scheduleId);
           }
+          let deferralsChanged = false;
           for (const scheduleId of this.consecutiveDeferrals.keys()) {
-            if (!activeIds.has(scheduleId)) this.consecutiveDeferrals.delete(scheduleId);
+            if (!activeIds.has(scheduleId) && this.consecutiveDeferrals.delete(scheduleId)) {
+              deferralsChanged = true;
+            }
           }
+          if (deferralsChanged) this.emitRuntimeState();
           for (const sch of actives) {
             // 存储能应答、批量结果仍含同版本的 active 行 = 那次过期写入没落地
             // (可能是永不 settle 的孤儿)。压制登记只有 settle/stop 才清,不淘汰
@@ -1554,12 +1558,12 @@ export class Scheduler extends EventEmitter {
         if (current.status === 'active') this.activeSchedules.set(current.id, current);
         else {
           this.activeSchedules.delete(schedule.id);
-          this.consecutiveDeferrals.delete(schedule.id);
+          if (this.consecutiveDeferrals.delete(schedule.id)) this.emitRuntimeState();
         }
       } else {
         // 回读拿到空(行被删掉):缓存里这一条也要下去。
         this.activeSchedules.delete(schedule.id);
-        this.consecutiveDeferrals.delete(schedule.id);
+        if (this.consecutiveDeferrals.delete(schedule.id)) this.emitRuntimeState();
       }
       if (updated) this.emitEvent({ type: 'changed', scheduleId: schedule.id });
     } catch (err) {
@@ -1608,7 +1612,7 @@ export class Scheduler extends EventEmitter {
           if (late.status === 'active') this.activeSchedules.set(late.id, late);
           else {
             this.activeSchedules.delete(late.id);
-            this.consecutiveDeferrals.delete(late.id);
+            if (this.consecutiveDeferrals.delete(late.id)) this.emitRuntimeState();
           }
           this.emitEvent({ type: 'changed', scheduleId: late.id });
           return;
@@ -1633,7 +1637,7 @@ export class Scheduler extends EventEmitter {
             if (current.status === 'active') this.activeSchedules.set(current.id, current);
             else {
               this.activeSchedules.delete(current.id);
-              this.consecutiveDeferrals.delete(current.id);
+              if (this.consecutiveDeferrals.delete(current.id)) this.emitRuntimeState();
             }
           },
           () => undefined,
@@ -3174,7 +3178,7 @@ export class Scheduler extends EventEmitter {
         toIso: recomputeFromTo.to ? new Date(recomputeFromTo.to).toISOString() : null,
       });
     }
-    this.consecutiveDeferrals.delete(id);
+    if (this.consecutiveDeferrals.delete(id)) this.emitRuntimeState();
     this.emitEvent({ type: 'changed', scheduleId: id });
     return updated;
   }
@@ -3234,8 +3238,9 @@ export class Scheduler extends EventEmitter {
     // (Codex P1 on #12087 的第十一轮复评)。
     this.invalidateReplanWriteReceipts(id);
     this.invalidScheduleIds.delete(id);
-    this.consecutiveDeferrals.delete(id);
+    const deferralCleared = this.consecutiveDeferrals.delete(id);
     this.activeSchedules.delete(id);
+    if (deferralCleared) this.emitRuntimeState();
     this.emitEvent({ type: 'changed', scheduleId: id });
     return updated;
   }
@@ -3274,9 +3279,10 @@ export class Scheduler extends EventEmitter {
     // 跳过(Codex P1 on #12087 的第十一轮复评)。
     this.invalidateReplanWriteReceipts(id);
     this.invalidScheduleIds.delete(id);
-    this.consecutiveDeferrals.delete(id);
+    const deferralCleared = this.consecutiveDeferrals.delete(id);
     if (updated.status === 'active') this.activeSchedules.set(id, updated);
     else this.activeSchedules.delete(id);
+    if (deferralCleared) this.emitRuntimeState();
     this.emitEvent({ type: 'changed', scheduleId: id });
     return updated;
   }
@@ -3335,11 +3341,12 @@ export class Scheduler extends EventEmitter {
       : undefined;
     await this.storage.delete(id);
     this.invalidScheduleIds.delete(id);
-    this.consecutiveDeferrals.delete(id);
+    const deferralCleared = this.consecutiveDeferrals.delete(id);
     this.pendingReplans.delete(id);
     this.replanLatestIssue.delete(id);
     this.replanWriteReceipts.delete(id);
     this.activeSchedules.delete(id);
+    if (deferralCleared) this.emitRuntimeState();
     this.emitEvent({ type: 'changed', scheduleId: id });
     return previousFailure;
   }
@@ -3388,6 +3395,17 @@ export class Scheduler extends EventEmitter {
         lastProgressAt: attempt.lastProgressAt,
       })),
       waitingSchedules: [...this.waitingSchedules.values()].map((waiting) => ({ ...waiting })),
+      deferredSchedules: [...this.consecutiveDeferrals.entries()].map(([scheduleId, deferral]) => {
+        const active = this.activeSchedules.get(scheduleId);
+        return {
+          scheduleId,
+          scheduleName: active?.name ?? scheduleId,
+          ...(active?.targetSessionId ? { targetSessionId: active.targetSessionId } : {}),
+          count: deferral.count,
+          firstAt: deferral.firstAt,
+          ...(deferral.lastReason ? { lastReason: deferral.lastReason } : {}),
+        };
+      }),
     };
   }
 
@@ -4950,7 +4968,7 @@ export class Scheduler extends EventEmitter {
     freshNext: number,
     attempt: ReplanAttempt,
   ): Promise<Schedule | null> {
-    const write = this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh);
+    const write = this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh, 'replan');
     const receipt = this.recordReplanWrite(scheduleId, freshNext, attempt.issueSeq, fresh);
     void write.then(
       (row) => {
@@ -5192,6 +5210,7 @@ export class Scheduler extends EventEmitter {
  */
 function replanWriteIdentity(row: Schedule): string {
   return JSON.stringify([
+    row.scheduleRevision ?? 0,
     row.lastFiredAt ?? null,
     row.nextFireAt ?? null,
     row.status,

@@ -10,6 +10,8 @@ import {
   findModelGroupRoute,
   MODEL_GROUP_LIMITS,
   modelGroupAutoSwitchOn,
+  modelGroupCandidateAccountId,
+  modelGroupCandidateBaseKey,
   modelGroupCandidateKey,
   sanitizeModelGroupSelection,
   type ModelGroupAgentKind,
@@ -26,8 +28,8 @@ const log = createLogger('model-group-session-bindings');
 const FILE_NAME = 'model-group-session-bindings.json';
 export const MODEL_GROUP_SESSION_BINDINGS_MAX = 2000;
 const SESSION_ID_MAX = 256;
-/** 候选键 = 引擎、供应商连接 ID、模型，另一台电脑或分享来的再加运行位置；各段上限与配置相同。 */
-const PICKED_KEY_MAX = MODEL_GROUP_LIMITS.field * 3 + 16;
+/** 候选键 = 引擎、供应商连接 ID、模型，加上可选运行位置或本机账号槽位后缀；各段上限与配置相同。 */
+const PICKED_KEY_MAX = MODEL_GROUP_LIMITS.field * 4 + 32;
 
 export interface ModelGroupSessionBinding {
   selection: ModelGroupSelection;
@@ -166,13 +168,22 @@ export async function readModelGroupBindingForDispatch(sessionId: string): Promi
   return state?.bindings.get(sessionId) ?? null;
 }
 
+/** 任务此刻经智能路由选中的本机账号槽位：记下的候选带账号、在本机、供应商相同时返回账号 id。 */
+export async function readModelGroupRoutedAccount(sessionId: string, providerId: string): Promise<string | undefined> {
+  const entry = await readModelGroupBindingForDispatch(sessionId);
+  const accountId = entry ? modelGroupCandidateAccountId(entry.pickedKey) : undefined;
+  if (!entry || !accountId) return undefined;
+  const [, keyProviderId, , agentDeviceId] = modelGroupCandidateBaseKey(entry.pickedKey).split('\u0000');
+  return keyProviderId === providerId && !agentDeviceId ? accountId : undefined;
+}
+
 export async function isModelGroupSessionDetachedForDispatch(sessionId: string): Promise<boolean> {
   if (!validSessionId(sessionId)) return false;
   const state = await readDispatchState();
   return state?.detached.has(sessionId) === true;
 }
 
-function writeTo(file: string, state: BindingsState): void {
+function writeTo(file: string, state: BindingsState): boolean {
   const newestBindings = [...state.bindings.entries()]
     .sort((a, b) => b[1].at - a[1].at)
     .slice(0, MODEL_GROUP_SESSION_BINDINGS_MAX);
@@ -190,8 +201,10 @@ function writeTo(file: string, state: BindingsState): void {
     }));
     dispatchIndex = { file, state: Promise.resolve(cloneState(nextState)) };
     syncCache = { file, state: nextState };
+    return true;
   } catch (error) {
     log.warn('model group session binding not saved', { error: error instanceof Error ? error.name : 'unknown' });
+    return false;
   }
 }
 
@@ -201,15 +214,16 @@ export function bindModelGroupSession(
   selection: ModelGroupSelection,
   pickedKey: string,
   now: number = Date.now(),
-): void {
+): boolean {
   const file = filePath();
   const entry = binding({ selection, pickedKey, at: now });
-  if (!file || !validSessionId(sessionId) || !entry) return;
+  if (!file || !validSessionId(sessionId) || !entry) return false;
   const state = readFrom(file);
   state.bindings.set(sessionId, entry);
   state.detached.delete(sessionId);
-  writeTo(file, state);
+  if (!writeTo(file, state)) return false;
   notifyBindingChanged(sessionId);
+  return true;
 }
 
 /** 解除任务的智能路由托管绑定(保留当前模型，不再自动换源)；同时记下解除标记，避免伙伴会话回落主槽重新接管。 */
@@ -266,35 +280,92 @@ export function peekModelGroupSessionBinding(sessionId: string): ModelGroupSessi
   return syncCache.state.bindings.get(sessionId) ?? null;
 }
 
-export function projectModelGroupSessionBinding(params: {
-  binding: ModelGroupSessionBinding | null;
-  config: ModelGroupsConfig;
-  current?: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null } | null;
-  pending?: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null } | null;
-}): ModelGroupSessionBindingView | null {
-  const { binding: entry, config, current, pending } = params;
-  if (!entry) return null;
-  const route = findModelGroupRoute(config, entry.selection);
-  if (!route) return null;
-  const matches = (target?: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null } | null) => {
-    if (!target || !target.providerId || !target.model) return false;
-    const kind = target.agentKind === 'claude-code' ? 'cc' : target.agentKind;
-    if (kind !== 'cc' && kind !== 'codex' && kind !== 'pi' && kind !== 'acp') return false;
+export interface ModelGroupSessionTarget {
+  agentKind?: string | null;
+  providerId?: string | null;
+  model?: string | null;
+  agentDeviceId?: string | null;
+  accountId?: string | null;
+}
+
+export interface PendingModelGroupTarget extends ModelGroupSessionTarget {
+  /** Explicit route pick, direct pick (null), or a system intent (omitted). */
+  pickedKey?: string | null;
+}
+
+function targetMatchesPickedKey(pickedKey: string, target?: ModelGroupSessionTarget | null): boolean {
+  if (!target || !target.providerId || !target.model) return false;
+  const kind = target.agentKind === 'claude-code' ? 'cc' : target.agentKind;
+  if (kind !== 'cc' && kind !== 'codex' && kind !== 'pi' && kind !== 'acp') return false;
+  if (target.accountId) {
     return modelGroupCandidateKey({
       agentKind: kind as ModelGroupAgentKind,
       providerId: target.providerId,
       model: target.model,
       agentDeviceId: target.agentDeviceId || undefined,
-    }) === entry.pickedKey;
-  };
-  const matchedCurrent = matches(current);
-  const matchedPending = !matchedCurrent && matches(pending);
-  if (!matchedCurrent && !matchedPending) return null;
+      accountId: target.accountId,
+    }) === pickedKey;
+  }
+  return modelGroupCandidateKey({
+    agentKind: kind as ModelGroupAgentKind,
+    providerId: target.providerId,
+    model: target.model,
+    agentDeviceId: target.agentDeviceId || undefined,
+  }) === modelGroupCandidateBaseKey(pickedKey);
+}
+
+/** Dispatch validates the execution route, keeping the full key for account-level recovery. */
+export async function readActiveModelGroupBindingForDispatch(
+  sessionId: string,
+  target: ModelGroupSessionTarget,
+): Promise<ModelGroupSessionBinding | null> {
+  const entry = await readModelGroupBindingForDispatch(sessionId);
+  return entry && targetMatchesPickedKey(entry.pickedKey, target) ? entry : null;
+}
+
+/** 当前任务的智能路由绑定是否正是为了切到这个目标（用于发前落地 pending intent 时保留绑定）。 */
+export function modelGroupBindingMatchesTarget(
+  sessionId: string,
+  target?: ModelGroupSessionTarget | null,
+  pickedKey?: string,
+): boolean {
+  const entry = peekModelGroupSessionBinding(sessionId);
+  return !!entry && (pickedKey === undefined || entry.pickedKey === pickedKey)
+    && targetMatchesPickedKey(entry.pickedKey, target);
+}
+
+export function projectModelGroupSessionBinding(params: {
+  binding: ModelGroupSessionBinding | null;
+  config: ModelGroupsConfig;
+  current?: ModelGroupSessionTarget | null;
+  pending?: PendingModelGroupTarget | null;
+}): ModelGroupSessionBindingView | null {
+  const { binding: entry, config, current, pending } = params;
+  if (!entry) return null;
+  const route = findModelGroupRoute(config, entry.selection);
+  if (!route) return null;
+  const matchedCurrent = targetMatchesPickedKey(entry.pickedKey, current);
+  // 手动选具体模型时立即退出托管展示，即使它正好是路由当前的模型。
+  // 经路由切入其他成员时，发前即显示托管(带 pendingSwitch)。
+  if (pending) {
+    if (pending.pickedKey !== undefined && pending.pickedKey !== entry.pickedKey) return null;
+    if (!targetMatchesPickedKey(entry.pickedKey, {
+      ...pending,
+      agentDeviceId: pending.agentDeviceId === undefined ? current?.agentDeviceId : pending.agentDeviceId,
+    })) return null;
+    return {
+      selection: entry.selection,
+      routeName: route.parent?.name ?? route.name,
+      ...(route.parent ? { parentId: route.parent.id, parentName: route.parent.name, isSourceRoute: true as const } : {}),
+      autoSwitch: modelGroupAutoSwitchOn(route),
+      ...(!matchedCurrent ? { pendingSwitch: true as const } : {}),
+    };
+  }
+  if (!matchedCurrent) return null;
   return {
     selection: entry.selection,
     routeName: route.parent?.name ?? route.name,
     ...(route.parent ? { parentId: route.parent.id, parentName: route.parent.name, isSourceRoute: true as const } : {}),
     autoSwitch: modelGroupAutoSwitchOn(route),
-    ...(matchedPending ? { pendingSwitch: true as const } : {}),
   };
 }

@@ -4,11 +4,14 @@ import {
   buildUserProvider,
   mergeDiscoveredRuntimeModels,
   parseModelsListResponse,
+  type Catalog,
+  type ProviderMediaModel,
   type ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 import { realtimeCustomVoiceConnection, realtimeModels, resolveRealtimeConnection } from '../realtimeModels.js';
 import type { SpeechCatalogDeps } from '../models.js';
 import {
+  normalizeRealtimeVoiceSelection,
   type RealtimeVoiceSelection,
 } from '../../../shared/realtimeVoice.js';
 import { appendSpeechModels } from '../../../shared/speechProviderSetup.js';
@@ -252,4 +255,141 @@ it('keeps Flash on a runtime whose own key was confirmed when another chat route
   deps.readKey = (_provider, agent) => 'fixture-' + agent;
   expect(realtimeModels(deps).map(m => m.agent)).toEqual(['claude-code', 'codex']);
   expect(resolveRealtimeConnection(deps, { ...selected, modelId: id }).headers.authorization).toBe('Bearer fixture-codex');
+});
+
+function gatewayRealtimeFixture(
+  audioModels: ProviderMediaModel[],
+  baseUrl = 'https://gateway.test',
+  apiKey = 'gateway-realtime-key',
+) {
+  const credentials = { baseUrl, apiKey };
+  const deps: SpeechCatalogDeps = {
+    catalog: {
+      ...BUNDLED_CATALOG,
+      providers: [
+        { id: 'xd', name: 'Cindy AI', audioModels } as unknown as Catalog['providers'][number],
+      ],
+    },
+    gatewayAllowed: true,
+    disabled: () => false,
+    readKey: vi.fn(() => 'unused-byok-key'),
+    gatewayConnection: () => credentials,
+  };
+  return { deps, credentials };
+}
+
+it('admits Cindy AI Gateway conversational realtime models and filters non-conversational/ineligible entries', () => {
+  const media = (id: string, extra: Partial<ProviderMediaModel> = {}): ProviderMediaModel => ({
+    id,
+    name: id,
+    mode: 'realtime',
+    availability: 'available',
+    ...extra,
+  });
+  const { deps } = gatewayRealtimeFixture([
+    media('gpt-realtime-mini'),
+    media('gpt-realtime-2', { modalities: { input: ['text', 'audio'], output: ['text', 'audio'] } }),
+    media('openai/gpt-realtime-2'),
+    media('future/custom-voice-rt', { nativeApi: 'openai-realtime', modalities: { input: ['audio'], output: ['audio'] } }),
+    media('future/unverified-rt'),
+    media('gpt-realtime-2.1', { availability: 'requires_payment' }),
+    media('gpt-realtime-1.5', { availability: undefined }),
+    media('gpt-realtime', { disabled: true }),
+    media('gpt-realtime-2.1-mini'),
+    media('gpt-realtime-2025-08-28', { nativeApi: null }),
+    media('gpt-realtime-mini-2025-12-15', { nativeApi: 'openai-responses' }),
+    media('qwen3-asr-flash-realtime'),
+    media('fun-asr-realtime-2026-02-28'),
+    media('volc.seedasr.sauc.duration'),
+    media('gpt-realtime-whisper'),
+    media('gpt-realtime-translate', { modalities: { input: ['audio'], output: ['audio'] } }),
+    media('qwen3-tts-flash-realtime', { modalities: { input: ['text'], output: ['audio'] } }),
+    media('future/text-only-rt', { nativeApi: 'openai-realtime', modalities: { input: ['audio'], output: ['text'] } }),
+    { id: 'qwen/qwen-audio-3.1-tts-plus', name: 'TTS', mode: 'audio_speech', availability: 'available' },
+  ]);
+  deps.disabled = (provider, id) => provider === 'xd' && id === 'gpt-realtime-2.1-mini';
+  const list = realtimeModels(deps);
+  expect(list.map(m => m.id)).toEqual([
+    'gpt-realtime-mini',
+    'gpt-realtime-2',
+    'openai/gpt-realtime-2',
+    'future/custom-voice-rt',
+  ]);
+  expect(list[0]).toEqual({
+    id: 'gpt-realtime-mini',
+    name: 'gpt-realtime-mini',
+    providerId: 'xd',
+    providerName: 'Cindy AI',
+    protocol: 'openai-realtime',
+    protocolLocked: true,
+    pickerVisible: true,
+  });
+  expect(JSON.stringify(list)).not.toContain('gateway-realtime-key');
+  expect(realtimeModels({ ...deps, gatewayAllowed: false })).toEqual([]);
+  expect(realtimeModels(gatewayRealtimeFixture([media('gpt-realtime-mini')], 'https://gateway.test', '').deps)).toEqual([]);
+  expect(deps.readKey).not.toHaveBeenCalled();
+  expect(() =>
+    realtimeCustomVoiceConnection(deps, {
+      providerId: 'xd',
+      modelId: 'gpt-realtime-mini',
+      protocol: 'openai-realtime',
+    }),
+  ).toThrow('voice_catalog_unavailable');
+  expect(() =>
+    resolveRealtimeConnection(deps, {
+      providerId: 'xd',
+      agent: 'codex',
+      modelId: 'gpt-realtime-mini',
+      protocol: 'openai-realtime',
+    }),
+  ).toThrow('realtime_model_unavailable');
+});
+
+it.each([
+  ['https://gateway.test', 'wss://gateway.test/v1/realtime?model=gpt-realtime-mini'],
+  ['https://gateway.test/', 'wss://gateway.test/v1/realtime?model=gpt-realtime-mini'],
+  ['https://gateway.test/v1', 'wss://gateway.test/v1/realtime?model=gpt-realtime-mini'],
+  ['https://gateway.test/v1/', 'wss://gateway.test/v1/realtime?model=gpt-realtime-mini'],
+  ['https://gateway.test/prefix/', 'wss://gateway.test/prefix/v1/realtime?model=gpt-realtime-mini'],
+  ['https://gateway.test/prefix/v1/', 'wss://gateway.test/prefix/v1/realtime?model=gpt-realtime-mini'],
+  ['http://127.0.0.1:8080', 'ws://127.0.0.1:8080/v1/realtime?model=gpt-realtime-mini'],
+])('normalizes the Gateway realtime WebSocket path for %s without mutating credentials', (baseUrl, expectedUrl) => {
+  const { deps, credentials } = gatewayRealtimeFixture(
+    [{ id: 'gpt-realtime-mini', name: 'GPT Realtime Mini', mode: 'realtime', availability: 'available' }],
+    baseUrl,
+  );
+  const resolved = resolveRealtimeConnection(deps, {
+    providerId: 'xd',
+    modelId: 'gpt-realtime-mini',
+    protocol: 'openai-realtime',
+  });
+  expect(resolved).toEqual({
+    protocol: 'openai-realtime',
+    url: expectedUrl,
+    headers: { authorization: 'Bearer gateway-realtime-key' },
+  });
+  expect(credentials).toEqual({ baseUrl, apiKey: 'gateway-realtime-key' });
+});
+
+it('normalizes and persists Cindy AI Gateway realtime preferences without an agent', () => {
+  const gatewaySelection: RealtimeVoiceSelection = {
+    mode: 'realtime',
+    providerId: 'xd',
+    modelId: 'gpt-realtime-mini',
+    voice: 'marin',
+    protocol: 'openai-realtime',
+  };
+  expect(normalizeRealtimeVoiceSelection(gatewaySelection)).toEqual(gatewaySelection);
+  expect(normalizeRealtimeVoiceSelection({ ...gatewaySelection, agent: 'codex' })).toBeUndefined();
+  expect(normalizeRealtimeVoiceSelection({ ...gatewaySelection, protocol: 'qwen-audio-realtime' })).toBeUndefined();
+  expect(normalizeRealtimeVoiceSelection({ ...gatewaySelection, providerId: 'byok' })).toBeUndefined();
+
+  let settings = normalizeVoiceInputSettings({});
+  Object.assign(settings, updateRealtimeVoicePreference(settings, 'buddy', gatewaySelection));
+  settings = normalizeVoiceInputSettings(JSON.parse(JSON.stringify(settings)));
+  expect(companionVoicePreference(settings, 'buddy').realtimeSelection).toEqual(gatewaySelection);
+  Object.assign(settings, updateRealtimeVoicePreference(settings, 'buddy', null));
+  settings = normalizeVoiceInputSettings(JSON.parse(JSON.stringify(settings)));
+  expect(companionVoicePreference(settings, 'buddy').previousRealtimeSelection).toEqual(gatewaySelection);
+  expect(companionVoicePreference(settings, 'buddy').realtimeSelection).toBeUndefined();
 });

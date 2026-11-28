@@ -42,13 +42,24 @@ import {
   isModelGroupSessionDetached,
   isModelGroupSessionDetachedForDispatch,
   MODEL_GROUP_SESSION_BINDINGS_MAX,
+  modelGroupBindingMatchesTarget,
   projectModelGroupSessionBinding,
   readModelGroupSessionBinding,
+  readActiveModelGroupBindingForDispatch,
   readModelGroupBindingForDispatch,
+  readModelGroupRoutedAccount,
   unbindModelGroupSession,
 } from '../sessionBindings.js';
+import { createModelGroupHandlers } from '../handlersCore.js';
 import { runModelGroupBeforeSend } from '../applyTurnRouting.js';
 import { evaluateModelGroupBeforeSend } from '../turnRouting.js';
+import {
+  applyPendingAgentSwitchIfIdle,
+  createPendingAgentSwitchRegistry,
+  performSessionAgentSwitch,
+  projectPendingModelGroupTarget,
+  type MakerSessionAgentSwitchHandlerDeps,
+} from '../../maker-ipc/sessionAgentSwitchHandler.js';
 
 const NOW = Date.UTC(2026, 10, 11, 4);
 const HOUR = 3_600_000;
@@ -305,6 +316,19 @@ describe('computeModelGroupSwitchOffer', () => {
   });
 });
 
+function bindPendingRoute(
+  registry: ReturnType<typeof createPendingAgentSwitchRegistry>,
+  sessionId: string,
+  route: { agentKind: 'codex'; providerId: string; model: string; agentDeviceId?: string },
+) {
+  const handlers = createModelGroupHandlers({
+    isDeviceLink: () => false,
+    deviceLinkOrigin: () => undefined,
+    markPendingModelGroupPick: registry.markModelGroupPick,
+  } as Parameters<typeof createModelGroupHandlers>[0]);
+  handlers.bindSession({ sessionId, selection: { type: 'route', id: 'r1' }, route }, () => {});
+}
+
 describe('model group session bindings', () => {
   let dir: string;
   beforeEach(() => {
@@ -380,6 +404,213 @@ describe('model group session bindings', () => {
     expect(unbindModelGroupSession('s1')).toBe(false);
     clearModelGroupSessionState('s1');
     expect(isModelGroupSessionDetached('s1')).toBe(false);
+  });
+
+  // 2026-11-27 回归：进行中任务在 ACP 与智能路由间切换时，pending 目标必须覆盖 current 判断。
+  // 生产入口：projectModelGroupSessionBinding / modelGroupBindingMatchesTarget；最小失败输入：
+  // 1) 从 ACP 切入智能路由成员(current=acp, pending=codex 成员)应返回 pendingSwitch:true；
+  // 2) 从智能路由成员手动改切 ACP(current=codex 成员, pending=acp)不得继续按 current 返回托管态。
+  it('uses pending switch target to project managed state across ACP and smart-route transitions', () => {
+    bindModelGroupSession('s-pending', { type: 'route', id: 'r1' }, CURRENT, 10);
+    const stored = readModelGroupSessionBinding('s-pending');
+    const config = { routes: [route('order')] };
+    const acpTarget = { agentKind: 'acp', providerId: 'acp-plugin:echo:echo', model: 'default' };
+    const codexMember = { agentKind: 'codex', providerId: 'acct-a', model: 'gpt' };
+
+    expect(projectModelGroupSessionBinding({
+      binding: stored,
+      config,
+      current: acpTarget,
+      pending: codexMember,
+    })).toEqual({
+      selection: { type: 'route', id: 'r1' },
+      routeName: '主力编程',
+      autoSwitch: true,
+      pendingSwitch: true,
+    });
+
+    expect(projectModelGroupSessionBinding({
+      binding: stored,
+      config,
+      current: codexMember,
+      pending: acpTarget,
+    })).toBeNull();
+
+    expect(modelGroupBindingMatchesTarget('s-pending', codexMember)).toBe(true);
+    expect(modelGroupBindingMatchesTarget('s-pending', acpTarget)).toBe(false);
+  });
+
+  // 2026-11-27 回归：
+  // 1) 从智能路由成员手动登记切到 ACP(applyNow=false)时，必须立即解绑智能路由并通知刷新；
+  // 2) 从 ACP 切入智能路由成员后，下一条消息落地(applyPendingAgentSwitchIfIdle)必须保留绑定而非误解绑。
+  it('unbinds on manual pending switch to ACP and preserves binding when landing a routed switch from ACP', async () => {
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    let row: {
+      id: string;
+      agentKind: 'cc' | 'codex' | 'pi' | 'acp';
+      model: string;
+      providerId: string | null;
+      status: 'active';
+      remoteHostId: null;
+      orcaRole: null;
+      sdkSessionId: string | null;
+    } = {
+      id: 's-switch',
+      agentKind: 'codex',
+      model: 'gpt',
+      providerId: 'acct-a',
+      status: 'active',
+      remoteHostId: null,
+      orcaRole: null,
+      sdkSessionId: null,
+    };
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      getSessionRow: async () => row,
+      getLiveSession: () => null,
+      closeSession: async () => {},
+      listMessagesForHandoff: async () => [],
+      findParkedEngineSession: async () => null,
+      applyAgentSwitchToDb: async (_sid, patch) => {
+        row = {
+          ...row,
+          agentKind: patch.agentKind,
+          model: patch.model,
+          providerId: patch.providerId ?? null,
+        };
+      },
+      setSessionProvider: () => {},
+      insertBoundaryMessage: async () => 'boundary-1',
+      applyResumeFallbackAtomically: async () => {},
+      setPendingHandoff: () => {},
+      readPendingHandoffGeneration: () => 0,
+      bootstrapSwitchedSession: async () => {},
+      withCloseSuppressed: async (_sid, fn) => fn(),
+      admitPluginEngineTarget: (input) => ({
+        engineKey: 'echo:echo',
+        engineName: 'Echo ACP',
+        providerId: input.providerId,
+        model: input.model || 'default',
+        effort: '',
+        permissionMode: 'auto',
+      }),
+      pendingSwitches,
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+
+    // 1) 手动从已托管的 Codex 切到 ACP（仅登记意图，未发送）→ 立即解绑。
+    bindModelGroupSession('s-switch', { type: 'route', id: 'r1' }, CURRENT, 20);
+    expect(readModelGroupSessionBinding('s-switch')).not.toBeNull();
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's-switch',
+      targetAgentKind: 'acp',
+      providerId: 'acp-plugin:echo:echo',
+      model: 'default',
+    });
+    expect(readModelGroupSessionBinding('s-switch')).toBeNull();
+
+    // 2) 落地切到 ACP 后，再经智能路由切回 Codex（先登记意图 + 写绑定，再随下一条消息落地）→ 保留绑定。
+    await applyPendingAgentSwitchIfIdle(deps, 's-switch');
+    expect(row.agentKind).toBe('acp');
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's-switch',
+      targetAgentKind: 'codex',
+      providerId: 'acct-a',
+      model: 'gpt',
+    });
+    bindPendingRoute(pendingSwitches, 's-switch', { agentKind: 'codex', providerId: 'acct-a', model: 'gpt' });
+    await applyPendingAgentSwitchIfIdle(deps, 's-switch');
+    expect(row.agentKind).toBe('codex');
+    expect(readModelGroupSessionBinding('s-switch')).toMatchObject({
+      selection: { type: 'route', id: 'r1' },
+      pickedKey: CURRENT,
+    });
+  });
+
+  // Unit, model-groups.md §4.4: the first send after selecting an already running
+  // remote member must distinguish a direct pick from an explicit smart route bind.
+  it.each([
+    { agentDeviceId: undefined, routed: false },
+    { agentDeviceId: 'computer-a', routed: true },
+  ])('lands a same-model selection with $agentDeviceId (routed=$routed)', async ({ agentDeviceId, routed }) => {
+    const sessionId = 's-remote';
+    const current = { agentKind: 'codex' as const, providerId: 'acct-a', model: 'gpt', agentDeviceId };
+    const selection = { type: 'route' as const, id: 'r1' };
+    const pickedKey = modelGroupCandidateKey(current);
+    bindModelGroupSession(sessionId, selection, pickedKey);
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    pendingSwitches.set(sessionId, {
+      targetAgentKind: 'codex', providerId: current.providerId, model: current.model, sameAgentSelection: true,
+    });
+    if (routed) bindPendingRoute(pendingSwitches, sessionId, current);
+    expect(Boolean(projectModelGroupSessionBinding({
+      binding: readModelGroupSessionBinding(sessionId),
+      config: { routes: [route('order')] },
+      current,
+      pending: projectPendingModelGroupTarget(pendingSwitches.get(sessionId)),
+    }))).toBe(routed);
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      pendingSwitches,
+      getSessionRow: async () => ({
+        id: sessionId, ...current, status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: null,
+      }),
+      getLiveSession: () => null,
+      closeSession: async () => {},
+      listMessagesForHandoff: async () => [],
+      applyAgentSwitchToDb: async () => {},
+      setSessionProvider: () => {},
+      insertBoundaryMessage: async () => 'boundary-1',
+      applyResumeFallbackAtomically: async () => {},
+      setPendingHandoff: () => {},
+      bootstrapSwitchedSession: async () => {},
+      withCloseSuppressed: async (_id, run) => run(),
+      selectSameAgentModel: async (_id, intent) => {
+        if (!intent.preserveModelGroupBinding) unbindModelGroupSession(sessionId);
+        return { deferred: false };
+      },
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+    await applyPendingAgentSwitchIfIdle(deps, sessionId);
+    expect(Boolean(readModelGroupSessionBinding(sessionId))).toBe(routed);
+  });
+
+  // #13658 review (unit): the task row has only the base route, but recovery needs
+  // to recognize the binding and preserve the suffix when the provider has several accounts.
+  it('keeps the selected account when matching an ordinary task for recovery', async () => {
+    const pickedKey = modelGroupCandidateKey({ ...CANDIDATES[0]!, accountId: 'first' });
+    const selection = { type: 'route', id: 'r1' } as const;
+    bindModelGroupSession('ordinary', selection, pickedKey, 10);
+    expect(await readActiveModelGroupBindingForDispatch('ordinary', ROW)).toEqual({ selection, pickedKey, at: 10 });
+    expect(await readActiveModelGroupBindingForDispatch('ordinary', { ...ROW, agentDeviceId: 'other-device' })).toBeNull();
+    expect(await readActiveModelGroupBindingForDispatch('ordinary', { ...ROW, model: 'gpt-mini' })).toBeNull();
+  });
+
+  // #13658 review (unit): during pre-send account handoff, the production dispatch lookup
+  // must see the target account inside eager bootstrap, while a rejected switch keeps the old one.
+  it.each([false, true])('publishes the account at the pre-send switch commit (committed=%s)', async committed => {
+    const sessionId = 'presend-account';
+    const selection = { type: 'route', id: 'r1' } as const;
+    bindModelGroupSession(sessionId, selection, modelGroupCandidateKey({ ...CANDIDATES[0]!, accountId: 'first' }), 10);
+    const bootstrapAccount = vi.fn();
+    const result = await runModelGroupBeforeSend({
+      readSession: async () => ROW,
+      evaluateTurnRouting: async () => ({
+        action: 'switch', selection, groupName: 'OpenAI', cause: 'preflight-unavailable',
+        target: { ...CANDIDATES[0]!, accountId: 'second', agentDeviceId: null },
+        fromLabel: 'first', toLabel: 'second', crossEngine: false, crossLocation: false, crossAccount: true,
+      }),
+      applySameEngineRoute: vi.fn(async () => ({})),
+      performCrossSwitch: async ({ commitLocalRoute, skipBootstrap }) => {
+        expect(skipBootstrap).toBe(false);
+        if (committed) {
+          commitLocalRoute?.();
+          bootstrapAccount(await readModelGroupRoutedAccount(sessionId, ROW.providerId!));
+        }
+        return { switched: committed };
+      },
+    }, sessionId, { bootstrapAfterSwitch: true });
+    expect(result.switched).toBe(committed);
+    expect(bootstrapAccount.mock.calls).toEqual(committed ? [['second']] : []);
+    expect(await readModelGroupRoutedAccount(sessionId, ROW.providerId!)).toBe(committed ? 'second' : 'first');
   });
 
   it('persists detached state for companion sessions so bot profile modelGroup does not re-manage them', async () => {
@@ -508,6 +739,42 @@ describe('evaluateModelGroupBeforeSend', () => {
       action: 'switch',
       cause: 'preflight-unavailable',
       target: { providerId: 'anthropic' },
+    });
+  });
+
+  // 2026-11-28 回归：本机多账号拆平后，账号 1 撞配额时能从 DB 会话行（无 accountId 列）匹配账号后缀绑定，
+  // 并直接提议/切换到同供应商下的账号 2，不再把同 providerId 的其余账号一并判成同一份已满配额。
+  it('fails over from an exhausted flat local account to the sibling account on the same provider', async () => {
+    const flatRoute: ModelGroupRoute = {
+      id: 'src:openai-gpt',
+      name: 'GPT-6.2',
+      strategy: 'order',
+      parent: { id: 'auto:openai', name: 'OpenAI' },
+      candidates: [
+        { agentKind: 'codex', providerId: 'openai', accountId: 'default', model: 'gpt-6.2' },
+        { agentKind: 'codex', providerId: 'openai', accountId: 'second', model: 'gpt-6.2' },
+      ],
+    };
+    const pickedAccount1 = modelGroupCandidateKey({
+      agentKind: 'codex', providerId: 'openai', accountId: 'default', model: 'gpt-6.2',
+    });
+    const offer = await computeModelGroupSwitchOffer({
+      readBinding: () => ({ selection: { type: 'route', id: 'src:openai-gpt' }, pickedKey: pickedAccount1, at: NOW }),
+      readSession: async () => ({ source: 'desktop', agentKind: 'codex', providerId: 'openai', model: 'gpt-6.2' }),
+      isShared: () => false,
+      hasGoal: async () => false,
+      config: () => ({ routes: [flatRoute] }),
+      candidateFacts: async () => [
+        { available: true, modelName: 'GPT-6.2', sourceName: 'OpenAI · first@example.com', windows: [{ usedPercent: 100, resetAtMs: NOW + 60_000, windowMs: 18_000_000 }] },
+        { available: true, modelName: 'GPT-6.2', sourceName: 'OpenAI · second@example.com', windows: [{ usedPercent: 15, resetAtMs: NOW + 60_000, windowMs: 18_000_000 }] },
+      ],
+      now: () => NOW,
+    }, 's-flat-1');
+    expect(offer).toMatchObject({
+      providerId: 'openai',
+      accountId: 'second',
+      sourceName: 'OpenAI · second@example.com',
+      crossEngine: false,
     });
   });
 });

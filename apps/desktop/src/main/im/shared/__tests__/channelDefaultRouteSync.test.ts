@@ -243,6 +243,29 @@ describe('syncUnderLock', () => {
     expect((await rowOf('dm')).model).toBe(NEW.model);
   });
 
+  // Same route key as task creation: receiving a message must keep following the configured group model.
+  it.each(['telegram', 'discord', 'wecom', 'dingtalk'] as const)('uses the saved %s lane when choosing a follow-up model', async (source) => {
+    await insertTask('group', OLD, { source });
+    await db.update(sessions).set({ imUserId: 'group-lane' }).where(eq(sessions.id, 'group'));
+    const groupRoute = { ...NEW, model: 'group-model' };
+    mocks.fingerprint.mockImplementation((...args: unknown[]) => args[1] ? 'fp-group' : 'fp-new');
+    mocks.resolveDefaults.mockImplementation(async (...args: unknown[]) =>
+      args[3] ? { ...groupRoute, fingerprint: 'fp-group' } : { ...NEW, fingerprint: 'fp-new' });
+    const follower = createImChannelDefaultRouteSync({
+      source,
+      config: CONFIG,
+      isRouteUsable: async () => true,
+      routeOverrideFor: (botId, userId) =>
+        botId === 'bot' && userId === 'group-lane'
+          ? { ...groupRoute, effort: 'low', agentDeviceId: null }
+          : null,
+    });
+
+    await follower.syncUnderLock('group');
+
+    expect((await rowOf('group')).model).toBe(groupRoute.model);
+  });
+
   /**
    * 绑定项目的群(2026-11-23 用户裁决): 群任务在项目目录里时跟随「项目与模型」里那一行, 还在
    * 对话目录里的任务仍跟随渠道设置, 直到 `/new`。生产入口 createImChannelDefaultRouteSync 的

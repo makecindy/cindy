@@ -3,8 +3,8 @@ export default {
   name: 'task-inbox',
   entry: './fixture.tsx',
   viewport: { width: 320, height: 640 },
-  real: 'TaskInbox, SessionEntryRows, SessionItem, TeammateInboxRow, shared inbox classifier',
-  notCovered: 'Persistence, remote devices, mobile native sheets, full sidebar filtering, and how a teammate row is resolved from the roster stores (teammateInbox.test.ts)',
+  real: 'TaskInbox, SessionEntryRows, SessionItem, shared inbox classifier',
+  notCovered: 'Persistence, remote devices, mobile native sheets, full sidebar filtering',
   stubs: {
     'src/renderer/contexts/AuthContext': {
       partial: 'export const useAuth = () => ({dataOwnerId: "fixture", isAuthenticated: false});',
@@ -23,9 +23,6 @@ export default {
     reply: {
       about: 'Replying to the open task moves it to Working at once without scrolling the sidebar',
     },
-    teammates: {
-      about: 'Each teammate conversation is one row by whose turn it is; idle ones are left out; Done only where reading settles it',
-    },
     pinned: {
       about: 'Pinned items in inbox mode share inbox display rules without Snooze or Done buttons',
     },
@@ -36,8 +33,36 @@ export default {
     offline: {
       about: 'Offline remote computer tasks support queueing Done, Snooze, pending-sync labels, and offline Undo',
     },
+    'health-single': {
+      about: 'Single environment health alert renders compact one-click fix card at top of Inbox',
+    },
+    'health-multi': {
+      about: 'Multiple environment health alerts aggregate into a collapsible summary card',
+    },
   },
   async check(page, ui) {
+    if (ui.case === 'health-single') {
+      const strip = page.getByTestId('inbox-environment-health');
+      await strip.waitFor();
+      await ui.capture('health-single');
+      await strip.getByRole('button', { name: await ui.t('ccAgent.sidebar.inbox.health.actions.connectGithub'), exact: true }).click();
+      assert.equal(
+        await page.locator('[data-inbox-scroller]').getAttribute('data-last-health-action'),
+        'github:connect',
+      );
+      return;
+    }
+    if (ui.case === 'health-multi') {
+      const strip = page.getByTestId('inbox-environment-health');
+      await strip.waitFor();
+      const toggle = strip.locator('button[aria-expanded]');
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+      await ui.capture('health-multi-collapsed');
+      await toggle.click();
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+      await ui.capture('health-multi-expanded');
+      return;
+    }
     if (ui.case === 'offline') {
       const doneTarget = page.locator('[data-session-id="offline-done-target"]');
       const snoozeTarget = page.locator('[data-session-id="offline-snooze-target"]');
@@ -126,55 +151,6 @@ export default {
       await ui.capture('replied');
       return;
     }
-    if (ui.case === 'teammates') {
-      const section = async (key) => page.locator('section > button')
-        .filter({ hasText: await ui.t(`ccAgent.sidebar.inbox.${key}`) }).locator('..');
-      const row = (id) => page.locator(`[data-teammate-inbox-row="teammate:local:${id}"]`);
-      for (const key of ['working', 'snoozed']) await (await section(key)).locator('> button').click();
-      const pending = await section('inbox');
-      // Teammates lead their section; the idle one is not in the inbox at all.
-      for (const id of ['pm', 'qa', 'older']) await pending.locator(`[data-teammate-inbox-row="teammate:local:${id}"]`).waitFor();
-      await (await section('working')).locator('[data-teammate-inbox-row="teammate:local:momo"]').waitFor();
-      await (await section('snoozed')).locator('[data-teammate-inbox-row="teammate:local:lulu"]').waitFor();
-      assert.equal(await row('idle').count(), 0, 'An idle, read teammate is not listed');
-      const header = await page.locator('section > button').first().boundingBox();
-      const task = await page.locator('[data-session-id="ready"]').boundingBox();
-      const first = await row('pm').boundingBox();
-      assert.ok(header && task && first);
-      assert.ok(Math.abs(first.width - task.width) <= 1 && Math.abs(first.height - task.height) <= 1,
-        `A teammate row uses the task row geometry: ${first.width}x${first.height} / ${task.width}x${task.height}`);
-      await page.mouse.move(1, 639);
-      await ui.capture('teammate-rows');
-      const done = await ui.t('ccAgent.sidebar.inbox.complete');
-      const snooze = await ui.t('ccAgent.sidebar.inbox.snooze');
-      const actions = async (id) => {
-        await row(id).hover();
-        return [await row(id).getByRole('button', { name: snooze, exact: true }).count(),
-          await row(id).getByRole('button', { name: done, exact: true }).count()];
-      };
-      // A pending request cannot be completed; a running one has nothing to complete;
-      // a computer that does not mirror the snooze offers none.
-      assert.deepEqual(await actions('pm'), [1, 0]);
-      assert.deepEqual(await actions('momo'), [1, 0]);
-      assert.deepEqual(await actions('older'), [0, 1]);
-      assert.deepEqual(await actions('qa'), [1, 1]);
-      const hovered = await row('qa').boundingBox();
-      assert.ok(hovered && Math.abs(hovered.width - first.width) <= 1, 'Hover actions do not change the row width');
-      await ui.capture('teammate-actions');
-      await row('qa').getByRole('button', { name: snooze, exact: true }).click();
-      const tomorrow = page.getByRole('menuitem').filter({ hasText: await ui.t('ccAgent.sidebar.inbox.tomorrow') });
-      const until = await tomorrow.locator('time').getAttribute('datetime');
-      await ui.capture('teammate-snooze-menu');
-      await tomorrow.click();
-      // The snooze is written to the conversation's own Session.
-      await page.waitForFunction((expected) => document.documentElement.dataset.snoozedUntil === expected
-        && document.documentElement.dataset.snoozedSession === 'chat-qa', until);
-      await row('lulu').hover();
-      await row('lulu').getByRole('button', { name: snooze, exact: true }).click();
-      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.wake'), exact: true }).waitFor();
-      await page.keyboard.press('Escape');
-      return;
-    }
     if (ui.case === 'intro') {
       const toggle = page.locator('[data-task-list-mode-toggle]');
       await toggle.click();
@@ -214,7 +190,6 @@ export default {
       await inbox.waitFor();
       assert.equal(await project.count(), 0);
       assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
-      assert.equal(await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.taskListMode.heading')) }).count(), 0);
       await page
         .locator('section > button')
         .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.archived') })
@@ -228,14 +203,33 @@ export default {
       await report.waitFor();
       const count = Number(await pending.locator('span').last().innerText());
       const settings = page.getByRole('button').filter({ has: page.locator('svg.lucide-sliders-horizontal') });
-      async function openFilters(inboxMode = true) {
+      const taskStatusHeading = new RegExp(await ui.t('ccAgent.sidebar.taskStatusHeading'));
+      const menuRow = async (key) => page.getByRole('menuitem', { name: new RegExp(`^${await ui.t(key)}`) });
+      const modeChoice = async (mode) =>
+        page.getByRole('radio', { name: await ui.t(`ccAgent.sidebar.taskListMode.${mode}`), exact: true });
+      // The menu keeps the list mode switch and shows each mode its own rows (2026-11-28 user decision).
+      // Wait for each open and close to finish: keys sent while a panel is still animating go astray.
+      async function openSettings() {
         await settings.focus();
         await settings.press('Enter');
-        assert.equal(await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.taskStatusHeading')) }).count(), inboxMode ? 0 : 1);
-        await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.filterHeading')) }).press('ArrowRight');
+        await (await modeChoice('tasks')).waitFor();
       }
-      await openFilters();
-      const hide = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.filterHideAutomations'), exact: true });
+      async function closeMenu() {
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => document.querySelectorAll('[role="menu"]').length === 0);
+      }
+      async function openMenu(inboxMode = true) {
+        await openSettings();
+        assert.equal(await page.getByRole('menuitem', { name: taskStatusHeading }).count(), inboxMode ? 0 : 1);
+        assert.equal(await (await modeChoice('inbox')).getAttribute('aria-checked'), String(inboxMode));
+      }
+      // What to hide is its own row beside the filters, checked like the grouping choices.
+      async function openHidden(inboxMode = true) {
+        await openMenu(inboxMode);
+        await (await menuRow('ccAgent.sidebar.hideHeading')).press('ArrowRight');
+      }
+      await openHidden();
+      const hide = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.hideOptions.automations'), exact: true });
       assert.equal(await hide.getAttribute('aria-checked'), 'false');
       await hide.click();
       await report.waitFor({ state: 'detached' });
@@ -243,53 +237,62 @@ export default {
       assert.equal(Number(await pending.locator('span').last().innerText()), count - 1);
       assert.equal(await toggle.getAttribute('aria-description'), null, 'Only the hidden automation was unread');
       await ui.capture('inbox-filter');
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      await closeMenu();
       await toggle.click();
       await project.waitFor();
       await report.waitFor();
       const teammate = page.locator('[data-session-id="teammate"]');
       await teammate.waitFor();
       assert.equal(await toggle.getAttribute('aria-description'), null, 'Task mode keeps the inbox filter for its dot');
-      await openFilters(false);
+      await openHidden(false);
       assert.equal(await hide.getAttribute('aria-checked'), 'false');
       await hide.click();
       await report.waitFor({ state: 'detached' });
-      await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.filterCreatorsHeading')) }).press('ArrowRight');
-      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterCreatorsNone'), exact: true }).press('Enter');
+      // Every teammate's tasks are hidden from the same submenu (2026-11-28 user decision).
+      await page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.hideOptions.teammates'), exact: true }).click();
       await teammate.waitFor({ state: 'detached' });
       await page.locator('[data-session-id="ready"]').waitFor();
-      await page.keyboard.press('ArrowLeft');
       await ui.capture('task-list-filters');
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      await closeMenu();
       await toggle.click();
       await pending.waitFor();
       assert.equal(await report.count(), 0);
-      await openFilters();
-      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterReset'), exact: true }).click();
+      // Each mode keeps its own hidden kinds: showing automations again here leaves the task list as it was.
+      await openHidden();
+      await hide.click();
       await report.waitFor();
       assert.equal(Number(await pending.locator('span').last().innerText()), count);
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      await closeMenu();
 
-      const display = page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.displayHeading')) });
-      const compact = await ui.t('ccAgent.sidebar.viewStyleList');
-      const wide = await ui.t('ccAgent.sidebar.viewStyleListWide');
-      await settings.press('Enter');
-      await display.press('ArrowRight');
-      await page.getByRole('menuitem', { name: compact, exact: true }).press('Enter');
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      // Row style is chosen in place, and each mode keeps its own.
+      const rowStyle = async (key) => page.getByRole('radio', { name: await ui.t(key), exact: true });
+      const compact = 'ccAgent.sidebar.viewStyleList';
+      const wide = 'ccAgent.sidebar.viewStyleListWide';
+      await openSettings();
+      await (await rowStyle(compact)).click();
+      await closeMenu();
       await toggle.click();
       await project.waitFor();
-      await settings.press('Enter');
-      assert.ok((await display.innerText()).includes(wide), 'Regular list retains its own row style');
-      await page.keyboard.press('Escape');
+      await openSettings();
+      assert.equal(await (await rowStyle(wide)).getAttribute('aria-checked'), 'true', 'Regular list retains its own row style');
+      await closeMenu();
       await toggle.click();
       await pending.waitFor();
-      await settings.press('Enter');
-      assert.ok((await display.innerText()).includes(compact), 'Inbox restores its row style');
+      await openSettings();
+      assert.equal(await (await rowStyle(compact)).getAttribute('aria-checked'), 'true', 'Inbox restores its row style');
+      // 「收件箱使用技巧」 reopens the introduction, which otherwise shows once per computer.
+      await (await menuRow('ccAgent.sidebar.taskListMode.inboxTips')).click();
+      const introduction = page.getByRole('dialog', { name: await ui.t('featureIntro.taskInbox.title') });
+      await introduction.waitFor();
+      await page.keyboard.press('Escape');
+      await introduction.waitFor({ state: 'detached' });
+      await openSettings();
+      // The switch inside the menu changes the list and the menu's own rows without closing it.
+      await (await modeChoice('tasks')).click();
+      await project.waitFor();
+      assert.equal(await page.getByRole('menuitem', { name: taskStatusHeading }).count(), 1);
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+      await ui.capture('menu-mode-switch');
       return;
     }
 

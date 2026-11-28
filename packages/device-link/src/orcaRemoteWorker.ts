@@ -14,6 +14,7 @@
 export const ORCA_REMOTE_WORKER_CAPS_CHANNEL = 'maker:orca:remote-worker:caps';
 export const ORCA_REMOTE_WORKER_MODELS_CHANNEL = 'maker:orca:remote-worker:models';
 export const ORCA_REMOTE_WORKER_OPEN_CHANNEL = 'maker:orca:remote-worker:open';
+export const ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL = 'maker:orca:remote-worker:archive';
 export const ORCA_REMOTE_WORKER_RELEASE_CHANNEL = 'maker:orca:remote-worker:release';
 /** Execution device → owning Lead. Never exposed to shared-task guests. */
 export const ORCA_REMOTE_WORKER_BRIDGE_CHANNEL = 'maker:orca:remote-worker:bridge';

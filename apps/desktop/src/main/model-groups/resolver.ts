@@ -40,6 +40,7 @@ import {
 import { modelGroupRouteFor } from './routeFor.js';
 
 export interface ModelGroupResolverDeps {
+  billingUnavailable?(providerId: string): boolean;
   config(): ModelGroupsConfig;
   /** 本机供应商目录的快照(不触发发现或登录)。 */
   views(): Promise<ProviderView[]>;
@@ -65,8 +66,13 @@ export interface ModelGroupResolverDeps {
    */
   quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
   /**
+   * 本机多账号订阅池里单个账号此刻的事实（由拆平后的扁平候选使用）：
+   * 是否可用（已登录、未暂停、支持此模型）以及给用户看的账号显示名。
+   */
+  localAccount?(providerId: string, accountId: string, model: string): { available: boolean; label: string } | null;
+  /**
    * 本机来源背后是电脑组或几个账号时，内层按它自己的选法下一个会接任务的那一个的额度事实(pick.ts 的
-   * ModelGroupInnerQuota)；不是这种来源、读不到时为 null。别的电脑与分享来的来源不问(只用对方开放的额度)。
+   * ModelGroupInnerQuota)；仅用于未拆平的按模型手工路由。拆平后的账号候选与供应商路由不再走内层。
    */
   innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupCandidate['agentKind'] }): Promise<ModelGroupInnerQuota | null>;
   /**
@@ -108,9 +114,14 @@ const builtinAgentOf = (kind: Exclude<ModelGroupCandidate['agentKind'], 'acp'>):
 /** 与新任务等额度的上限一致：读不到别处的目录不让新任务多等。 */
 export const MODEL_GROUP_REMOTE_WAIT_MS = 2_000;
 
-/** 额度窗口的键：本机按供应商连接 ID；别的电脑上的连接再加那台的设备 id，两者不会混用。 */
-export function modelGroupQuotaKey(agentDeviceId: string | null | undefined, providerId: string): string {
-  return agentDeviceId ? `${agentDeviceId}\u0000${providerId}` : providerId;
+/** 额度窗口的键：本机按供应商连接 ID（拆平后的本机账号再附账号槽位 ID）；别的电脑上的连接再加那台的设备 id，互不混用。 */
+export function modelGroupQuotaKey(
+  agentDeviceId: string | null | undefined,
+  providerId: string,
+  accountId?: string | null,
+): string {
+  const base = agentDeviceId ? `${agentDeviceId}\u0000${providerId}` : providerId;
+  return accountId && !agentDeviceId ? `${base}\u0000acct:${accountId}` : base;
 }
 
 /** 超时按失败处理；计时器在结果出来后清掉。 */
@@ -297,6 +308,12 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       ? (deps.pluginEngines?.() ?? [])
       : [];
     const locations = remote ? await remote.locations : null;
+    const heldProviders = new Set<string>();
+    if (context?.scheduled && !sshHostId && deps.billingUnavailable) {
+      const localProviders = new Set(route.candidates.filter(candidate =>
+        !candidate.off && !candidate.agentDeviceId && candidate.agentKind !== 'acp').map(candidate => candidate.providerId));
+      for (const id of localProviders) if (deps.billingUnavailable(id)) heldProviders.add(id);
+    }
     return Promise.all(route.candidates.map(async (candidate) => {
       const { agentDeviceId } = candidate;
       if (candidate.agentKind === 'acp') {
@@ -353,18 +370,22 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       const view = catalog.views.find((item) => item.id === candidate.providerId);
       const model = view?.models[agent]?.find((item) => item.id === candidate.model);
       const modelName = model?.name ?? candidate.model;
-      const windows = quota.get(modelGroupQuotaKey(agentDeviceId, candidate.providerId))
+      const accountFact = !agentDeviceId && candidate.accountId && deps.localAccount
+        ? deps.localAccount(candidate.providerId, candidate.accountId, candidate.model)
+        : null;
+      const windows = quota.get(modelGroupQuotaKey(agentDeviceId, candidate.providerId, candidate.accountId))
         // 只对某个模型生效的窗口，只在候选就是那个模型时参与。
         ?.filter((window) => !window.scopedTo || scopedWindowApplies(window.scopedTo, candidate.model, modelName))
         .map(({ usedPercent, resetAtMs, windowMs }) => ({ usedPercent, resetAtMs, windowMs }));
       const exact = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model, effort: '', fastMode: false as const };
-      const inner = !agentDeviceId && !sshHostId && deps.innerQuota
+      // 拆平后的单账号候选与供应商路由（route.parent）不再套第二层内层自动选路。
+      const inner = !agentDeviceId && !sshHostId && !candidate.accountId && !route.parent && deps.innerQuota
         ? await deps.innerQuota({ providerId: candidate.providerId, model: candidate.model, agentKind: candidate.agentKind }).catch(() => null)
         : null;
       const sshAllowed = !sshHostId
         ? true
         : !agentDeviceId && (!deps.sshFilter || await Promise.resolve(deps.sshFilter(sshHostId, candidate, view)).catch(() => false));
-      const available = sshAllowed && (agentDeviceId
+      const baseAvailable = sshAllowed && (!!agentDeviceId || !heldProviders.has(candidate.providerId)) && (agentDeviceId
         // 与插件卡片里的远程模型同一判断：位置此刻能选，模型也在那里允许远程调用的目录里。
         ? !!locations && !!remoteViews && await isGhostCardModelRouteAvailable({ ...exact, agentDeviceId }, {
             localViews: async () => views,
@@ -376,6 +397,11 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           // SSH 原生 Codex 以远端 SSH 主机目录与远端就绪态为准，不要求本机登录 openai 或安装本机 codex。
           ? !!sshCodex && isPluginModelPickerRouteAvailable(exact, sshCodex, ['codex'])
           : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents));
+      const available = baseAvailable && (!candidate.accountId || !deps.localAccount || accountFact?.available === true);
+      const baseSourceName = view?.name ?? candidate.providerId;
+      const sourceName = accountFact?.label && accountFact.label !== baseSourceName
+        ? `${baseSourceName} · ${accountFact.label}`
+        : baseSourceName;
       return {
         available,
         ...(available && wantedEffort && isPluginModelPickerRouteAvailable(
@@ -385,7 +411,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           { ...exact, fastMode: wantedFast }, catalog.views, catalog.agents,
         ) ? { fastMode: wantedFast } : {}),
         modelName,
-        sourceName: view?.name ?? candidate.providerId,
+        sourceName,
         windows: windows && windows.length > 0 ? windows : null,
         ...(inner ? { inner } : {}),
         ...(route.strategy === 'cheapest'
@@ -442,6 +468,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       route: {
         ...chosen,
         ...(candidate.agentDeviceId ? { agentDeviceId: candidate.agentDeviceId } : {}),
+        ...(candidate.accountId ? { accountId: candidate.accountId } : {}),
         ...(effort ? { effort } : {}),
         ...(fastMode ? { fastMode } : {}),
       },

@@ -47,6 +47,7 @@ const log = createLogger('model-groups');
  */
 let cached: { owner: string | null; config: ModelGroupsConfig; visible: ModelGroupsConfig } | null = null;
 let loading: { owner: string | null; promise: Promise<void> } | null = null;
+let saving: Promise<unknown> = Promise.resolve();
 const listeners = new Set<() => void>();
 
 const ownerNow = (): string | null => getDataOwnerGeneration().dataOwnerId;
@@ -64,17 +65,29 @@ function publish(owner: string | null, next: ModelGroupsConfig): void {
 export function refreshModelGroups(): Promise<void> {
   const owner = ownerNow();
   if (loading?.owner === owner) return loading.promise;
+  const pendingSave = saving;
   // 读不到(含桥接还没有这个接口)只记日志：选择器照常显示其余内容，不让挂载它的页面报错。
-  const promise = Promise.resolve()
-    .then(() => window.electronAPI.modelGroups.get())
-    .then((next) => publish(owner, next))
+  const promise = pendingSave.then(async () => {
+    if (owner !== ownerNow()) return;
+    const next = await window.electronAPI.modelGroups.get();
+    if (owner !== ownerNow()) return;
+    if (pendingSave === saving) {
+      publish(owner, next);
+      return;
+    }
+    // 保存与这次读取交错时，待已排队的编辑完成后合并补读一次；随后提交的编辑复用同一队列。
+    const reload = saving.then(async () => {
+      if (owner !== ownerNow()) return;
+      publish(owner, await window.electronAPI.modelGroups.get());
+    });
+    saving = reload.catch(() => undefined);
+    await reload;
+  })
     .catch((err: unknown) => log.warn('model groups unavailable', err))
     .finally(() => { if (loading?.promise === promise) loading = null; });
   loading = { owner, promise };
   return promise;
 }
-
-let saving: Promise<unknown> = Promise.resolve();
 
 /**
  * 保存排队执行，每次都在上一次保存的结果上改：连点两次「上移」或改名后马上再改别的，
@@ -155,9 +168,9 @@ export function commitModelGroupDecision(result: ModelGroupResolveResult | null)
 export async function bindModelGroupSession(
   sessionId: string,
   selection: ModelGroupSelection,
-  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'> | null,
+  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'> | null,
 ): Promise<void> {
-  const route: { agentKind: ModelGroupCandidate['agentKind']; providerId: string; model: string; agentDeviceId?: string } | null =
+  const route: { agentKind: ModelGroupCandidate['agentKind']; providerId: string; model: string; agentDeviceId?: string; accountId?: string } | null =
     !result ? null : 'outcome' in result ? (result.outcome === 'routed' ? result.route : null) : result;
   if (result && 'outcome' in result) commitModelGroupDecision(result);
   if (!route) return;
@@ -166,8 +179,9 @@ export async function bindModelGroupSession(
     selection,
     route: {
       agentKind: route.agentKind, providerId: route.providerId, model: route.model,
-      // 记录带上运行位置：同一个模型在另一台电脑上是另一个来源。
+      // 记录带上运行位置与本机账号槽位：同一个供应商下的不同电脑或拆平账号是不同来源。
       ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+      ...(route.accountId ? { accountId: route.accountId } : {}),
     },
   }).catch((err: unknown) => log.warn('model group session binding failed', err));
 }
@@ -214,7 +228,7 @@ export function useModelGroupLocationName(): ModelGroupLocationName {
   return useMemo(() => modelGroupLocationNameFrom(devices, nameFor), [devices, nameFor]);
 }
 
-type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
+type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'>;
 
 export interface ModelGroupCandidateNames {
   provider: ProviderView | undefined;
@@ -281,8 +295,11 @@ export function useModelGroupCandidateNames(
     const knownModel = model ?? everywhere.flatMap((views) => views.flatMap((view) => view.models[agent] ?? []))
       .find((item) => item.id === candidate.model);
     const knownProvider = provider ?? everywhere.flat().find((view) => view.id === candidate.providerId);
-    const sourceName = provider?.name ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId
-      ? fallback.sourceName : knownProvider?.name ?? fallback?.sourceName ?? candidate.providerId);
+    const hasAccountSourceName = !!candidate.accountId && !!fallback?.sourceName && fallback.sourceName !== candidate.providerId;
+    const sourceName = hasAccountSourceName
+      ? fallback!.sourceName!
+      : provider?.name ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId
+        ? fallback.sourceName : knownProvider?.name ?? fallback?.sourceName ?? candidate.providerId);
     return {
       provider,
       modelName: model?.name ?? (fallback?.modelName && fallback.modelName !== candidate.model

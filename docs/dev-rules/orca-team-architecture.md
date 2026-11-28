@@ -48,7 +48,7 @@ Orca 是 Cindy Desktop 内的多 agent 协同能力：一个 **Lead session** �
 
 - 多 worker：同一个 active team 下可创建多个 worker，支持 role、label、focused worker 切换、soft/hard limit 与归档。创建后可经协同面板的编辑入口或 `update_worker` 修改 worker 的展示角色名 `role` 与 team 内唯一标识 `label`（只改身份元数据，不换 Agent/模型/权限，见「Worker 运行态」第 10 条）。
 - Split view：Lead 与 focused Worker 共用 `OrcaSplitView` pane 外壳，宽屏为左右 split，doc rail 为 Lead/Worker toggle。见 `apps/desktop/src/renderer/features/cc-agent/OrcaSplitView.tsx` 的 `OrcaSplitView`、`OrcaPaneShell`。
-- 本地 Claude Code、Codex、Pi 与 ACP 插件引擎的普通 Lead 无论是项目还是对话都可开启协同；本地 Worker 同样支持这四类引擎（插件引擎 Worker 仅限在 Lead 所在电脑本机运行，支持 worktree，但拒绝跨机运行设备、Agent 位置与 SSH Lead，且 `set_worker_runtime` 对插件引擎 Worker 返回 `UNSUPPORTED_CAPABILITY`，详参[ACP 插件执行引擎](acp-plugin-harness.md)与[协议记录](protocol-compatibility/plugin-harnesses.md)）；SSH 远端会话的 Claude Code、Codex 与 Pi 均可作 Lead 或 Worker（远端 agent 经 SSH remote-forward 连接本机 MCP bridge：Codex 走 daemon config 注入，Claude Code 走 per-query HTTP 注入，Pi 走内部 MCP bridge URL 改写）；device-link 被控端的项目与对话同样可作 Lead（Lead / Worker / team 的真身都在被控端，控制端只是镜像）。renderer 的入口判定收敛在 `apps/desktop/src/renderer/features/cc-agent/collabEntryPolicy.ts` 的 `resolveCollabEntryPolicy`，新建草稿（`NewMakerDraftRoute`）与会话视图（`CCAgentSessionView` 的 `allowCollabToggle`）共用同一份：普通 Lead 都显示入口，只排除不能嵌套协同的 Orca Worker 子会话。项目按项目级策略查询；Main 的 `resolveLocalCollabPolicyWorkingDir` 同时服务入口状态查询与最终授权，只有 workspace kind 为 dialogue 且 Main 确认目录位于 app 托管 dialogue root 时才只查用户级/全局级策略（即使 cwd 内出现 `.cindy/plugins.json`），显式绑定真实目录的对话仍按该目录的项目级策略查询，不能靠自报 `workspaceKind` 绕过项目禁用。
+- 本地 Claude Code、Codex、Pi 与 ACP 插件引擎的普通 Lead 无论是项目还是对话都可开启协同；本地 Worker 同样支持这四类引擎（插件引擎 Worker 支持本机 worktree。Lead 工具可显式选同账号工作电脑，并以工作电脑可用且获授权的插件引擎作为模型来源。远程创建按[跨电脑 Worker 协议](protocol-compatibility/orca-remote-worker.md)协商能力，再由工作电脑复核来源。SSH Lead 仍拒绝插件引擎 Worker，`set_worker_runtime` 仍返回 `UNSUPPORTED_CAPABILITY`。详参[ACP 插件执行引擎](acp-plugin-harness.md)与[协议记录](protocol-compatibility/plugin-harnesses.md)）；SSH 远端会话的 Claude Code、Codex 与 Pi 均可作 Lead 或 Worker（远端 agent 经 SSH remote-forward 连接本机 MCP bridge：Codex 走 daemon config 注入，Claude Code 走 per-query HTTP 注入，Pi 走内部 MCP bridge URL 改写）；device-link 被控端的项目与对话同样可作 Lead（Lead / Worker / team 的真身都在被控端，控制端只是镜像）。renderer 的入口判定收敛在 `apps/desktop/src/renderer/features/cc-agent/collabEntryPolicy.ts` 的 `resolveCollabEntryPolicy`，新建草稿（`NewMakerDraftRoute`）与会话视图（`CCAgentSessionView` 的 `allowCollabToggle`）共用同一份：普通 Lead 都显示入口，只排除不能嵌套协同的 Orca Worker 子会话。项目按项目级策略查询；Main 的 `resolveLocalCollabPolicyWorkingDir` 同时服务入口状态查询与最终授权，只有 workspace kind 为 dialogue 且 Main 确认目录位于 app 托管 dialogue root 时才只查用户级/全局级策略（即使 cwd 内出现 `.cindy/plugins.json`），显式绑定真实目录的对话仍按该目录的项目级策略查询，不能靠自报 `workspaceKind` 绕过项目禁用。
 - Codex Lead 使用全局注册的 `cindy_orca`，调用时通过 context 恢复身份并在 handler 内拒绝越权。远端 Codex 同样走 `params._meta.threadId` 路由——remote thread 与本地 thread 一样注册进 `CodexMcpThreadContextStore`（`packages/maker-core/src/agents/codex/index.ts` 的 `registerCodexMcpContext` 不再跳过 remoteHostId）。远端 cc 没有 threadId，身份走持久 bearer token + URL `?session=<id>` 路由（`codexHttpBridge.registerSessionCtx`），审批归属快照在 `remoteCcQueryFactory` 注入后按 `startParams.mcpServers` 最终清单定稿。
 - SSH 远端 Codex 的 MCP 桥接：本机 `codexHttpBridge` 在原有 per-run 主 token 之外接受一个 persistent bearer token（safeStorage）；`remote-ssh/codex-remote-mcp.ts` 在 session start/resume 前置完成 per-host 固定端口 remote-forward（`RemoteHost.openRemoteForward`，重连自动 rebind）、远端 `$CODEX_HOME/config.toml` 的 `mcp_servers` 管理段漂移检测（行级 marker + 剥离用户同名 table）与 daemon 幂等 bootstrap（token 只经 stdin 的 KEY=value 块注入，不进 argv）；config 漂移需要重启 daemon 时若同 host 有 live turn 则本次降级（留待下次 ensure）。worker 创建经 `OrcaLeadSessionSnapshot.remoteHostId` 继承在同一台远端主机 spawn，创建前走 `ensureRemoteReadyForSessionStart`（SSH 重连 / agent 安装 / MCP 注入）；lazy resume 与 Orca worker 唤醒路径同样先 ensure 再 bootstrap。
 - PR #107 提供 side_chat 的底层 fork 数据动作：user/assistant 消息都能 fork，assistant 按 turn 粒度复制，Claude 用 uuid 锚点，Codex 用 ThreadFork + ThreadRollback。当前作为普通 session 跳转；未来要登记为 side activity 并挂入统一 pane。
@@ -142,12 +142,14 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 创建回执陈述交接事实，不让 Lead 猜（2026-11-10 现场：五个 Worker「创建成功、首条任务已排队」被说成
 「五个在跑」，随后全部因读不到 Lead 的文件受阻）。`create_worker` 与 `create_workers` 的每个成功项都带：
 
-- `initial_task_state`：`delivered`（已送达并开始处理）／`queued`（已排队、尚未开始）／`not_delivered`
-  （Worker 已创建但任务没送到）／`none`（没有附任务），由 `dispatched`、`queued_message_id` 与
-  `dispatch_outcome` 确定推出；`create_workers.user_report` 按这四类计数，不再让用户自己核对终态。
+- `initial_task_state`：`delivered`（已送达并开始处理）／`queued`（已排队、尚未开始）／`unknown`（送达未确认，正在核对）／
+  `not_delivered`（Worker 已创建但任务没送到）／`none`（没有附任务），由 `dispatched`、`queued_message_id` 与
+  `dispatch_outcome` 确定推出；`create_workers.user_report` 按这五类计数，不再让用户自己核对终态。
 - `file_access`：`lead_working_directory`（与 Lead 同一目录）／`own_worktree`／`explicit_directory`
   （同一台电脑的另一个目录）／`other_computer`（运行设备），后三类附一句 `handoff_hint`。按创建参数与
   实际落点判定，不读 Lead 目录。
+
+跨电脑创建时，Lead 按首条任务的 clientId 查询运行设备的投递回执。只有与该输入匹配的引擎接手回执 `dispatchedInput` 才报告 `delivered`。入队成功、投递回执为 `pending`／`accepted`，或历史中已找到该输入时，缺少接手证据则报告 `queued`。入队回执丢失且回查也无法确认送达（包括旧端缺少回执字段）时报告 `unknown`，保留原 clientId 继续核对，请勿重复派发。明确拒绝或回执为 `removed` 时报告 `not_delivered`。
 
 实现见 `create_worker.ts` 的 `initialTaskState` / `workerHandoffPayload`，回归见
 `createWorkersTool.test.ts`。任务正文要自包含写在这两个工具与 `send_to_worker` 的工具说明里，不进系统提示词。
@@ -956,7 +958,9 @@ Desktop 和 Mobile 均隐藏协同入口，保留 `releasedAt` 的历史来源�
 Mobile 的入口读取和残留表单提交都检查该身份，元数据补齐标记后返回主面板；
 回归见 `apps/mobile/src/__tests__/orcaTeam.test.ts` 与 `useOrcaWorkerForm.test.tsx`。
 
-当前停止补偿的已知限制：`maker:abort-session` 只接受任务 ID，没有目标轮次与持久请求
+显式归档单个跨设备 Worker 使用同账号专用通道 `maker:orca:remote-worker:archive`。运行设备在发送锁内核对来源、关闭会话并在原任务来源标记中保存关闭回执。重复请求只读回执；工作目录和任务记录保留。Lead 收到明确回执才归档代理，设备离线或旧端拒绝新通道时可在恢复连接或更新后重试。旧 Lead 继续使用原有通道。若 Worker 的 Agent 又运行在另一台电脑，通用 Remote Agent 关闭暂不能证明进程已停，运行设备在关闭前返回原因并保留协同归属。已有可信回执仍可重放。
+
+团队结束和创建回滚的旧停止补偿仍有已知限制：`maker:abort-session` 只接受任务 ID，没有目标轮次与持久请求
 身份；若运行设备已停止但回执丢失，后续补偿可能停止用户新发起的轮次。现有传输去重
 不能覆盖新的请求或运行设备重启。不能把超时当成功、取消所有补偿，或用先查空闲再停止
 代替解决；后续应在 Orca 专用边界设计持久幂等停止、目标轮次条件与旧端能力协商，覆盖

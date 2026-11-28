@@ -16,6 +16,18 @@
   "memberCount_other": "{{count}} membros",
   "organizer": "Organizador",
   "waitingConfirm": "{{name}} está à espera da sua autorização",
+  "assistantDevice": {
+    "title": "A Cindy do grupo está à espera que escolha um computador",
+    "onlyYou": "Só você pode ver",
+    "request": "«{{request}}» começa assim que escolher um computador.",
+    "requestUnknown": "O seu pedido começa assim que escolher um computador.",
+    "requests_one": "{{count}} pedido está à espera e começa assim que escolher um computador.",
+    "requests_many": "{{count}} pedidos estão à espera e começam assim que escolher um computador.",
+    "requests_other": "{{count}} pedidos estão à espera e começam assim que escolher um computador.",
+    "remember": "Os seus próximos pedidos neste grupo usarão o mesmo computador. Pode alterá-lo nas definições do grupo.",
+    "cancel": "Cancelar pedido",
+    "continue": "Continuar"
+  },
   "loadFailedTitle": "Não foi possível carregar esta conversa de grupo",
   "loadFailedDescription": "Não é possível ler esta conversa de grupo a partir do seu computador neste momento. Tente novamente ou volte a Amigos.",
   "unavailableTitle": "Esta conversa de grupo já não está disponível",
@@ -47,6 +59,7 @@
     "all": "Todos",
     "allHint": "Apenas pessoas",
     "label": "Mencionar um amigo",
+    "avatarHint": "Menciona este amigo no fim do rascunho.",
     "allBots": "Todos os amigos",
     "allBotsHint": "Apenas amigos"
   },
@@ -181,6 +194,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
       "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+      "ATTACHMENTS_DOWNLOAD_FAILED": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência. Reenvie os anexos necessários para este pedido.",
+      "ATTACHMENTS_LIMIT_REACHED": "Alguns anexos não foram entregues a {{name}} devido ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+      "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência e ao limite de anexos. Reenvie os anexos necessários para este pedido.",
       "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, ligue o seu Cindy para que o Cindy possa trabalhar por si (nenhum Cindy seu está online neste momento).",
       "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, escolha um computador para este grupo para continuar o pedido.",
       "GROUP_ASSISTANT_DEVICE_OFFLINE": "O computador que {{name}} escolheu para este grupo está offline."

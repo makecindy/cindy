@@ -58,7 +58,11 @@ export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 
  * online computer of its requester (card `cindy.group-assistant`, bot-group-chat.md「群里的 Cindy」);
  * Desktop projects it under this code with the requester's name, it is never posted from a client.
  */
-export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE', 'GROUP_ASSISTANT_DEVICE_REQUIRED', 'GROUP_ASSISTANT_DEVICE_OFFLINE'] as const;
+export const BOT_GROUP_CAPABILITY_NOTICE_CODES = [
+  'GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE',
+  'ATTACHMENTS_DOWNLOAD_FAILED', 'ATTACHMENTS_LIMIT_REACHED', 'ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED',
+  'GROUP_ASSISTANT_UNAVAILABLE', 'GROUP_ASSISTANT_DEVICE_REQUIRED', 'GROUP_ASSISTANT_DEVICE_OFFLINE',
+] as const;
 export type BotGroupCapabilityNoticeCode = typeof BOT_GROUP_CAPABILITY_NOTICE_CODES[number];
 export function isBotGroupCapabilityNoticeCode(value: unknown): value is BotGroupCapabilityNoticeCode {
   return BOT_GROUP_CAPABILITY_NOTICE_CODES.some(code => code === value);
@@ -92,6 +96,40 @@ export function readBotGroupAssistantNotice(message: {
   const data = card?.data && typeof card.data === 'object' ? card.data as { type?: unknown; reason?: unknown; requesterId?: unknown } : null;
   if (data?.type !== 'executor_unavailable') return null;
   return { type: 'executor_unavailable', ...(data.reason === 'unbound' || data.reason === 'offline' ? { reason: data.reason } : {}), requesterId: typeof data.requesterId === 'string' && data.requesterId ? data.requesterId : null };
+}
+
+/**
+ * The group Cindy's computer notices speak to the member who asked, not the room: other members
+ * never see them, and the requester sees an unbound one as a private card above the composer instead.
+ */
+export function isBotGroupAssistantNoticeHidden(notice: { requesterId: string | null; reason?: 'unbound' | 'offline' }, selfId: string): boolean {
+  return notice.requesterId !== selfId || notice.reason === 'unbound';
+}
+
+interface BotGroupAssistantWaitInput { assistant: boolean; requesterId?: string | null; status: string }
+
+/**
+ * Whether one group-Cindy execution waits only on someone else (their computer choice or confirmation).
+ * Nobody else can act on it, so it is not group activity for them: no header status, timeline
+ * progress or running state that would linger while the requester is away.
+ */
+export function isBotGroupAssistantWaitPrivate(execution: BotGroupAssistantWaitInput, selfId: string): boolean {
+  return execution.assistant && execution.status === 'needs_input' && execution.requesterId !== selfId;
+}
+
+/**
+ * The requester's own group-Cindy request held for a computer choice. A member with no computer chosen
+ * in this group cannot have had it claimed, so its waiting execution is exactly that hold.
+ */
+export function isBotGroupAssistantDeviceWait(execution: BotGroupAssistantWaitInput, selfId: string, assistantDeviceId: string | null | undefined): boolean {
+  return execution.assistant && execution.status === 'needs_input' && execution.requesterId === selfId && !assistantDeviceId;
+}
+
+export interface BotGroupAssistantDeviceWait {
+  executionId: string;
+  sourceMessageId: string;
+  /** The request in one line for the requester's own card; empty when its source is unavailable. */
+  requestText: string;
 }
 
 export function groupAssistantNoticeCode(reason: 'unbound' | 'offline' | undefined): BotGroupCapabilityNoticeCode {
@@ -686,6 +724,7 @@ export function chatGroupNotificationPreference(
 }
 
 export interface BotGroupSummary {
+  supportsPersonalMentionHistory?: boolean;
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
   /** Manager-controlled friend invitations; absent on old servers/hosts. */
@@ -714,6 +753,8 @@ export interface BotGroupSummary {
   supportsMemberAvatar?: boolean;
   assistantDeviceId?: string | null;
   assistantComputers?: Array<{ id: string; name: string }>;
+  /** This member's own group-Cindy requests waiting for a computer; shown only to them. Absent on older hosts. */
+  assistantDeviceWaits?: BotGroupAssistantDeviceWait[];
   supportsNotificationSettings?: boolean;
   notificationMode?: ChatGroupNotificationMode;
   /** True when the effective mode is inherited rather than saved. Absent on older hosts. */
@@ -815,6 +856,10 @@ export interface BotGroupDetail extends BotGroupSummary {
   /** Raised by every edit, deletion or reset; an older share view may no longer be true. */
   threadShareVersion?: number;
   hasMoreBefore: boolean;
+  /** Oldest sequence in the server page when notices were hidden, even if no visible rows remain. */
+  pageOldestSequence?: number;
+  /** Newest sequence in that same page, for detecting gaps on refresh. */
+  pageNewestSequence?: number;
   round: BotGroupRoundView;
   /** Plans referenced by the loaded messages, plus the open plan. */
   plans: BotGroupPlanView[];
@@ -833,6 +878,7 @@ export interface BotGroupDetail extends BotGroupSummary {
 }
 
 export type BotGroupErrorCode =
+  | 'PROJECT_NOT_REGISTERED'
   | 'INVALID_ATTACHMENT'
   | 'ATTACHMENT_UNAVAILABLE'
   | 'ATTACHMENT_TOO_LARGE'
@@ -1079,6 +1125,8 @@ export type BotGroupRemoteActionId =
   | 'set-assistant'
   | 'notifications'
   | 'assistantDevice'
+  /** `{ executionId }`: end the caller's own group-Cindy request still waiting for a computer. */
+  | 'cancelAssistantDeviceWait'
   | 'mask'
   | 'mask-mentions'
   | 'readers'
@@ -1247,6 +1295,10 @@ export interface ChatMaskMention {
   messageId: string; sequence: string; threadRootId?: string; authorName: string; text: string;
   reply?: { companion: ChatMaskIdentity; text: string };
 }
+/** One current group message read by ID, without changing any read position. */
+export interface ChatMaskOriginal {
+  messageId: string; authorName: string; text: string; deleted: boolean;
+}
 /** One reacting actor. `name` is null when the group has no member record for it. */
 export interface ChatReactor { actorId: string; name: string | null; isSelf: boolean; formerMember: boolean }
 /** One member on a message's read list; `readAt` is null when the server knows the read but not its time. */
@@ -1271,6 +1323,8 @@ export interface ChatInvitePreview {
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
   | { type: 'assistantDevice'; deviceId: string }
+  /** End this account's own group-Cindy request that is still waiting for a computer. */
+  | { type: 'cancelAssistantDeviceWait'; executionId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
   | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberMentionAll?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
@@ -1284,7 +1338,7 @@ export type ChatGroupAction =
   | { type: 'retryAttachment'; mediaId: string; name?: string };
 export interface ChatServerApi {
   mask?(input: { groupId: string; action?: ChatMaskAction; operationId?: string }): Promise<ChatServerResult<{ state: ChatMaskState }>>;
-  mentions?(input: { groupId: string; before?: string; readIds?: string[]; operationId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean }>>;
+  mentions?(input: { groupId: string; history?: boolean; before?: string; readIds?: string[]; operationId?: string; originalId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean; original?: ChatMaskOriginal }>>;
   manage(input: { groupId: string; action: ChatGroupAction }): Promise<ChatServerResult<{ listState?: { conversationId: string; hidden: boolean; revision: number } }>>;
   /** Owned companions across devices. `botId` is the stable external id, not a local-install guarantee. */
   ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; botId?: string; name: string; avatar?: string | null; homeDeviceId?: string | null }> }>>;
@@ -1298,6 +1352,9 @@ export interface ChatServerApi {
    */
   thread(input: { groupId: string; rootId: string; before?: number; sourceMessageIds?: string[]; markRead?: boolean }): Promise<ChatServerResult<{
     root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
+    /** Oldest sequence before filtering hidden notices. */
+    pageOldestSequence?: number;
+    pageNewestSequence?: number;
     /** Same room generation as the main timeline; reset before merging older pages. */
     historyRevision?: string;
     messageUpdates?: BotGroupMessageView[];

@@ -1,10 +1,8 @@
-# 伙伴主对话的稍后处理
+# 伙伴主对话的稍后处理（旧端兼容字段）
 
-> 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
-
-收件箱把每个伙伴的主对话列成一行（产品规则见[任务收件箱](../../product-rules/task-inbox.md#伙伴主对话2026-11-20)）。
-分区由控制端用已有字段算出：`teammateActivity`、`generation`、`lastReplyAt` 与读位决定状态，本文件只新增
-延期信息。
+> 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件记录宿主仍保留的可选协议字段。
+>
+> **状态变更（2026-11-28）**：桌面端与手机端收件箱已不再列出伙伴主对话（产品规则见[任务收件箱](../../product-rules/task-inbox.md#伙伴主对话2026-11-28-移出收件箱)），新版控制端不再消费该字段。宿主侧继续保留 `teammates` 远程资源上可选的 `inboxSnooze` 投影，保证尚未升级的旧版桌面／手机控制端连接新宿主时不回退。
 
 `teammates` 伙伴行的 `display` 可选携带 `inboxSnooze: { snoozedUntil, snoozedAt, userSendAt }`（ISO 时间，
 未设置为 `null`）。`snoozedUntil`、`snoozedAt` 是主对话任务记录上的同名字段；`userSendAt` 是主对话最近一次
@@ -34,9 +32,4 @@
 （`apps/host`）未提供伙伴名册，不受影响。
 
 实现与回归入口：宿主 `localDb/ipc/bots.ts`（`botInboxSnooze`）、`botRemoteResourceProjection.ts`、
-`localDb/ipc/sessions.ts`（`setSessionSnoozePatchedListener`）；共享 `packages/maker-shared/src/liveTaskPriority.ts`
-（`teammateInboxSection`）；Desktop `features/bots/remoteBotRoster.ts`（`parseTeammateInboxSnooze`）、
-`teammateInbox.ts`；Mobile `device-link/remoteResources.ts`（`normalizeRemoteInboxSnooze`，畸形值整体丢弃）、
-`session/InboxTeammates.tsx`。测试：`botRemoteResourceProjection.test.ts`、`botCanonicalSession.test.ts`、
-`liveTaskPriority.test.ts`、`teammateInbox.test.ts`、`TaskInbox.test.tsx`，Mobile `remoteResources.test.ts`、
-`homeSections.test.ts`。
+`localDb/ipc/sessions.ts`（`setSessionSnoozePatchedListener`）；Mobile `device-link/remoteResources.ts`（`normalizeRemoteInboxSnooze`，畸形值整体丢弃）。测试：`botRemoteResourceProjection.test.ts`、`botCanonicalSession.test.ts`、Mobile `remoteResources.test.ts`。

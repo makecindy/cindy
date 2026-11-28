@@ -62,6 +62,16 @@ vi.mock('../ImChannelSettingsCard', async (importOriginal) => ({
   useImChannelSettingsSummary: () => [null, vi.fn()],
 }));
 
+// 应用子页(WechatBotSettings)才用到项目与回复对象两行; 这里测的是伙伴页那张微信卡。
+vi.mock('../ImChannelProjectRows', () => ({
+  ImChannelProjectRows: () => null,
+  usePersonalChannelProject: () => ({ state: null }),
+}));
+
+vi.mock('../ImReplyTargetField', () => ({
+  ImReplyTargetField: () => null,
+}));
+
 const searchTarget = SETTINGS_SEARCH_ENTRIES.find((entry) => entry.id === 'imBot.wechat')!.targetId;
 
 describe('WechatBotSection', () => {

@@ -4,6 +4,7 @@
  * transient failures are retried; rejected profile sources are surfaced without replaying writes.
  */
 import type { DeliverToCanonical } from './directRoom.js';
+import { isMissingBotModelError } from '../../shared/ipc-errors.js';
 import { randomUUID } from 'node:crypto';
 import { COMPANION_CLOUD_LEGACY_SKILL_MAX_BODY_BYTES, COMPANION_CLOUD_SKILL_SOURCE_VERSION, type CompanionOversizedSkill } from '@cindy/device-link';
 import { parseBotSkillFile } from '../maker-ipc/botSkillStore.js';
@@ -139,6 +140,7 @@ export interface CompanionCloudRuntime {
   /** What the last move to this computer could not keep of the companion's setup, until dismissed. */
   arrivalNotices: (botId: string) => CompanionArrivalNotice[];
   profileFailure: (botId: string) => BotProfileSourceFailure | undefined;
+  needsModelSetup: (botId: string) => boolean;
   dismissArrivalNotices: (botId: string) => void;
   /** One of the files in the companion's room, brought to this computer. */
   attachment: (botId: string, mediaId: string) => Promise<CompanionHistoryAttachment>;
@@ -515,6 +517,7 @@ export function startCompanionCloud(input: {
   const materializing = new Map<string, Promise<CompanionMaterializeResult>>();
   const autoRetryAt = new Map<string, number>();
   const autoPending = new Set<string>();
+  const missingModelActors = new Map<string, string>();
   const identityConflicts = new Map<string, { actorId: string; conflictingBotId: string }>();
   const profileFailures = new Map<string, { actorId: string; failure: BotProfileSourceFailure }>();
   const repairDrafts = new Map<string, { token: string; actorId: string; home: string | null; version: string }>();
@@ -756,11 +759,25 @@ export function startCompanionCloud(input: {
       return materialize(actor, correction);
     })().then(result => {
       autoRetryAt.delete(botId);
+      missingModelActors.delete(botId);
       profileFailures.delete(botId);
       input.log?.info?.('Companion moved to this computer', { actorId: actor.id, created: result.created, inserted: result.inserted, rebuild: result.rebuild });
       publish(); mirrors.kick(botId); uploads.kick(botId);
     }, error => {
       autoRetryAt.set(botId, Date.now() + AUTO_RETRY_MS);
+      const current = actorOf(botId);
+      if (live() && current?.id === actorId && current.homeDeviceId === input.selfDeviceId) {
+        if (isMissingBotModelError(error) && state.isDemoted(botId) && installOwner(botId) === 'mine') {
+          if (missingModelActors.get(botId) !== actorId) {
+            profileFailures.delete(botId);
+            missingModelActors.set(botId, actorId);
+            input.log?.warn('Companion take-over waiting for a local model', { actorId });
+            publish();
+          }
+          return;
+        }
+        if (missingModelActors.delete(botId)) publish();
+      }
       if (recordProfileFailure(actor, actorId, error)) return;
       if (error instanceof CompanionIdentityConflict) {
         const previous = identityConflicts.get(botId);
@@ -964,6 +981,11 @@ export function startCompanionCloud(input: {
       for (const actor of input.actors?.() ?? []) {
         if (actor.kind !== 'bot') continue;
         const botId = actor.externalId;
+        const waitingActor = missingModelActors.get(botId);
+        if (waitingActor && (waitingActor !== actor.id || actor.disabled || actor.homeDeviceId !== self)) {
+          missingModelActors.delete(botId);
+          autoRetryAt.delete(botId);
+        }
         const failure = profileFailures.get(botId);
         if (failure && (failure.actorId !== actor.id || actor.disabled || actor.homeDeviceId !== self)) {
           profileFailures.delete(botId);
@@ -1153,6 +1175,7 @@ export function startCompanionCloud(input: {
         await materialize(actor, correction, { allowMissingProfile: missingProfileFallback, resilient: true });
         identityConflicts.delete(actor.externalId);
         profileFailures.delete(actor.externalId);
+        missingModelActors.delete(actor.externalId);
         autoRetryAt.delete(actor.externalId);
       } catch (error) {
         recordProfileFailure(actor, actorId, error);
@@ -1332,6 +1355,11 @@ export function startCompanionCloud(input: {
     },
 
     arrivalNotices: botId => state.bot(botId)?.arrivalNotices ?? [],
+    needsModelSetup: botId => {
+      const actor = actorOf(botId);
+      return !!actor && live() && !actor.disabled && actor.homeDeviceId === input.selfDeviceId
+        && state.isDemoted(botId) && installOwner(botId) === 'mine' && missingModelActors.get(botId) === actor.id;
+    },
     profileFailure: botId => {
       if (!live()) return undefined;
       const actor = actorOf(botId);

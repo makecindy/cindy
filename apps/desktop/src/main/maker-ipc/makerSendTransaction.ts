@@ -295,6 +295,7 @@ export interface MakerSendTransactionSession {
   /** Exact in-memory incarnation; a reused session id must not inherit turn grants. */
   instanceId: string;
   agentKind: EngineKind;
+  readonly model?: string;
   workDir: string;
   remoteHostId: string | null;
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
@@ -316,7 +317,10 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  /** Synchronous executor facts; returns a snapshot only on fallback mismatch. */
+  readDispatchRoute?(session: MakerSendTransactionSession, scheduled: boolean): import('@cindy/maker-shared/message-source').MessageDispatchRoute | undefined;
   onUserProviderDispatch?(sessionId: string): void;
+  onManualPiDispatch?(sessionId: string): void;
   /** Read launcher preferences at dispatch time, not at module initialization. */
   /** Null when the launcher has no interface-language preference. */
   getResolvedMainLocale(): SupportedLocale | null;
@@ -453,7 +457,7 @@ export interface MakerSendTransactionDeps {
   /** Capture product lifecycle state before async preparation; commit only at vendor dispatch. */
   prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
-  assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
+  assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown, scheduled: boolean) => void;
   /** Launcher-owned durable startup fence. A failed write must prevent provider
    * startup so an uncertain turn cannot be replayed after a Host restart.
    * Desktop omits this port and retains its existing event-driven lifecycle. */
@@ -1254,6 +1258,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const sess = deps.getSession(sessionId);
       if (!sess) return false;
       const hydrated = await hydrateActiveOrcaSessionIfNeeded(sess, createOpts, false);
+      if (sess.agentKind === 'acp' && hydrated?.kind === 'failure') {
+        const outcome = hydrated.result.outcome;
+        throw new Error(outcome?.kind === 'host-send' ? outcome.message : 'Collaboration tools could not be restored.');
+      }
       return hydrated?.kind === 'session';
     },
     async sendToAgentAccepted(
@@ -2219,13 +2227,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 try {
                   // The first attempt already persisted this input. Only the
                   // new runtime's dispatch preparation needs to run again.
-                  if (!recovery) await deps.createDbMessage(
+                  if (!recovery) {
+                    const dispatchRoute = deps.readDispatchRoute?.(
+                      sess,
+                      (persistUserMessage.origin ?? so.origin)?.kind === 'scheduler',
+                    );
+                    await deps.createDbMessage(
                     sessionId,
                     {
                       clientId: persistUserMessage.clientId,
                       role: 'user',
                       content: persistUserMessage.content,
                       agentMeta: {
+                        ...(dispatchRoute ? { dispatchRoute } : {}),
                         ...(persistUserMessage.botTaskCoordination ? { botTaskCoordinationInput: persistUserMessage.botTaskCoordination } : {}),
                         ...(persistUserMessage.sharedTaskAuthor ? { sharedTaskAuthor: persistUserMessage.sharedTaskAuthor } : {}),
                         // 来源标签数据(只用于归属展示,不是权限判据)。
@@ -2282,6 +2296,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         }
                       : undefined,
                   );
+                  }
                 } catch (err) {
                   persistUserMessage.onPersistFailed?.();
                   throw err;
@@ -2305,16 +2320,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded',
               );
             }
-            deps.assertBeforeVendorDispatch?.(sessionId, finalFenceSendOpts);
+            deps.assertBeforeVendorDispatch?.(sessionId, finalFenceSendOpts, !!scheduledOrigin);
             recovery?.onDispatching();
             if (persistUserMessage?.clientId) {
               deps.onModelDispatched?.(sessionId, persistUserMessage.clientId);
             }
             activateTelegramQuestionReply(so[TELEGRAM_QUESTION_ORIGIN], sess);
             dispatchProductTurn?.();
-            if (!persistUserMessage?.autoResume && (mainOwnedSendContext?.origin.kind === 'desktop'
-              || (persistUserMessage?.clientId && !so.origin && !so.fromMobileClient))) {
-              deps.onUserProviderDispatch?.(sess.id);
+            const desktopUser = mainOwnedSendContext?.origin.kind === 'desktop' ||
+              (!!persistUserMessage?.clientId && !so.origin && !so.fromMobileClient);
+            if (!persistUserMessage?.autoResume && desktopUser) deps.onUserProviderDispatch?.(sess.id);
+            if (sess.agentKind === 'pi' && !scheduledOrigin && !persistUserMessage?.autoResume &&
+                (mainOwnedSendContext ? ['desktop', 'im'].includes(mainOwnedSendContext.origin.kind) : !!persistUserMessage?.clientId)) {
+              deps.onManualPiDispatch?.(sess.id);
             }
             if (userPromptPreviewSessionId) {
               deps.dispatchUserPromptPreview?.(

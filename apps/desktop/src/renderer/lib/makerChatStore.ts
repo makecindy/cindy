@@ -54,11 +54,11 @@ import { parsePluginConnectionInput, type InputHandoffSnapshot } from '@cindy/de
  * - User-initiated stopSession (NOT called on session switch anymore)
  */
 
-import { HISTORY_WORK_PATCH_CHANNEL, HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries, historyPrefetchVersion, historySnapshotCovers, historySnapshotForCache, selectHistoryPrefetchSessions, type HistoryViewPage, type HistoryDetailPage, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
+import { HISTORY_VIEW_VERSION, HISTORY_WORK_PATCH_CHANNEL, HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries, historyPrefetchVersion, historySnapshotCovers, historySnapshotForCache, selectHistoryPrefetchSessions, type HistoryViewPage, type HistoryDetailPage, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { nextHistoryCacheReceipt, isHistoryCacheReceipt, historyCacheReceiptFollows, mergeHistoryPrefetchRequest, readContinuousHistoryPage, type HistoryCacheReceipt, type HistoryPrefetchRequest } from '@cindy/maker-shared/message-window';
 import { isHistoryDetailTool, hasVisibleHistoryResult, historyViewEndMs } from '@cindy/maker-shared/message-window';
-import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
+import { SESSION_SYNC_CHANNEL, projectionContainsInput, remoteInputRefusal } from '@cindy/device-link';
 import { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from '@cindy/maker-shared/message-window';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import {
@@ -114,6 +114,7 @@ import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { cancelPendingGhostCardTaskAutoArchive } from '@/cindy-brain/ghostCardTaskArchive';
 import {
   readMessageSourceDevice,
+  readMessageDispatchRoute,
   readMessageSourceGroup,
   readMessageSourcePlugin,
   type MessageSourceDevice,
@@ -219,7 +220,7 @@ import {
   mainContiguousRunStartIndex,
   type LoadedWindowIsland,
 } from '@/lib/searchJumpTargeting';
-import { extractIpcError, hostProfileHoldI18nKey } from '@/utils/ipcError';
+import { extractIpcError, extractRemoteOptionalReadMiss, hostProfileHoldI18nKey } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -544,6 +545,7 @@ export interface ChatMessage {
    * tool_result 消息时,即便插在末尾或重新从 DB 加载乱序,也能正确配对。
    */
   toolUseId?: string;
+  mcpToolName?: string;
   toolName?: string;
   toolInput?: unknown;
   /**
@@ -616,6 +618,7 @@ export interface ChatMessage {
   sharedAuthorMemberId?: string;
   /** 手机 / 另一台电脑远程发来时的发送设备(读自 agentMeta.sourceDevice)。 */
   sourceDevice?: MessageSourceDevice;
+  dispatchRoute?: import('@cindy/maker-shared/message-source').MessageDispatchRoute;
   /** 插件任务派发的消息来源(读自 agentMeta.sourcePlugin)。 */
   sourcePlugin?: MessageSourcePlugin;
   /** Group source of an explicitly sent private assistant message. */
@@ -810,7 +813,7 @@ export interface ChatMessage {
    * modelUsage 时挂到该轮收尾 assistant 上(agentMeta.modelMismatch 持久化 +
    * usage:message-model-mismatch 实时推送)。AssistantMessage 渲染降级提示行。
    */
-  modelMismatch?: { selected: string; actual: string };
+  modelMismatch?: { selected: string; actual: string; providerName?: string };
   /** 历史行由 device-link 压缩过;merge 时不能覆盖控制端已有的完整实时内容。 */
   remoteContentTruncated?: boolean;
   /** 历史页由 device-link 裁掉过部分行;分页状态需保持可继续加载。 */
@@ -1168,7 +1171,14 @@ export interface QueuedMessage extends Omit<
   chatMessage: ChatMessage & { role: 'user' };
   /** device-link 控制端本地态：enqueue 尚未确认受理；不进入 wire / DB。 */
   isPendingEnqueue?: boolean;
+  remoteDelivery?: RemoteQueueDelivery | { state: 'waiting' };
 }
+
+export type RemoteQueueDelivery = {
+  state: 'failed' | 'unconfirmed';
+  refusal?: Exclude<ReturnType<typeof remoteInputRefusal>, undefined>;
+  checking?: boolean;
+};
 
 interface RemoteOptimisticSendRecord {
   queued: QueuedMessage;
@@ -1198,6 +1208,13 @@ interface RemoteOptimisticSendRecord {
   phase: 'preflight' | 'dispatching' | 'waiting-for-connection' | 'accepted';
   dispatching: boolean;
   attempt: number;
+  localDelivery?: RemoteQueueDelivery;
+  /** The original enqueue was prepared using a v1 projection. */
+  retrySafe?: boolean;
+  needsDeliveryProof?: boolean;
+  retryProofCurrent?: () => boolean;
+  /** Invalidates confirmation in progress when this device's link changes. */
+  receiptEpoch?: number;
   beforeEnqueue?: () => Promise<boolean>;
   preflightCompleted: boolean;
   /** 标注附件仍在本机烧录；完成前必须挡住本条及后续 FIFO 派发。 */
@@ -1285,6 +1302,7 @@ type RemoteInputProjectionProbeState = {
   dataOwner: DataOwnerGeneration;
   clearGeneration: number;
   status: 'ready' | 'blocked';
+  inputDeliveryVersion?: 1;
   /** `undefined` is a successful legacy projection with no boundary field. */
   boundary: number | null | undefined;
   error?: unknown;
@@ -2110,37 +2128,8 @@ async function reconcileRemoteOptimisticSettling(
     if (!isRemoteOptimisticSendRegistered(sessionId, record)) return;
     const persisted = rows.find((message) => message.clientId === clientId);
     if (persisted) {
-      const [mapped] = mapServerMessages([persisted]);
-      // Do not resurrect a purged/LRU session merely to settle a late ACK.
-      if (mapped && sessions.has(sessionId)) {
-        setState(sessionId, (s) => {
-          const existing = s.messages.find((message) => message.clientId === clientId);
-          const messages = existing
-            ? s.messages.map((message) =>
-                message.clientId === clientId
-                  ? hydratePersistedMessage(message, mapped, {
-                      preserveExistingToolResultContent: true,
-                      preserveExistingCodexPlanContent: true,
-                    })
-                  : message,
-              )
-            : mergeMessages([mapped], s.messages, {
-                preserveExistingToolResultContent: true,
-                preserveExistingCodexPlanContent: true,
-              });
-          const pendingQueue = s.pendingQueue.filter((item) => item.clientId !== clientId);
-          if (messages === s.messages && pendingQueue.length === s.pendingQueue.length) return s;
-          return {
-            ...s,
-            messages,
-            pendingQueue,
-            isFirstMessage: mapped.role === 'user' ? false : s.isFirstMessage,
-          };
-        });
-      }
-      clearRemoteOptimisticSend(sessionId, clientId);
+      settleRemoteOptimisticHistory(sessionId, clientId, persisted);
       settled = true;
-      markSessionHasUserMessage(sessionId);
       void reconcileRemoteMessages(sessionId);
     }
   } catch (error) {
@@ -2160,6 +2149,40 @@ async function reconcileRemoteOptimisticSettling(
       scheduleRemoteOptimisticSettlingRetirement(sessionId, clientId);
     }
   }
+}
+
+function settleRemoteOptimisticHistory(sessionId: string, clientId: string, persisted: Message): void {
+  const [mapped] = mapServerMessages([persisted]);
+  // Do not resurrect a purged/LRU session merely to settle a late ACK.
+  if (mapped && sessions.has(sessionId)) {
+    setState(sessionId, (s) => {
+      const existing = s.messages.find((message) => message.clientId === clientId);
+      const messages = existing
+        ? s.messages.map((message) =>
+            message.clientId === clientId
+              ? hydratePersistedMessage(message, mapped, {
+                  preserveExistingToolResultContent: true,
+                  preserveExistingCodexPlanContent: true,
+                })
+              : message,
+          )
+        : mergeMessages([mapped], s.messages, {
+            preserveExistingToolResultContent: true,
+            preserveExistingCodexPlanContent: true,
+          });
+      const pendingQueue = s.pendingQueue.filter((item) => item.clientId !== clientId);
+      if (messages === s.messages && pendingQueue.length === s.pendingQueue.length) return s;
+      return {
+        ...s,
+        messages,
+        pendingQueue,
+        isFirstMessage: mapped.role === 'user' ? false : s.isFirstMessage,
+      };
+    });
+  }
+  clearRemoteOptimisticSend(sessionId, clientId);
+  markSessionHasUserMessage(sessionId);
+  pumpRemoteOptimisticSendsAfterCurrent(sessionId);
 }
 
 function cancelRemoteOptimisticSettlingRetirement(sessionId: string, clientId: string): void {
@@ -2613,6 +2636,8 @@ export type MessageDeliveryMode = 'queue' | 'steer';
 
 /** 仅影响 selector/chip 的乐观展示；agentKind 始终保留真实 reducer 路由。 */
 export interface AgentSwitchIntentRecord {
+  preparation?: 'preparing' | 'failed';
+  preparationError?: string;
   /**
    * 'acp' = 切到插件引擎(docs/plans/acp-plugin-bridge.md)，providerId 是 acp-plugin:<插件>:<引擎>。
    * 内置引擎的展示与切换链路只读 builtinAgentSwitchIntent()，插件引擎由选择器单独呈现。
@@ -3692,6 +3717,7 @@ function noteRemoteInputProjectionSuccess(
     clearGeneration,
     status: 'ready',
     boundary,
+    inputDeliveryVersion: projection.inputDeliveryVersion,
   });
 }
 
@@ -5533,10 +5559,13 @@ function applyInputProjection(
     const authoritativeIds = new Set(authoritativeQueue.map((item) => item.clientId));
     const pendingQueue = [...authoritativeQueue];
     if (optimisticRecords) {
+      const head = firstUnacceptedRemoteOptimisticSend(projection.sessionId);
       for (const record of optimisticRecords.values()) {
-        if (record.accepted || authoritativeIds.has(record.queued.clientId)) continue;
-        if (s.messages.some((message) => message.clientId === record.queued.clientId)) continue;
-        pendingQueue.push({ ...record.queued, isPendingEnqueue: true });
+        const clientId = record.queued.clientId;
+        if (record.accepted || authoritativeIds.has(clientId) || persistedMessageIds.has(clientId)) continue;
+        const waiting = record.deliveryMode === 'queue' && head !== record;
+        if (!waiting && !record.localDelivery && s.messages.some((message) => message.clientId === clientId)) continue;
+        pendingQueue.push(remoteQueueEntry(record, waiting));
       }
     }
 
@@ -5968,10 +5997,15 @@ function hydratePersistedMessage(
   // Keeping a cached field here can falsely label a user message as a teammate,
   // even after the host has delivered a source-free row.
   for (const field of [
-    'automationOrigin', 'sourceDevice', 'sourcePlugin', 'sourceGroup',
+    'automationOrigin', 'sourceDevice', 'sourcePlugin', 'sourceGroup', 'dispatchRoute',
     'hookSource', 'sharedAuthorName', 'sharedAuthorMemberId',
   ] as const) {
     if (persisted[field] === undefined) delete hydrated[field];
+  }
+  // A full tool row supersedes the previous card identity, including absence.
+  // Truncated remote rows can omit it alongside the rest of the tool payload.
+  if (persisted.role === 'tool_use' && persisted.remoteContentTruncated !== true && persisted.mcpToolName === undefined) {
+    delete hydrated.mcpToolName;
   }
   if (
     options.preserveExistingCodexPlanContent === true &&
@@ -7008,6 +7042,7 @@ export function handleStreamEvent(
         role: 'tool_use', content: event.data,
       });
 
+      const { mcpToolName } = (event.data ?? {}) as { mcpToolName?: unknown };
       // F1-a: 在飞 assistant 文本 + tool_use 的落库都已收口 main(messagePersistBroadcaster
       // 在 tool_use 边界先 flushAssistantBlock 再落 tool_use),renderer 这里只做 UI:
       // finalize 在飞气泡 + 用 main 下发的 persistId 建 tool_use 气泡(onCreated 同 id dedup)。
@@ -7048,6 +7083,7 @@ export function handleStreamEvent(
             content: formatToolUseSummary(toolName, input),
             toolUseId,
             toolName,
+            ...(typeof mcpToolName === 'string' ? { mcpToolName } : {}),
             toolInput: input,
             ...(assistantMetaFields.replyToClientId ? { replyToClientId: assistantMetaFields.replyToClientId } : {}),
             ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
@@ -9914,7 +9950,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     if (!mapped) return;
     if (mapped.role === 'tool_use' || mapped.role === 'tool_result') durableToolRows.add(mapped);
     traceRemoteSendEcho(mapped.clientId, mapped.role);
+    const ownedQueueInput = mapped.role === 'user' &&
+      remoteOptimisticSendRecords(sessionId)?.get(mapped.clientId)?.deliveryMode === 'queue';
     clearRemoteOptimisticSend(sessionId, mapped.clientId);
+    if (ownedQueueInput) pumpRemoteOptimisticSendsAfterCurrent(sessionId);
     const current = getOrCreateState(sessionId);
     const existing = current.messages.find((candidate) => candidate.clientId === mapped.clientId);
     if (existing?.cacheHydrated || existing?.cacheReceipt) {
@@ -10112,7 +10151,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const p = raw as {
       sessionId?: string;
       clientId?: string;
-      modelMismatch?: { selected?: unknown; actual?: unknown } | null;
+      modelMismatch?: { selected?: unknown; actual?: unknown; providerName?: unknown } | null;
     } | null;
     if (!p?.sessionId || !p.clientId) return;
     const mm = p.modelMismatch;
@@ -10125,7 +10164,15 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     )
       return;
     const { sessionId, clientId } = p;
-    const modelMismatch = { selected: mm.selected, actual: mm.actual };
+    const providerName =
+      typeof mm.providerName === 'string' && mm.providerName.trim()
+        ? mm.providerName.trim()
+        : undefined;
+    const modelMismatch = {
+      selected: mm.selected,
+      actual: mm.actual,
+      ...(providerName ? { providerName } : {}),
+    };
     setState(sessionId, (s) => {
       const idx = s.messages.findIndex((m) => m.clientId === clientId);
       if (idx < 0) return s;
@@ -10491,8 +10538,17 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       ) {
         return;
       }
-      const status = (raw as { status?: string } | null)?.status;
-      if (status !== 'online') return;
+      const change = raw as { status?: string; dataPathChangedDeviceId?: string } | null;
+      if (change?.status !== 'online' || change.dataPathChangedDeviceId) {
+        for (const records of remoteOptimisticSends.values()) {
+          for (const record of records.values()) {
+            if (!change?.dataPathChangedDeviceId || record.deviceId === change.dataPathChangedDeviceId) {
+              record.receiptEpoch = (record.receiptEpoch ?? 0) + 1;
+            }
+          }
+        }
+      }
+      if (change?.status !== 'online') return;
       const remoteOutboxSessionIds = new Set([
         ...remoteOptimisticSends.keys(),
         ...remoteClearFences.keys(),
@@ -10521,6 +10577,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       if (!presence?.deviceId) return;
       const wasOnline = remotePresenceOnlineByDevice.get(presence.deviceId);
       remotePresenceOnlineByDevice.set(presence.deviceId, presence.online === true);
+      if (wasOnline !== presence.online) {
+        for (const records of remoteOptimisticSends.values()) {
+          for (const record of records.values()) {
+            if (record.deviceId === presence.deviceId) record.receiptEpoch = (record.receiptEpoch ?? 0) + 1;
+          }
+        }
+      }
       if (presence.online !== true) return;
       // Only a real offline -> online edge may indicate that the controlled
       // process restarted and reset its local owner generation. Busy/name/
@@ -12511,6 +12574,151 @@ async function reconcileUncertainRemoteSteer(
   return { kind: 'deferred' };
 }
 
+function remoteQueueEntry(record: RemoteOptimisticSendRecord, waiting = false): QueuedMessage {
+  return {
+    ...record.queued,
+    isPendingEnqueue: true,
+    remoteDelivery: record.localDelivery ?? (waiting ? { state: 'waiting' } : undefined),
+  };
+}
+
+function showRemoteQueueDelivery(
+  sessionId: string, record: RemoteOptimisticSendRecord, delivery?: RemoteQueueDelivery,
+): void {
+  record.localDelivery = delivery;
+  const clientId = record.queued.clientId;
+  setState(sessionId, (state) => {
+    const entry = remoteQueueEntry(record);
+    const pendingQueue = state.pendingQueue.some((item) => item.clientId === clientId)
+      ? state.pendingQueue.map((item) => item.clientId === clientId ? entry : item)
+      : [entry, ...state.pendingQueue];
+    return { ...state, pendingQueue,
+      messages: state.messages.filter((message) => message.clientId !== clientId || !message.isPendingPersist) };
+  });
+}
+
+function beginRemoteQueueConfirmation(sessionId: string, record: RemoteOptimisticSendRecord) {
+  const operation = beginInputProjectionOperation(sessionId, record.deviceId);
+  const epoch = record.receiptEpoch;
+  const isCurrent = () => isRemoteOptimisticSendRegistered(sessionId, record)
+    && getStickySessionDeviceId(sessionId) === record.deviceId
+    && (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === operation.epoch
+    && (rendererClearGenerationBySession.get(sessionId) ?? 0) === record.clearGeneration
+    && record.receiptEpoch === epoch
+    && !hasPendingRemoteClearFence(sessionId);
+  return { isCurrent };
+}
+
+async function confirmRemoteQueueDelivery(
+  sessionId: string,
+  record: RemoteOptimisticSendRecord,
+  confirmation: ReturnType<typeof beginRemoteQueueConfirmation>,
+  allowDurableRetry = false,
+): Promise<'accepted' | 'missing' | 'retry-safe' | 'unknown'> {
+  const clientId = record.queued.clientId;
+  const { isCurrent } = confirmation;
+  if (!isCurrent()) return 'unknown';
+  const readProjection = () => window.electronAPI.deviceLink.invoke(record.deviceId,
+    'maker:input:get-projection', [sessionId, { deliveryClientIds: [clientId] }]) as Promise<AgentInputProjection>;
+  const validProjection = (projection: AgentInputProjection | undefined): projection is AgentInputProjection => {
+    if (projection?.sessionId !== sessionId || !Array.isArray(projection.pendingQueue)
+        || !isAcceptedRemoteProjectionBoundary(sessionId, projection)) return false;
+    const previous = sessions.get(sessionId)?.remoteQueueSnapshot;
+    const snapshot = projection.queueSnapshot;
+    if (previous && snapshot && (previous.host !== snapshot.host || previous.sequence > snapshot.sequence)) return false;
+    if (record.expectedClearBoundaryMs === undefined) return typeof projection.clearBoundaryMs !== 'number';
+    return projection.clearBoundaryMs === undefined || record.expectedClearBoundaryMs === projection.clearBoundaryMs;
+  };
+  let projection: AgentInputProjection | undefined;
+  if (allowDurableRetry && record.retrySafe) {
+    projection = await readProjection();
+    if (!isCurrent()) return 'unknown';
+  }
+  let persisted: Message | undefined;
+  let exactMiss = false;
+  const matches = (row: Message) => row.role === 'user' && row.sessionId === sessionId && row.clientId === clientId;
+  try {
+    const rows = await aroundMessagesByClientIdForDevice(record.deviceId, sessionId, clientId, { radius: 0 }, true);
+    persisted = rows.find(matches);
+  } catch (error) {
+    const parsed = extractIpcError(error);
+    exactMiss = parsed?.code === 'NOT_FOUND' && !/no (?:local IPC )?handler|handler not registered/i.test(parsed.message);
+    if (isCurrent() && extractRemoteOptionalReadMiss(error, 'local-db:messages:around-client-id', { allowMissingHandler: false })) {
+      const page = await window.electronAPI.deviceLink.invoke(record.deviceId, 'local-db:messages:view',
+        [sessionId, { lazyDetails: true }]) as HistoryViewPage<Message> | null;
+      if (page?.version === HISTORY_VIEW_VERSION && Array.isArray(page.items)) {
+        for (const leaf of historyViewLeaves(page.items)) {
+          if (leaf.type !== 'messages') continue;
+          persisted = leaf.messages.find((row) => matches(row) && Number.isSafeInteger(row.rowid));
+          if (persisted) break;
+        }
+      }
+    }
+  }
+  if (!isCurrent()) return 'unknown';
+  if (persisted) {
+    settleRemoteOptimisticHistory(sessionId, clientId, persisted);
+    return 'accepted';
+  }
+  if (allowDurableRetry && record.retrySafe && validProjection(projection) && projection.inputDeliveryVersion === 1) {
+    const receipt = projection.deliveryReceipts?.find((entry) => entry.clientId === clientId);
+    // v1 enqueues deduplicate both coordinator IDs and persisted messages.
+    // They can accept the original ID even when the exact history read fails.
+    return receipt?.state === 'removed' || projection.withdrawnQueueClientIds?.includes(clientId)
+      ? 'unknown' : 'retry-safe';
+  }
+  if (!exactMiss) return 'unknown';
+  projection ??= await readProjection();
+  if (!isCurrent() || !validProjection(projection) || projectionContainsInput(projection, clientId)) return 'unknown';
+  record.retrySafe = projection.inputDeliveryVersion === 1;
+  return 'missing';
+}
+
+async function retryRemotePendingMessage(sessionId: string, clientId: string): Promise<void> {
+  const record = remoteOptimisticSendRecords(sessionId)?.get(clientId);
+  const delivery = record?.localDelivery;
+  if (!record || !delivery || delivery.checking || record.dispatching || record.accepted
+      || !isRemoteOptimisticSendRegistered(sessionId, record)) return;
+  if (delivery.state === 'failed' && !record.needsDeliveryProof) {
+    showRemoteQueueDelivery(sessionId, record);
+    await pumpRemoteOptimisticSends(sessionId);
+    return;
+  }
+  const confirmation = beginRemoteQueueConfirmation(sessionId, record);
+  showRemoteQueueDelivery(sessionId, record, { ...delivery, checking: true });
+  const evidence = await confirmRemoteQueueDelivery(sessionId, record, confirmation, record.retrySafe)
+    .catch(() => 'unknown' as const);
+  if (!isRemoteOptimisticSendRegistered(sessionId, record) || record.accepted) return;
+  if (!confirmation.isCurrent() || (evidence !== 'missing' && evidence !== 'retry-safe')) {
+    showRemoteQueueDelivery(sessionId, record, { state: 'unconfirmed' });
+    return;
+  }
+  if (delivery.state === 'unconfirmed' && evidence === 'missing') {
+    showRemoteQueueDelivery(sessionId, record, { state: 'failed' });
+    return;
+  }
+  record.retryProofCurrent = confirmation.isCurrent;
+  showRemoteQueueDelivery(sessionId, record);
+  await pumpRemoteOptimisticSends(sessionId);
+}
+
+function discardRemotePendingMessage(
+  sessionId: string, clientId: string, delivery: RemoteQueueDelivery,
+): void {
+  const record = remoteOptimisticSendRecords(sessionId)?.get(clientId);
+  if (!record || record.localDelivery !== delivery || delivery.checking || record.dispatching
+      || record.accepted || !isRemoteOptimisticSendRegistered(sessionId, record)) return;
+  // Retire only this controller's outbox entry. No remote cancellation, retry,
+  // or history mutation. A late persisted echo still goes through normal history.
+  clearRemoteOptimisticSend(sessionId, clientId);
+  setState(sessionId, state => ({
+    ...state,
+    pendingQueue: state.pendingQueue.filter(entry => entry.clientId !== clientId),
+  }));
+  if (!remoteOptimisticSendRecords(sessionId)?.size) clearSessionStarting(sessionId);
+  pumpRemoteOptimisticSendsAfterCurrent(sessionId);
+}
+
 async function dispatchRemoteOptimisticSend(
   sessionId: string,
   record: RemoteOptimisticSendRecord,
@@ -12542,7 +12750,21 @@ async function dispatchRemoteOptimisticSend(
       void requestInputProjection(sessionId);
       return { kind: 'accepted' };
     }
-    const projection = await operation.api.input.enqueue(sessionId, record.queued, {
+    const retryProof = record.retryProofCurrent;
+    record.retryProofCurrent = undefined;
+    if (retryProof && !retryProof()) {
+      showRemoteQueueDelivery(sessionId, record, { state: 'unconfirmed' });
+      return { kind: 'deferred' };
+    }
+    if (getOrCreateState(sessionId).pendingQueue.some(item => item.clientId === record.queued.clientId && item.remoteDelivery)) {
+      showRemoteQueueDelivery(sessionId, record);
+    }
+    const probe = remoteInputProjectionProbeStateBySession.get(sessionId);
+    if (!retryProof && probe && isRemoteInputProjectionProbeStateCurrent(sessionId, probe, record.deviceId)) {
+      record.retrySafe = probe.inputDeliveryVersion === 1;
+    }
+    const projection = await operation.api.input.enqueue(sessionId,
+      record.retrySafe ? { ...record.queued, durableDelivery: true } : record.queued, {
       sendAtMs: Date.now(),
       ...(record.expectedClearBoundaryMs !== undefined
         ? { expectedClearBoundaryMs: record.expectedClearBoundaryMs }
@@ -12573,6 +12795,43 @@ async function dispatchRemoteOptimisticSend(
       // message is no longer safe to re-probe or enqueue; restore the draft
       // immediately without surfacing a user-facing error.
       return { kind: 'failed', error: undefined };
+    }
+    if (record.deliveryMode === 'queue') {
+      // The controller's attachment reader rejects before sending any frame.
+      if (extractIpcError(error)?.code === 'DEVICE_LINK_MEDIA_ACCESS_DENIED' && !record.needsDeliveryProof) {
+        return { kind: 'failed', error };
+      }
+      const ipcError = extractIpcError(error);
+      const message = ipcError
+        ? ipcError.message.startsWith(`[${ipcError.code}]`) ? ipcError.message : `[${ipcError.code}] ${ipcError.message}`
+        : formatRemoteError(error).replace(/^Error invoking remote method .*?: Error: /, '');
+      const refusal = remoteInputRefusal(message.replace(/^\[DEVICE_LINK_CHANNEL_NOT_ALLOWED\]/, '[CHANNEL_NOT_ALLOWED]'));
+      // A stable preflight refusal applies to this write. Retain uncertainty if
+      // an earlier attempt using this ID may still have been accepted.
+      if (refusal && !record.needsDeliveryProof) {
+        showRemoteQueueDelivery(sessionId, record, { state: 'failed', refusal });
+        if (!getOrCreateState(sessionId).agentStatus.isRunning) clearSessionStarting(sessionId);
+        return { kind: 'deferred' };
+      }
+      if (isDefinitelyUndeliveredRemoteMutationError(error)) {
+        markRemoteOptimisticSendWaiting(sessionId, record.queued.clientId);
+        return { kind: 'deferred' };
+      }
+      record.needsDeliveryProof = true;
+      const confirmation = beginRemoteQueueConfirmation(sessionId, record);
+      const evidence = await confirmRemoteQueueDelivery(sessionId, record, confirmation,
+        record.retrySafe && record.attempt === 1).catch(() => 'unknown' as const);
+      if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
+      if (record.accepted) return { kind: 'accepted' };
+      if (evidence === 'retry-safe' && confirmation.isCurrent()) {
+        record.retryProofCurrent = confirmation.isCurrent;
+        showRemoteQueueDelivery(sessionId, record);
+        return { kind: 'retry' };
+      }
+      const missing = evidence === 'missing' && confirmation.isCurrent();
+      showRemoteQueueDelivery(sessionId, record, { state: missing ? 'failed' : 'unconfirmed' });
+      if (!getOrCreateState(sessionId).agentStatus.isRunning) clearSessionStarting(sessionId);
+      return { kind: 'deferred' };
     }
     if (isRemoteInputClearBoundaryError(error)) {
       // The clear token can advance between the click-time probe and dispatch.
@@ -12698,7 +12957,7 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
   run = (async () => {
     while (true) {
       const record = firstUnacceptedRemoteOptimisticSend(sessionId);
-      if (!record || record.dispatching) return;
+      if (!record || record.dispatching || record.localDelivery) return;
       const prepared = await prepareRemoteOptimisticSend(sessionId, record);
       if (prepared.kind === 'deferred') return;
       if (prepared.kind === 'cancelled') {
@@ -15622,7 +15881,7 @@ function completeRemoteOptimisticMaterialization(
     const pendingQueue = state.pendingQueue.map((item) => {
       if (item.clientId !== clientId || item.isPendingEnqueue !== true) return item;
       changed = true;
-      return { ...queued, isPendingEnqueue: true };
+      return { ...queued, isPendingEnqueue: true, remoteDelivery: item.remoteDelivery };
     });
     const messages = state.messages.map((message) => {
       if (message.clientId !== clientId || message.isPendingPersist !== true) return message;
@@ -16788,19 +17047,21 @@ async function sendMessageCore(
     : undefined;
   if (deviceLinkRemote && !remoteRecord) return false;
 
+  const waitingForPrevious = remoteRecord && firstUnacceptedRemoteOptimisticSend(sessionId) !== remoteRecord;
   // Busy sends must be visible before the main projection round-trip.  This is
   // especially important for local sessions: the coordinator can be waiting
   // for a delayed/stale turn boundary, so waiting for `input.enqueue()` to
   // resolve would make the user's message appear to disappear.  The
   // authoritative projection will replace the temporary marker (or remove it
   // on a pre-accept failure) once the IPC call settles.
-  if (isSendBusyForQueue(current)) {
+  if (isSendBusyForQueue(current) || waitingForPrevious) {
+    const entry = remoteRecord ? remoteQueueEntry(remoteRecord, waitingForPrevious) : { ...queued, isPendingEnqueue: true };
     setState(sessionId, (s) =>
       s.pendingQueue.some((item) => item.clientId === queued.clientId)
         ? s
-        : { ...s, pendingQueue: [...s.pendingQueue, { ...queued, isPendingEnqueue: true }] },
+        : { ...s, pendingQueue: [...s.pendingQueue, entry] },
     );
-  } else if (!isSendBusyForQueue(current)) {
+  } else {
     setState(sessionId, (s) =>
       s.messages.some((m) => m.clientId === queued.clientId)
         ? s
@@ -19622,6 +19883,8 @@ function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | n
       : undefined;
   return {
     target: item.targetAgentKind,
+    ...(item.preparation === 'preparing' || item.preparation === 'failed' ? { preparation: item.preparation } : {}),
+    ...(typeof item.preparationError === 'string' ? { preparationError: item.preparationError.slice(0, 4000) } : {}),
     model: item.model,
     providerId: typeof item.providerId === 'string' ? item.providerId : null,
     ...(typeof item.effort === 'string' && item.effort.length > 0 ? { effort: item.effort } : {}),
@@ -19642,7 +19905,9 @@ function agentSwitchIntentEquals(
     a.providerId === b.providerId &&
     a.effort === b.effort &&
     a.fastMode === b.fastMode &&
-    a.agentDeviceId === b.agentDeviceId
+    a.agentDeviceId === b.agentDeviceId &&
+    a.preparation === b.preparation &&
+    a.preparationError === b.preparationError
   );
 }
 
@@ -19902,6 +20167,8 @@ export const makerChatStore = {
   hasCompactedToolPayload,
   hydrateCompactedMessage,
   sendMessage,
+  retryRemotePendingMessage,
+  discardRemotePendingMessage,
   prewarmSession,
   /** #2194: MessageStream 强 pin 门控——区分本端发送与外部注入的 user 消息。 */
   isLocalSentUserMessage,
@@ -20687,7 +20954,7 @@ function historyToolName(m: Message): string | undefined {
   return typeof toolName === 'string' ? toolName : undefined;
 }
 
-function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
+export function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   // Build per-clientId createdAt lookup so we can patch it onto every
   // mapped ChatMessage uniformly (each branch below builds a different
   // shape, easier to attach the timestamp once at the end).
@@ -20770,6 +21037,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         content: formatToolUseSummary(toolName, toolInput),
         toolUseId,
         toolName,
+        ...(typeof c.mcpToolName === 'string' ? { mcpToolName: c.mcpToolName } : {}),
         toolInput,
         ...replyToFields,
         ...(agentTaskStatus ? { agentTaskStatus } : {}),
@@ -21145,6 +21413,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       // 发送设备 / 插件来源:宽容读取(平台未知等不完整数据不出标签)。
       const sourceDevice = readMessageSourceDevice(m.agentMeta);
       const sourcePlugin = readMessageSourcePlugin(m.agentMeta);
+      const dispatchRoute = readMessageDispatchRoute(m.agentMeta);
       // Both ingress paths share the Desktop card, but local IM must not opt
       // older Mobile clients into legacy Hook/system-card semantics.
       // 插件转发的 IM 消息(sourcePlugin.relay)只在这里派生同一张卡片,不落库成 imSource;
@@ -21155,6 +21424,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           : undefined);
       return {
         sharedAuthorName: sharedTaskAuthorName(m.agentMeta),
+        ...(dispatchRoute ? { dispatchRoute } : {}),
         sharedAuthorMemberId: sharedTaskAuthorMemberId(m.agentMeta),
         clientId: m.clientId,
         role: m.role,
@@ -21361,13 +21631,22 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
             };
           })()
         : {}),
-      // assistant 上挂的模型降级标记(main turn 结束检测命中时 patch 进 agent_meta)
+      // assistant 上挂的模型改派标记(main turn 结束检测命中时 patch 进 agent_meta)
       ...(m.role === 'assistant' &&
       typeof m.agentMeta?.modelMismatch?.selected === 'string' &&
       m.agentMeta.modelMismatch.selected &&
       typeof m.agentMeta.modelMismatch.actual === 'string' &&
       m.agentMeta.modelMismatch.actual
-        ? { modelMismatch: m.agentMeta.modelMismatch }
+        ? {
+            modelMismatch: {
+              selected: m.agentMeta.modelMismatch.selected,
+              actual: m.agentMeta.modelMismatch.actual,
+              ...(typeof m.agentMeta.modelMismatch.providerName === 'string' &&
+              m.agentMeta.modelMismatch.providerName.trim()
+                ? { providerName: m.agentMeta.modelMismatch.providerName.trim() }
+                : {}),
+            },
+          }
         : {}),
       // subagent-model-chip: 历史重载时,纯文本子代理(全程不调工具)的子消息是
       // assistant/thinking 而非 tool_use,模型只在它们的 agentMeta 上。这里和

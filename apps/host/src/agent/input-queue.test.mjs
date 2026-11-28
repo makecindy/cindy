@@ -1,4 +1,5 @@
 import { bindHostProfileServices } from './profile-services.ts';
+import { createFakeMaker } from '../test-support/input-queue-maker.mjs';
 import { profileReleaseFixture } from '../test-support/profile-release-fixture.mjs';
 import { runDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { test, after } from 'node:test';
@@ -36,6 +37,7 @@ import { CredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-h
 import { SILENT_STOP_DECISION_DELAY_MS } from '../../../desktop/src/main/maker-ipc/silentStopAutoResume.ts';
 import { SILENT_STOP_AUTO_RESUME_SETTINGS_FILE } from '../../../desktop/src/main/maker-host/silentStopAutoResumeSettingsCore.ts';
 import { lockSessionRoute } from './session-route-lock.mjs';
+import { setSessionRouteLockImplementation } from '../../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
 import { RECOVERY_SHUTDOWN_WAIT_MS, contextRecoveryKind, createHostContextRecovery } from './context-recovery.ts';
 import { createHostCodexThreadStorage } from './codex-thread-storage.ts';
@@ -43,6 +45,7 @@ import { createHostContextRecoveryWiring } from './context-recovery-wiring.ts';
 import { CODEX_HISTORY_OVERSIZED_REASON, CODEX_LIVE_TAIL_OVERSIZED_BYTES } from '@cindy/maker-core';
 import { createHostContextRecoveryRollover } from './context-recovery-assembly.ts';
 import { createHostAgentHandoffPending } from './handoff-pending.ts';
+import { createHostSessionHandoff } from './session-handoff.ts';
 import { markCodexPlanInterrupted, writeCodexPlanUpdate } from '../../../desktop/src/main/localDb/codexPlanState.ts';
 import { buildPlanReconcileNote } from '../../../desktop/src/main/maker-ipc/planReconcile.ts';
 import { buildGoalInactiveNote } from '../../../desktop/src/main/goal-host/inactiveNote.ts';
@@ -138,7 +141,8 @@ const unitDatabase = await (async () => {
     const layout = hostRuntimeLayout();
     configureAppDataDir(path.join(unitProfile, 'app-data'));
     const opened = await openOwnerDatabase({ userDataDir: unitProfile, ownerId: 'input-queue-unit',
-      isPackaged: false, drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
+      isPackaged: false, drizzleDir: layout.drizzleDir,
+      sqliteVecExtPath: process.env.CINDY_HOST_SQLITE_VEC_PATH?.trim() || layout.sqliteVecPath });
     return createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
   } finally {
     if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile;
@@ -153,96 +157,6 @@ function ensureUnitOwner() {
   if (!getCurrentDbClientSnapshot()) setCurrentDbClient(unitDatabase, 'input-queue-unit');
 }
 ensureUnitOwner();
-
-function createFakeMaker() {
-  const sessions = new Map();
-  // Told of every message a runtime of this fake receives (the enqueue helper waits on it).
-  const sendListeners = new Set();
-  return {
-    sessions,
-    onSent(listener) { sendListeners.add(listener); return () => sendListeners.delete(listener); },
-    getSession(id) {
-      return sessions.get(id) ?? null;
-    },
-    async getSessionMeta(id) {
-      return { id, agentKind: 'claude-code', model: 'stored-model', workDir: '/tmp' };
-    },
-    // As Maker (maker.ts listActiveSessions): the live runtimes; the shared agent switch reads it.
-    listActiveSessions() { return [...sessions.values()]; },
-    async closeSession(id) { sessions.delete(id); },
-    async closeSessionIfCurrent(session) {
-      if (sessions.get(session.id) === session) sessions.delete(session.id);
-    },
-    async createSession(opts) {
-      const listeners = new Set();
-      const session = {
-        id: opts.id,
-        instanceId: `runtime-${opts.id}-${Math.random()}`,
-        agentKind: opts.agentKind,
-        capabilities: { sameTurnSteer: { supported: true } },
-        workDir: opts.workingDir,
-        remoteHostId: opts.remoteHostId ?? null,
-        running: false,
-        generation: 0,
-        get stablePermissionModeState() { return { mode: session.options.permissionMode ?? 'ask', generation: 0 }; },
-        get stablePlanModeState() { return { enabled: session.options.planMode ?? false, generation: 0 }; },
-        isTurnRunning() { return session.running; },
-        getTurnGeneration() { return session.generation; },
-        options: opts,
-        get model() { return session.options.model; },
-        sent: [],
-        sendOptions: [],
-        steerOptions: [],
-        steerMessages: [],
-        aborted: 0,
-        async setModel(model, settings) { Object.assign(session.options, { model }, settings); },
-        async setEffort(effort) { session.options.effort = effort; },
-        async setPermissionMode(permissionMode) { session.options.permissionMode = permissionMode; },
-        async setFastMode(fastMode) { session.options.fastMode = fastMode; },
-        async setPlanMode(planMode) { session.options.planMode = planMode; },
-        onEvent(listener) {
-          listeners.add(listener);
-          return () => listeners.delete(listener);
-        },
-        emit(event) {
-          if (event.type === 'done' || event.type === 'error') session.running = false;
-          for (const listener of [...listeners]) listener(event);
-        },
-        async send(text, opts = {}) {
-          opts.onTurnReserved?.(++session.generation);
-          await opts.beforeProviderStart?.();
-          await opts.onAccepted?.(opts.signal);
-          await opts.resolveAutoReviewUserIntent?.();
-          opts.onDispatching?.();
-          session.running = true;
-          session.sent.push(typeof text === 'string' ? text : text.content);
-          session.sendOptions.push(opts);
-          for (const listener of [...sendListeners]) listener(session.id);
-          return { accepted: true };
-        },
-        async abort() {
-          session.aborted += 1;
-          session.running = false;
-          session.continuationClaim = null;
-        },
-        // As the maker-core Session (session.ts): the Host's claim on a generation for a silent-stop
-        // continuation (released by its settle or a stop), and the continuation's send.
-        continuationClaim: null,
-        claimHostTurnContinuation(generation) { if (generation === session.generation) session.continuationClaim = generation; },
-        settleHostTurnContinuation(generation) { if (session.continuationClaim === generation) session.continuationClaim = null; },
-        sendHostTurnContinuation(text, opts) { return session.send(text, opts); },
-        async steer(text, options = {}) {
-          await options.beforeProviderStart?.();
-          session.steerMessages.push(text);
-          session.steerOptions.push(options);
-          session.sent.push(`steer:${typeof text === 'string' ? text : text.content}`);
-        },
-      };
-      sessions.set(opts.id, session);
-      return session;
-    },
-  };
-}
 
 function createHarness(overrides = {}) {
   ensureUnitOwner();
@@ -725,6 +639,7 @@ test('a remote task handoff expires while queued and is discarded before executi
   }, { onSettled: async () => { settled = true; } });
   const clientId = 'remote-task-action:revoked-while-queued';
   await h.queue.enqueue('handoff-task', { clientId, text: 'delegated follow-up' }, {
+    validateTarget: async () => ({ ok: true }),
     taskActionDeliveryGuard: guard,
     origin: { kind: 'session', senderSessionId: 'other-computer::source-task', displayText: 'delegated follow-up' },
     autoReviewUserText: { kind: 'agent-request', request: { userText: null } },
@@ -747,7 +662,8 @@ test('a remote task handoff returns NOT_FOUND if its target disappears before en
   const rejected = await h.queue.enqueue('missing-task', {
     clientId: 'remote-task-action:missing-before-enqueue',
     text: 'delegated follow-up',
-  }, { taskActionDeliveryGuard: async () => assert.fail('Missing target must not be admitted') });
+  }, { validateTarget: async () => ({ ok: true }),
+    taskActionDeliveryGuard: async () => assert.fail('Missing target must not be admitted') });
   assert.deepEqual(rejected, { ok: false, errorCode: 'NOT_FOUND', message: 'Session does not exist' });
   assert.equal(h.queue.projection('missing-task').pendingQueue.length, 0);
   assert.deepEqual(h.persisted, []);
@@ -766,6 +682,7 @@ test('remote task handoff inherits the target Plan intent only for plugin delega
     const id = plugin ? 'plugin-handoff' : 'ordinary-handoff';
     const text = 'delegated message';
     await enqueueUntilSent(h, id, { clientId: `remote-task-action:${id}`, text }, 1, {
+      validateTarget: async () => ({ ok: true }),
       taskActionDeliveryGuard: async () => {},
       ...(plugin ? {
         inheritTargetPlanMode: true,
@@ -2989,7 +2906,7 @@ test('the Auto-review context treats a running plugin-target input as unavailabl
 });
 
 // The task send lock (table B of the context recovery plan): a send holds it until accepted, the
-// entries that change a task's runtime or route take it, queue commands and stop never do.
+// entries that change a task's runtime or route take it. Stop interrupts lock waiters.
 function holdSendLock(sessionId) {
   let release, acquired;
   const ready = new Promise(resolve => { acquired = resolve; });
@@ -3070,6 +2987,221 @@ test('queue commands finish while another holder has the task send lock; the que
   assert.equal(h.maker.sessions.get('lock-commands')?.sent.length ?? 0, 0, 'the send waits for the lock');
   await lock.release();
   await waitFor(() => h.maker.sessions.get('lock-commands')?.sent.length === 1);
+});
+
+// Unit: a restored enqueue must give up the route lock before its drain starts.
+// An archived row and one input exercise the actual queue and executor; the
+// fixture keeps the route callback open through the first drain microtasks.
+test('ordinary archived enqueue gives up the route lock before dispatch', async t => {
+  const id = 'archive-route-lock';
+  let routeHeld = false;
+  let status = 'archived';
+  const observed = [];
+  const h = createHarness({
+    readSession: async (sessionId, options) => {
+      if (sessionId === id && !options?.forUserInput) observed.push(routeHeld);
+      return { id: sessionId, status, agentKind: 'claude-code', model: 'm',
+        workingDir: os.tmpdir(), providerId: 'xd' };
+    },
+    restoreArchivedSessionForSend: async () => { status = 'active'; },
+  });
+  setSessionRouteLockImplementation((sessionId, run) => withSendToSessionLock(sessionId, async () => {
+    routeHeld = true;
+    try {
+      const result = await run();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(observed, [], 'the drain must not inherit a still-held route lock');
+      return result;
+    } finally {
+      routeHeld = false;
+    }
+  }));
+  t.after(() => { setSessionRouteLockImplementation(null); return h.queue.dispose(); });
+  await h.queue.enqueue(id, { clientId: 'archived-1', text: 'continue' }, undefined, {});
+  await waitFor(() => h.maker.getSession(id)?.sent.length === 1);
+  assert.ok(observed.length > 0 && observed.every(held => !held));
+  assert.equal(status, 'active');
+});
+
+// An archived enqueue and a direct send share command -> route-lock order. In
+// the old order the lock holder queued the archived command behind a direct
+// send, while that send waited for the lock: neither could finish.
+test('archived enqueue and direct send cannot wait on each other', { timeout: 10_000 }, async t => {
+  const id = 'archive-direct-interleave';
+  let status = 'archived';
+  let direct;
+  const h = createHarness({
+    readSession: async sessionId => ({ id: sessionId, status, agentKind: 'claude-code',
+      model: 'm', workingDir: os.tmpdir(), providerId: 'xd' }),
+    restoreArchivedSessionForSend: async () => { status = 'active'; },
+  });
+  setSessionRouteLockImplementation((sessionId, run) => withSendToSessionLock(sessionId, async () => {
+    direct = h.queue.send(sessionId, 'direct follow-up', {});
+    direct.catch(() => {});
+    await new Promise(resolve => setImmediate(resolve));
+    return run();
+  }));
+  t.after(() => { setSessionRouteLockImplementation(null); return h.queue.dispose(); });
+  await h.queue.enqueue(id, { clientId: 'archived-1', text: 'continue' }, undefined, {});
+  await direct;
+  assert.equal(status, 'active');
+  assert.ok(h.maker.getSession(id)?.sent.includes('direct follow-up'));
+});
+
+// Unit, PR #13672: the production handoff adapter must let an earlier runtime
+// command finish before validating and queueing a message. Existing archive
+// and direct-send cases don't enter this adapter. Park the runtime command at
+// queue hydration, just before it needs the route lock.
+for (const { name, agentKind, prepare } of [
+  { name: 'plugin page restore', agentKind: 'claude-code',
+    prepare: (queue, id) => queue.restoreSession(id, async () => {}) },
+  { name: 'Pi prewarm', agentKind: 'pi',
+    prepare: (queue, id) => queue.preparePiSkillRuntime(id, os.tmpdir()) },
+]) {
+  test(`handoff delivers once behind an earlier ${name} command`, { timeout: 10_000 }, async t => {
+    const id = `handoff-after-${agentKind}`;
+    const clientId = `remote-task-action:${id}`;
+    const hydrating = Promise.withResolvers();
+    const continueHydration = Promise.withResolvers();
+    const cleanupWaiters = new AbortController();
+    const order = [];
+    const stored = { id, title: 'Handoff target', status: 'active', source: 'desktop',
+      agentKind, model: 'stored-model', workingDir: os.tmpdir(), providerId: 'xd' };
+    const h = createHarness({
+      readSession: async () => stored,
+      loadQueueSnapshot: async () => {
+        hydrating.resolve();
+        await continueHydration.promise;
+        return [];
+      },
+    });
+    await unitDatabase.exec('INSERT INTO sessions(id,title,source,status,agent_kind,working_dir,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
+      [id, stored.title, stored.source, stored.status, agentKind, stored.workingDir, 1, 1]);
+    setSessionRouteLockImplementation((sessionId, run, stage, signal) => withSendToSessionLock(
+      sessionId, run, stage, AbortSignal.any(signal ? [signal, cleanupWaiters.signal] : [cleanupWaiters.signal]),
+    ));
+    t.after(async () => {
+      setSessionRouteLockImplementation(null);
+      await h.queue.dispose();
+      await unitDatabase.exec('DELETE FROM sessions WHERE id = ?', [id]);
+    });
+    const handoff = createHostSessionHandoff({
+      input: h.queue, worktree: {}, agents: () => [agentKind], readProviders: async () => [],
+      isSelfDeviceId: () => true, hasCindyAiApiKey: () => false, broadcastCreated() {},
+      assertProviderExecutionSupported() { order.push('target validated'); },
+    });
+    const preparation = prepare(h.queue, id).then(() => { order.push('runtime prepared'); });
+    preparation.catch(() => {});
+    await hydrating.promise;
+    const delivery = handoff.send({
+      targetSessionId: id, clientId, message: 'delegated follow-up', autoReviewUserText: 'delegated follow-up',
+      resumeWithStoredPermissionMode: true, taskActionDeliveryGuard: async () => {},
+    });
+    delivery.catch(() => {});
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(order, [], 'handoff must leave the route lock available to the earlier command');
+      continueHydration.resolve();
+      const [result] = await Promise.all([delivery, preparation]);
+      assert.deepEqual(order, ['runtime prepared', 'target validated']);
+      assert.deepEqual(result, { ok: true, agentKind, wakeKind: 'queued',
+        targetTitle: stored.title, targetLastUserSendAt: null });
+      await waitFor(() => h.maker.getSession(id)?.sent.length === 1);
+      assert.deepEqual(h.persisted.filter(row => row.clientId === clientId).map(row => row.clientId), [clientId]);
+    } finally {
+      cleanupWaiters.abort();
+      continueHydration.resolve();
+      await Promise.allSettled([delivery, preparation]);
+    }
+  });
+}
+
+// Unit, PR #13672: delete and provisional discard hold the route lock while
+// calling disposeSession. Put a production command into its lock wait before
+// calling Stop. First-phase enqueue and Stop after restore don't cover this cycle.
+for (const { name, run, archived, handoff, pi } of [
+  { name: 'archived enqueue', archived: true,
+    run: (queue, id) => queue.enqueue(id, { clientId: 'archived-1', text: 'continue' }, undefined, {}) },
+  { name: 'handoff enqueue', handoff: true,
+    run: (queue, id) => queue.enqueue(id, { clientId: 'handoff-1', text: 'delegated follow-up' }, {
+      validateTarget: async () => assert.fail('A stopped waiter cannot validate or accept the input'),
+    }) },
+  { name: 'direct send', run: (queue, id) => queue.send(id, 'continue', {}) },
+  { name: 'plugin page restore', run: (queue, id) => queue.restoreSession(id, async () => {}) },
+  { name: 'Pi prewarm', pi: true, run: (queue, id) => queue.preparePiSkillRuntime(id, os.tmpdir()) },
+]) {
+  test(`delete cancels a waiting ${name} without the route lock watchdog`, { timeout: 10_000 }, async t => {
+    const id = 'delete-waiting-command';
+    const deleteHasLock = Promise.withResolvers();
+    const allowStop = Promise.withResolvers();
+    const releaseOnFailure = Promise.withResolvers();
+    let disposal;
+    let deleted = false;
+    let restorations = 0;
+    const h = createHarness({
+      readSession: async sessionId => ({ id: sessionId, status: archived ? 'archived' : 'active',
+        agentKind: pi ? 'pi' : 'claude-code', model: 'm', workingDir: os.tmpdir(), providerId: 'xd' }),
+      restoreArchivedSessionForSend: async () => { restorations += 1; },
+    });
+    setSessionRouteLockImplementation(withSendToSessionLock);
+    t.after(() => { setSessionRouteLockImplementation(null); return h.queue.dispose(); });
+    const deleting = lockSessionRoute(async sessionId => {
+      deleteHasLock.resolve();
+      await allowStop.promise;
+      disposal = h.queue.disposeSession(sessionId).then(() => { deleted = true; });
+      // Let a failing implementation unwind only after the assertions.
+      await Promise.race([disposal, releaseOnFailure.promise]);
+    })(id);
+    await deleteHasLock.promise;
+    const holder = sendToSessionLocks.get(id);
+    const commandSettled = Promise.allSettled([run(h.queue, id)]);
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      assert.ok(holder && sendToSessionLocks.get(id) !== holder, 'the command is waiting behind deletion');
+      allowStop.resolve();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(deleted, true, 'deletion must finish with its own route lock still held');
+      const [result] = await commandSettled;
+      assert.equal(result.status, 'rejected');
+      if (archived || handoff) {
+        assert.equal(result.reason.code, 'PRECONDITION_FAILED');
+        assert.match(result.reason.message, /superseded/);
+      } else assert.equal(result.reason.name, 'AbortError');
+      assert.equal(restorations, 0);
+      assert.deepEqual(h.queue.projection(id).pendingQueue, []);
+      assert.deepEqual(h.persisted, []);
+      assert.equal(h.maker.getSession(id), null);
+    } finally {
+      allowStop.resolve();
+      releaseOnFailure.resolve();
+      await Promise.allSettled([commandSettled, deleting]);
+      await disposal?.catch(() => {});
+    }
+  });
+}
+
+// Unit: Stop after restoration commits but before admission recheck cannot
+// enqueue the input. The independent task status transition is already durable.
+test('a stopped archived send keeps the completed restore without accepting input', async t => {
+  let status = 'archived';
+  let stopping;
+  const h = createHarness({
+    readSession: async id => ({ id, status, agentKind: 'claude-code', model: 'm',
+      workingDir: os.tmpdir(), providerId: 'xd' }),
+    restoreArchivedSessionForSend: async id => {
+      status = 'active';
+      stopping = h.queue.stop(id);
+    },
+  });
+  t.after(() => h.queue.dispose());
+  const id = 'archive-stopped';
+  const input = { clientId: 'archived-1', text: 'continue' };
+  await assert.rejects(h.queue.enqueue(id, input, undefined, {}), /superseded/);
+  await stopping;
+  assert.equal(status, 'active');
+  assert.deepEqual(h.queue.projection(id).pendingQueue, []);
+  assert.equal(h.persisted.length, 0);
+  assert.equal(h.maker.getSession(id), null);
 });
 
 test('stopping a task takes effect while another holder has its send lock', { timeout: 10_000 }, async t => {
@@ -4228,7 +4360,8 @@ test('switching to and from a plugin engine follows live plugin engine admission
 test('model change at send: an engine pick that cannot land lets the send go on, and lands on a later send', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
   await r.createTask('cross');
-  const picked = await r.selection.switchAgent({ sessionId: 'cross', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-a' });
+  r.views.current = [...r.views.current, { ...switchViews('codex')[0], id: 'prov-b', models: { codex: [switchModel('gpt-x')] } }];
+  const picked = await r.selection.switchAgent({ sessionId: 'cross', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-b' });
   assert.equal(picked.deferred, true, 'an engine pick waits for the send');
   const views = r.views.current;
   // The picked route is unusable when the send lands the pick: its copy is disabled. The task's current
@@ -4243,6 +4376,19 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   assert.equal(r.row('cross').agent_kind, 'cc');
   assert.equal(r.h.queue.projection('cross').error ?? null, null, 'no error for the send');
   assert.equal(r.selection.projectIntent('cross')?.targetAgentKind, 'codex', 'the pick stays for the next send');
+  // PR #13360, DB tier: the existing send-time fixture reaches the real Host
+  // assembly. Previously it proved fallback delivery, but not what history tells
+  // either client about that delivery. One failed pick followed by success is
+  // enough to expose missing assembly and attribution rewritten by later picks.
+  const routes = () => r.db.db.prepare("SELECT agent_meta FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid")
+    .all('cross').map(row => JSON.parse(row.agent_meta ?? '{}').dispatchRoute);
+  const firstRoute = routes()[0];
+  assert.deepEqual(firstRoute && { ...firstRoute, switchError: undefined }, {
+    agentKind: 'claude-code', model: 'big', providerId: 'prov-a', agentDeviceId: null,
+    selected: { agentKind: 'codex', model: 'gpt-x', providerId: 'prov-b', agentDeviceId: null },
+    switchError: undefined,
+  });
+  assert.ok(firstRoute.switchError, 'the failed preparation reason stays with this input');
   first.emit({ type: 'done', data: {}, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
   await waitFor(() => !r.h.queue.projection('cross').active);
   r.views.current = views;
@@ -4251,9 +4397,12 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   const next = r.h.maker.sessions.get('cross');
   assert.equal(next.agentKind, 'codex', 'the next send lands the engine pick');
   assert.equal(next.options.model, 'gpt-x');
+  assert.equal(next.options.providerId, 'prov-b');
   assert.equal(r.row('cross').agent_kind, 'codex');
   assert.equal(r.selection.projectIntent('cross') ?? null, null);
   assert.equal(r.userRows('cross').length, 2);
+  assert.deepEqual(routes()[0], firstRoute, 'later successful selection does not change the first input');
+  assert.equal(routes()[1], undefined, 'a normal send without fallback does not attach dispatchRoute');
 });
 
 // The runtime start admission (register.ts bootstrapSession's admitLocalRoute, shared as

@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "思考中…",
+    "replyStreaming": "正在生成…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
@@ -398,7 +399,13 @@
     "forkConfirmTitle": "從這裡開啟一個新任務？",
     "forkConfirmDescription": "系統會根據這裡的對話上下文建立一個獨立的新任務。原任務不會改變，之後兩邊的訊息互不影響。",
     "forkConfirm": "開啟新任務",
-    "forkCancel": "取消"
+    "forkCancel": "取消",
+    "modelSwitchPreparation": {
+      "pending": "下則訊息",
+      "preparing": "準備中…",
+      "failed": "切換失敗",
+      "usingPrevious": "本次使用 {{actual}}，{{target}} 尚未就緒"
+    }
   },
   "shareImage": {
     "title": "分享對話",
@@ -664,7 +671,20 @@
     "toolUseLoopDetectedRotationWithCount": "模型持續輪轉呼叫多個工具，Cindy 偵測到本輪已有 {{count}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
     "codexThreadLost": "Codex 驗證模式已切換，目前任務無法繼續，請新建任務。",
     "remoteCompactEncryptedContent": "整理上下文失敗：模型無法讀取歷史中的加密內容。自動接續未完成，可重試恢復。",
-    "encryptedContentInvalid": "由於更換供應商導致加密不可用，本任務只能在原供應商下使用；請回到電腦端處理（可以用「從這裡開啟新任務」丟棄協定加密內容，在新任務裡繼續）。"
+    "encryptedContentInvalid": "由於更換供應商導致加密不可用，本任務只能在原供應商下使用；請回到電腦端處理（可以用「從這裡開啟新任務」丟棄協定加密內容，在新任務裡繼續）。",
+    "providerSafetyRefusal": "模型供應商的安全政策攔截了本次回覆。如需繼續，請調整請求內容後再傳送",
+    "providerSafetyRefusalWithProvider": "{{provider}} 的安全政策攔截了本次回覆。如需繼續，請調整請求內容後再傳送",
+    "overloadBusy": "模型供應商暫時繁忙，目前沒有可用容量。可稍後重試，或換一個模型。",
+    "overloadBusyWithProvider": "{{provider}} 暫時繁忙，目前沒有可用容量。可稍後重試，或換一個模型。",
+    "streamInterrupted": "模型供應商回傳回覆時中途斷線，請稍後重試。",
+    "streamInterruptedWithProvider": "{{provider}} 回傳回覆時中途斷線，請稍後重試。",
+    "upstreamStatusError": "模型供應商服務回傳異常（HTTP {{status}}），本次回覆未完成。",
+    "upstreamStatusErrorWithProvider": "{{provider}} 服務回傳異常（HTTP {{status}}），本次回覆未完成。",
+    "modelAccessDenied": "目前模型供應商帳號無權存取此模型。請切換模型，或向供應商確認模型存取權限",
+    "modelAccessDeniedWithProvider": "目前 {{provider}} 帳號無權存取此模型。請切換模型，或確認模型存取權限",
+    "providerQuotaExhausted": "模型供應商帳戶配額或餘額不足，請檢查供應商帳戶",
+    "providerQuotaExhaustedWithProvider": "{{provider}} 帳戶配額或餘額不足，請檢查帳戶狀態",
+    "usageLimitReachedWithProvider": "{{provider}} 帳號已達到用量上限"
   },
   "row": {
     "markRead": "已讀",
@@ -680,9 +700,15 @@
   "outbox": {
     "deleteConfirmTitle": "刪除這則訊息？",
     "deleteConfirmBody": "這則訊息未能成功傳送，刪除後無法復原。",
+    "deleteUnconfirmedBody": "電腦可能已經收到這則訊息。刪除只會移除這部裝置上的待傳訊息。若電腦已收到，這則訊息仍會出現在對話記錄中。",
     "legacyPlanRecovery": "這臺電腦暫不支援在計畫模式下恢復待傳訊息。請關閉計畫模式，或更新電腦上的 Cindy 後重試。",
     "creationRecoveryRequired": "請先重試建立任務，再刪除首則訊息；這則訊息仍保存著後續訊息所需的任務恢復資訊。",
     "confirmationRequired": "電腦暫時無法確認是否收到這則訊息。請核對訊息記錄，或更新電腦上的 Cindy 後重試。",
+    "profileInUseByDesktop": "這份資料正被單獨執行的 Cindy 電腦端使用。請先結束它，再傳送。",
+    "taskInactive": "這個任務目前無法接收訊息。",
+    "inputNotSupported": "這部電腦暫不支援向這個任務傳送這類訊息。",
+    "invalidInput": "這則訊息包含無效內容，電腦未接收。",
+    "taskClearedBeforeSend": "任務已清空或正在清空，訊息仍儲存在這部裝置上。",
     "taskCleared": "傳送後，這個任務已被清空。訊息仍保存在手機上，請核對後處理。",
     "restoreFailed": "暫時無法恢復待傳訊息，已保存的內容沒有刪除。請重新啟動 App 後重試。",
     "recoveryTarget": "恢復這個任務時請保留原來的電腦，後續訊息仍保存在手機上。",

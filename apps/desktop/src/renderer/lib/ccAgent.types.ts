@@ -238,6 +238,7 @@ export interface CcMeta {
    * readMessageSourceDevice（宽容解析）。
    */
   sourceDevice?: MessageSourceDevice;
+  dispatchRoute?: import('@cindy/maker-shared/message-source').MessageDispatchRoute;
   /** 插件任务派发的消息（readMessageSourcePlugin 读取）。 */
   sourcePlugin?: MessageSourcePlugin;
   /** Group source of an explicitly sent private assistant message. */
@@ -261,12 +262,12 @@ export interface CcMeta {
   turnUsageDetails?: TurnUsageDetails;
 
   /**
-   * Host-side 模型降级标记:turn 结束时 main 检测到「所选模型家族在本轮实际
-   * modelUsage 里整轮缺席」(上游静默降级,如 fable-5 高负载被路由到 opus-4-8)
+   * Host-side 模型改派标记:turn 结束时 main 检测到「所选模型家族在本轮实际
+   * modelUsage 里整轮缺席」(如模型供应商触发安全回退、高负载临时切流等)
    * → patch 到该轮收尾 assistant 的 agent_meta(modelMismatchBroadcaster)。
-   * AssistantMessage 据此渲染降级提示行。判定纯函数见 shared/modelMismatch.ts。
+   * AssistantMessage 据此渲染提示行。判定纯函数见 shared/modelMismatch.ts。
    */
-  modelMismatch?: { selected: string; actual: string };
+  modelMismatch?: { selected: string; actual: string; providerName?: string };
 
   /**
    * device-link host-side marker:被控端为满足单帧上限返回了压缩历史内容。

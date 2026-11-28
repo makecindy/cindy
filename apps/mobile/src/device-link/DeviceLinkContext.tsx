@@ -25,6 +25,7 @@ import {
   DeviceLinkError,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   providerPickerListArgs,
@@ -331,6 +332,7 @@ const CONTROLLER_CAPABILITIES = [
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   // maker:event 微批:被控端把同一会话的连续事件合并成一帧,本端拆包后逐条消费
   // (见 remoteSessionStore 的 MAKER_EVENT_BATCH_CHANNEL 分支)。
@@ -2408,11 +2410,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const getConnectionState = useCallback((deviceId: string): DeviceLinkConnectionState => {
     const client = clientRef.current, source = client?.connectionFor(deviceId);
     const state = source && source !== client ? { status: source.getStatus(), connectionEpoch: connectionEpochFor(deviceId), connectionIssue: source.getConnectionIssue() }
-      : { status, connectionEpoch, connectionIssue };
+      : { status, connectionEpoch: connectionEpochFor(deviceId), connectionIssue };
     const retained = clientRef.current?.connectionFor(deviceId).peekOfflineDirectPath(deviceId) === true
       && !revokedDevicesStore.has(deviceId) && presenceAvailableByDeviceRef.current.get(deviceId) !== false;
     return retained ? { ...state, status: 'online', connectionIssue: null, signalingStatus: state.status, usingRetainedDirect: true } : state;
-  }, [connectionEpochFor, status, connectionEpoch, connectionIssue, presenceVersion]);
+  }, [connectionEpochFor, status, connectionIssue, presenceVersion]);
 
   const value = useMemo<DeviceLinkContextValue>(() => ({
     beginBackgroundTransition,

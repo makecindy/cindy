@@ -179,6 +179,32 @@ it.each([
   expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
 });
 
+// PR #13634 review, unit: a Smart Routing account source can move a task to another account of the
+// same provider with engine, model and computer unchanged. The old same-engine no-op kept the native
+// session owned by the old account. Exercise the real transaction: it must close that session, never
+// reuse a parked one, and bind the new account after the route commits but before the fresh start.
+it('rebuilds a same-engine route when Smart Routing moves the task to another local account', async () => {
+  let row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', agentDeviceId: null });
+  const order: string[] = [];
+  const { deps, calls } = makeDeps({
+    getSessionRow: vi.fn(async () => ({ ...row })),
+    findParkedEngineSession: vi.fn(async () => ({ sdkSessionId: 'old-account-history', watermarkCreatedAt: 1, watermarkRowid: 1 })),
+    applyAgentSwitchToDb: vi.fn(async (_id, patch) => { order.push('db'); row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+    bootstrapSwitchedSession: vi.fn(async () => { order.push('bootstrap'); }),
+  });
+  const commit = vi.fn(async () => { order.push('bind-account'); });
+  const result = await performSessionAgentSwitch(deps, {
+    ...validParams, model: 'gpt-5.5', providerId: 'openai', applyNow: true, configStaged: true, preserveModelGroupBinding: true,
+    localSubscriptionAccount: { changes: true, commit },
+  });
+  expect(result).toMatchObject({ switched: true, engineReady: true });
+  expect(calls[0]).toBe('close');
+  expect(deps.findParkedEngineSession).not.toHaveBeenCalled();
+  expect(row).toMatchObject({ providerId: 'openai', model: 'gpt-5.5', sdkSessionId: null });
+  expect(order).toEqual(['db', 'bind-account', 'bootstrap']);
+  expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
+});
+
 it('rejects an unavailable same-device connection before closing or changing the source', async () => {
   const { deps } = makeDeps({
     getSessionRow: vi.fn(async () => makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' })),
@@ -1603,7 +1629,9 @@ describe('deferred switch (turn running)', () => {
     expect(calls).toEqual([]);
   });
 
-  it('applyPendingAgentSwitchIfIdle:执行失败吞掉不抛(不阻塞发送),pending 保留供下次重试', async () => {
+  // Unit regression: preserve Dash's ordinary fail-continue policy, while the
+  // public intent must report the failed preparation and its real cause.
+  it('applyPendingAgentSwitchIfIdle:执行失败继续发送，公开失败原因并保留目标供重试', async () => {
     const { deps, store } = makeDepsWithPending({
       applyAgentSwitchToDb: vi.fn(async () => {
         throw new Error('db locked');
@@ -1612,7 +1640,46 @@ describe('deferred switch (turn running)', () => {
     store.set('s1', { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: null });
     await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).resolves.toBeUndefined();
     expect(store.has('s1')).toBe(true);
+    expect(store.get('s1')).toMatchObject({ preparation: 'failed', preparationError: 'db locked' });
     expect(deps.log.warn).toHaveBeenCalled();
+  });
+
+  // Production apply, unit: an unresolved catalog read must expose preparation,
+  // time out without late close/commit, and leave a newer selection untouched.
+  // Existing failures were immediate and never exercised a late read result.
+  it('times out read-only preparation and ignores its late result after re-selection', async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    const read = new Promise<string | undefined>(resolve => { release = () => resolve(undefined); });
+    const { deps, store } = makeDepsWithPending({ assertModelRouteUsable: vi.fn(() => read),
+      onPendingSwitchChanged: vi.fn() });
+    store.set('s1', { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' });
+    try {
+      const applying = applyPendingAgentSwitchIfIdle(deps, 's1');
+      expect(store.get('s1')?.preparation).toBe('preparing');
+      await vi.advanceTimersByTimeAsync(120_000);
+      await applying;
+      expect(store.get('s1')).toMatchObject({ preparation: 'failed', preparationError: expect.stringContaining('timed out') });
+      const newer = { targetAgentKind: 'pi' as const, model: 'newer', providerId: 'xd' };
+      store.set('s1', newer);
+      release();
+      await read;
+      expect(store.get('s1')).toBe(newer);
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    } finally { release(); vi.useRealTimers(); }
+  });
+
+  it('Stop cancels read-only preparation without starting or committing a switch', async () => {
+    const controller = new AbortController();
+    const { deps, store } = makeDepsWithPending({ assertModelRouteUsable: vi.fn(() => new Promise<string | undefined>(() => {})) });
+    store.set('s1', { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' });
+    const applying = applyPendingAgentSwitchIfIdle(deps, 's1', { signal: controller.signal });
+    controller.abort(new Error('Stopped by user'));
+    await expect(applying).rejects.toThrow('Stopped by user');
+    expect(store.get('s1')?.preparation).toBeUndefined();
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
   });
 
   it('applyPendingAgentSwitchIfIdle:同 session 并发调用复用同一 in-flight,只执行一次切换', async () => {
@@ -1651,7 +1718,7 @@ describe('deferred switch (turn running)', () => {
     });
     store.set('s1', { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: null });
 
-    await applyPendingAgentSwitchIfIdle(deps, 's1', { signal: controller.signal });
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1', { signal: controller.signal })).rejects.toThrow();
 
     expect(calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending']);
     expect(store.has('s1')).toBe(false);
@@ -2771,7 +2838,7 @@ describe('换到供应商组那一项：由组选一台能用的电脑(provider-
       's1',
       expect.objectContaining({ model: 'claude-opus-5-5', providerId: 'xd' }),
       true,
-      undefined,
+      expect.any(Function),
       undefined,
     );
     expect(row.model).toBe('claude-opus-5-5');

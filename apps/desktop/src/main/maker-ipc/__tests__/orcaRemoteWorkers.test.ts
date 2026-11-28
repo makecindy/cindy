@@ -88,6 +88,8 @@ function setup(opts: {
         const agentKind = acceptedInputs.get(clientId);
         return ok(agentKind ? [{ clientId, role: 'user', agentKind }] : []);
       }
+      case 'maker:orca:remote-worker:archive':
+        return ok({ runtimeClosed: true });
       case 'maker:abort-session':
         return ok(undefined);
       case 'maker:orca:remote-worker:release':
@@ -510,6 +512,27 @@ describe('wrapTeamDeps', () => {
     } finally { workers.stop(); }
   });
 
+  // #13619, unit: losing both ACK and lookup must keep the original delivery tracked.
+  it('preserves the remote input when its first-task receipt cannot be confirmed', async () => {
+    const { workers, remoteInvoke } = setup({ handle: (_device, channel) =>
+      channel === 'maker:input:enqueue' ? fail('INVOKE_TIMEOUT', 'lost acknowledgement') : undefined });
+    store.listActiveRemoteWorkers.mockResolvedValueOnce([restoredRow] as never);
+    const rollback = vi.fn();
+    try {
+      await workers.start();
+      const result = await workers.wrapTeamDeps(baseDeps()).dispatchWorkerMessage({
+        targetSessionId: 'proxy-1', message: 'work', workerId: 'w-1',
+        dispatchMeta: { source: 'orca', context: 'create_worker/proxy-1/initial_task' },
+        onAcceptedRollback: rollback,
+      });
+      expect(result).toMatchObject({ ok: false, dispatchOutcome: { code: 'DELIVERY_UNKNOWN' } });
+      expect(result).not.toHaveProperty('clientId');
+      expect(rollback).not.toHaveBeenCalled();
+      expect(workers.runtime.hasPendingReport('proxy-1')).toBe(true);
+      expect(remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:input:enqueue')).toHaveLength(1);
+    } finally { workers.stop(); }
+  });
+
   it('rejects image attachments for cross-device workers instead of silently dropping them', async () => {
     // 图片是 Lead 本机文件, 运行设备上的 Agent 读不到; 必须显式拒错, 不能只发文本返回 ok。
     const { workers, remoteInvoke } = setup();
@@ -688,6 +711,51 @@ describe('wrapTeamDeps', () => {
     return { ...ctx, service, deps, getWorker: () => worker };
   }
 
+  // #13619, unit: the creation dispatch must keep the accepted receipt when the Agent lookup fails.
+  it('returns an accepted first task without inferring its Agent from the session', async () => {
+    const h = await trackedTeam({ handle: (_device, channel, args) => {
+      if (channel === 'maker:input:enqueue') return fail('INVOKE_TIMEOUT', 'lost ACK');
+      if (channel === 'maker:input:get-projection') {
+        const { deliveryClientIds } = args[1] as { deliveryClientIds: string[] };
+        return ok({ deliveryReceipts: deliveryClientIds.map(clientId => ({ clientId, state: 'accepted' })) });
+      }
+      if (channel === 'local-db:messages:around-client-id') return fail('INVOKE_TIMEOUT', 'history unavailable');
+    } });
+    try {
+      const result = await h.service.dispatchWorkerTask({ targetSessionId: 'proxy-1', message: 'work',
+        dispatchMeta: { source: 'orca', context: 'create_worker/proxy-1/initial_task' } });
+      expect(result).toMatchObject({ dispatched: false, queued: true, queuedMessageId: expect.any(String) });
+      expect(h.remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:input:enqueue')).toHaveLength(1);
+    } finally { h.workers.stop(); }
+  });
+  // #13619 (unit): a durable user row may exist while the engine's pre-dispatch hooks still run.
+  it.each(['queued', 'persisted', 'different-turn', 'started'] as const)(
+    'reports a newly created remote Worker task at the %s boundary', async boundary => {
+      const h = await trackedTeam({ handle: (_device, channel, args) => {
+        if (channel !== 'maker:input:get-projection') return undefined;
+        const [clientId] = (args[1] as { deliveryClientIds: string[] }).deliveryClientIds;
+        return ok({
+          deliveryReceipts: [{ clientId, state: boundary === 'queued' ? 'pending' : 'accepted' }],
+          ...(boundary === 'started' || boundary === 'different-turn'
+            ? { dispatchedInput: { clientId: boundary === 'started' ? clientId : 'unrelated', agentKind: 'pi' } }
+            : {}),
+        });
+      } });
+      try {
+        const result = await h.service.dispatchWorkerTask({
+          targetSessionId: 'proxy-1', message: 'initial assignment',
+          dispatchMeta: { source: 'test', context: 'create_worker/proxy-1/initial_task' },
+        });
+        expect(result).toMatchObject(boundary === 'started'
+          ? { dispatched: true, agentKind: 'pi' }
+          : { dispatched: false, queued: true, queuedMessageId: expect.any(String) });
+        expect(h.remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:input:enqueue')).toHaveLength(1);
+      } finally {
+        h.workers.stop();
+      }
+    },
+  );
+
   // #11042 / PR #11060: unit, real TeamService + remote adapter. Existing report
   // tests never acknowledged done. A foreground-idle remote has no background
   // signal, so automatic acknowledgement must preserve done. Explicit idle and
@@ -712,10 +780,10 @@ describe('wrapTeamDeps', () => {
         : h.service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'w-1', onlyIfIdle: true }))
         .resolves.toMatchObject({ ok: true });
       expect(h.getWorker().status).toBe(action === 'idle' ? 'idle' : 'done');
-      expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session')).toBe(true);
+      expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session')).toBe(action === 'idle');
       if (action === 'release') {
         expect(store.archiveSingleWorkerSession).toHaveBeenCalledWith('proxy-1', expect.any(Function));
-        expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(true);
+        expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:archive')).toBe(true);
         expect(store.markWorkerRemoteReleased).toHaveBeenCalledWith('w-1');
         expect(h.workers.runtime.isRemote('proxy-1')).toBe(false);
       }
@@ -1273,21 +1341,64 @@ describe('wrapTeamDeps', () => {
     await workers.wrapTeamDeps(base).archiveWorkerSession('proxy-1');
     expect(base.archiveWorkerSession).not.toHaveBeenCalled();
     expect(store.archiveSingleWorkerSession).toHaveBeenCalledWith('proxy-1', expect.any(Function));
-    expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(true);
+    expect(remoteInvoke).toHaveBeenCalledWith('mac-mini', 'maker:orca:remote-worker:archive', [{ sessionId: 'remote-1' }]);
     expect(store.markWorkerRemoteReleased).toHaveBeenCalledWith('w-1');
     expect(workers.runtime.isRemote('proxy-1')).toBe(false);
   });
 
-  it('keeps remote routing when archive persistence or authorization fails', async () => {
-    const { workers } = await trackedWorker();
+  it.each([
+    fail('CHANNEL_NOT_ALLOWED', 'old host'),
+    fail('DEVICE_OFFLINE', 'offline'),
+    ok({ released: true }),
+  ])('keeps the proxy available to retry until the host confirms close', async response => {
+    let next = response;
+    const { workers, remoteInvoke } = await trackedWorker({ handle: (_device, channel) =>
+      channel === 'maker:orca:remote-worker:archive' ? next : undefined });
+    store.getRemoteWorkerByProxySession.mockResolvedValue(restoredRow as never);
+    try {
+      const wrapped = workers.wrapTeamDeps(baseDeps());
+      await expect(wrapped.archiveWorkerSession('proxy-1')).rejects.toThrow();
+      expect(store.archiveSingleWorkerSession).not.toHaveBeenCalled();
+      expect(store.markWorkerRemoteReleased).not.toHaveBeenCalled();
+      expect(workers.runtime.isRemote('proxy-1')).toBe(true);
+      next = ok({ runtimeClosed: true });
+      await wrapped.archiveWorkerSession('proxy-1');
+      expect(store.archiveSingleWorkerSession).toHaveBeenCalledOnce();
+      expect(remoteInvoke.mock.calls.map(([, channel]) => channel)).toEqual([
+        'maker:orca:remote-worker:archive', 'maker:orca:remote-worker:archive',
+      ]);
+    } finally {
+      store.getRemoteWorkerByProxySession.mockResolvedValue(null);
+      workers.stop();
+    }
+  });
+
+  it('refuses dispatch from a closed proxy while the local archive is retried', async () => {
+    let releasedAt: number | undefined;
+    const { workers, remoteInvoke } = await trackedWorker({ handle: (_device, channel) => {
+      if (channel === 'maker:orca:remote-worker:archive') {
+        releasedAt = 123;
+        return ok({ runtimeClosed: true });
+      }
+      if (channel === 'local-db:sessions:get') {
+        return ok({ status: 'active', orcaRemoteLead: { releasedAt } });
+      }
+      return undefined;
+    } });
+    store.getRemoteWorkerByProxySession.mockResolvedValueOnce(restoredRow as never).mockResolvedValueOnce(restoredRow as never);
     store.archiveSingleWorkerSession.mockRejectedValueOnce(new Error('permission revoked'));
     const base = baseDeps();
     const wrapped = workers.wrapTeamDeps(base);
-    await expect(wrapped.archiveWorkerSession('proxy-1')).rejects.toThrow('permission revoked');
-    expect(workers.runtime.isRemote('proxy-1')).toBe(true);
-    await wrapped.dispatchWorkerMessage({ targetSessionId: 'proxy-1', message: 'task', dispatchMeta: { source: 'mcp' } } as never);
-    expect(base.dispatchWorkerMessage).not.toHaveBeenCalled();
-    workers.stop();
+    try {
+      await expect(wrapped.archiveWorkerSession('proxy-1')).rejects.toThrow('permission revoked');
+      expect(workers.runtime.isRemote('proxy-1')).toBe(true);
+      await expect(wrapped.dispatchWorkerMessage({ targetSessionId: 'proxy-1', message: 'task',
+        dispatchMeta: { source: 'mcp' } } as never)).resolves.toMatchObject({ ok: false });
+      expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(false);
+      expect(base.dispatchWorkerMessage).not.toHaveBeenCalled();
+      await wrapped.archiveWorkerSession('proxy-1');
+      expect(workers.runtime.isRemote('proxy-1')).toBe(false);
+    } finally { workers.stop(); }
   });
 
   it('retries a Lead refusal until its captured report identity is settled', async () => {
