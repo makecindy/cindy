@@ -87,9 +87,12 @@ import {
   findLinuxUserInstallation,
   hasLinuxPkexec,
   isLinuxPkexecPreauthorized,
+  missingLinuxCustomUpdateTools,
   missingLinuxUserInstallTools,
+  readLinuxUpdateActionConfig,
   recognizeLinuxUserInstallation,
   type LinuxUserInstallation,
+  type LinuxUpdateActionConfig,
 } from './linuxInstallation';
 import { linuxPasswordStoreRelaunchArgs } from './linuxPasswordStore';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion';
@@ -381,6 +384,9 @@ function systemDebSupportsUnattendedUpdate(exePath: string): boolean {
  */
 function supportsUnattendedAppUpdate(): boolean {
   if (process.platform !== 'linux') return true;
+  // Custom package-manager actions may require a terminal or authorization.
+  // Never invoke them from idle or startup relaunch paths.
+  if (readLinuxUpdateActionConfig().status !== 'absent') return false;
   const exePath = app.getPath('exe');
   const installation = recognizeLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
   if (installation) return installation.region === CURRENT_CINDY_REGION;
@@ -394,6 +400,7 @@ function supportsUnattendedAppUpdate(): boolean {
  */
 function canApplyUnattendedAppUpdateNow(): boolean {
   if (process.platform !== 'linux') return true;
+  if (readLinuxUpdateActionConfig().status !== 'absent') return false;
   const exePath = app.getPath('exe');
   const uid = process.getuid?.() ?? -1;
   const installation = findLinuxUserInstallation(exePath, os.homedir(), uid);
@@ -1011,6 +1018,7 @@ function discardStagedPatchFiles(): void {
   readyTargetArch = undefined;
   linuxStagedDebSha256 = null;
   linuxStagedDebSize = null;
+  linuxStagedDebUrl = null;
   removePatchInfo();
   const flag = discardedVersion ? readReloginFlag() : null;
   if (flag?.version === discardedVersion) {
@@ -1516,6 +1524,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     // 信任锚:manifest 里的 installer 摘要与大小,进本进程内存,不落用户可写盘。
     linuxStagedDebSha256 = normalizeLinuxDebSha256(asset.sha256 ?? '');
     linuxStagedDebSize = typeof asset.size === 'number' && asset.size > 0 ? asset.size : null;
+    linuxStagedDebUrl = process.platform === 'linux' ? downloadUrl : null;
     setStatus('ready', { version: latestVersion });
     return 'ready';
   } catch (err) {
@@ -1546,6 +1555,9 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
         readyFilePath = undefined;
         readyChannelEpoch = undefined;
         readyTargetArch = undefined;
+        linuxStagedDebSha256 = null;
+        linuxStagedDebSize = null;
+        linuxStagedDebUrl = null;
         removePatchInfo();
         setStatus('idle');
         return 'idle';
@@ -1586,6 +1598,9 @@ function handleApplyFailure(reason: string): void {
   readyFilePath = undefined;
   readyChannelEpoch = undefined;
   readyTargetArch = undefined;
+  linuxStagedDebSha256 = null;
+  linuxStagedDebSize = null;
+  linuxStagedDebUrl = null;
   isRelaunching = false;
   autoRelaunchInProgress = false;
   // Every failure exit converges here, including the two that fire *after*
@@ -1908,6 +1923,7 @@ async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
  */
 let linuxStagedDebSha256: string | null = null;
 let linuxStagedDebSize: number | null = null;
+let linuxStagedDebUrl: string | null = null;
 
 function readStagedLinuxDebSha256(debPath: string): string | null {
   if (!linuxStagedDebSha256 || linuxStagedDebSize === null) {
@@ -1924,7 +1940,11 @@ function readStagedLinuxDebSha256(debPath: string): string | null {
   return linuxStagedDebSha256;
 }
 
-function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation | null): void {
+function executeUpdateLinux(
+  debPath: string,
+  installation: LinuxUserInstallation | null,
+  updateAction: Extract<LinuxUpdateActionConfig, { status: 'configured' }> | null,
+): void {
   const exePath = app.getPath('exe');
   const lockFilePath = getUpdateLockPath();
   const logDir = path.join(app.getPath('userData'), 'logs');
@@ -1968,8 +1988,11 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
   try {
     // Do not change installation strategy after the preflight (there is an
     // await while reclaiming runners). A changed layout must fail closed.
-    const now = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
-    const debianCheck = installation ? null : checkDebianManagedInstallation(exePath);
+    const currentAction = readLinuxUpdateActionConfig();
+    const now = updateAction
+      ? null
+      : findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+    const debianCheck = installation || updateAction ? null : checkDebianManagedInstallation(exePath);
     if (debianCheck?.status === 'error') {
       log.error('Linux Debian ownership recheck failed: %s', formatLinuxProbeError(debianCheck.error, exePath));
       isRelaunching = false;
@@ -1981,11 +2004,16 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
       setStatus('ready', { version: readyVersion ?? undefined });
       return;
     }
-    if (installation
-      ? !now || now.prefix !== installation.prefix || now.current !== installation.current
-        || now.region !== installation.region || !readyVersion
-      : now !== null || debianCheck?.status !== 'managed') {
-      throw new Error('Linux installation changed after preflight');
+    if (updateAction
+      ? currentAction.status !== 'configured'
+        || currentAction.command !== updateAction.command
+        || currentAction.launcher !== updateAction.launcher
+        || installation !== null || !readyVersion || !linuxStagedDebUrl
+      : currentAction.status !== 'absent' || (installation
+        ? !now || now.prefix !== installation.prefix || now.current !== installation.current
+          || now.region !== installation.region || !readyVersion
+        : now !== null || debianCheck?.status !== 'managed')) {
+      throw new Error('Linux installation or update action changed after preflight');
     }
     // Count the attempt only after the recheck confirms we will launch.
     // Incrementing earlier let three transient recheck failures burn the
@@ -1994,6 +2022,10 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
     script = buildLinuxUpdateScript({
       pid, debPath, sha256, sizeBytes, exePath, lockFilePath, logPath,
       userInstallation: installation ? { ...installation, version: readyVersion! } : undefined,
+      customUpdateCommand: updateAction?.command,
+      relaunchCommand: updateAction?.launcher,
+      version: readyVersion,
+      assetUrl: updateAction ? linuxStagedDebUrl ?? undefined : undefined,
       relaunchArgs: [
         ...linuxRelaunchDisplayArgs(process.argv),
         ...linuxPasswordStoreRelaunchArgs(app.commandLine?.getSwitchValue('password-store') ?? ''),
@@ -2164,38 +2196,69 @@ async function executeRelaunchUnguarded(
   // keeps both Cindy and the already-downloaded patch intact.
   if (!ensureWindowsUpdaterPrerequisites()) return;
 
-  // Do not stop active work or quit into a Debian-only installer on Arch.
-  // This also protects pacman/AUR-owned and manually unpacked applications.
+  // Do not stop active work or install a Debian package on an unrelated Linux
+  // installation unless its launcher explicitly configured a distro updater.
   let linuxInstallation: LinuxUserInstallation | null = null;
+  let linuxUpdateAction: Extract<LinuxUpdateActionConfig, { status: 'configured' }> | null = null;
   if (process.platform === 'linux') {
     const exePath = app.getPath('exe');
-    const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
-    linuxInstallation = installation;
-    const debianCheck = installation ? null : checkDebianManagedInstallation(exePath);
-    if (debianCheck?.status === 'error') {
-      log.error('Linux Debian ownership check failed: %s', formatLinuxProbeError(debianCheck.error, exePath));
-      isRelaunching = false;
-      autoRelaunchInProgress = false;
-      // Keep the verified installer staged. A transient dpkg-query failure is
-      // not evidence that this executable belongs to an unsupported layout.
-      setStatus('ready', { version: readyVersion ?? undefined });
-      return;
-    }
-    const supported = installation
-      ? installation.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0
-      // The update script needs pkexec for a system .deb; without it, quitting
-      // would only stop active work and relaunch the same version.
-      : debianCheck?.status === 'managed' && hasLinuxPkexec();
-    if (!supported) {
-      log.error(
-        debianCheck?.status === 'managed'
-          ? 'Linux system .deb update needs pkexec, which is not installed'
-          : 'Linux installation cannot self-update; use the installation guide or its package manager',
-      );
+    const action = readLinuxUpdateActionConfig();
+    if (action.status === 'invalid') {
+      log.error('Linux custom update action configuration is invalid: %s', action.reason);
       isRelaunching = false;
       autoRelaunchInProgress = false;
       setStatus('ready', { version: readyVersion ?? undefined, errorCode: LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE });
       return;
+    }
+    if (action.status === 'configured') {
+      if (!linuxStagedDebUrl) {
+        log.error('Linux custom update action has no source URL for the staged installer');
+        isRelaunching = false;
+        autoRelaunchInProgress = false;
+        setStatus('ready', { version: readyVersion ?? undefined, errorCode: LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE });
+        return;
+      }
+      // The script verifies the staged package and restarts the app after this
+      // process is gone. Without those tools the update would fail only after
+      // active work has been stopped, so refuse it while the app is running.
+      const missingCustomTools = missingLinuxCustomUpdateTools();
+      if (missingCustomTools.length > 0) {
+        log.error('Linux custom update is missing tools: %s', missingCustomTools.join(','));
+        isRelaunching = false;
+        autoRelaunchInProgress = false;
+        setStatus('ready', { version: readyVersion ?? undefined, errorCode: LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE });
+        return;
+      }
+      linuxUpdateAction = action;
+    } else {
+      const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+      linuxInstallation = installation;
+      const debianCheck = installation ? null : checkDebianManagedInstallation(exePath);
+      if (debianCheck?.status === 'error') {
+        log.error('Linux Debian ownership check failed: %s', formatLinuxProbeError(debianCheck.error, exePath));
+        isRelaunching = false;
+        autoRelaunchInProgress = false;
+        // Keep the verified .deb staged. A transient dpkg-query failure is not
+        // evidence that the install changed. The user can retry after it clears.
+        setStatus('ready', { version: readyVersion ?? undefined });
+        return;
+      }
+      const supported = installation
+        ? installation.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0
+        // The update script needs pkexec for a system .deb; without it, quitting
+        // would only stop active work and relaunch the same version.
+        : debianCheck?.status === 'managed' && hasLinuxPkexec();
+      if (!supported) {
+        log.error(
+          debianCheck?.status === 'managed'
+            ? 'Linux system .deb update needs pkexec, which is not installed'
+            : 'Linux installation cannot self-update; use the installation guide or its package manager',
+        );
+        isRelaunching = false;
+        autoRelaunchInProgress = false;
+        setStatus('ready', { version: readyVersion ?? undefined, errorCode: LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE });
+        return;
+      }
     }
   }
 
@@ -2251,7 +2314,7 @@ async function executeRelaunchUnguarded(
       executeUpdateMacOS(readyFilePath);
       break;
     case 'linux':
-      executeUpdateLinux(readyFilePath, linuxInstallation);
+      executeUpdateLinux(readyFilePath, linuxInstallation, linuxUpdateAction);
       break;
     default:
       log.error(`Unsupported platform: ${process.platform}`);
@@ -2271,6 +2334,9 @@ function agentUpdateApplyBlockReason(): string | null {
     return 'Windows 更新器运行环境不可用；已下载的更新将保留。';
   }
   if (process.platform === 'linux') {
+    const action = readLinuxUpdateActionConfig();
+    if (action.status === 'configured') return null;
+    if (action.status === 'invalid') return 'Linux 自定义更新动作配置无效。';
     const exePath = app.getPath('exe');
     const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
     if (installation) {
@@ -2823,8 +2889,9 @@ export function initUpdateService(): void {
           linuxStagedDebSize = typeof installer?.size === 'number' && installer.size > 0
             ? installer.size
             : null;
-          if (!linuxStagedDebSha256 || linuxStagedDebSize === null) {
-            log.info('Linux: manifest has no installer digest/size — discarding local patch');
+          linuxStagedDebUrl = installer?.file ? `${getBaseUrl()}/${installer.file}` : null;
+          if (!linuxStagedDebSha256 || linuxStagedDebSize === null || !linuxStagedDebUrl) {
+            log.info('Linux: manifest has incomplete installer metadata — discarding local patch');
             discardStagedPatchFiles();
             return { hasUpdate: false, action: 'none' as const };
           }
@@ -2845,6 +2912,7 @@ export function initUpdateService(): void {
         readyTargetArch = undefined;
         linuxStagedDebSha256 = null;
         linuxStagedDebSize = null;
+        linuxStagedDebUrl = null;
       }
 
       // Step 3: download (re-using the manifest we already have). Route through

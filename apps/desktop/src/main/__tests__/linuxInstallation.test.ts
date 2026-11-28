@@ -12,6 +12,7 @@ import {
   isDebianManagedInstallation,
   isLinuxPkexecPreauthorized,
   missingLinuxUserInstallTools,
+  readLinuxUpdateActionConfig,
   linuxUserDesktopName,
 } from '../linuxInstallation';
 import { stageLinuxBuildInfo } from '../../../forge-linux';
@@ -89,6 +90,38 @@ describe('Linux install routing', () => {
     expect(isLinuxPkexecPreauthorized(42, (file, args) => { calls.push([file, ...args]); })).toBe(true);
     expect(calls).toEqual([['/usr/bin/pkcheck', '--action-id', 'org.freedesktop.policykit.exec', '--process', '42']]);
     expect(isLinuxPkexecPreauthorized(42, () => { throw Object.assign(new Error('challenge'), { status: 2 }); })).toBe(false);
+  });
+});
+
+// Test value
+// - Production entry and observable result: readLinuxUpdateActionConfig selects a custom updater only when both launcher paths are executable and absolute.
+// - Bug/rule basis: docs/dev-rules/cindy-updater.md, Linux custom update action contract.
+// - Existing coverage gap: package ownership and pkexec probes did not cover distro-provided updater configuration.
+// - Smallest failure: either path is missing, relative, or non-executable; tier: unit.
+describe('Linux custom update action configuration', () => {
+  const executable = (file: string) => file.startsWith('/');
+
+  it('requires both absolute executable paths and reports a complete action', () => {
+    expect(readLinuxUpdateActionConfig({}, executable)).toEqual({ status: 'absent' });
+    expect(readLinuxUpdateActionConfig({
+      CINDY_LINUX_UPDATE_COMMAND: '/nix/store/update-action/bin/update',
+    }, executable)).toMatchObject({ status: 'invalid' });
+    expect(readLinuxUpdateActionConfig({
+      CINDY_LINUX_UPDATE_COMMAND: 'update',
+      CINDY_LINUX_UPDATE_LAUNCHER: '/run/current-system/sw/bin/cindy',
+    }, executable)).toMatchObject({ status: 'invalid' });
+    expect(readLinuxUpdateActionConfig({
+      CINDY_LINUX_UPDATE_COMMAND: '/nix/store/update-action/bin/update',
+      CINDY_LINUX_UPDATE_LAUNCHER: '/run/current-system/sw/bin/cindy',
+    }, executable)).toEqual({
+      status: 'configured',
+      command: '/nix/store/update-action/bin/update',
+      launcher: '/run/current-system/sw/bin/cindy',
+    });
+    expect(readLinuxUpdateActionConfig({
+      CINDY_LINUX_UPDATE_COMMAND: '/nix/store/update-action/bin/update',
+      CINDY_LINUX_UPDATE_LAUNCHER: '/run/current-system/sw/bin/cindy',
+    }, () => false)).toMatchObject({ status: 'invalid' });
   });
 });
 

@@ -141,6 +141,18 @@ export function missingLinuxUserInstallTools(
     .filter((name) => !probe(name));
 }
 
+/**
+ * Tools the custom-action path runs itself: it verifies the staged package and
+ * restarts the app in the same script, but the embedded installer (which wants
+ * bsdtar, dd, flock, find and the rest) never runs when an action is set.
+ */
+export function missingLinuxCustomUpdateTools(
+  probe: (name: string) => boolean = commandOnPath,
+): string[] {
+  return ['stat', 'sha256sum', 'awk', 'setsid', 'nohup']
+    .filter((name) => !probe(name));
+}
+
 /** System .deb updates run the installer through pkexec, looked up the same
  * way as the generated update script. Without it the script can only relaunch
  * the old version, so the update must be refused before Cindy quits.
@@ -152,6 +164,41 @@ export function hasLinuxPkexec(
   probe: (name: string) => boolean = commandOnPath,
 ): boolean {
   return isExecutable('/usr/bin/pkexec') || probe('pkexec');
+}
+
+/** Optional distro-owned update handler configured by the application launcher. */
+export type LinuxUpdateActionConfig =
+  | { status: 'absent' }
+  | { status: 'invalid'; reason: string }
+  | { status: 'configured'; command: string; launcher: string };
+
+/**
+ * A custom Linux updater is an explicit launcher contract, not a command-line
+ * string. Require both absolute executable paths so the update script never
+ * evaluates shell syntax or resolves a mutable PATH entry after Cindy exits.
+ */
+export function readLinuxUpdateActionConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  isExecutable: (file: string) => boolean = (file) => {
+    try {
+      fs.accessSync(file, fs.constants.X_OK);
+      return fs.statSync(file).isFile();
+    } catch { return false; }
+  },
+): LinuxUpdateActionConfig {
+  const command = env.CINDY_LINUX_UPDATE_COMMAND?.trim() ?? '';
+  const launcher = env.CINDY_LINUX_UPDATE_LAUNCHER?.trim() ?? '';
+  if (!command && !launcher) return { status: 'absent' };
+  if (!command || !launcher) {
+    return { status: 'invalid', reason: 'both command and launcher must be configured' };
+  }
+  if (!path.posix.isAbsolute(command) || !path.posix.isAbsolute(launcher)) {
+    return { status: 'invalid', reason: 'command and launcher must be absolute paths' };
+  }
+  if (!isExecutable(command) || !isExecutable(launcher)) {
+    return { status: 'invalid', reason: 'command and launcher must be executable files' };
+  }
+  return { status: 'configured', command, launcher };
 }
 
 /** Whether polkit already grants this user `pkexec` without an authentication
