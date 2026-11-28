@@ -126,6 +126,11 @@ export const imBotSettings = defineSettings({
     targetId: 'personal-im-feishu',
     titleKey: 'settings.feishuBot.title',
     sectionKey: 'settings.imBot.groups.personal',
+    keywordKeys: [
+      'settings.feishuBot.serviceLabel',
+      'settings.feishuBot.qr.description',
+      'settings.feishuBot.qr.cardActionHint',
+    ],
     aliases: ['Feishu', '飞书', '飞书机器人'],
   },
   lark: {

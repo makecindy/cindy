@@ -29,6 +29,9 @@ import {
 import type { FeishuPublicState } from './internal-types.js';
 
 const ipc_SLOT = Symbol('feishu.ipc');
+
+/** 凭证没能落盘时回给 renderer 的错误码; 由设置页翻译成可重试的提示。 */
+export const CREDENTIAL_SAVE_FAILED = 'CREDENTIAL_SAVE_FAILED';
 function createIpcState() {
   return {
     registered: false,
@@ -154,7 +157,7 @@ export function registerFeishuIpc(): void {
         begin.expiresIn,
         accountScope,
       );
-      return { ok: true, ...begin };
+      return { ok: true, ...begin, runId };
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       log.warn(`[feishu/ipc] registration begin failed: ${error}`);
@@ -162,11 +165,15 @@ export function registerFeishuIpc(): void {
     }
   });
 
-  handle('feishuBot:registration-cancel', async () => {
+  handle('feishuBot:registration-cancel', async (payload) => {
+    const p = payload as { runId?: unknown } | undefined;
+    const cancelledRunId = S().registrationRunId;
+    // 旧窗口只能取消自己那一轮: 当前轮次已被别的窗口取代时不能误杀。
+    if (typeof p?.runId === 'number' && p.runId !== cancelledRunId) {
+      return { ok: true };
+    }
     cancelAppRegistration();
-    broadcast('feishuBot:registration-status', {
-      status: 'cancelled',
-    });
+    broadcast('feishuBot:registration-status', { status: 'cancelled', runId: cancelledRunId });
     return { ok: true };
   });
 
@@ -313,6 +320,7 @@ async function pollRegistrationInBackground(
       const error = err instanceof Error ? err.message : String(err);
       broadcast('feishuBot:registration-status', {
         status: 'error',
+        runId,
         error,
       });
       return;
@@ -330,6 +338,7 @@ async function pollRegistrationInBackground(
     if (result.status === 'pending') {
       broadcast('feishuBot:registration-status', {
         status: 'pending',
+        runId,
       });
       continue;
     }
@@ -338,6 +347,7 @@ async function pollRegistrationInBackground(
       currentInterval = result.interval;
       broadcast('feishuBot:registration-status', {
         status: 'pending',
+        runId,
       });
       continue;
     }
@@ -347,33 +357,62 @@ async function pollRegistrationInBackground(
       if (!success.clientId || !success.clientSecret) {
         broadcast('feishuBot:registration-status', {
           status: 'pending',
+          runId,
         });
         continue;
       }
 
+      const service = success.tenantBrand ?? pollBrand;
       let verdict: 'connected' | 'conflict' | 'error' | 'pending';
       try {
-        ({ verdict } = await runInAccountScope(accountScope, async () => {
-          return saveAndConnect(
-            success.clientId,
-            success.clientSecret,
-            success.tenantBrand ?? pollBrand,
-            {
-              replacementOwnerOpenId: success.ownerOpenId,
-            },
-          );
-        }));
+        const saved = await runInAccountScope(accountScope, async () => {
+          // runInAccountScope 会把这次保存排进连接生命周期队列。排队期间用户
+          // 可能已经取消或重新发起: 这一轮不再是当前轮时不能再落盘, 更不能
+          // 把连接拉起来 —— 否则被取消的授权仍会变成实际生效的机器人。
+          if (runId !== S().registrationRunId || !isAccountScopeCurrent(accountScope)) {
+            return null;
+          }
+          return saveAndConnect(success.clientId, success.clientSecret, service, {
+            replacementOwnerOpenId: success.ownerOpenId,
+          });
+        });
+        if (saved === null) return;
+        verdict = saved.verdict;
       } catch (err) {
         if (!isAccountScopeCurrent(accountScope)) return;
         const error = err instanceof Error ? err.message : String(err);
         broadcast('feishuBot:registration-status', {
           status: 'error',
+          runId,
           error,
         });
         return;
       }
+      // saveAndConnect 是 await 的: 期间用户可能已取消或重新发起。这一轮
+      // 已经不是当前轮时, 界面显示的是"已取消" / 新一轮的二维码; 但凭证已经
+      // 写盘、连接可能已经起来, 不能只拦 success 广播就完事 —— 还要把这一轮
+      // 自己写下的绑定撤回, 否则用户以为取消了, 机器人实际仍然生效。
+      if (runId !== S().registrationRunId) {
+        await rollbackCancelledRegistration(accountScope, success.clientId);
+        return;
+      }
+      if (verdict === 'error') {
+        // 'error' 可能来自凭证没落盘, 也可能来自凭证已保存但连接失败。前者
+        // 这轮授权等于作废, 必须让用户看到失败并可重试; 后者设置卡会显示
+        // 已绑定 + 连接失败, 不能再报一次"创建成功"。
+        const savedCreds = storage.readCredentials();
+        if (savedCreds?.appId !== success.clientId || savedCreds.service !== service) {
+          broadcast('feishuBot:registration-status', {
+            status: 'error',
+            runId,
+            error: CREDENTIAL_SAVE_FAILED,
+          });
+          return;
+        }
+      }
       broadcast('feishuBot:registration-status', {
         status: 'success',
+        runId,
         appId: success.clientId,
         ownerOpenId: success.ownerOpenId,
         verdict,
@@ -384,6 +423,7 @@ async function pollRegistrationInBackground(
     if (result.status === 'expired') {
       broadcast('feishuBot:registration-status', {
         status: 'expired',
+        runId,
         error: result.message,
       });
       return;
@@ -392,6 +432,7 @@ async function pollRegistrationInBackground(
     if (result.status === 'denied' || result.status === 'error') {
       broadcast('feishuBot:registration-status', {
         status: 'error',
+        runId,
         error: result.message,
       });
       return;
@@ -400,7 +441,35 @@ async function pollRegistrationInBackground(
 
   if (runId === S().registrationRunId && isAccountScopeCurrent(accountScope)) {
     log.info('[feishu/ipc] registration expired');
-    broadcast('feishuBot:registration-status', { status: 'expired' });
+    broadcast('feishuBot:registration-status', { status: 'expired', runId });
+  }
+}
+
+/** 撤回一轮在保存 / 握手期间被取消或取代的授权: 只清掉这一轮自己写下的凭证与连接。 */
+async function rollbackCancelledRegistration(
+  accountScope: CapturedAccountScope,
+  appId: string,
+): Promise<void> {
+  try {
+    // 排进与 saveAndConnect 同一条连接生命周期队列: 新一轮的保存不会与这次
+    // 清理交错, 否则 stop/clear 可能落在刚建好的新绑定上。
+    await runInAccountScope(accountScope, async () => {
+      // 新一轮可能已经写入了自己的凭证; 只撤回仍然是这一轮的绑定。
+      if (storage.readCredentials()?.appId !== appId) return;
+      await wsClient.stop({
+        reason: 'registration-cancelled',
+        clearOwnerBeforeIdle: true,
+        discardPendingTopicLeases: true,
+      });
+      // stop 期间账号或绑定可能已经换人: 清理前再核对一次, 避免误清新绑定。
+      if (storage.readCredentials()?.appId !== appId) return;
+      outbound.forgetBoundAccount();
+      storage.clearAll();
+    });
+  } catch (err) {
+    getLog().warn(
+      `[feishu/ipc] registration rollback failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 

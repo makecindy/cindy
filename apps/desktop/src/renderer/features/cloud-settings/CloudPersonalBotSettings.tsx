@@ -270,6 +270,8 @@ export function CloudPersonalBotSettings({
         <FeishuBotSectionView
           {...common}
           notificationSettings={notifications('settings.feishuBot.lifecycleAnnouncement.label')}
+          // 云端表单没有本机 IPC: 飞书继续手填凭证。
+          credentialEntry="form"
           canSubmit={valid}
           services={
             form?.fields
