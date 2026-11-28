@@ -46,6 +46,7 @@ import {
   backlogLabel,
   isBacklogChannel,
   summarizeBacklog,
+  summarizeQueuedChannels,
 } from './transportBacklog.js';
 import {
   PROTOCOL_VERSION,
@@ -4577,6 +4578,37 @@ export class DeviceLinkClient {
     return replaced.length;
   }
 
+  private trimStalledReliableQueue(dst: string, peer: PeerTransportState, trigger: string): void {
+    this.retireExpiredInvokeResults(dst, peer);
+    if (peer.sendPhase === 'ready') return;
+    const oldest = peer.pending.values().next().value;
+    const cutoff = this.monotonicNow() - this.timing.stalledLinkPendingMaxAgeMs;
+    if (!oldest || oldest.enqueuedAt >= cutoff) return;
+
+    const context = () => `trigger=${trigger} sendPhase=${peer.sendPhase}`
+      + ` queue=[${summarizeQueuedChannels(peer.pending.values())}]`;
+    if (this.isDiscardablePending(oldest)) {
+      this.dropDiscardablePendingPrefix(dst, peer, false, `from stalled queue ${context()}`);
+    }
+
+    // An accept is already on the wire while awaiting confirmation. Age alone
+    // cannot invalidate that handshake or a reply the controller still awaits.
+    // Only a down link with a wholly stalled remainder and no live replies
+    // needs the old abandonment escape hatch. A reply without a negotiated
+    // deadline isn't known expired. The bare result bypass still works even
+    // when the retained replies fill the queue (see sendInvokeResult).
+    if (peer.sendPhase !== 'down' || peer.pending.size === 0) return;
+    for (const pending of peer.pending.values()) {
+      if (pending.enqueuedAt >= cutoff
+        || (pending.envelope.kind === 'invoke-result' && !isTransportSkipPayload(pending.envelope.payload))) return;
+    }
+    this.log.warn(
+      `abandoning ${peer.pending.size} stalled reliable frame(s) for peer ${shortDeviceRef(dst)}`
+      + ` (link down > ${this.timing.stalledLinkPendingMaxAgeMs}ms) ${context()}`,
+    );
+    this.abandonReliablePending(dst, 'reliable link stalled; pending abandoned');
+  }
+
   /** Name what fills a peer's reliable queue; rate-limited, never changes sending. */
   private warnSendBacklog(dst: string, peer: PeerTransportState, reason: 'high' | 'full'): void {
     if (reason === 'high' && peer.pending.size < BACKLOG_WARN_MESSAGES && peer.pendingBytes < BACKLOG_WARN_BYTES) return;
@@ -4755,23 +4787,9 @@ export class DeviceLinkClient {
       return false;
     }
 
-    // 死锁兜底:link 断开状态下 pending 冻结(不重试、不清理,只等 link 重建),
-    // 若 link-accept/link-open 丢失则永远等不到,满队列把所有新帧顶成 BACKPRESSURE。
-    // 队头滞留超过阈值即整队放弃 —— push 由重连 resync 补偿,invoke-result 的
-    // 原请求方早已超时;放弃后 baseSeq 前移,对端按新基线跳过这些 seq。
-    if (!this.isPeerSendReady(peer) && peer.pending.size > 0) {
-      const oldest = peer.pending.values().next().value as PendingReliableMessage | undefined;
-      if (
-        oldest
-        && this.monotonicNow() - oldest.enqueuedAt > this.timing.stalledLinkPendingMaxAgeMs
-      ) {
-        this.log.warn(
-          `abandoning ${peer.pending.size} stalled reliable frame(s) for peer ${shortDeviceRef(env.dst)} (link down > ${this.timing.stalledLinkPendingMaxAgeMs}ms)`,
-        );
-        this.abandonReliablePending(env.dst, 'reliable link stalled; pending abandoned');
-      }
-    }
-    this.retireExpiredInvokeResults(env.dst, peer);
+    const replyKey = routedEnv.kind === 'invoke-result' && env.id ? `${env.dst}\u0000${env.id}` : undefined;
+    const diagChannel = backlogLabel(routedEnv, replyKey ? this.inboundInvokeChannels.get(replyKey) : undefined);
+    this.trimStalledReliableQueue(env.dst, peer, diagChannel);
 
     const seq = peer.nextSeq;
     let frames: Envelope[];
@@ -4870,13 +4888,8 @@ export class DeviceLinkClient {
       lastBlockedBy: willSendNow ? undefined : !this.isPeerSendReady(peer) ? 'link'
         : this.isOutsideReceiveWindow(peer, seq) ? 'receive-window'
         : this.shouldHoldRecoverySend(peer, additionalFrames) ? 'recovery-ack' : 'relay-budget',
-      diagChannel: backlogLabel(
-        routedEnv,
-        routedEnv.kind === 'invoke-result' && env.id ? this.inboundInvokeChannels.get(`${env.dst}\u0000${env.id}`) : undefined,
-      ),
-      expiresAt: routedEnv.kind === 'invoke-result' && env.id
-        ? this.inboundInvokeDeadlines.get(`${env.dst}\u0000${env.id}`)
-        : undefined,
+      diagChannel,
+      expiresAt: replyKey ? this.inboundInvokeDeadlines.get(replyKey) : undefined,
     };
     peer.pending.set(seq, pending);
     peer.pendingBytes += reservedBytes;
