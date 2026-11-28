@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const managedEnvKeys = [
@@ -40,6 +40,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const key of managedEnvKeys) {
     const value = previousEnv[key];
     if (value === undefined) delete process.env[key];
@@ -166,6 +167,21 @@ describe('mobile native app config', () => {
     expect(cn.extra.xdtProductionEnv).not.toHaveProperty(
       'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL',
     );
+  });
+
+  it.each([
+    ['https://global.example.invalid/bootstrap/', 'https://hotfix.cindy.com.cn/cindy'],
+    ['https://peer.example.invalid/bootstrap', 'https://peer.example.invalid/bootstrap'],
+  ])('resolves the production Global peer from %s to %s', (inherited, expected) => {
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+    vi.stubEnv('NODE_ENV', 'production');
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = 'global';
+    process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL = 'https://global.example.invalid/bootstrap';
+    process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL = inherited;
+
+    buildConfig();
+
+    expect(process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL).toBe(expected);
   });
 
   it('keeps the CN Release manifest injection CindyDev-only and outside Expo config', () => {
