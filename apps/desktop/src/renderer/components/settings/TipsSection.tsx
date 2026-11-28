@@ -26,6 +26,7 @@ import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/sett
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 
 import { ChatEmbeddingCell } from './ChatEmbeddingCell';
+import { LastTurnStatisticsSettings } from './LastTurnStatisticsCell';
 import { MessageNavRailCell } from './MessageNavRailCell';
 import { SilentEncryptedRetryCell } from './SilentEncryptedRetryCell';
 import { WorktreeModelNamingCell } from './WorktreeModelNamingCell';
@@ -77,6 +78,7 @@ export function TipsSection() {
         <MessageNavRailCell />
         <WorktreeModelNamingCell />
       </SettingsCard>
+      <LastTurnStatisticsSettings />
     </SettingsSection>
   );
 }

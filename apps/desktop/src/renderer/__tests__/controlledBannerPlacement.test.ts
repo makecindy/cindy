@@ -45,9 +45,8 @@ describe('controlled banner placement', () => {
     expect(sessionViewSource).toContain(
       "suppressContent={Boolean(pendingPlanReview) || errorReason === 'unexecuted-tool-markup'}",
     );
-    expect(sessionViewSource).toContain(
-      'const isHidden = suppressContent || (!showContent && !visible);',
-    );
+    // Suppression and idle visibility are covered through RunningStatusBar's real
+    // DOM in runningStatusBarSuppression.test.tsx, including saved statistics.
     expect(sessionViewSource).toContain('{showCenteredControlledBanner && <ControlledBanner');
     expect(sessionViewSource).toContain('centeredSlot={composerCenter}');
     expect(sessionViewSource).toContain('rightLeadingSlot?: ReactNode;');
@@ -61,10 +60,8 @@ describe('controlled banner placement', () => {
     expect(sessionViewSource).toContain(
       'const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;',
     );
-    expect(sessionViewSource).toContain(
-      'const showRuntime = Boolean(rightLeadingSlot) || (!suppressContent && (!isHidden || ratePanelPinned));',
-    );
-    expect(sessionViewSource).toContain('if (!showRuntime && !centeredSlot && !composerHeaderRef) return null;');
+    // Runtime/idle row lifetime and the collapsed control's position are asserted
+    // in runningStatusBarSuppression.test.tsx; they do not depend on source spelling.
     expect(controlledBannerSource).toContain("placement?: 'floating' | 'inline' | 'composer';");
     expect(controlledBannerSource).toContain(
       'className="pointer-events-auto flex min-w-0 max-w-full shrink justify-end"',
