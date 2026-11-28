@@ -556,7 +556,7 @@
     },
     "revoked": {
       "title": "Acceso revocado",
-      "body": "\"{{deviceName}}\" revocó el acceso remoto de este dispositivo. Vuelve a autorizarlo en la configuración de {{appName}} en esa computadora y luego toca \"Reintentar acceso\".",
+      "body": "“{{deviceName}}” revocó el acceso remoto de este dispositivo. Vuelve a autorizarlo en la configuración de {{appName}} en esa computadora y luego toca “Reintentar acceso”.",
       "retry": "Reintentar acceso"
     },
     "viewAllConversations": "Ver las {{count}} sesiones",
@@ -976,13 +976,13 @@
     "devicesFailed": "No se pueden cargar tus computadoras en este momento. Vuelve a intentarlo más tarde.",
     "preparing": "Preparándonos en “{{device}}”…",
     "preparingHint": "Esa computadora toma el control del amigo desde su perfil en la nube y lo abre cuando está listo.",
-    "timeout": "\"{{device}}\" aún no está listo. Asegúrate de que Cindy esté abierto y en línea en esa computadora y vuelve a intentarlo.",
+    "timeout": "“{{device}}” aún no está listo. Asegúrate de que Cindy esté abierto y en línea en esa computadora y vuelve a intentarlo.",
     "conflict": "{{name}} ya se mudó a “{{device}}”.",
     "switchFailed": "No se puede cambiar la computadora principal en este momento. Vuelve a intentarlo más tarde.",
     "skillTargetOutdated": "Una Habilidad de {{name}} tiene un contenido de más de 64 KB que la versión antigua de Cindy en “{{device}}” no puede recibir. Actualiza Cindy en ese ordenador antes de mover a tu amigo. Tu amigo sigue en el ordenador original",
     "skillTargetOutdated_skill": "La versión antigua de Cindy en «{{device}}» no puede recibir la habilidad «{{slug}}». Su contenido ocupa {{bodyBytes, number}} bytes y supera el límite de 64 KB. {{name}} sigue en el ordenador original. Actualiza Cindy en el ordenador de destino y vuelve a intentarlo.",
     "unknownDevice": "otra computadora",
-    "runsOn": "Se ejecuta en \"{{device}}\"",
+    "runsOn": "Se ejecuta en “{{device}}”",
     "homeTitle": "Computadora principal",
     "moveTo": "Mover a “{{device}}”",
     "moveTitle": "¿Ejecutar {{name}} en “{{device}}”?",
@@ -998,7 +998,7 @@
     "transferBusy": "{{name}} todavía está trabajando en una respuesta. Muévelo después de que termine la respuesta.",
     "switchConflict": "La computadora principal de {{name}} ya cambió, así que no se trasladó",
     "homeOutdated": "La computadora principal “{{device}}” ejecuta una versión antigua de Cindy. Actualízala o cambia la computadora principal allí.",
-    "homeUnreachable": "No se puede acceder a \"{{device}}\". Debe estar en línea con \"Permitir que dispositivos con la misma cuenta controlen esta máquina\" activado",
+    "homeUnreachable": "No se puede acceder a “{{device}}”. Debe estar en línea con “Permitir que dispositivos con la misma cuenta controlen esta máquina” activado",
     "sendUnreachable": "Tu mensaje no ha llegado a la computadora principal “{{device}}”; puede que esté desconectado. Puedes continuar en otra computadora."
   },
   "sessionImport": {

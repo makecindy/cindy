@@ -288,7 +288,7 @@
     "replyMode": "Cuando no se @menciona a nadie",
     "replyModeAll": "Cualquiera puede responder",
     "replyModeMentioned": "Solo responden los @mencionados",
-    "replyModeNote": "Los amigos que no tienen nada que añadir se quedan callados. Cada ronda ejecuta hasta 3 pases y 10 mensajes, luego espera a que hagas clic en \"Continuar discusión\".",
+    "replyModeNote": "Los amigos que no tienen nada que añadir se quedan callados. Cada ronda ejecuta hasta 3 pases y 10 mensajes, luego espera a que hagas clic en “Continuar discusión”.",
     "replyModeNoteQueue": "Los amigos responden uno a la vez; los primeros cinco continúan solos. Citar a un amigo o responder en su hilo también lo llama.",
     "replyModeSaveFailed": "No se pudo guardar la configuración de respuesta. Inténtalo de nuevo.",
     "delete": "Eliminar chat grupal",

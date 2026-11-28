@@ -1425,7 +1425,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "Modelo não alterado: o proprietário suspendeu esta partilha para si. Escolha outro modelo.",
     "REMOTE_AGENT_SHARE_REMOVED": "Modelo não alterado: esta partilha já não está disponível (foi removida pelo proprietário ou já saiu dela). Escolha outro modelo.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modelo não alterado: o fornecedor partilhado está temporariamente indisponível (o computador do proprietário está offline ou a partilha está desativada por agora). Tente novamente mais tarde ou escolha outro modelo.",
-    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modelo não alterado: esta é uma partilha antiga e não pode ser usada enquanto \"Usar apenas Agent-Net\" estiver ativado. Desative esta opção ou escolha outro modelo.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modelo não alterado: esta é uma partilha antiga e não pode ser usada enquanto «Usar apenas Agent-Net» estiver ativado. Desative esta opção ou escolha outro modelo.",
     "SSH_HOST_KEY_MISMATCH": "Chave do anfitrião SSH alterada",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "O Cindy não consegue ler o anexo de origem; a mensagem não foi enviada. Guarde uma cópia em Transferências ou noutra pasta acessível, remova o anexo original e adicione a cópia com o botão de anexos antes de enviar novamente."
   },
@@ -1446,7 +1446,7 @@
     "TIMEOUT": "O tempo de ligação esgotou-se. Verifique a rede e o URL base",
     "CERT_ERROR": "A verificação do certificado falhou. Verifica se o nome do anfitrião do URL base corresponde ao certificado, bem como a cadeia de certificados e a configuração de confiança da CA da tua organização.",
     "UNKNOWN": "Erro desconhecido. Consulte os registos para obter detalhes",
-    "upstreamToast": "O pedido ao fornecedor \"{{provider}}\" falhou: {{message}}"
+    "upstreamToast": "O pedido ao fornecedor «{{provider}}» falhou: {{message}}"
   },
   "appError": {
     "title": "Ocorreu um erro",
@@ -1979,7 +1979,7 @@
         "write": "A Cindy não conseguiu guardar a chave de anfitrião fidedigna: {{reason}}. Ligação recusada.",
         "mismatch": "A chave de anfitrião de {{host}} mudou ({{fingerprint}}) e já não corresponde à impressão digital em que a Cindy confiava. Isto pode significar que o servidor foi reinstalado ou um ataque man-in-the-middle. Ligação recusada.",
         "file": "Ficheiro de chaves de anfitrião fidedignas:\n{{filePath}}",
-        "repair": "A Cindy não lê ~/.ssh/known_hosts. A impressão digital antiga está guardada em:\n{{filePath}}\nA chave da entrada é \"{{host}}\".\nSe confirmou que esta alteração é fidedigna, feche a Cindy, remova apenas esta entrada, mantenha o ficheiro e todos os outros anfitriões e volte a ligar. A nova impressão digital será guardada na primeira ligação. Não elimine o ficheiro inteiro.",
+        "repair": "A Cindy não lê ~/.ssh/known_hosts. A impressão digital antiga está guardada em:\n{{filePath}}\nA chave da entrada é «{{host}}».\nSe confirmou que esta alteração é fidedigna, feche a Cindy, remova apenas esta entrada, mantenha o ficheiro e todos os outros anfitriões e volte a ligar. A nova impressão digital será guardada na primeira ligação. Não elimine o ficheiro inteiro.",
         "verifyChange": "Confirme a alteração com o administrador do servidor antes de atualizar o registo de chaves de anfitrião fidedignas."
       },
       "footnote": "Fase A: apenas gestão de ligações SSH. A execução de Agents na máquina remota chegará numa atualização posterior.",
@@ -2000,7 +2000,7 @@
       },
       "empty": {
         "title": "Ainda não existem máquinas remotas.",
-        "hint": "Clique em \"Adicionar\" para registar uma ou no ícone de atualização para importar de ~/.ssh/config."
+        "hint": "Clique em «Adicionar» para registar uma ou no ícone de atualização para importar de ~/.ssh/config."
       },
       "status": {
         "disconnected": "Desligado",
@@ -2039,12 +2039,12 @@
         "done": "Concluído",
         "pickOrGenerate": "Escolher uma chave existente ou gerar uma nova",
         "loading": "A procurar em ~/.ssh/…",
-        "empty": "Não foram encontradas chaves SSH em ~/.ssh/. Clique em \"Gerar nova\" para criar uma.",
+        "empty": "Não foram encontradas chaves SSH em ~/.ssh/. Clique em «Gerar nova» para criar uma.",
         "generateButton": "Gerar nova",
         "cancelGenerate": "Cancelar",
         "inAgent": "no ssh-agent",
         "notInAgent": "fora do ssh-agent",
-        "notInAgentTip": "Esta chave está no disco, mas não está carregada no ssh-agent. Clique em \"Desbloquear\" para a carregar (será pedida a frase de acesso se estiver encriptada).",
+        "notInAgentTip": "Esta chave está no disco, mas não está carregada no ssh-agent. Clique em «Desbloquear» para a carregar (será pedida a frase de acesso se estiver encriptada).",
         "unlockButton": "Desbloquear",
         "unlockTip": "Carregar esta chave no ssh-agent para estabelecer ligações SSH sem voltar a introduzir a frase de acesso.",
         "unlockTitle": "Desbloquear {{name}}",
@@ -2089,7 +2089,7 @@
           "tryThis": "Experimente isto no terminal",
           "close": "Fechar",
           "fallbackTitle": "Ou dispense por completo o agent",
-          "fallbackBody": "Também podes escolher \"Ficheiro de identidade\" ao adicionar um anfitrião. A {{appName}} lê a chave privada para a memória do processo sem ssh-agent. Atualmente, só são suportadas chaves privadas não encriptadas; a frase-passe não é pedida ao ligar. Usa ssh-agent para chaves encriptadas.",
+          "fallbackBody": "Também podes escolher «Ficheiro de identidade» ao adicionar um anfitrião. A {{appName}} lê a chave privada para a memória do processo sem ssh-agent. Atualmente, só são suportadas chaves privadas não encriptadas; a frase-passe não é pedida ao ligar. Usa ssh-agent para chaves encriptadas.",
           "reason": {
             "agent_unavailable": "O ssh-add não conseguiu contactar o ssh-agent (binário em falta, agent inativo ou SSH_AUTH_SOCK não definido).",
             "bad_passphrase": "O ssh-add rejeitou a frase de acesso.",
@@ -2289,7 +2289,7 @@
         "import": "Importar tema do VSCode / Obsidian",
         "openDir": "Abrir pasta de temas",
         "refresh": "Atualizar",
-        "exportSuccess": "{{file}} criado. Substitua os caminhos de imagem de exemplo, guarde e clique em \"Atualizar\".",
+        "exportSuccess": "{{file}} criado. Substitua os caminhos de imagem de exemplo, guarde e clique em «Atualizar».",
         "exportFailed": "Falha na exportação: {{error}}",
         "importSuccess": "{{name}} importado ({{themeCount}} variante(s)). Selecione-o na lista de temas acima.",
         "importPartial": "{{name}} importado ({{themeCount}} variante(s)). {{skipped}} cores semânticas permanecem inalteradas conforme a especificação, não foi possível ler {{unresolved}} valores e {{derived}} funções foram aproximadas a partir de cores próximas.",
@@ -2453,7 +2453,7 @@
       "sessionDoneAria": "Ativar ou desativar notificações do sistema para sessões",
       "feishuLabel": "Enviar uma mensagem privada do Feishu / Lark quando uma sessão termina ou precisa de uma resposta",
       "feishuHint": "Envia uma mensagem privada através do bot Feishu ou Lark associado; apenas quando a janela não está em foco.",
-      "feishuDisabledHint": "Primeiro configure o bot em \"Bot Feishu / Lark\" e envie-lhe uma mensagem privada para concluir a associação.",
+      "feishuDisabledHint": "Primeiro configure o bot em «Bot Feishu / Lark» e envie-lhe uma mensagem privada para concluir a associação.",
       "feishuAria": "Ativar ou desativar notificações FeiShu de conclusão de sessão",
       "botGroupPlan": {
         "stepDone": "{{name}} concluiu “{{task}}” — continue quando quiser",
@@ -3814,8 +3814,8 @@
         "formatStructure": "O ficheiro contém um objeto JSON, sem Base64, uma ligação de importação ou um invólucro adicional. Os campos abaixo descrevem um fornecedor personalizado com chave de API. Os nomes dos campos distinguem maiúsculas de minúsculas; o JSON não permite comentários.",
         "formatIdentity": "Obrigatório. Defina kind como \"custom\" e name como o nome do fornecedor que pretende apresentar.",
         "formatAuth": "Obrigatório. Neste exemplo, defina method como \"apiKey\" e substitua apiKey pela chave do seu fornecedor.",
-        "formatEndpoint": "Obrigatório para cada endpoint. protocol aceita \"openai-chat\", \"openai-responses\", \"anthropic-messages\" e \"google-generative-ai\". Defina baseUrl como o URL HTTP(S) completo do endpoint; recomenda-se HTTPS.",
-        "formatTargets": "Lista opcional de motores: \"claude-code\", \"codex\" ou \"pi\". Omita-a para associar motores por protocolo ou especifique os motores explicitamente. O Claude Code também suporta os protocolos OpenAI e Google. O exemplo ativa apenas o Pi.",
+        "formatEndpoint": "Obrigatório para cada endpoint. protocol aceita «openai-chat», «openai-responses», «anthropic-messages» e «google-generative-ai». Defina baseUrl como o URL HTTP(S) completo do endpoint; recomenda-se HTTPS.",
+        "formatTargets": "Lista opcional de motores: «claude-code», \"codex\" ou \"pi\". Omita-a para associar motores por protocolo ou especifique os motores explicitamente. O Claude Code também suporta os protocolos OpenAI e Google. O exemplo ativa apenas o Pi.",
         "formatModels": "Opcional. Utilize cadeias com os IDs dos modelos ou objetos com id (name é opcional). Omita a lista ou deixe-a vazia para obter os modelos após a confirmação. Uma lista não vazia dispensa a obtenção automática.",
         "formatMetadata": "Campos opcionais dos modelos: group é o grupo do modelo, contextWindow é o comprimento do contexto e maxOutputTokens é o limite de saída (ambos em tokens). Os números do exemplo são ilustrativos; utilize as capacidades reais do modelo.",
         "formatEffort": "Campos opcionais dos modelos: efforts lista os níveis de esforço de raciocínio suportados; defaultEffort seleciona um deles como predefinição. Remova ambos os campos se tiver dúvidas.",
@@ -4494,7 +4494,7 @@
       "detail": {
         "singleAgentNote": "Apenas {{agent}}",
         "emptyModels": "Os modelos disponíveis são detetados após iniciar sessão",
-        "emptyList": "Clique em \"Adicionar fornecedor\" abaixo para ligar a sua primeira fonte de modelos",
+        "emptyList": "Clique em «Adicionar fornecedor» abaixo para ligar a sua primeira fonte de modelos",
         "emptyModelsConnected": "Ligado — a detetar modelos disponíveis. Se continuar vazio, tente novamente dentro de momentos.",
         "discoveryFailed": {
           "network": "Não é possível contactar este fornecedor, pelo que a lista de modelos está indisponível. Verifique as definições de rede ou proxy e tente novamente.",
@@ -5252,7 +5252,7 @@
         "headingOffline": "Offline neste dispositivo",
         "noteOffline": "Não está a receber mensagens. O token e a associação do bot continuam guardados neste computador — pode voltar a ficar online a qualquer momento.",
         "headingConflict": "Em utilização noutro dispositivo",
-        "noteConflict": "Apenas um dispositivo pode receber mensagens para o mesmo bot, e este continua a disputar esse acesso. Coloque o outro dispositivo offline abaixo para que este assuma a receção, ou escolha \"Ficar offline aqui\" para deixar o acesso ao outro.",
+        "noteConflict": "Apenas um dispositivo pode receber mensagens para o mesmo bot, e este continua a disputar esse acesso. Coloque o outro dispositivo offline abaixo para que este assuma a receção, ou escolha «Ficar offline aqui» para deixar o acesso ao outro.",
         "botLabel": "Conta do bot",
         "ownerLabel": "O meu ID de utilizador"
       },
@@ -5406,7 +5406,7 @@
       },
       "groups": {
         "title": "Participação em grupos",
-        "hint": "Os grupos que o bot já viu aparecem aqui. \"Ativo\" = lê todas as mensagens e decide por si próprio se deve participar (cada mensagem consome tokens).",
+        "hint": "Os grupos que o bot já viu aparecem aqui. «Ativo» = lê todas as mensagens e decide por si próprio se deve participar (cada mensagem consome tokens).",
         "empty": "Ainda não há grupos. Adicione o bot a um grupo e este aparecerá aqui assim que alguém falar.",
         "error": {
           "load": "Não foi possível carregar os grupos do Telegram. Verifique a ligação e tente novamente.",
@@ -6293,7 +6293,7 @@
           "installFailed": "Falha ao instalar cua-driver",
           "permissionFailed": "As permissões do Computer Use não estão concluídas",
           "permissionPending": "Conclua a autorização no Mac. Se o estado não for atualizado, volte a verificar.",
-          "permissionSettingsOpened": "As definições de permissões do sistema foram abertas. Após conceder as permissões, volte e clique em \"Verificar novamente\".",
+          "permissionSettingsOpened": "As definições de permissões do sistema foram abertas. Após conceder as permissões, volte e clique em «Verificar novamente».",
           "permissionSettingsMonitoring": "As definições de permissões do sistema foram abertas. Conclua as permissões e o estado será atualizado automaticamente.",
           "openPermissionSettingsFailed": "Falha ao abrir as definições de permissões do sistema"
         }
@@ -6532,11 +6532,11 @@
           "ownerTitle": "Parar o relay neste computador?",
           "ownerDescription": "Os dispositivos que aderiram serão desligados e informados de que o relay foi parado. Este computador volta ao relay da Cindy.",
           "memberTitle": "Voltar ao relay da Cindy?",
-          "memberDescription": "Este computador sai de \"{{name}}\" e utiliza o relay da Cindy. Para voltar a aderir, peça uma nova ligação de partilha.",
+          "memberDescription": "Este computador sai de «{{name}}» e utiliza o relay da Cindy. Para voltar a aderir, peça uma nova ligação de partilha.",
           "sharedOwnerTitle": "Voltar ao relay da Cindy?",
           "sharedOwnerDescription": "Este computador sai de «{{name}}» e usa o relay da Cindy; os seus dispositivos que aderiram através dele também são desligados. Para voltar a usá-lo, peça uma nova partilha.",
           "serverTitle": "Voltar ao relay da Cindy?",
-          "serverDescription": "O relay \"{{name}}\" continua em execução no seu servidor e os dispositivos que aderiram continuam a poder comunicar através dele. Pode voltar a mudar este computador a qualquer momento."
+          "serverDescription": "O relay «{{name}}» continua em execução no seu servidor e os dispositivos que aderiram continuam a poder comunicar através dele. Pode voltar a mudar este computador a qualquer momento."
         },
         "errors": {
           "INVALID_LINK": "A ligação de partilha ou o endereço não é válido.",
@@ -6816,7 +6816,7 @@
           "addProject": "Adicionar projeto",
           "defaultWorkspaceChip": "Predefinido: {{name}}",
           "defaultWorkspaceAria": "Escolha o projeto predefinido para as tarefas enviadas",
-          "defaultWorkspaceRadioAria": "Definir \"{{name}}\" como projeto predefinido",
+          "defaultWorkspaceRadioAria": "Definir «{{name}}» como projeto predefinido",
           "defaultWorkspaceRowHint": "O projeto selecionado é o predefinido: as conversas do Telegram, Feishu / Lark, X e Discord que não escolheram um projeto executam as suas tarefas aí.",
           "defaultProjectTag": "Predefinido",
           "defaultProjectFullAccessWarning": "O projeto predefinido «{{name}}» tem Acesso total: uma @mention de qualquer grupo é executada nele com acesso total.",
@@ -6879,7 +6879,7 @@
           "rebind": "Voltar a associar",
           "removeAria": "Desassociar este espaço de trabalho",
           "removeConfirmTitle": "Desassociar {{team}}",
-          "removeConfirmDescription": "Após a desassociação, o espaço de trabalho do Slack \"{{team}}\" deixa de poder enviar tarefas para este dispositivo. Pode voltar a autorizá-lo e associá-lo a qualquer momento.",
+          "removeConfirmDescription": "Após a desassociação, o espaço de trabalho do Slack «{{team}}» deixa de poder enviar tarefas para este dispositivo. Pode voltar a autorizá-lo e associá-lo a qualquer momento.",
           "removeDisplacedConfirmDescription": "Esta associação foi assumida por outro dispositivo. Removê-la apenas elimina esta linha da lista local.",
           "removeConfirm": "Desassociar",
           "cancelPending": "Cancelar",
@@ -8212,7 +8212,7 @@
         "saveFailed": "Falha ao guardar as definições de atalhos",
         "notBindable": "Esta combinação de teclas não pode ser utilizada",
         "systemReserved": "Reservada pelo sistema operativo",
-        "conflict": "Entra em conflito com \"{{name}}\"",
+        "conflict": "Entra em conflito com «{{name}}»",
         "voiceConflict": "Entra em conflito com o atalho de entrada de voz",
         "composerVoiceConflict": "Entra em conflito com o atalho de entrada de voz. Altere o atalho de envio do editor de mensagens ou o atalho de entrada de voz.",
         "menuAccelerator": "Esta combinação não pode ser registada como atalho de menu",
@@ -8745,15 +8745,15 @@
           "empty": "Não há entradas de plugins neste mercado",
           "skippedEntries": "Foram ignoradas {{count}} entradas de plugins inválidas",
           "unreadableEntries": "{{count}} entradas de plugins estão temporariamente ilegíveis; atualize para tentar novamente",
-          "addedReceipt": "Adicionado \"{{name}}\" com {{count}} plugins encontrados",
-          "refreshedReceipt": "Atualizado \"{{name}}\" com {{count}} plugins encontrados",
+          "addedReceipt": "Adicionado «{{name}}» com {{count}} plugins encontrados",
+          "refreshedReceipt": "Atualizado «{{name}}» com {{count}} plugins encontrados",
           "emptyWithSkippedEntries": "Não foram encontrados plugins utilizáveis porque todas as entradas listadas foram ignoradas. Verifique os tipos de fonte, os diretórios dos plugins e as entradas do manifesto.",
           "localBadge": "Local",
           "defaultRef": "Branch predefinida",
           "neverSynced": "Nunca sincronizado",
           "refresh": "Atualizar",
           "remove": "Remover",
-          "removeConfirmTitle": "Remover o mercado \"{{name}}\"?",
+          "removeConfirmTitle": "Remover o mercado «{{name}}»?",
           "removeConfirmDescription": "Os plugins deste mercado deixarão de ser listados. Os plugins instalados são mantidos.",
           "close": "Fechar",
           "add": "Adicionar mercado",
@@ -8778,7 +8778,7 @@
             "structureLabelEntry": "Entrada do plugin",
             "structureNote": "O manifesto pode estar numa destas localizações:",
             "manifestTitle": "Formato do manifesto",
-            "manifestBody": "name é a identidade única do mercado (após o adicionar, é gerido por este nome). Cada source na matriz plugins aponta para um diretório de plugin dentro do repositório através de um caminho relativo; o formato de objeto {\"source\": \"local\", \"path\": \"…\"} também é suportado.",
+            "manifestBody": "name é a identidade única do mercado (após o adicionar, é gerido por este nome). Cada source na matriz plugins aponta para um diretório de plugin dentro do repositório através de um caminho relativo; o formato de objeto {\"source\": \"local\", \"path\": «…»} também é suportado.",
             "sourceTitle": "Formatos de fonte",
             "sourceBody": "Fontes aceites: formato abreviado GitHub owner/repo, URLs Git completos (https / ssh / git@) e caminhos de pastas locais (~ suportado). A referência Git aceita uma branch, etiqueta ou commit; deixe em branco para a branch predefinida. Os caminhos esparsos (um por linha) extraem apenas os subdiretórios listados — útil para repositórios grandes.",
             "authTitle": "Repositórios privados",
@@ -8848,7 +8848,7 @@
       "enableAria": "Ativar {{name}}",
       "uninstall": "Desinstalar",
       "uninstallConfirm": {
-        "title": "Desinstalar \"{{name}}\"?",
+        "title": "Desinstalar «{{name}}»?",
         "description": "O painel e as capacidades serão removidos. A posição no esquema é mantida e restaurada se o instalar novamente.",
         "cancel": "Cancelar"
       },
@@ -8862,14 +8862,14 @@
         "groupSeparator": ", "
       },
       "toast": {
-        "installed": "\"{{name}}\" instalado",
-        "uninstalled": "\"{{name}}\" desinstalado",
-        "updated": "\"{{name}}\" atualizado para v{{version}}",
-        "reapproved": "\"{{name}}\" restaurado",
-        "exported": "Ficheiro .cindy de \"{{name}}\" exportado",
-        "exportFailed": "Não foi possível exportar \"{{name}}\" — tente novamente",
-        "projectDisabled": "\"{{name}}\" desativado neste projeto",
-        "projectEnabled": "\"{{name}}\" segue agora a definição global neste projeto"
+        "installed": "«{{name}}» instalado",
+        "uninstalled": "«{{name}}» desinstalado",
+        "updated": "«{{name}}» atualizado para v{{version}}",
+        "reapproved": "«{{name}}» restaurado",
+        "exported": "Ficheiro .cindy de «{{name}}» exportado",
+        "exportFailed": "Não foi possível exportar «{{name}}» — tente novamente",
+        "projectDisabled": "«{{name}}» desativado neste projeto",
+        "projectEnabled": "«{{name}}» segue agora a definição global neste projeto"
       },
       "panelError": {
         "crashed": "Este plugin falhou",
@@ -9051,12 +9051,12 @@
         "nodeSecretDetail": "Cindy guarda-a encriptada e injeta-a apenas durante a execução dos métodos de Worker declarados abaixo. O programa Node recebe o texto simples e pode devolvê-lo, registá-lo, guardá-lo ou expô-lo de outra forma ao código do plugin no navegador ou a parâmetros de Agent. Instale apenas plugins em que confia.",
         "nodeResident": "O programa Node pode permanecer em execução em segundo plano",
         "nodeResidentDetail": "É executado enquanto o plugin está ativo e para quando este é desativado, atualizado ou desinstalado, ou quando Cindy é encerrado.",
-        "tool": "Ferramenta \"{{name}}\"",
-        "toolAutoApprove": "O Agent pode executar a ferramenta \"{{name}}\" sem confirmação",
+        "tool": "Ferramenta «{{name}}»",
+        "toolAutoApprove": "O Agent pode executar a ferramenta «{{name}}» sem confirmação",
         "toolAutoApproveDetail": "Quando o Agent chama esta ferramenta, ela é executada de imediato, sem pedir confirmação nem rever cada chamada.",
         "command": "Comando de conversa ${{command}}",
-        "panelLeft": "Painel \"{{title}}\" · apresentado na barra lateral",
-        "panelTab": "Painel \"{{title}}\" · abre dentro da página Plugins",
+        "panelLeft": "Painel «{{title}}» · apresentado na barra lateral",
+        "panelTab": "Painel «{{title}}» · abre dentro da página Plugins",
         "mainView": "Pode adicionar uma entrada “{{title}}” à navegação esquerda de Cindy",
         "mainViewDetail": "Ao abri-la, é apresentada a vista principal na sandbox do plugin, sem conceder acesso a ficheiros, rede ou credenciais.",
         "taskView": "Página de tarefa “{{title}}” · abre na barra lateral da tarefa",
@@ -9119,13 +9119,13 @@
         "libraryPersistDetail": "Recebe uma área de armazenamento gerida por Cindy para o seu trabalho (telas, imagens, bases de dados), sem a quota normal de dados dos plugins. Todas as operações de ficheiros e bases de dados são executadas pelo anfitrião; o plugin só usa caminhos relativos dentro da sua própria biblioteca e não pode tocar nos seus outros ficheiros. Pode também pedir a Cindy para mostrar um ficheiro da biblioteca no Finder ou no Explorer, ou abrir a caixa de diálogo Guardar como do sistema para que escolha o destino de uma cópia; cancelar Guardar como não copia nada. Pode também escrever uma imagem bitmap PNG na área de transferência do sistema sem caixa de diálogo de confirmação; isto substitui o conteúdo atual da área de transferência. Desinstalar o plugin não elimina estes dados; a eliminação exige uma confirmação separada nas definições de Cindy.",
         "networkHost": "Acede ao destino de rede {{host}}",
         "networkHosts": "Destinos de rede",
-        "networkSecret": "Precisa de uma credencial sua: \"{{name}}\"",
+        "networkSecret": "Precisa de uma credencial sua: «{{name}}»",
         "networkSecretGhostInputDetail": "Recolhida pela interface de definições do próprio plugin — a página do plugin vê o valor no momento da introdução. Em seguida, é entregue ao anfitrião num único passo para armazenamento encriptado; depois de guardada, o plugin nunca a pode voltar a ler, e o anfitrião injeta-a apenas nos domínios que declara.",
-        "networkSecretIdentity": "Usará o seu email de início de sessão como credencial \"{{name}}\"",
+        "networkSecretIdentity": "Usará o seu email de início de sessão como credencial «{{name}}»",
         "networkSecretIdentityDetail": "O valor provém do email da conta com sessão iniciada, sendo obtido e injetado pelo anfitrião no momento do pedido; não precisa de preencher nada. O plugin pode ler este email para mostrar a identidade atual na sua interface de definições.",
-        "networkSecretGhCli": "Dará preferência ao seu início de sessão local no GitHub CLI para a credencial \"{{name}}\"",
+        "networkSecretGhCli": "Dará preferência ao seu início de sessão local no GitHub CLI para a credencial «{{name}}»",
         "networkSecretGhCliDetail": "O anfitrião lê o token de início de sessão local de gh apenas quando necessário e injeta-o apenas em pedidos à API do GitHub; o código do plugin não pode ler nem guardar o token. Se gh não estiver disponível, pode configurar um Personal Access Token alternativo nas definições do plugin.",
-        "networkSecretOrganizationIdentity": "Usará a sua identidade de organização de Cindy como credencial \"{{name}}\"",
+        "networkSecretOrganizationIdentity": "Usará a sua identidade de organização de Cindy como credencial «{{name}}»",
         "networkSecretOrganizationIdentityDetail": "Cindy emite uma asserção de identidade de curta duração quando necessário, e o anfitrião envia-a apenas aos anfitriões de serviço explicitamente indicados. O código do plugin não pode ler nem guardar o token.",
         "networkSecretOauth": "Autorizar {{name}} ou usar uma conta ligada em {{host}}",
         "networkSecretOauthDetail": "O Cindy gere o início de sessão e os tokens. Pode autorizar uma nova conta ou escolher uma conta ligada compatível. Verifique os âmbitos abaixo; as contas ligadas mantêm as suas permissões existentes.",
@@ -9159,7 +9159,7 @@
         "browserExtensionPageControlDetail": "Apenas as extensões listadas abaixo podem ligar-se. A extensão também implementa o controlo de páginas: com “O meu navegador” selecionado, o Agent pode ler e operar páginas no navegador que está a utilizar.",
         "nodeChildSpawn": "O seu programa Node pode pedir ao anfitrião para iniciar subprocessos declarados no seu pacote",
         "nodeChildSpawnDetail": "Só podem ser iniciados ficheiros JS declarados dentro do próprio pacote (com as mesmas permissões locais do programa principal); não podem ser executados comandos arbitrários. Os subprocessos são encerrados em conjunto quando o plugin é desativado ou termina.",
-        "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
+        "skill": "Adiciona a Skill «{{name}}» aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um ficheiro de instruções que a IA carrega e segue como suas, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — não está limitada à sandbox deste plugin. Permanece disponível enquanto o plugin está ativo e é removida quando o plugin é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. Não é possível pré-visualizar aqui o texto completo da Skill — instale apenas plugins em que confia.",
         "routineEvents": "Eventos de automatização",
         "mcpUi": "Apresentar páginas interativas na conversa",
@@ -9260,7 +9260,7 @@
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de ligação",
-        "confirmMessage": "O plugin \"{{name}}\" solicita a adição do endereço de ligação {{host}}",
+        "confirmMessage": "O plugin «{{name}}» solicita a adição do endereço de ligação {{host}}",
         "confirmDetail": "Se permitir, este plugin pode aceder a este endereço através do anfitrião ({{label}}); a credencial que fornecer é inserida apenas nos pedidos para este endereço.",
         "confirmAllow": "Permitir",
         "confirmCancel": "Cancelar"
@@ -9275,7 +9275,7 @@
         "brokerRedirectPortRequired": "Este plugin declara um intermediário de autorização, mas não declara redirectPort na mesma configuração OAuth. Peça ao autor para adicionar o campo para que a etapa final da autorização possa regressar à porta de escuta local.",
         "sourceMissing": "Não foi possível encontrar o ficheiro selecionado",
         "generic": "A operação falhou. Tente novamente.",
-        "updateIdMismatch": "O ficheiro selecionado é o plugin \"{{id}}\", que não corresponde a este plugin \"{{expected}}\""
+        "updateIdMismatch": "O ficheiro selecionado é o plugin «{{id}}», que não corresponde a este plugin «{{expected}}»"
       },
       "detail": {
         "enable": "Ativar",
@@ -9552,7 +9552,7 @@
         "legacyReattachUnknownSource": "Estes dados de trabalho não têm registo de origem. Podem ter sido copiados manualmente ou por um script. Certifique-se de que pertencem a este plugin."
       },
       "updateConfirm": {
-        "title": "Atualizar o plugin \"{{name}}\"?",
+        "title": "Atualizar o plugin «{{name}}»?",
         "body": "Versão {{from}} → {{to}}. Esta operação substitui a versão instalada; o estado de ativação e a posição do painel são preservados.",
         "oauthClientChanged": "Esta atualização altera o cliente OAuth. As contas ligadas que utilizam a autorização integrada do plugin expirarão após a atualização e terão de ser ligadas novamente.",
         "confirm": "Atualizar",
@@ -9993,7 +9993,7 @@
         "deleteFailed": "Falha ao eliminar"
       },
       "deleteConfirm": {
-        "title": "Eliminar \"{{name}}\"?",
+        "title": "Eliminar «{{name}}»?",
         "message": "As novas sessões do Agent deixarão de carregar este MCP.",
         "confirm": "Eliminar"
       },
@@ -10332,7 +10332,7 @@
     "cancel": "Cancelar",
     "chooseMethod": "Escolher como iniciar sessão",
     "emailCode": "Iniciar sessão com um código por email",
-    "orgDetected": "{{email}} pertence a \"{{org}}\"",
+    "orgDetected": "{{email}} pertence a «{{org}}»",
     "enterpriseLogin": "Com a identidade profissional",
     "enterpriseVia": "SSO através de {{name}}",
     "personalLogin": "Com uma conta pessoal",
@@ -10353,7 +10353,7 @@
     "ssoOrgSubtitle": "Introduzir um ID de empresa, identificador de organização ou domínio verificado para continuar com o início de sessão único",
     "ssoOrgPlaceholder": "ID da empresa, identificador ou domínio",
     "ssoOrgHint": "Não sabe o seu identificador de acesso empresarial? Contacte o administrador",
-    "ssoOrgDetected": "Escolher uma ligação de início de sessão único para \"{{org}}\"",
+    "ssoOrgDetected": "Escolher uma ligação de início de sessão único para «{{org}}»",
     "realmConsent": {
       "personalTitle": "Início de sessão empresarial disponível",
       "personalBodyCn": "Empresa encontrada na China Continental.\nUtilize SSO ou continue com a sua conta.",
@@ -12686,7 +12686,7 @@
         "groupNew": "Mensagens novas do grupo",
         "threadRecent": "Mensagens recentes do tópico",
         "threadNew": "Mensagens novas do tópico",
-        "replyingTo": "Em resposta a \"{{name}}\": {{text}}",
+        "replyingTo": "Em resposta a «{{name}}»: {{text}}",
         "filesOutsideWorkingDir": "Os ficheiros fora do diretório de trabalho não foram anexados.",
         "modelFallback": "O modelo selecionado não está neste computador, por isso esta resposta usa {{model}}.",
         "modelFallbackUnnamed": "O modelo selecionado não está neste computador, por isso esta resposta usa um modelo disponível aqui.",
@@ -15478,11 +15478,11 @@
       "noTextContent": "(sem conteúdo de texto)",
       "orcaRowAria": "Mensagem de colaboração em fila de {{sender}}",
       "schedulerRowAria": "Mensagem de tarefa de automatização em fila de {{sender}}",
-      "sessionRowAria": "Mensagem em fila da sessão \"{{sender}}\"",
+      "sessionRowAria": "Mensagem em fila da sessão «{{sender}}»",
       "sessionSenderFallback": "Outra sessão",
-      "pluginRowAria": "Mensagem em fila do plugin \"{{sender}}\"",
+      "pluginRowAria": "Mensagem em fila do plugin «{{sender}}»",
       "pluginSenderFallback": "Plugin",
-      "botRowAria": "Mensagem em fila do amigo \"{{sender}}\"",
+      "botRowAria": "Mensagem em fila do amigo «{{sender}}»",
       "dragAria": "Arrastar a mensagem em fila {{index}} para reordenar",
       "steerAction": "Orientar",
       "steerRunningTip": "Encaminhar esta mensagem para a tarefa em curso sem a interromper; será tratada assim que a ação atual terminar",
@@ -16387,14 +16387,14 @@
       "switchingClaudeSubscription": "A mudar para Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Não foi possível mudar para Claude.ai ou repetir esta sessão: {{msg}}",
       "codexAppServerRetired": "A ligação ao Codex perdeu-se e o pedido em curso foi interrompido. Podes continuar nesta sessão.",
-      "codexAuthMissing": "Ainda não foi iniciada sessão no Codex remoto (401 Unauthorized). Clique em \"Sincronizar autenticação\" para enviar as credenciais locais do Codex para o diretório base do Cindy Codex remoto e tente novamente.",
+      "codexAuthMissing": "Ainda não foi iniciada sessão no Codex remoto (401 Unauthorized). Clique em «Sincronizar autenticação» para enviar as credenciais locais do Codex para o diretório base do Cindy Codex remoto e tente novamente.",
       "codexAuthMissingLocal": "Não foi possível autenticar a ligação «{{provider}}» neste computador. Verifique o estado de início de sessão nas definições e volte a esta sessão depois de restabelecer a ligação.",
       "codexSessionExpired": "A ligação à OpenAI precisa de ser atualizada. Volte a ligar o ChatGPT para continuar; o {{appName}} não irá terminar a sessão do Codex CLI do sistema nem pedir que volte a ligar outras origens de modelos.",
-      "codexAuthSynced": "Autenticação sincronizada. Clique em \"Tentar novamente\" para reenviar.",
+      "codexAuthSynced": "Autenticação sincronizada. Clique em «Tentar novamente» para reenviar.",
       "syncAuth": "Sincronizar autenticação",
       "syncAuthSyncing": "A sincronizar…",
       "syncAuthTitle": "Enviar credenciais locais do Codex para o diretório base do Cindy Codex remoto",
-      "syncAuthSuccess": "Sincronizado — clique em \"Tentar novamente\" para reenviar",
+      "syncAuthSuccess": "Sincronizado — clique em «Tentar novamente» para reenviar",
       "syncAuthFailed": "Falha na sincronização: {{msg}}",
       "syncAuthDaemonRestartFailed": "Credenciais enviadas, mas o daemon antigo não reiniciou — volte a ligar ao remoto antes de tentar novamente",
       "invalidEncryptedContent": "O fornecedor atual não consegue ler parte do histórico. Volte ao fornecedor original ou continue numa nova sessão.",
@@ -16408,7 +16408,7 @@
       "forkStripOversizedHistoryTitle": "Criar uma nova tarefa após remover imagens incorporadas demasiado grandes",
       "codexSessionExpiredLogin": "Voltar a ligar o ChatGPT",
       "codexSessionReconnected": "O ChatGPT está novamente ligado. Clique em «Tentar novamente» para continuar.",
-      "networkUnreachable": "Erro de rede: o serviço está temporariamente inacessível. Clique em \"Tentar novamente\" para repetir.",
+      "networkUnreachable": "Erro de rede: o serviço está temporariamente inacessível. Clique em «Tentar novamente» para repetir.",
       "networkUnreachableNoRetry": "Erro de rede: o serviço está temporariamente inacessível.",
       "networkAutoRetrying": "Erro de rede — a tentar novamente automaticamente…",
       "networkReconnecting": "Ligação interrompida — a restabelecer ligação ({{attempt}}/{{maxAttempts}})…",
@@ -17086,26 +17086,26 @@
       "attachmentSourceMissing": "Não é possível guardar o anexo porque o ficheiro de origem já não existe",
       "attachmentSaveFailed": "Não é possível guardar o anexo. Verifique as permissões da pasta de destino e tente novamente",
       "automationSent": "Enviado por automatização",
-      "automationSentNamed": "Enviado pela automatização \"{{name}}\"",
+      "automationSentNamed": "Enviado pela automatização «{{name}}»",
       "automationViewTask": "Ver tarefa de automatização",
       "sessionSent": "Enviado por outra sessão",
-      "sessionSentNamed": "Enviado pela sessão \"{{name}}\"",
+      "sessionSentNamed": "Enviado pela sessão «{{name}}»",
       "sessionViewSource": "Ver sessão de origem",
-      "botSentNamed": "Enviado pelo amigo \"{{name}}\"",
-      "groupThreadSent": "Enviado por \"{{name}}\" num tópico de \"{{group}}\"",
-      "groupRequestSent": "Do grupo \"{{group}}\" · {{name}}",
+      "botSentNamed": "Enviado pelo amigo «{{name}}»",
+      "groupThreadSent": "Enviado por «{{name}}» num tópico de «{{group}}»",
+      "groupRequestSent": "Do grupo «{{group}}» · {{name}}",
       "orcaFromLead": "Mensagem do Lead",
       "orcaFromWorker": "Mensagem do Worker",
       "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
-      "orcaFromWorkerNamed": "Mensagem do Worker \"{{role}}\"",
+      "orcaFromWorkerNamed": "Mensagem do Worker «{{role}}»",
       "hookChannelFrom": "De {{channel}}",
-      "deviceSentMobileNamed": "Enviado do telemóvel \"{{name}}\"",
+      "deviceSentMobileNamed": "Enviado do telemóvel «{{name}}»",
       "deviceSentMobile": "Enviado do telemóvel",
-      "deviceSentDesktopNamed": "Enviado do computador \"{{name}}\"",
+      "deviceSentDesktopNamed": "Enviado do computador «{{name}}»",
       "deviceSentDesktop": "Enviado do computador",
       "deviceViewSettings": "Ver em Os meus dispositivos",
       "deviceRemoved": "Este dispositivo foi removido",
-      "pluginSentNamed": "Enviado pelo plugin \"{{name}}\"",
+      "pluginSentNamed": "Enviado pelo plugin «{{name}}»",
       "pluginSent": "Enviado por plugin",
       "pluginViewDetail": "Ver plugin",
       "sourceIds": {
@@ -17267,7 +17267,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "O proprietário colocou esta partilha em pausa para si, pelo que estes modelos não podem ser usados até ser retomada. Mude para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Esta partilha já não está disponível (o proprietário removeu-a ou o utilizador saiu dela). Mude para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "O fornecedor partilhado está temporariamente indisponível. O computador do proprietário pode estar offline ou a partilha pode estar desativada por agora. Tente mais tarde ou mude para outro modelo para continuar.",
-      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Esta é uma partilha antiga e não pode ser usada enquanto \"Usar apenas Agent-Net\" estiver ativado. Desative esta opção para continuar ou mude para outro modelo.",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Esta é uma partilha antiga e não pode ser usada enquanto «Usar apenas Agent-Net» estiver ativado. Desative esta opção para continuar ou mude para outro modelo.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "As contas disponíveis para este modelo atingiram o limite de utilização. Mude de modelo ou continue quando a quota for reposta.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo do fornecedor pode executar esta tarefa neste momento. Podem estar offline, em pausa, num período de espera ou sem este modelo. Verifique o grupo na página Acesso remoto e partilha deste fornecedor.",
       "REMOTE_AGENT_GROUP_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde que uma tarefa em curso termine ou aumente o limite nas definições do fornecedor.",
@@ -17379,7 +17379,7 @@
     },
     "credentialSwitchWait": {
       "waiting": "Está em execução outra tarefa do Codex num fornecedor de modelos diferente. Esta mensagem será enviada automaticamente com o fornecedor selecionado para esta sessão quando essa tarefa terminar.",
-      "waitingForNamed": "\"{{titles}}\" está em execução num fornecedor de modelos diferente. Esta mensagem será enviada automaticamente com o fornecedor selecionado para esta sessão quando essa tarefa terminar.",
+      "waitingForNamed": "«{{titles}}» está em execução num fornecedor de modelos diferente. Esta mensagem será enviada automaticamente com o fornecedor selecionado para esta sessão quando essa tarefa terminar.",
       "cancel": "Cancelar",
       "cancelTitle": "Parar de esperar e remover esta mensagem"
     },
@@ -17418,7 +17418,7 @@
       "mailRemoveAttachment": "Remover {{name}}",
       "mailUpdated": "Rascunho atualizado (só de leitura)",
       "mailLegacy": "Histórico de rascunhos (só de leitura)",
-      "taskAutoArchived": "\"{{title}}\" arquivada",
+      "taskAutoArchived": "«{{title}}» arquivada",
       "taskAutoArchivedUndo": "Desfazer",
       "taskAutoArchivePending": "Será arquivada ao sair desta tarefa",
       "taskAutoArchiveBlockedDirty": "«{{title}}» não foi arquivada automaticamente: há alterações não submetidas no espaço de trabalho",
@@ -17428,7 +17428,7 @@
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
-      "fused": "\"{{name}}\" falhou repetidamente ao responder; o bloqueio está em pausa (apenas observação)",
+      "fused": "«{{name}}» falhou repetidamente ao responder; o bloqueio está em pausa (apenas observação)",
       "processing": "Plugin a processar…",
       "viewOriginal": "Ver original",
       "viewGhostCard": "Ver cartão do plugin"
@@ -17450,10 +17450,10 @@
       "infoActionCheckProvider": "Se persistir em vários turnos, verifique o estado da quota do fornecedor de modelos ou o encaminhamento do gateway."
     },
     "ghostNotify": {
-      "secretSaved": "Credencial \"{{name}}\" guardada",
+      "secretSaved": "Credencial «{{name}}» guardada",
       "oauthConnected": "Autorizado — ligado como {{label}}",
       "oauthConnectedNoLabel": "Autorizado — conta ligada",
-      "connectionAdded": "Endereço de ligação para \"{{label}}\" adicionado"
+      "connectionAdded": "Endereço de ligação para «{{label}}» adicionado"
     },
     "ghostPreview": {
       "opened": "Foi aberta uma página de pré-visualização"
@@ -18804,7 +18804,7 @@
       "createFailed": "Falha ao criar: {{message}}",
       "deleteFile": {
         "title": "Eliminar ficheiro",
-        "description": "Eliminar \"{{name}}\"? Esta ação não pode ser anulada.",
+        "description": "Eliminar «{{name}}»? Esta ação não pode ser anulada.",
         "confirm": "Eliminar",
         "cancel": "Cancelar"
       },
@@ -18895,7 +18895,7 @@
       },
       "archiveSession": {
         "title": "Arquivar sessão",
-        "description": "\"{{title}}\" será arquivado e removido da lista. Pode restaurá-lo na vista de arquivados.",
+        "description": "«{{title}}» será arquivado e removido da lista. Pode restaurá-lo na vista de arquivados.",
         "confirm": "Arquivar",
         "cancel": "Cancelar",
         "failed": "Falha ao arquivar. Tente novamente.",
@@ -18904,8 +18904,8 @@
       },
       "confirmSwitchAway": {
         "title": "O ficheiro atual tem alterações por guardar",
-        "descriptionSwitchFile": "\"{{path}}\" não está guardado. Mudar para outro ficheiro irá descartar as alterações por guardar.",
-        "descriptionCloseTab": "\"{{path}}\" não está guardado. Fechar irá descartar o conteúdo por guardar.",
+        "descriptionSwitchFile": "«{{path}}» não está guardado. Mudar para outro ficheiro irá descartar as alterações por guardar.",
+        "descriptionCloseTab": "«{{path}}» não está guardado. Fechar irá descartar o conteúdo por guardar.",
         "saveAndSwitch": "Guardar e mudar",
         "save": "Guardar",
         "tertiary": "Não guardar",
@@ -19148,7 +19148,7 @@
       "removeProject": {
         "menu": "Remover do projeto",
         "confirmTitle": "Remover da automatização do projeto?",
-        "confirmDescription": "Remove \"{{name}}\" de .cindy/automations/schedules.json. Após o commit, isto afeta todos os colaboradores.",
+        "confirmDescription": "Remove «{{name}}» de .cindy/automations/schedules.json. Após o commit, isto afeta todos os colaboradores.",
         "confirm": "Remover",
         "demote": "Remover e manter cópia pessoal",
         "demoteSuccess": "Removido do projeto e mantido como pessoal"
@@ -19258,7 +19258,7 @@
         "titleProjectCreate": "Nova automatização do projeto",
         "titleProjectEdit": "Editar automatização do projeto",
         "subtitle": "Escolha quando executar uma sessão de IA ou um script.",
-        "subtitleFromGhost": "\"{{name}}\" está a pedir-lhe para criar uma automatização. Escolha um modelo e guarde para a ativar.",
+        "subtitleFromGhost": "«{{name}}» está a pedir-lhe para criar uma automatização. Escolha um modelo e guarde para a ativar.",
         "save": "Guardar",
         "create": "Criar",
         "saveAria": "Guardar automatização",
@@ -19305,8 +19305,8 @@
           "usage_read": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de computadores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições."
         },
         "capabilityWarn": {
-          "ghostMissing": "Requer o plugin \"{{name}}\", que não está instalado — esta capacidade irá falhar durante a execução",
-          "ghostAsleep": "Requer o plugin \"{{name}}\", que está desativado — esta capacidade irá falhar durante a execução"
+          "ghostMissing": "Requer o plugin «{{name}}», que não está instalado — esta capacidade irá falhar durante a execução",
+          "ghostAsleep": "Requer o plugin «{{name}}», que está desativado — esta capacidade irá falhar durante a execução"
         }
       },
       "fields": {
@@ -19601,7 +19601,7 @@
           "placeholder": "!12, #12, group/project!12 ou uma ligação",
           "hint": "Escreva !número para merge request, #número para issue, ou cole uma ligação.",
           "required": "Introduza o merge request ou issue a acompanhar.",
-          "mrHint": "O GitLab não envia notificações. O Cindy lê o estado ao ritmo de \"Também verificar num agendamento\" (sem executar a tarefa), usando o glab deste computador ou a conta ligada no plugin do GitLab.",
+          "mrHint": "O GitLab não envia notificações. O Cindy lê o estado ao ritmo de «Também verificar num agendamento» (sem executar a tarefa), usando o glab deste computador ou a conta ligada no plugin do GitLab.",
           "mrPluginHint": "O suplemento GitLab verifica este pedido de fusão a cada minuto, incluindo novos commits, comentários, aprovações e resultados de pipeline.",
           "issueHint": "As alterações deste issue chegam por um webhook do GitLab. Os eventos de comentário não distinguem merge requests de issues, por isso só contam criar, editar, fechar e reabrir o issue.",
           "issuePluginHint": "O plugin do GitLab verifica este issue a cada minuto, incluindo novos comentários.",
@@ -19729,10 +19729,10 @@
       "renameFailed": "Falha ao mudar o nome: {{error}}",
       "deleteFailed": "Falha ao eliminar: {{error}}",
       "restartFailed": "Falha ao reiniciar: {{error}}",
-      "pluginDraftIgnoredFormOpen": "\"{{name}}\" pediu para criar uma automatização, mas já existe um formulário aberto. As suas alterações foram mantidas — guarde-o ou feche-o e, depois, acione novamente o pedido."
+      "pluginDraftIgnoredFormOpen": "«{{name}}» pediu para criar uma automatização, mas já existe um formulário aberto. As suas alterações foram mantidas — guarde-o ou feche-o e, depois, acione novamente o pedido."
     },
     "deleteDialog": {
-      "title": "Eliminar a automatização \"{{name}}\"?",
+      "title": "Eliminar a automatização «{{name}}»?",
       "titleFallback": "Eliminar automatização?",
       "description": "Os acionamentos futuros serão interrompidos. Escolha o que fazer com as sessões já geradas por esta automatização.",
       "sessionCountPending": "A contar as sessões geradas…",
@@ -19759,7 +19759,7 @@
     },
     "confirm": {
       "delete": {
-        "title": "Eliminar a automatização \"{{name}}\"?",
+        "title": "Eliminar a automatização «{{name}}»?",
         "description": "Os acionamentos futuros serão interrompidos. O histórico de execuções existente será mantido. Esta ação não pode ser anulada.",
         "withInflight": "Esta automatização tem {{count}} execução(ões) em curso. A eliminação irá interrompê-las imediatamente e o trabalho em curso poderá perder-se. Continuar?",
         "confirm": "Eliminar",
@@ -19767,7 +19767,7 @@
         "cancel": "Cancelar"
       },
       "pause": {
-        "title": "Colocar a automatização \"{{name}}\" em pausa?",
+        "title": "Colocar a automatização «{{name}}» em pausa?",
         "withInflight": "Esta automatização tem {{count}} execução(ões) em curso. A pausa irá interrompê-las imediatamente e o trabalho em curso poderá perder-se. Continuar?",
         "confirm": "Pausar",
         "cancel": "Cancelar"
@@ -19812,7 +19812,7 @@
         "domain-radar": {
           "name": "Radar temático",
           "description": "Recolher periodicamente as últimas novidades sobre um tema que acompanha e apresentar um resumo crítico",
-          "prompt": "Recolher os últimos desenvolvimentos sobre \"{{topic}}\" das últimas 24 horas (à segunda-feira, abranger todo o fim de semana) e produzir um resumo crítico.\nRestrições:\n- Usar pesquisa na Web, cruzar várias fontes antes de confiar numa afirmação e citar a ligação da fonte para cada item\n- Dar preferência a desenvolvimentos relevantes (lançamentos, investigação, políticas, discussões de destaque); filtrar conteúdo promocional vazio e republicações\n- Para cada item, acrescentar uma avaliação de uma linha sobre a sua importância, em vez de apenas listar ligações\n- Quando a informação for escassa ou as fontes forem duvidosas, dizê-lo honestamente; nunca inventar",
+          "prompt": "Recolher os últimos desenvolvimentos sobre «{{topic}}» das últimas 24 horas (à segunda-feira, abranger todo o fim de semana) e produzir um resumo crítico.\nRestrições:\n- Usar pesquisa na Web, cruzar várias fontes antes de confiar numa afirmação e citar a ligação da fonte para cada item\n- Dar preferência a desenvolvimentos relevantes (lançamentos, investigação, políticas, discussões de destaque); filtrar conteúdo promocional vazio e republicações\n- Para cada item, acrescentar uma avaliação de uma linha sobre a sua importância, em vez de apenas listar ligações\n- Quando a informação for escassa ou as fontes forem duvidosas, dizê-lo honestamente; nunca inventar",
           "params": {
             "topic": {
               "label": "Tema a acompanhar",
@@ -19834,12 +19834,12 @@
         "weekly-work-draft": {
           "name": "Redator de relatório semanal",
           "description": "Compilar o trabalho desta semana a partir dos documentos no diretório de trabalho num rascunho de relatório",
-          "prompt": "Com base nas alterações desta semana a documentos, notas e trabalhos no diretório de trabalho, compilar um rascunho de relatório semanal.\nRestrições:\n- Usar como prova apenas conteúdo com vestígios reais de modificação no diretório de trabalho, citando os ficheiros\n- Organizar como \"Concluído esta semana / Em curso / Próxima semana / Requer coordenação\", de forma suficientemente concisa para entregar diretamente\n- Separar o progresso substancial das tarefas de rotina e destacar os resultados de valor\n- Deixar espaços reservados com notas onde o material for insuficiente, para o utilizador os preencher"
+          "prompt": "Com base nas alterações desta semana a documentos, notas e trabalhos no diretório de trabalho, compilar um rascunho de relatório semanal.\nRestrições:\n- Usar como prova apenas conteúdo com vestígios reais de modificação no diretório de trabalho, citando os ficheiros\n- Organizar como «Concluído esta semana / Em curso / Próxima semana / Requer coordenação», de forma suficientemente concisa para entregar diretamente\n- Separar o progresso substancial das tarefas de rotina e destacar os resultados de valor\n- Deixar espaços reservados com notas onde o material for insuficiente, para o utilizador os preencher"
         },
         "knowledge-freshness": {
           "name": "Verificação de atualização da base de conhecimento",
           "description": "Verificação mensal dos documentos do diretório de trabalho para detetar conteúdo desatualizado ou contraditório",
-          "prompt": "Verificar o estado dos documentos no diretório de trabalho e identificar conteúdo que precisa de atualização.\nRestrições:\n- Procurar informação desatualizada (datas antigas, ligações inativas, processos ou ferramentas obsoletos), contradições e duplicações\n- Citar o caminho do ficheiro e a localização de cada problema e explicar o raciocínio\n- Categorizar como sugestões de \"atualizar / unir / eliminar\" e produzir uma lista de revisão\n- Apresentar apenas o relatório; não modificar os documentos"
+          "prompt": "Verificar o estado dos documentos no diretório de trabalho e identificar conteúdo que precisa de atualização.\nRestrições:\n- Procurar informação desatualizada (datas antigas, ligações inativas, processos ou ferramentas obsoletos), contradições e duplicações\n- Citar o caminho do ficheiro e a localização de cada problema e explicar o raciocínio\n- Categorizar como sugestões de «atualizar / unir / eliminar» e produzir uma lista de revisão\n- Apresentar apenas o relatório; não modificar os documentos"
         }
       }
     },
@@ -19877,8 +19877,8 @@
       "secretMissing": "Os eventos são recusados até ser gerado um segredo.",
       "rotateFailed": "Não foi possível gerar o segredo. Os segredos só podem ser geridos no computador que executa esta tarefa.",
       "genericSender": "remetente",
-      "secretFillHint": "Introduza-o em \"{{field}}\" no {{sender}}.",
-      "secretPastePlaceholder": "Cole \"{{field}}\" do {{sender}}",
+      "secretFillHint": "Introduza-o em «{{field}}» no {{sender}}.",
+      "secretPastePlaceholder": "Cole «{{field}}» do {{sender}}",
       "secretSave": "Guardar segredo",
       "secretSaved": "Segredo guardado.",
       "secretSaveFailed": "Não foi possível guardar o segredo. Os segredos só podem ser geridos no computador que executa esta tarefa.",
@@ -20076,7 +20076,7 @@
         "publicToPrivateBody": "Esta issue ficará visível apenas para si. Os outros membros da equipa não a verão na lista nem na pesquisa.",
         "publicToPrivateConfirm": "Definir como privada",
         "publicToPrivateWithAssigneeTitle": "Confirmar alteração para privada?",
-        "publicToPrivateWithAssigneeBody": "Esta issue ficará visível apenas para si. Está atualmente atribuída a \"{{assignee}}\" — ao torná-la privada, o responsável será removido automaticamente.",
+        "publicToPrivateWithAssigneeBody": "Esta issue ficará visível apenas para si. Está atualmente atribuída a «{{assignee}}» — ao torná-la privada, o responsável será removido automaticamente.",
         "publicToPrivateWithAssigneeConfirm": "Definir como privada e remover responsável",
         "assigneeFallback": "alguém",
         "privateToPublicTitle": "Tornar esta issue pública?",
@@ -20108,7 +20108,7 @@
       "marked": "Marcada como duplicada",
       "bannerPrefix": "Esta issue é um duplicado de",
       "bannerSuffix": "",
-      "bannerTitleWrap": "\"{{title}}\"",
+      "bannerTitleWrap": "«{{title}}»",
       "checkPanel": {
         "ariaLabel": "Foram encontradas issues semelhantes",
         "close": "Fechar",
@@ -20151,7 +20151,7 @@
       "delete": "Eliminar",
       "deleteDialog": {
         "title": "Eliminar comentário?",
-        "description": "Após a eliminação, será apresentado o marcador \"Este comentário foi eliminado pelo autor\". Esta ação não pode ser anulada.",
+        "description": "Após a eliminação, será apresentado o marcador «Este comentário foi eliminado pelo autor». Esta ação não pode ser anulada.",
         "cancel": "Cancelar",
         "confirm": "Confirmar eliminação",
         "confirming": "A eliminar…"
@@ -21224,7 +21224,7 @@
       "discordFieldsRequired": "Bot Token e ID de utilizador do Discord são ambos obrigatórios",
       "discordOwnerUserIdFormat": "O ID de utilizador do Discord tem de ter entre 17 e 20 algarismos",
       "telegramFieldsRequired": "Bot Token e ID de utilizador do Telegram são ambos obrigatórios",
-      "telegramTokenFormat": "Formato de token inválido: é esperado o formato \"digits:secret\" gerado pelo BotFather",
+      "telegramTokenFormat": "Formato de token inválido: é esperado o formato «digits:secret» gerado pelo BotFather",
       "telegramOwnerUserIdFormat": "O ID de utilizador do Telegram tem de ser numérico",
       "dingtalkFieldsRequired": "Client ID e Client Secret são ambos obrigatórios"
     },
@@ -21258,11 +21258,11 @@
       "remoteCcBinaryMissingTitle": "Componente Claude Code não está pronto no dispositivo remoto",
       "remoteCodexBinaryMissingTitle": "Componente Codex não está pronto no dispositivo remoto",
       "remotePiBinaryMissingTitle": "Componente Pi não está pronto no dispositivo remoto",
-      "remoteAuthDescription": "Tem de concluir a configuração no dispositivo remoto \"{{device}}\" antes de poder iniciar uma sessão aqui. Configure-o nesse dispositivo e tente novamente.",
+      "remoteAuthDescription": "Tem de concluir a configuração no dispositivo remoto «{{device}}» antes de poder iniciar uma sessão aqui. Configure-o nesse dispositivo e tente novamente.",
       "remoteCodexNoSourceTitle": "Nenhuma fonte do Codex ligada no dispositivo remoto",
-      "remoteCodexNoSourceDescription": "\"{{device}}\" não tem nenhuma fonte de modelos ligada para o Codex, pelo que não é possível iniciar sessões a partir daqui. Abra {{appName}} nesse dispositivo, inicie sessão na OpenAI ou ligue outra fonte em Definições → Fornecedores e tente novamente.",
+      "remoteCodexNoSourceDescription": "«{{device}}» não tem nenhuma fonte de modelos ligada para o Codex, pelo que não é possível iniciar sessões a partir daqui. Abra {{appName}} nesse dispositivo, inicie sessão na OpenAI ou ligue outra fonte em Definições → Fornecedores e tente novamente.",
       "remoteCcNoSourceTitle": "Nenhuma fonte do Claude ligada no dispositivo remoto",
-      "remoteCcNoSourceDescription": "\"{{device}}\" não tem nenhuma fonte de modelos Claude ligada, pelo que não é possível iniciar sessões a partir daqui. Abra {{appName}} nesse dispositivo, ligue uma fonte em Definições → Fornecedores e tente novamente.",
+      "remoteCcNoSourceDescription": "«{{device}}» não tem nenhuma fonte de modelos Claude ligada, pelo que não é possível iniciar sessões a partir daqui. Abra {{appName}} nesse dispositivo, ligue uma fonte em Definições → Fornecedores e tente novamente.",
       "gotIt": "Compreendido"
     },
     "fileTypes": {
@@ -21597,7 +21597,7 @@
       "review": "Rever proposta",
       "fromConversation": "Sintetizada a partir da sessão atual",
       "openSession": "Abrir sessão de aprendizagem",
-      "continueHint": "Continue a conversar nesta sessão para rever a proposta; aplique-a através de \"Rever proposta\" quando estiver satisfeito"
+      "continueHint": "Continue a conversar nesta sessão para rever a proposta; aplique-a através de «Rever proposta» quando estiver satisfeito"
     },
     "review": {
       "ariaLabel": "Painel de revisão da proposta de Skill",
