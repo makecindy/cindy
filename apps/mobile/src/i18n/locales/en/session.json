@@ -503,7 +503,8 @@
     "worktreeUnsupported": "Cindy on your computer can't safely create worktrees. Turn worktree off to continue, or update Cindy on your computer.",
     "worktreeCreateFailed": "Failed to create worktree: {{message}}",
     "worktreeRecoveryStateFailed": "Could not save the worktree recovery state. Try again.",
-    "worktreeCleanupPending": "The previous worktree is still awaiting cleanup. Reconnect the device and try again."
+    "worktreeCleanupPending": "The previous worktree is still awaiting cleanup. Reconnect the device and try again.",
+    "createRejectedReturnToEdit": "Tap “Back to Edit” and send again. The worktree will be cleaned up safely."
   },
   "menu": {
     "moveToProject": "Move task",
