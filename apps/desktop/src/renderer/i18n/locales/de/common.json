@@ -12756,7 +12756,19 @@
         "failed": "Diese Aktion konnte nicht abgeschlossen werden. Versuche es erneut.",
         "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt."
       },
-      "externalBadge": "Extern"
+      "externalBadge": "Extern",
+      "links": {
+        "kind": {
+          "pull": "Pull Request",
+          "issue": "Issue",
+          "discussion": "Diskussion",
+          "commit": "Commit",
+          "file": "Datei",
+          "folder": "Ordner",
+          "release": "Release",
+          "repo": "Repository"
+        }
+      }
     },
     "joined": {
       "today": "Heute beigetreten",

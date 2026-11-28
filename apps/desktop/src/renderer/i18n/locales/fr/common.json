@@ -12858,7 +12858,19 @@
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter."
       },
       "memberCount_many": "{{count}} membres",
-      "externalBadge": "Externe"
+      "externalBadge": "Externe",
+      "links": {
+        "kind": {
+          "pull": "Pull request",
+          "issue": "Issue",
+          "discussion": "Discussion",
+          "commit": "Commit",
+          "file": "Fichier",
+          "folder": "Dossier",
+          "release": "Version",
+          "repo": "Dépôt"
+        }
+      }
     },
     "joined": {
       "today": "Arrivé aujourd'hui",

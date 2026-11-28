@@ -178,8 +178,10 @@ function ReadTailRow() {
   return <div aria-hidden {...{ [SHARE_EXCLUDE_ATTR]: '' }} className="h-5 shrink-0" />;
 }
 
-function BotGroupMessageText({ content, mentionLabels, members, mentions, serverBacked, authorKind, messageKey, onRichSend, sharing, readTail = false }: {
+function BotGroupMessageText({ content, mentionLabels, members, mentions, serverBacked, authorKind, messageKey, onRichSend, sharing, readTail = false, readableLinks = false }: {
   messageKey?: string;
+  /** Others' messages show bare URLs as short labels; my own keep the text as typed (bot-group-chat.md). */
+  readableLinks?: boolean;
   onRichSend?: (text: string) => Promise<boolean>;
   /** Reserve room for the read check at the end of the last line. */
   readTail?: boolean;
@@ -267,7 +269,7 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
       onPointerLeave={() => { if (ref.current) ref.current.style.cursor = ''; scheduleClose(); }}>
       <SessionQuickSendProvider value={authorKind === 'bot' ? sender : null}>
         {folded ? <InlineReferenceChip icon={<FileText aria-hidden />} label={t('newChat.pastedText.chipLabel', { lines: countPasteLines(content) })}
-          onClick={() => setTextPreview(true)} /> : <MarkdownRenderer workingDir="" content={content} allowPrivilegedLinks={false}
+          onClick={() => setTextPreview(true)} /> : <MarkdownRenderer workingDir="" content={content} allowPrivilegedLinks={false} readableBareLinks={readableLinks}
           renderRichAnswers={authorKind === 'bot'} streamFadeKey={messageKey} />}
       </SessionQuickSendProvider>
       {textPreview && <ToolPayloadLightbox payload={{ kind: 'text', title: t('newChat.pastedText.previewTitle'), text: content }}
@@ -747,7 +749,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                   {shareBody}
                   {!share && hasText ? (
                     <div className="min-w-0">
-                      <BotGroupMessageText sharing={sharing} authorKind={message.authorKind} messageKey={`group:${props.reactionGroupId ?? shareScope}:${message.id}`}
+                      <BotGroupMessageText sharing={sharing} authorKind={message.authorKind} readableLinks messageKey={`group:${props.reactionGroupId ?? shareScope}:${message.id}`}
                         onRichSend={!props.readOnly && !sharing ? props.onRichSend : undefined} content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} />
                     </div>
                   ) : null}

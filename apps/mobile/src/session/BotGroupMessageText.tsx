@@ -9,6 +9,7 @@ import { memo, useContext, useId, useCallback, useMemo, useRef, useState, type R
 import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
+import { describeExternalLink, externalLinkLabel } from '@cindy/maker-shared/external-link';
 import { HighlightedCodeText } from './HighlightedCodeText';
 import { MarkdownBlockCopyButton } from './MarkdownBlockCopyButton';
 import { MermaidDiagramWebView } from './mermaidWebView';
@@ -87,6 +88,21 @@ function inlineMathSubFontSize(baseFontSize: number): number {
   return typeScale.footnote;
 }
 
+function linkIsClickable(url: string, options: BodyOptions): boolean {
+  return Boolean(options.richContent) && options.interactive !== false && /^https?:\/\//i.test(url);
+}
+
+/**
+ * A tappable bare URL reads as the desktop's short form (`owner/repo#12`, site + short path).
+ * `github` marks GitHub objects, which desktop draws as inline chips; native inline spans only take
+ * a background (no radius or icon), so the phone uses the session-link chip fill instead.
+ */
+function readableBareLink(inline: Extract<MobileMarkdownInline, { type: 'link' }>, options: BodyOptions): { text: string; github: boolean } {
+  if (!linkIsClickable(inline.url, options) || (!inline.bare && inline.text !== inline.url)) return { text: inline.text, github: false };
+  const info = describeExternalLink(inline.url);
+  return info ? { text: externalLinkLabel(info), github: info.kind === 'github' } : { text: inline.text, github: false };
+}
+
 function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext, baseFontSize: number = typeScale.bodyLarge): ReactNode[] {
   const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
   const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
@@ -94,7 +110,8 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
   const runs = inlines.map(inline => {
     const mathSegments = inline.type === 'math' && options.richContent ? tokenizeInlineMath(inline.text) : null;
     const text = inline.type === 'image' ? inline.alt ? `[${inline.alt}]` : ''
-      : mathSegments ? mathSegments.map(segment => segment.text).join('') : inline.text;
+      : mathSegments ? mathSegments.map(segment => segment.text).join('')
+        : inline.type === 'link' ? readableBareLink(inline, options).text : inline.text;
     const start = offset;
     offset += text.length;
     return { inline, mathSegments, text, start, end: offset, excluded: ['code', 'link', 'image', 'math'].includes(inline.type) };
@@ -140,8 +157,9 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
       );
     }
     if (inline.type === 'link') {
-      const clickable = options.richContent && options.interactive !== false && /^https?:\/\//i.test(inline.url);
-      return <Span key={index} style={[textStyle, clickable && styles.link]}
+      const clickable = linkIsClickable(inline.url, options);
+      const chip = clickable && readableBareLink(inline, options).github;
+      return <Span key={index} style={[textStyle, clickable && styles.link, chip && styles.githubChip]}
         onPress={clickable ? () => { void Linking.openURL(inline.url).catch(() => undefined); } : undefined}>{text}</Span>;
     }
     // UITextView children inherit the root's style, not an enclosing span's.
@@ -342,6 +360,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontStyle: 'normal',
   },
   link: { textDecorationLine: 'underline' },
+  // Same fill as the session-link chip in task messages (MessageRenderer.sessionLinkChipText).
+  githubChip: { backgroundColor: colors.surfaceChip },
   inlineCode: { fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodyLarge, backgroundColor: colors.surfaceChip },
   quote: { borderLeftWidth: 2, borderLeftColor: colors.border, paddingLeft: spacing.md },
   quoteText: { color: colors.textSecondary },

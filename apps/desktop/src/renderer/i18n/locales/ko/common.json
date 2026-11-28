@@ -12710,7 +12710,19 @@
         "failed": "작업을 완료하지 못했습니다. 다시 시도하세요.",
         "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요."
       },
-      "externalBadge": "외부"
+      "externalBadge": "외부",
+      "links": {
+        "kind": {
+          "pull": "풀 리퀘스트",
+          "issue": "이슈",
+          "discussion": "토론",
+          "commit": "커밋",
+          "file": "파일",
+          "folder": "폴더",
+          "release": "릴리스",
+          "repo": "저장소"
+        }
+      }
     },
     "joined": {
       "today": "오늘 합류",
