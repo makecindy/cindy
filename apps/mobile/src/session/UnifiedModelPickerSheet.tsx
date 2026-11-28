@@ -16,6 +16,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { MobileProviderMarkProps } from "./MobileProviderMark";
 import type { AgentKind } from "@cindy/model-providers/types";
+import { isModelVisible } from "@cindy/model-providers/sections";
 import { listedSourceFolds, resolveStoredModelEntry, sameRunLocationProvider, type ProviderView, type UnifiedModelEntry } from "@cindy/model-providers";
 import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
@@ -597,6 +598,11 @@ export function UnifiedModelPickerSheet(
       boundGroup ? { ...keepModel, providerId: boundGroup.providerId } : undefined,
     [boundGroup, keepModel],
   );
+  const remoteVisibilityByDevice = useMemo(() => {
+    const map = new Map<string, Record<string, boolean> | undefined>();
+    for (const catalog of remoteCatalogs) map.set(catalog.deviceId, catalog.modelVisibilityOverrides);
+    return map;
+  }, [remoteCatalogs]);
   const entries = useMemo(
     () =>
       mobileUnifiedEntries(
@@ -609,6 +615,14 @@ export function UnifiedModelPickerSheet(
           : selectedDeviceId === null || shownMergedSourceId !== null
             ? keepModel
             : undefined,
+        (providerId, model, agent) =>
+          sourceRoutes.isModelVisible(providerId, model.id, agent, (member) => {
+            const visibility = member.agentDeviceId
+              ? remoteVisibilityByDevice.get(member.agentDeviceId)
+              : p.modelVisibilityOverrides;
+            return visibility === undefined
+              || isModelVisible(visibility[`${member.agent}:${member.providerId}:${member.model.id}`], member.model.defaultEnabled);
+          }),
       ),
     [
       displayProviders,
@@ -620,6 +634,8 @@ export function UnifiedModelPickerSheet(
       boundGroup,
       selectedDeviceId,
       shownMergedSourceId,
+      sourceRoutes,
+      remoteVisibilityByDevice,
     ],
   );
   /** Agent 下一条消息时所在的那台电脑上正在用的来源(那台在组里被收起时照样算出来,用来停在组那一项)。 */

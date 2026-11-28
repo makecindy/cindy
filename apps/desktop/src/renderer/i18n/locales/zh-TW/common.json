@@ -12211,6 +12211,17 @@
       "memberCount_other": "{{count}} 位成員",
       "nameLabel": "群聊名稱",
       "waitingConfirm": "{{name}}在等你確認",
+      "assistantDevice": {
+        "title": "群裡的 Cindy 在等你選電腦",
+        "onlyYou": "只有你看得到",
+        "request": "「{{request}}」選好電腦後就開始做。",
+        "requestUnknown": "選好電腦後就開始做這項請求。",
+        "requests_one": "你有 {{count}} 項請求在等，選好電腦後就開始做。",
+        "requests_other": "你有 {{count}} 項請求在等，選好電腦後就開始做。",
+        "remember": "之後你在本群組的請求都用這台電腦，可在群聊設定中更換。",
+        "cancel": "取消請求",
+        "continue": "繼續"
+      },
       "loadFailedTitle": "無法載入這個群聊",
       "loadFailedDescription": "Cindy 暫時讀不到這個群聊的訊息。你可以重試，或返回夥伴頁。",
       "unavailableTitle": "這個群聊已無法使用",

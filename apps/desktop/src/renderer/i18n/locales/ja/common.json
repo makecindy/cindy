@@ -12211,6 +12211,17 @@
       "memberCount_other": "メンバー {{count}} 人",
       "nameLabel": "グループ名",
       "waitingConfirm": "{{name}} があなたの確認を待っています",
+      "assistantDevice": {
+        "title": "グループの Cindy がコンピュータの選択を待っています",
+        "onlyYou": "あなただけに表示",
+        "request": "「{{request}}」はコンピュータを選ぶと始まります。",
+        "requestUnknown": "コンピュータを選ぶと、この依頼が始まります。",
+        "requests_one": "{{count}} 件の依頼が待機中です。コンピュータを選ぶと始まります。",
+        "requests_other": "{{count}} 件の依頼が待機中です。コンピュータを選ぶと始まります。",
+        "remember": "このグループでの今後の依頼も同じコンピュータを使います。グループの設定で変更できます。",
+        "cancel": "依頼を取り消す",
+        "continue": "続行"
+      },
       "loadFailedTitle": "このグループチャットを読み込めません",
       "loadFailedDescription": "Cindy は現在このグループチャットを読み込めません。再試行するか、仲間のページに戻ってください。",
       "unavailableTitle": "このグループチャットは利用できません",

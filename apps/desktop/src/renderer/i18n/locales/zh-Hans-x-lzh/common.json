@@ -12211,6 +12211,17 @@
       "memberCount_other": "{{count}} 人",
       "nameLabel": "群议之名",
       "waitingConfirm": "{{name}}候君确认",
+      "assistantDevice": {
+        "title": "群中 Cindy 待君择机",
+        "onlyYou": "唯君可见",
+        "request": "「{{request}}」既择机即行。",
+        "requestUnknown": "既择机即行此事。",
+        "requests_one": "君有 {{count}} 事待行，既择机即行。",
+        "requests_other": "君有 {{count}} 事待行，既择机即行。",
+        "remember": "此后君于本群之事皆用此机，可于群议之设更之。",
+        "cancel": "罢此事",
+        "continue": "续"
+      },
       "loadFailedTitle": "不能载此群议",
       "loadFailedDescription": "Cindy 暂不能读此群议之讯。君可再试，或归同伴页。",
       "unavailableTitle": "此群议已不可用",
