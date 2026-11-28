@@ -11,6 +11,7 @@ import { tipsSettings } from './TipsSection.settings-search';
  *   2. ChatEmbeddingCell — 启用聊天记录语义索引 (chat-history-embedder)
  *   3. MessageNavRailCell — 显示提问导航条 (默认关闭)
  *   4. WorktreeModelNamingCell — 用模型给新建 worktree 取名 (默认关闭)
+ *   5. LocalPathDropConfirmCell — 路径型文件拖拽先确认 (默认关闭)
  *
  * 新增 cell 用 SettingsRow, 或包一层 SettingsBlock 取得分割线。
  */
@@ -26,6 +27,7 @@ import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/sett
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 
 import { ChatEmbeddingCell } from './ChatEmbeddingCell';
+import { LocalPathDropConfirmCell } from './LocalPathDropConfirmCell';
 import { MessageNavRailCell } from './MessageNavRailCell';
 import { SilentEncryptedRetryCell } from './SilentEncryptedRetryCell';
 import { WorktreeModelNamingCell } from './WorktreeModelNamingCell';
@@ -76,6 +78,7 @@ export function TipsSection() {
         {additionalSettings.chatEmbedding.isVisible({ mode }) ? <ChatEmbeddingCell /> : null}
         <MessageNavRailCell />
         <WorktreeModelNamingCell />
+        <LocalPathDropConfirmCell />
       </SettingsCard>
     </SettingsSection>
   );

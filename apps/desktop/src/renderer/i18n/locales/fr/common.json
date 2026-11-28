@@ -1,4 +1,9 @@
 {
+  "attachmentPathConfirm": {
+    "title": "Ajouter les fichiers locaux de ce glisser-déposer ?",
+    "description": "Ce glisser-déposer provient de données texte, pas d’un glisser-déposer de fichiers système. Continuez uniquement si vous avez volontairement glissé ces fichiers :",
+    "askAgain": "Demander avant d’ajouter des fichiers locaux glissés"
+  },
   "antigravityVerification": {
     "title": "Validez votre compte Google",
     "note": "Scannez le code ou ouvrez la page Google. La tâche reprendra dès qu’Antigravity aura confirmé l’accès.",
@@ -1881,6 +1886,13 @@
     }
   },
   "settings": {
+    "localPathDropConfirm": {
+      "cell": {
+        "label": "Demander avant d’ajouter des fichiers locaux glissés",
+        "description": "Le texte glissé depuis une page web peut contenir des chemins locaux. Activé, Cindy demande avant de les lire ; désactivé, les fichiers sont ajoutés directement."
+      },
+      "toggleAria": "Demander avant d’ajouter des fichiers locaux glissés"
+    },
     "newChatDefaults": {
       "title": "Autorisation par défaut des nouvelles tâches"
     },

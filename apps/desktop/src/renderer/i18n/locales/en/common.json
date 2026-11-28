@@ -1,4 +1,9 @@
 {
+  "attachmentPathConfirm": {
+    "title": "Add local files from this drag?",
+    "description": "This drag came from text data, not a system file drag. Add only if you intentionally dragged these files:",
+    "askAgain": "Ask before adding dragged local files"
+  },
   "antigravityVerification": {
     "title": "Verify your Google account",
     "note": "Scan the code or open the Google page. This task continues when Antigravity confirms access.",
@@ -1843,6 +1848,13 @@
     }
   },
   "settings": {
+    "localPathDropConfirm": {
+      "cell": {
+        "label": "Ask before adding dragged local files",
+        "description": "Text dragged from a web page can contain local paths. When enabled, Cindy asks before reading them; when off, dragged files are added directly."
+      },
+      "toggleAria": "Ask before adding dragged local files"
+    },
     "newChatDefaults": {
       "title": "Default permission for new tasks"
     },

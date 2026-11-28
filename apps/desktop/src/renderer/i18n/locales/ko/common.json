@@ -1,4 +1,9 @@
 {
+  "attachmentPathConfirm": {
+    "title": "이 드래그의 로컬 파일을 추가할까요?",
+    "description": "이 드래그는 텍스트 데이터에서 왔으며 시스템 파일 드래그가 아닙니다. 추가할 파일을 확인하세요:",
+    "askAgain": "로컬 파일을 끌어올 때 확인"
+  },
   "antigravityVerification": {
     "title": "Google 계정 확인",
     "note": "QR 코드를 스캔하거나 Google 페이지를 열어 계정을 확인하세요. Antigravity에서 액세스를 확인하면 작업이 재개됩니다.",
@@ -1813,6 +1818,13 @@
     }
   },
   "settings": {
+    "localPathDropConfirm": {
+      "cell": {
+        "label": "로컬 파일을 끌어올 때 확인",
+        "description": "웹 페이지에서 끌어온 텍스트에도 로컬 경로가 포함될 수 있습니다. 켜면 읽기 전에 확인하고, 끄면 바로 추가합니다."
+      },
+      "toggleAria": "로컬 파일을 끌어올 때 확인"
+    },
     "newChatDefaults": {
       "title": "새 작업의 기본 권한"
     },

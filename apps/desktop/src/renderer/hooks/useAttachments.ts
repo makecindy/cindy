@@ -14,15 +14,20 @@
  *     is used for the input-area chip and persistent message rendering).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
+import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import type { ComposerFileMentionPayload } from '@/lib/composerMentionDrag';
 import { isDangerousAttachmentName } from '../../shared/attachmentSafety';
 import { readPluginUiEntries } from '@/cindy-brain/PluginUiContributions';
 import { processPluginUiAttachment } from '@/cindy-brain/pluginUiAttachments';
 import { assertPluginUiDraftWritable } from '@/cindy-brain/pluginUiContext';
+import {
+  getLocalPathDropConfirmEnabled,
+  setLocalPathDropConfirmEnabled,
+} from '@/hooks/useLocalPathDropConfirmPreference';
 import { insertComposerDocumentForRestore, plainTextToComposerDocument } from '@/lib/composerListDocument';
 
 const log = createLogger('UseAttachments');
@@ -125,7 +130,10 @@ interface AttachmentDraftScope {
 }
 
 /** Only this add event retains File objects; draft/history never stores them. */
-type AddedAttachmentSources = Uint8Array | ReadonlyMap<string, Blob>;
+type AddedAttachmentSources =
+  | Uint8Array
+  | ReadonlyMap<string, Blob>
+  | ((file: AttachedFile) => Promise<Uint8Array | Blob | null>);
 
 interface AttachmentOperationScope extends AttachmentDraftScope {
   sessionId: string | undefined;
@@ -213,6 +221,7 @@ export function cleanupRemovedCachedImage(file: Pick<AttachedFile, 'url'> | unde
  */
 export function useAttachments(sessionId?: string, draftKey?: string): UseAttachmentsReturn {
   const { t } = useTranslation();
+  const confirmDialog = useOptionalConfirmDialog();
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const attachmentsRef = useRef<AttachedFile[]>(attachments);
   const mountedRef = useRef(false);
@@ -335,7 +344,11 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       try {
         output = await processPluginUiAttachment(file, scope.sessionId ?? null, controller.signal, async () => {
           if (!bytes) {
-            const source = sources instanceof Uint8Array ? sources : sources.get(file.path);
+            const source = sources instanceof Uint8Array
+              ? sources
+              : typeof sources === 'function'
+                ? await sources(file)
+                : sources.get(file.path);
             if (!source) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
             bytes = source instanceof Uint8Array ? source : new Uint8Array(await source.arrayBuffer());
           }
@@ -554,12 +567,12 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
 
   const addRawFiles = useCallback(
     async (
+      operationScope: AttachmentOperationScope,
+      attachmentCountAtStart: number,
       rawFiles: DroppedRawFile[],
       earlyErrors: { name: string; reason: string }[],
+      pathSourceLoader?: (file: AttachedFile) => Promise<Uint8Array | Blob | null>,
     ) => {
-      const operationScope = attachmentOperationScopeRef.current;
-      const attachmentCountAtStart = attachmentsRef.current.length;
-
       // ── Step 2: split into known / unknown by extension/filename ──
       const knownRaw: DroppedRawFile[] = [];
       const unknownRaw: DroppedRawFile[] = [];
@@ -649,9 +662,12 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       const pluginSourceEntries: Array<[string, Blob]> = rawFiles.flatMap((raw) =>
         raw.file ? [[raw.path, raw.file] as [string, Blob]] : [],
       );
-      const pluginSources = pluginSourceEntries.length > 0
-        && readPluginUiEntries('composer.attachment').length
-        ? new Map<string, Blob>(pluginSourceEntries) : undefined;
+      const hasAttachmentProviders = readPluginUiEntries('composer.attachment').length > 0;
+      const pluginSources: AddedAttachmentSources | undefined = hasAttachmentProviders
+        ? (pluginSourceEntries.length > 0
+          ? new Map<string, Blob>(pluginSourceEntries)
+          : pathSourceLoader)
+        : undefined;
       const currentSessionId = operationScope.sessionId;
 
       for (const item of valid) {
@@ -779,7 +795,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
             }),
           ]);
         }
-        if (pluginSources && newAttachments.length > previousCount) {
+        if (pluginSources instanceof Map && newAttachments.length > previousCount) {
           const source = pluginSources.get(item.path);
           if (source) pluginSources.set(newAttachments[newAttachments.length - 1]!.path, source);
         }
@@ -793,6 +809,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   const addFiles = useCallback(
     async (fileList: FileList | readonly File[]) => {
       const operationScope = attachmentOperationScopeRef.current;
+      const attachmentCountAtStart = attachmentsRef.current.length;
       // Fresh attempt: clear stale rejections so the inline strip reflects only
       // this drop's failures.
       setRejections([]);
@@ -835,7 +852,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         }
         return;
       }
-      await addRawFiles(rawFiles, earlyErrors);
+      await addRawFiles(operationScope, attachmentCountAtStart, rawFiles, earlyErrors);
     },
     [addRawFiles, pushScopedRejections, t],
   );
@@ -848,10 +865,11 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   const addFilePaths = useCallback(
     async (paths: readonly string[], options?: AddFilePathsOptions) => {
       const operationScope = attachmentOperationScopeRef.current;
-      setRejections([]);
+      const attachmentCountAtStart = attachmentsRef.current.length;
       const rawFiles: DroppedRawFile[] = [];
       const earlyErrors: { name: string; reason: string }[] = [];
       const seen = new Set<string>();
+      const uniquePaths: string[] = [];
 
       for (const input of paths) {
         const filePath = input.trim();
@@ -861,15 +879,55 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
           : filePath;
         if (seen.has(key)) continue;
         seen.add(key);
+        uniquePaths.push(filePath);
+      }
 
+      if (uniquePaths.length === 0) return;
+      // A text/uri-list payload can be produced by any web page, so a path in
+      // it does not prove the user picked that local file. The optional setting
+      // asks before reading; the dialog itself can switch the setting off.
+      if (getLocalPathDropConfirmEnabled()) {
+        if (!confirmDialog) return;
+        const result = await confirmDialog.confirmWithCheckbox({
+          title: t('attachmentPathConfirm.title'),
+          description: t('attachmentPathConfirm.description'),
+          content: createElement(
+            'div',
+            { className: 'max-h-48 overflow-auto whitespace-pre-wrap break-all text-12' },
+            uniquePaths.join('\n'),
+          ),
+          checkboxLabel: t('attachmentPathConfirm.askAgain'),
+          checkboxDefaultChecked: true,
+          confirmText: t('commonUi.confirmDialog.confirm'),
+          cancelText: t('commonUi.confirmDialog.cancel'),
+        });
+        if (!result.ok || !isAttachmentDraftScopeActive(operationScope)) return;
+        if (!result.checked) setLocalPathDropConfirmEnabled(false);
+      }
+      setRejections([]);
+
+      const pathSourceLoader = readPluginUiEntries('composer.attachment').length > 0
+        ? async (file: AttachedFile) => {
+          const result = await window.electronAPI.readFileBytes({ filePath: file.path });
+          return result.bytes;
+        }
+        : undefined;
+
+      for (const filePath of uniquePaths) {
         let kind: 'share' | 'directory' | 'other' = 'other';
         try {
           kind = (await window.electronAPI.localDb.sessionShare.classifyPath({ path: filePath })).kind;
         } catch {
           // Classification is best-effort; let the attachment read report a real failure.
         }
+        if (!isAttachmentDraftScopeActive(operationScope)) return;
         if (kind === 'directory') {
-          if (options?.directories !== 'skip') addFolderPath(filePath);
+          if (
+            options?.directories !== 'skip'
+            && isAttachmentOperationScopeCurrent(operationScope)
+          ) {
+            addFolderPath(filePath);
+          }
           continue;
         }
 
@@ -894,7 +952,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         }
       }
 
-      if (!isDataOwnerGenerationCurrent(operationScope.dataOwner)) return;
+      if (!isAttachmentDraftScopeActive(operationScope)) return;
       if (rawFiles.length === 0) {
         if (earlyErrors.length > 0) {
           pushScopedRejections(
@@ -906,9 +964,22 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         }
         return;
       }
-      await addRawFiles(rawFiles, earlyErrors);
+      await addRawFiles(
+        operationScope,
+        attachmentCountAtStart,
+        rawFiles,
+        earlyErrors,
+        pathSourceLoader,
+      );
     },
-    [addFolderPath, addRawFiles, isDataOwnerGenerationCurrent, pushScopedRejections, t],
+    [
+      addFolderPath,
+      addRawFiles,
+      confirmDialog,
+      isAttachmentOperationScopeCurrent,
+      pushScopedRejections,
+      t,
+    ],
   );
 
   /**
