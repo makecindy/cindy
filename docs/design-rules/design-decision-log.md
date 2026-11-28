@@ -1463,3 +1463,11 @@ DESIGN.md 瘦身 4a 把下列历史说明从正文移到这里，原文逐字保
 - **§14.4 macOS 菜单栏额度填充动效**（现在在 [macos-menu-bar-quota.md](./macos-menu-bar-quota.md)）：`(owner request, 2026-10-16)`；`(registered 2026-11-11, maintainer ruling D-16)`；`(owner request, 2026-11-19)`
 - **§14.4 开始引导入场动效**（现在在 [first-run-guide.md](./first-run-guide.md)）：`(2026-11-11)`
 - **§14.4 Composer 通话 / 发送 / 停止动效**（现在在 [composer.md](./composer.md)）：`(owner-approved prototype, 2026-10-22)`；`(owner correction, 2026-10-29)`
+
+## 2026-11-29 · DESIGN.md 瘦身 4c：颜色登记搬出时移出的来源说明
+
+下列括号里的来源与日期说明，在颜色例外从 DESIGN.md 搬到登记文件时从正文移出，原文逐字记在这里。规则本身没有改。
+
+- **§2 Semantic & Accent：窄范围颜色例外**（现在在 [exceptions/color.md](./exceptions/color.md)）：`(owner decision 2026-10-31)` ×2；`(user decision 2026-11-11)`；`(2026-10-23)`；`(2026-09-20, refined 2026-09-21)`；`(finalized 2026-07-17)`；`(A-15)`；`(owner-approved 2026-09-08, extended 2026-09-09)`；`(owner approved the prototype)`；`(registered 2026-08-17)` ×2；`(registered 2026-10-30)`；`(registered 2026-10-26, owner-approved)`；`(registered 2026-11-20, maintainer ruling)`；`(2026-11-11)` ×2
+- **Semantic Exemption Colors (theme-invariant)**（现在在 [exceptions/color.md](./exceptions/color.md)）：`(2026-08-17)` ×3；`(finalized 2026-07-17)` ×4；`(registered 2026-11-11, A-14)`；`(2026-07-27)`；`(2026-09-29)`；`(2026-10-28)`；`(2026-09-08)`；`(2026-11-13)`；`(2026-08-06)`；`(user-approved 2026-11-09)`；`(user request, 2026-11-14)`
+- **15.4 Cross-Theme Exemptions (not covered by CINDY overrides)**（现在在 [exceptions/color.md](./exceptions/color.md)）：`(2026-07-17)`
