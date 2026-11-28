@@ -48,7 +48,11 @@ export function usePendingOutboxActions({
     }
     setQueueSelectedClientId(null);
     void mobileDurableOutbox.update(record, {
-      state: record.prepared && !record.retryAfterConfirmedMiss ? 'confirming' : 'queued', error: undefined,
+      state: 'queued',
+      error: undefined,
+      // A stored failure can predate the exact history check. The runner must
+      // prove absence on the original task before retrying the original ID.
+      ...(isDurableOutboxUnsent(record) ? {} : { retryAfterConfirmedMiss: true }),
     }).catch((err) => setError(formatRemoteError(err)));
   }, [deviceId, deviceName, findDurableOutboxRecord, outboxSessionAliveRef, router, sessionId, setError, setQueueSelectedClientId]);
   const removeOutboxItem = useCallback((clientId: string) => {

@@ -12,6 +12,7 @@ import { useDeviceLink, type DeviceLinkInvokeOptions } from "@/device-link/Devic
 import { parseSharedTaskPeer } from "@cindy/device-link";
 import { createMobileMakerTransport } from "@/device-link/mobileMakerTransport";
 import {
+  describeOutboxEnqueueRefusal,
   formatRemoteError,
   isAutoRecoveringRemoteError,
 } from "@/device-link/remoteStatus";
@@ -378,6 +379,7 @@ export function MobileOutboxBridge() {
         (error instanceof MobileSessionReferenceError &&
           error.code === "SESSION_REFERENCE_OFFLINE"),
       describe: formatRemoteError,
+      isEnqueueRefusal: (error) => describeOutboxEnqueueRefusal(error) !== undefined,
       confirmationMessage: i18n.t("session.outbox.confirmationRequired"),
       clearedMessage: i18n.t("session.outbox.taskCleared"),
     });

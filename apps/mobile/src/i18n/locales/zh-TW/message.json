@@ -287,6 +287,7 @@
     "pendingDelivery": "待送達",
     "pendingDeliveryHint": "訊息已儲存在手機上，正在等待電腦確認。",
     "waitingForComputer": "等電腦連上後傳送",
+    "waitingForPrevious": "等待前一則訊息",
     "waitingForNetwork": "等網路恢復後傳送",
     "queued": "排隊中",
     "retryImage": "重新上傳這張圖片",

@@ -62,6 +62,8 @@ export interface DurableOutboxDeliveryDeps {
   mediaFailed?(error: unknown): boolean;
   retryable(error: unknown): boolean;
   describe(error: unknown): string;
+  /** This rejection is known to precede acceptance of the enqueue RPC. */
+  isEnqueueRefusal?(error: unknown): boolean;
   confirmationMessage: string;
   clearedMessage: string;
 }
@@ -394,18 +396,18 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         || state === "pending" || state === "accepted";
       if (!resending && needsHistory && await confirmHistory() === 'handled') return;
       if (!current(record) || record.state === "failed") return;
-      if (state === "pending" || state === "accepted" || record.state === "host-owned") {
-        await update({ state: state === "pending" ? "confirming" : "failed", error: deps.confirmationMessage });
+      if (state === "pending") {
+        if (record.state !== "confirming") await update({ state: "confirming", error: undefined });
         return;
       }
+      if (state === "accepted" || record.state === "host-owned") return await holdForHistoryConfirmation();
       if (
         record.prepared &&
         (record.state === "sending" || record.state === "confirming") &&
         !record.refreshUploads &&
         !(record.retrySafe && projection.inputDeliveryVersion === 1)
       ) {
-        await update({ state: "failed", error: deps.confirmationMessage });
-        return;
+        return await holdForHistoryConfirmation();
       }
       if (record.refreshUploads && record.uploads.length) {
         const superseded = record.item.attachmentSlots.filter((attachment, slot): attachment is RemoteSerializedAttachment =>
@@ -484,6 +486,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         }
       };
       if (resending) assertResendCurrent();
+      const hadNeverEnqueued = isDurableOutboxUnsent(record);
       // This write precedes every external enqueue. Crash recovery therefore knows it must reconcile.
       await update({ state: "sending", enqueueStarted: true, error: undefined,
         ...(resending ? { retrySafe: false } : {}) });
@@ -512,6 +515,17 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           trace("send known boundary rejected", { client: record.item.clientId.slice(-8) });
           return;
         }
+        if (current(record) && deps.isEnqueueRefusal?.(error)) {
+          // A fresh refusal only describes its own attempt. If an earlier
+          // attempt may have landed, retain the original confirmation.
+          if (!hadNeverEnqueued && !resending) return await holdForHistoryConfirmation();
+          due.delete(id(record));
+          await update({
+            state: "failed", error: deps.describe(error), retryAfterConfirmedMiss: undefined,
+            enqueueStarted: !hadNeverEnqueued,
+          });
+          return;
+        }
         throw error;
       }
       if (!current(record)) return;
@@ -521,7 +535,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (durableEnqueue) await deps.accepted?.(record);
       await update(durableEnqueue
         ? { state: "host-owned", retryAfterConfirmedMiss: undefined, retrySafe: resending ? true : record.retrySafe }
-        : { state: "confirming", retryAfterConfirmedMiss: undefined, error: deps.confirmationMessage });
+        : { state: "confirming", retryAfterConfirmedMiss: undefined, error: undefined });
       attempts.delete(id(record));
       due.set(id(record), Date.now() + 1_000);
       stage('enqueue');
@@ -535,7 +549,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       });
     } catch (error) {
       if (!current(record)) return;
-      if (resending) {
+      if (resending || (record.state === "confirming" && !record.cancelRequested
+        && !record.retrySafe && !isDurableOutboxUnsent(record) && !deps.retryable(error))) {
         await holdForHistoryConfirmation().catch(() => undefined);
         return;
       }
@@ -607,8 +622,9 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           ];
         })
         .filter((r) => r.historyConfirmation !== 'unconfirmed' && !inFlight.has(id(r)) && deps.canRun(r)
-          && !(r.retryAfterConfirmedMiss && r.state === 'failed' && !r.cancelRequested)
-          && (r.historyConfirmation === 'requested' || (due.get(id(r)) ?? 0) <= Date.now()));
+          && !(r.state === 'failed' && !r.cancelRequested && (r.retryAfterConfirmedMiss || isDurableOutboxUnsent(r)))
+          && (r.historyConfirmation === 'requested' || (r.retryAfterConfirmedMiss && r.state === 'queued')
+            || (due.get(id(r)) ?? 0) <= Date.now()));
       // Round robin prevents one failed head starving peers.
       const capacity = Math.min(MAX_IN_FLIGHT - inFlight.size, candidates.length);
       for (let n = 0; n < capacity; n++) {

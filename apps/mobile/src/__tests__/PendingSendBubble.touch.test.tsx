@@ -82,7 +82,8 @@ vi.mock('@/session/sentAttachmentThumbStore', () => ({ getSentAttachmentThumbUri
   useSentAttachmentThumbsVersion: () => 0 }));
 vi.mock('react-i18next', () => ({ initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({ t: (key: string) => key === 'message.queue.deliveryUnconfirmed'
-    || key === 'message.queue.recheckDelivery' ? i18n.t(key) : key }) }));
+    || key === 'message.queue.recheckDelivery'
+    || key === 'message.queue.waitingForPrevious' ? i18n.t(key) : key }) }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }),
@@ -250,6 +251,37 @@ it('offers retry and delete on a failed send without opening it first, and re-up
   expect(removeOutbox).toHaveBeenCalledWith('a');
   expect(select).not.toHaveBeenCalled();
 });
+// Unit of the real bubble: persisted Host refusal is rendered in the
+// current language, with the existing failure actions and no recheck.
+it('displays the reason for a rejected send in the current language', async () => {
+  const previousLanguage = i18n.language;
+  try {
+    for (const [language, copy] of [
+      ['zh-CN', '这个任务当前无法接收消息。'],
+      ['en', 'This session cannot receive messages right now.'],
+    ]) {
+      await i18n.changeLanguage(language);
+      show({ actions: null, phase: 'failed', queueIndex: null, errorText: 'session is not active' });
+      expect(host.querySelector('[data-testid="pendingSend.error.a"]')?.textContent).toBe(copy);
+      expect(host.querySelector('[data-testid="pendingSend.outboxRetry.a"]')).not.toBeNull();
+      expect(host.querySelector('[data-testid="pendingSend.outboxRecheck.a"]')).toBeNull();
+    }
+  } finally {
+    await i18n.changeLanguage(previousLanguage);
+  }
+});
+it('shows a message held behind a local send in the waiting state', async () => {
+  const previousLanguage = i18n.language;
+  try {
+    await i18n.changeLanguage('zh-CN');
+    show({ actions: null, phase: 'waiting', waitingFor: 'previous', queueIndex: null });
+    expect(host.textContent).toContain('等待前一条消息');
+    expect(host.querySelector('[data-testid="pendingSend.reconnect.a"]')).toBeNull();
+    expect(host.querySelector('[data-testid="pendingSend.outboxRetry.a"]')).toBeNull();
+  } finally {
+    await i18n.changeLanguage(previousLanguage);
+  }
+});
 it('lets a real body link consume the pending tap before the frame commits', () => {
   show(); touch('Start'); touch('End');
   act(() => host.querySelector<HTMLElement>('[data-testid="link"]')!.click());
@@ -259,7 +291,7 @@ it('lets a real body link consume the pending tap before the frame commits', () 
 // UI unit regression with the real ledger, driver and task-page callback. The wire
 // cases cover Host persistence; this case makes the missing confirmation visible
 // and verifies that a tap changes only the read request for that same message.
-it('keeps a legacy miss under the original message and checks it again on tap', async () => {
+it.each(['recheck', 'retry-old-failure'] as const)('acts on the original message on %s', async (action) => {
   const previousLanguage = i18n.language;
   await i18n.changeLanguage('zh-CN');
   const storage = new Map<string, string>();
@@ -278,10 +310,12 @@ it('keeps a legacy miss under the original message and checks it again on tap', 
   });
   const first = pending('a', 'original message', 1);
   const next = pending('b', 'later message', 2);
-  await ledger.add({ ...first, state: 'confirming', enqueueStarted: true, prepared: { clientId: 'a' } as QueuedRemoteMessage });
+  await ledger.add({ ...first, state: action === 'recheck' ? 'confirming' : 'failed',
+    enqueueStarted: true, prepared: { clientId: 'a' } as QueuedRemoteMessage });
   await ledger.add(next);
   const projection = { ...EMPTY_INPUT_PROJECTION, sessionId: task };
   const history = vi.fn(async (_r: DurableOutboxRecord) => {
+    if (action === 'retry-old-failure') throw new DeviceLinkError('NOT_FOUND', 'Message does not exist');
     throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'old peer');
   });
   const legacyHistory = vi.fn<(r: DurableOutboxRecord) => Promise<boolean>>()
@@ -311,7 +345,8 @@ it('keeps a legacy miss under the original message and checks it again on tap', 
       steerQueueItem: steer, removeQueueItem: remove, moveQueueItem: move,
     });
     const items = buildPendingSendItems({
-      outbox: records.map(r => ({ ...outboxDisplayItem(r.item),
+      outbox: records.map(r => ({ ...outboxDisplayItem(r.state === 'failed'
+        ? outboxItemWithEnqueueFailure(r.item, r.error ?? 'old failure') : r.item),
         historyConfirmation: r.historyConfirmation, canCancel: !r.historyConfirmation })),
       queue: [], settling: [], editingClientId: null, hiddenClientIds: new Set(),
       sendingClientIds: new Set(), steeringClientIds: new Set(), presentationByClientId: new Map(),
@@ -324,6 +359,17 @@ it('keeps a legacy miss under the original message and checks it again on tap', 
     act(() => root.render(<Screen />));
     const messageRow = host.querySelector('[data-testid="pendingSend.row.a"]')!;
     expect(messageRow.textContent).toContain('original message');
+    if (action === 'retry-old-failure') {
+      expect(enqueue).not.toHaveBeenCalled();
+      const retry = messageRow.querySelector<HTMLElement>('[data-testid="pendingSend.outboxRetry.a"]')!;
+      await act(async () => retry.click());
+      expect(enqueue).not.toHaveBeenCalled();
+      await act(async () => delivery.run());
+      expect(history).toHaveBeenLastCalledWith(expect.objectContaining({ item: first.item }), true);
+      expect(legacyHistory).not.toHaveBeenCalled();
+      expect(enqueue.mock.calls.map(([r]) => r.prepared?.clientId)).toEqual(['a']);
+      return;
+    }
     expect(messageRow.textContent).toContain('发送结果未确认');
     expect(messageRow.querySelector('[data-testid="pendingSend.outboxRemove.a"]')).toBeNull();
     expect(messageRow.querySelector('[data-testid="pendingSend.outboxRetry.a"]')).toBeNull();

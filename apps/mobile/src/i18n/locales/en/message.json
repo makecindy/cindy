@@ -287,6 +287,7 @@
     "pendingDelivery": "Pending delivery",
     "pendingDeliveryHint": "Saved on this phone. Waiting for confirmation from the computer.",
     "waitingForComputer": "Sends when your computer is back",
+    "waitingForPrevious": "Waiting for the previous message",
     "waitingForNetwork": "Sends when you’re back online",
     "queued": "Queued",
     "retryImage": "Upload this image again",

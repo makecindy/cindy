@@ -1247,13 +1247,18 @@ const hostProviderGroups = createProviderGroupStore({
 const hostProviderBindings = createProviderGroupBindings(hostProviderGroups);
 // The send path and the Device Link create entry refuse provider group tasks with this one check.
 const assertProviderExecutionSupported = createHostProviderExecutionCheck({ hostProviderBindings, hostProviderGroups });
-const readSessionForRun = async (sessionId: string, { forHandoff = false } = {}) => {
+const readSessionForRun = async (sessionId: string, { forHandoff = false, forUserInput = false } = {}) => {
   const db = getDbClient();
   const rows = await db.drizzle.select().from(sessionTable)
     .where(eq(sessionTable.id, sessionId)).limit(1);
   const row = rows[0];
   if (forHandoff && (!row || row.status !== 'active' || row.hiddenAt != null || row.source === 'bot')) return null;
-  if (!row || row.status !== 'active') throw new Error('session is not active');
+  if (forUserInput && (!row || row.status === 'deleted' || (row.status === 'archived' && row.hiddenAt != null))) {
+    throwIpcError('NOT_FOUND', `Session ${sessionId} not found`);
+  }
+  if (!row || (row.status !== 'active' && !(forUserInput && row.status === 'archived'))) {
+    throw new Error('session is not active');
+  }
   const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
     .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
   if (forHandoff && botLink) return null;
@@ -1465,7 +1470,7 @@ const hostHistoryReader = createHostHistoryReader({
 // as the desktop's maker:send and INPUT_ENQUEUE (agent/user-input.ts).
 const enqueueUserInput = createUserInputEnqueue({
   getOwner: getCurrentDbClientSnapshot,
-  enqueue: (sessionId: string, input: unknown) => inputQueue.enqueue(sessionId, input),
+  enqueue: (sessionId: string, input: unknown, options: unknown) => inputQueue.enqueue(sessionId, input, undefined, options),
 });
 
 // A task's model and engine changes, with the desktop's steps (runtime-selection.ts): the shared

@@ -1,8 +1,10 @@
 import { holdError, releaseFailure } from './profile-hold.ts';
+import { withSessionRouteLock } from '../../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
-import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
+import { assertHostTaskExecutionSupported } from './send-preflight.ts';
 import { hostCoordinatorDeps } from './coordinator-deps.ts';
 import { createHostAutoResume } from './auto-resume.ts';
 import { createHostProductTurn } from './product-turn.ts';
@@ -51,13 +53,14 @@ export function holdTaskForProfile(coordinator, id) {
   coordinator.setExecutionPaused(id, true);
 }
 const errorText = error => error instanceof Error ? error.message : String(error);
+const NEEDS_ARCHIVE_RESTORE_LOCK = Symbol('needs archive restore lock');
 
 /** Only composition fields cross the browser trust boundary. Host receipts,
  * scheduler origins, hook bypasses and remote-device identity never do. */
 function composeInput(item, stored, handoff) {
-  if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
+  if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throwIpcError('INVALID_PARAMS', 'clientId is required');
   const text = typeof item.text === 'string' ? item.text : item.content;
-  if (typeof text !== 'string' || !text.trim()) throw new Error('message text is required');
+  if (typeof text !== 'string' || !text.trim()) throwIpcError('INVALID_PARAMS', 'message text is required');
   // Picker changes already persist through their own entries (set-model, set-effort,
   // set-permission-mode and the like). Input fields are snapshots for presentation,
   // not another authority over task settings.
@@ -79,7 +82,7 @@ function composeInput(item, stored, handoff) {
       fastMode: stored.fastMode ?? undefined, planMode: stored.planModeEnabled ?? undefined } };
   for (const key of ['files', 'mentions', 'sessionRefs', 'agentReferences']) {
     if (item[key] !== undefined) {
-      if (!Array.isArray(item[key])) throw new Error(`invalid ${key}`);
+      if (!Array.isArray(item[key])) throwIpcError('INVALID_PARAMS', `invalid ${key}`);
       result[key] = item[key];
     }
   }
@@ -197,6 +200,19 @@ export function createInputQueue(deps) {
     function holdIfHeld(id) {
       if (profileHold) holdTaskForProfile(coordinator, id);
     }
+    function readExpectedClearBoundary(options) {
+      if (!options || typeof options !== 'object' || !Object.hasOwn(options, 'expectedClearBoundaryMs')) return;
+      const expected = normalizeAgentInputClearBoundaryMs(options.expectedClearBoundaryMs);
+      if (expected === undefined) throwIpcError('INVALID_PARAMS', 'expectedClearBoundaryMs must be null or a non-negative finite number');
+      return expected;
+    }
+    function assertExpectedClearBoundary(id, expected) {
+      if (expected === undefined) return;
+      const current = coordinator.getClearBoundaryMs(id);
+      if (expected !== current) throwIpcError('PRECONDITION_FAILED',
+        `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expected ?? 'null'}; currentClearBoundaryMs=${current ?? 'null'}`);
+    }
+
     /** The execution pause this module lifts after a write stays while the profile is held. */
     function unpause(id) {
       if (!profileHold) coordinator.setExecutionPaused(id, false);
@@ -584,37 +600,60 @@ export function createInputQueue(deps) {
       }),
       // The optional third argument is supplied only by the in-process handoff adapter.
       // HTTP/IPC input still goes through composeInput's untrusted-field filter.
-      enqueue(id, item, handoff) {
+      async enqueue(id, item, handoff, userInputOptions) {
         const admission = stateFor(id).admission;
-        return command(id, async state => {
+        const ordinaryInput = !handoff && userInputOptions !== undefined && !getDeviceLinkInvokeContext()?.sharedTask;
+        const generation = ordinaryInput ? coordinator.getGeneration(id) : undefined;
+        const expectedClearBoundary = readExpectedClearBoundary(userInputOptions);
+        const enqueue = routeLockHeld => command(id, async state => {
           if (coordinator.hasKnownClientId(id, item?.clientId)) {
             handoff?.onQueueAcceptanceStarted?.();
             await flushed(id);
             return api.projection(id);
           }
           const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
+          assertCurrent();
           if (known?.has(item?.clientId)) {
             handoff?.onQueueAcceptanceStarted?.();
             return api.projection(id);
           }
-          refuseWhileHeld();
-          const stored = handoff ? await deps.readSession(id, { forHandoff: true }) : await deps.readSession(id);
+          const assertAdmitted = () => {
+            assertCurrent();
+            refuseWhileHeld();
+            if (closing || state.closed || admission !== state.admission
+                || (generation !== undefined && !coordinator.isGenerationCurrent(id, generation))) {
+              throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
+            }
+            assertExpectedClearBoundary(id, expectedClearBoundary);
+          };
+          assertAdmitted();
+          const stored = await deps.readSession(id, handoff ? { forHandoff: true }
+            : ordinaryInput ? { forUserInput: true } : undefined);
           if (handoff && !stored) {
             assertCurrent();
             return { ok: false, errorCode: 'NOT_FOUND', message: 'Session does not exist' };
           }
+          const restore = ordinaryInput && stored.status === 'archived';
+          if (restore) {
+            if (!routeLockHeld) return NEEDS_ARCHIVE_RESTORE_LOCK;
+            assertHostTaskExecutionSupported(stored);
+            deps.assertProviderExecutionSupported?.(id, stored.providerId, stored.sdkSessionId);
+          }
           const queued = composeInput(item, stored, handoff);
           if (handoff) bindTaskActionInput(id, queued, handoff.taskActionDeliveryGuard);
           const prepared = await prepareAttachments(id, queued, admission);
-          if (handoff) {
-            await handoff.taskActionDeliveryGuard();
-            assertCurrent();
-            refuseWhileHeld();
-            if (state.admission !== admission) throw new Error('input cancelled before acceptance');
-          }
-          const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
           let accepted = false;
           try {
+            if (handoff) await handoff.taskActionDeliveryGuard();
+            assertAdmitted();
+            const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
+            if (restore) {
+              await deps.restoreArchivedSessionForSend(id, {
+                assertAdmitted,
+                signal: AbortSignal.any([routeStartup.signal, coordinator.getInputAbortSignal(id, generation)]),
+              });
+              assertAdmitted();
+            }
             state.lastUserActionAt = Date.now();
             coordinator.setExecutionPaused(id, true);
             // The coordinator may mutate the queue before reporting a failure.
@@ -631,6 +670,11 @@ export function createInputQueue(deps) {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
           }
         });
+        const result = await enqueue(false);
+        if (result !== NEEDS_ARCHIVE_RESTORE_LOCK) return result;
+        // Delete takes the same route lock, then drains this command chain. A
+        // command must finish before we wait for the lock, never the reverse.
+        return withSessionRouteLock(id, () => enqueue(true));
       },
       /**
        * Capture the input epoch before any asynchronous preparation. The stamp is
@@ -638,23 +682,13 @@ export function createInputQueue(deps) {
        */
       assertRemoteInputControlBoundary(id, opts) {
         const expectedInputGeneration = coordinator.getGeneration(id);
-        const hasExpectedBoundary = opts && typeof opts === 'object'
-          && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
-        const expectedBoundary = hasExpectedBoundary
-          ? normalizeAgentInputClearBoundaryMs(opts.expectedClearBoundaryMs)
-          : undefined;
-        if (hasExpectedBoundary && expectedBoundary === undefined) {
-          throwIpcError('INVALID_PARAMS', 'expectedClearBoundaryMs must be null or a non-negative finite number');
-        }
+        const expectedClearBoundary = readExpectedClearBoundary(opts);
         return command(id, () => {
           if (!coordinator.isGenerationCurrent(id, expectedInputGeneration)) {
             throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
           }
           const currentBoundary = coordinator.getClearBoundaryMs(id);
-          if (hasExpectedBoundary && expectedBoundary !== currentBoundary) {
-            throwIpcError('PRECONDITION_FAILED',
-              `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expectedBoundary ?? 'null'}; currentClearBoundaryMs=${currentBoundary ?? 'null'}`);
-          }
+          assertExpectedClearBoundary(id, expectedClearBoundary);
           return {
             expectedClearBoundaryMs: currentBoundary,
             expectedInputGeneration,

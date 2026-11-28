@@ -60,7 +60,7 @@ export interface DurableOutboxRecord {
   historyConfirmed?: boolean;
   /** A legacy peer could not confirm this send. Only a read may release it. */
   historyConfirmation?: OutboxHistoryConfirmation;
-  /** Failed awaits a Retry tap; queued may retry once; sending is an uncertain retry. */
+  /** Failed awaits a Retry tap; queued must verify absence before one retry; sending is an uncertain retry. */
   retryAfterConfirmedMiss?: true;
   error?: string;
   cancelRequested?: boolean;
