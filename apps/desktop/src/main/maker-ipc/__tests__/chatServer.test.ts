@@ -521,6 +521,22 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.urls.some(url=>url.includes('/read'))).toBe(false);
   });
 
+  // Unit: an old @ original no longer depends on the bounded quote search.
+  // Read the exact message, without a timeline fetch or a read acknowledgement.
+  it('reads one current original for a historical mention on demand', async () => {
+    const originalId = execution.source_message_id;
+    const originalPath = `/conversations/${roomId}/messages/${originalId}`;
+    fixture.handle.mockImplementation(route => route === '/me'
+      ? { body: { actor: { id: selfId }, capabilities: { personalMask: 1, personalMentionHistory: 1 } } }
+      : route === originalPath ? { body: { id: originalId, deleted: false, author: { kind: 'human', name: 'Peer' },
+        content: [{ type: 'text', text: 'Current old message' }] } } : response(route));
+    expect(await service.chatServer!.mentions!({ groupId: roomId, originalId })).toMatchObject({
+      ok: true, original: { messageId: originalId, text: 'Current old message', deleted: false },
+    });
+    expect(fixture.handle.mock.calls.filter(([route]) => route.startsWith(`/conversations/${roomId}`))
+      .map(([route]) => route)).toEqual([originalPath]);
+  });
+
   // Unit: exercise the real transport and read.changed path. The former notification-only
   // tests had no persistent group attention consumer, so read/mute/reconnect could not be observed.
   it('projects one group reminder, follows server reads and mute, and restores reconnect history without alerting it', async () => {
@@ -2659,7 +2675,8 @@ describe('Chat Server result delivery and refresh', () => {
         await ask(4, 'Please check');
         expect(fixture.download.mock.calls).toEqual([2, 1].map(n => [roomId, file(n).mediaId]));
         expect(dispatched()[0]!.attachments).toEqual([downloaded(1)]);
-        expect(dispatched()[0]!.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        expect(notices()[0]?.[2].content[0].data).toEqual({ code: 'ATTACHMENTS_DOWNLOAD_FAILED' });
+        expect(dispatched()[0]!.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_DOWNLOAD_FAILED').replaceAll('{{name}}', 'Cindy'));
         expect(notices()).toHaveLength(1);
       });
 
@@ -2690,7 +2707,7 @@ describe('Chat Server result delivery and refresh', () => {
         expect(input.attachments).toEqual(expected);
         expect(fixture.download).toHaveBeenCalledTimes(expected.length);
         expect(notices()).toHaveLength(count === 1 ? 0 : 1);
-        if (count === 20) expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        if (count === 20) expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_LIMIT_REACHED').replaceAll('{{name}}', 'Cindy'));
       });
 
       it.each(['deleted', 'forbidden', 'missing', 'gone', 'other-thread', 'future'] as const)('does not deliver an unavailable quoted original: %s', async state => {
@@ -2723,7 +2740,7 @@ describe('Chat Server result delivery and refresh', () => {
         expect(input?.attachments).toEqual([downloaded(2)]);
         expect(verifiedOwnerRequestText(input.autoReviewUserText)).toContain('@Cindy read the lessons');
         expect(notices()).toHaveLength(failure === 'text-only' ? 0 : 1);
-        if (failure !== 'text-only') expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        if (failure !== 'text-only') expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_DOWNLOAD_FAILED').replaceAll('{{name}}', 'Cindy'));
         expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
       });
 
@@ -6554,6 +6571,15 @@ describe('Chat Server result delivery and refresh', () => {
       // An older page is history being scrolled, not the reader catching up.
       await service.chatServer!.thread({ groupId: roomId, rootId, before: 3, markRead: true });
       expect(writes()).toHaveLength(1);
+    });
+
+    it('exposes the server main readSequence on group detail when reads are present', async () => {
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [...shares, ...replies, root].sort((a, b) => Number(b.seq) - Number(a.seq)), cursor: '8', reads: [{ thread_key: 'main', read_seq: '2' }] } };
+        return threadResponse(route, method, body);
+      });
+      const detail = await service.getGroup(roomId);
+      expect(detail.ok && detail.group.readSequence).toBe('2');
     });
 
     // bot-group-chat.md §10「话题未读与提示」: following is the reader's own switch, kept by the server.

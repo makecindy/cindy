@@ -304,3 +304,38 @@ it('reports an IM domain as unavailable on host-settings v1 when a plugin engine
   );
   expect(await getHostSettings(caller, 'imFeishu')).toMatchObject({ status: 'unavailable', revision: null });
 });
+
+it('preserves modelGroup on effort-only IM updates and clears modelGroup on default reset', async () => {
+  const { writeModelGroupsConfig } = await import('../../model-groups/store.js');
+  writeModelGroupsConfig({ routes: [{ id: 'coding', name: 'Coding', strategy: 'order', candidates: [] }] });
+  expect(await updateHostSettings(caller, await request('imFeishu', {
+    set: {
+      agentKind: 'codex',
+      modelGroup: 'coding',
+      codex: { providerId: route.providerId, modelId: route.modelId, effort: 'high' },
+    },
+  }))).toMatchObject({ saved: true });
+  expect(await getHostSettings(caller, 'imFeishu')).toMatchObject({
+    status: 'ready',
+    value: { modelGroup: 'coding' },
+  });
+
+  // Effort-only change on the same concrete route keeps modelGroup.
+  expect(await updateHostSettings(caller, await request('imFeishu', {
+    set: { codex: { providerId: route.providerId, modelId: route.modelId, effort: 'low' } },
+  }))).toMatchObject({ saved: true });
+  expect(await getHostSettings(caller, 'imFeishu')).toMatchObject({
+    status: 'ready',
+    value: { modelGroup: 'coding', codex: { effort: 'low' } },
+  });
+
+  // Clearing default keys (even without explicitly naming modelGroup) clears modelGroup.
+  const beforeReset = await getHostSettings(caller, 'imFeishu');
+  expect(beforeReset.status).toBe('ready');
+  const defaultKeys = Object.keys((beforeReset as { defaults: Record<string, unknown> }).defaults);
+  expect(await updateHostSettings(caller, await request('imFeishu', { clear: defaultKeys }))).toMatchObject({ saved: true });
+  const afterReset = await getHostSettings(caller, 'imFeishu');
+  expect(afterReset.status).toBe('ready');
+  expect((afterReset as { value: Record<string, unknown>; isCustomized: boolean }).value.modelGroup).toBeUndefined();
+  expect((afterReset as { isCustomized: boolean }).isCustomized).toBe(false);
+});

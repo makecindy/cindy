@@ -30,23 +30,90 @@ private extension CindyAgentActivityAttributes.ContentState {
   }
 }
 
+/// Dark tints of the companion hue families; mirrors the desktop Live Activity's
+/// `companionHueColor` and `agentIslandCompanionHueColor` in the macOS island helper.
+private func companionHueColor(_ hue: String) -> Color {
+  let rgb: (Double, Double, Double)
+  switch hue {
+  case "red": rgb = (0x4a, 0x2e, 0x2a)
+  case "orange": rgb = (0x4a, 0x35, 0x27)
+  case "amber": rgb = (0x47, 0x3a, 0x22)
+  case "green": rgb = (0x26, 0x40, 0x2a)
+  case "teal": rgb = (0x21, 0x40, 0x3e)
+  case "blue": rgb = (0x26, 0x34, 0x49)
+  case "pink": rgb = (0x45, 0x2b, 0x39)
+  case "graphite": rgb = (0x3c, 0x3c, 0x3a)
+  default: rgb = (0x32, 0x2b, 0x48)
+  }
+  return Color(red: rgb.0 / 255, green: rgb.1 / 255, blue: rgb.2 / 255)
+}
+
+/// Companion avatar as the Mac island draws it: artwork, or its emoji / initial on the hue.
+private struct CompanionAvatarView: View {
+  let companion: CindyAgentActivityAttributes.Companion
+  let size: CGFloat
+
+  var body: some View {
+    ZStack {
+      Circle().fill(companionHueColor(companion.hue))
+      if let artwork {
+        artwork.resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+      } else if companion.glyphIsInitial {
+        Text(companion.glyph)
+          .font(.system(size: size * 0.5, weight: .medium))
+          .foregroundStyle(Color.white.opacity(0.92))
+      } else {
+        Text(companion.glyph).font(.system(size: size * 0.58))
+      }
+    }
+    .frame(width: size, height: size)
+    .clipShape(Circle())
+  }
+
+  private var artwork: Image? {
+    companion.imageJpeg
+      .flatMap { Data(base64Encoded: $0) }
+      .flatMap { UIImage(data: $0) }
+      .map { Image(uiImage: $0) }
+  }
+}
+
+/// Who the activity is about: the companion once its task needs the user or has
+/// replied (same rule as macOS), otherwise Cindy in the pose for the status.
 private struct AgentActivityMascot: View {
   let state: CindyAgentActivityAttributes.ContentState
   let size: CGFloat
   var showBadge = false
 
   var body: some View {
-    Image("agent-island-\(state.pose)")
-      .resizable().interpolation(.high).scaledToFit()
+    identity
       .frame(width: size, height: size)
       .overlay(alignment: .bottomTrailing) {
-        if showBadge {
+        // An avatar has no pose, so it always carries the status dot.
+        if showBadge || showsCompanion {
           Circle().fill(state.tint)
             .frame(width: max(5, size * 0.3), height: max(5, size * 0.3))
             .overlay(Circle().stroke(.black, lineWidth: max(1, size * 0.06)))
         }
       }
       .accessibilityLabel(Text(state.detail))
+  }
+
+  @Environment(\.redactionReasons) private var redactionReasons
+
+  /// The avatar identifies the companion, so it follows the lock-screen privacy
+  /// setting like the privacy-sensitive title: when the system redacts, show Cindy.
+  private var showsCompanion: Bool {
+    state.companion != nil && state.status != "running" && !redactionReasons.contains(.privacy)
+  }
+
+  @ViewBuilder private var identity: some View {
+    if let companion = state.companion, showsCompanion {
+      CompanionAvatarView(companion: companion, size: size)
+    } else {
+      Image("agent-island-\(state.pose)")
+        .resizable().interpolation(.high).scaledToFit()
+    }
   }
 }
 

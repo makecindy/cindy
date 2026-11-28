@@ -507,8 +507,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       const snapshot = captureBinding(f);
       if (snapshot) lastBindingRef.current = snapshot;
       const next = applyRunMode(f, mode, lastBindingRef.current);
-      // 持续会话(scheduler 任务)暂不支持插件引擎；新建与绑定普通任务支持。
-      return mode === 'fresh' || mode === 'bound' ? next : { ...next, pluginEngine: null };
+      return next;
     });
   }, []);
 

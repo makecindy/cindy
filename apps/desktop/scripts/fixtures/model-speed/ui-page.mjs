@@ -7,9 +7,21 @@ export default {
   cases: {
     default: { about: 'GPT-6 Astra: catalog reasoning levels and Ultrafast speed' },
     sol: { about: 'GPT-6.1 Sol: catalog reasoning levels and Ultrafast speed' },
+    'third-party-speed': { about: '#13496: a supplier declaration leaves the Standard/Fast toggle available' },
     'remote-context': { about: '#9501: remote 1M is not replaced by local same-model 272K' },
   },
   async check(page, ui) {
+    if (ui.case === 'third-party-speed') {
+      const toggle = page.getByRole('button', { name: await ui.t('newChat.modelSelector.unified.fastTip'), exact: true });
+      await toggle.waitFor();
+      if (await toggle.getAttribute('aria-pressed') !== 'false') throw Error('Expected Standard initially');
+      await toggle.click();
+      if (await toggle.getAttribute('aria-pressed') !== 'true') throw Error('Fast must remain selectable');
+      await ui.capture('fast');
+      await toggle.click();
+      if (await toggle.getAttribute('aria-pressed') !== 'false') throw Error('Standard must remain selectable');
+      return;
+    }
     if (ui.case === 'remote-context') {
       const expected = await ui.t('newChat.modelSelector.meta.context', { value: '1M' });
       if (!(await page.locator('main').innerText()).includes(expected)) {
