@@ -43,7 +43,7 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 | [`gamepads/switch-joy-con/`](./gamepads/switch-joy-con/) | 设置页 Joy-Con 交稿包（SVG / PNG / 热区 / 键位表） | 交稿包 |
 | [`gamepads/ultimate-c1/`](./gamepads/ultimate-c1/) | 设置页 Ultimate C1 / 通用手柄交稿包（SVG / PNG / 热区 / 键位表） | 交稿包 |
 
-供应商设置的顶部视觉合同见 [DESIGN §4](./DESIGN.md#provider-detail-header)，身份、状态和操作语义见 [供应商设置](../product-rules/provider-settings.md)。
+供应商设置的顶部视觉合同见 [供应商设置页](./provider-settings-ui.md#provider-detail-header)，身份、状态和操作语义见 [供应商设置](../product-rules/provider-settings.md)。
 
 ## 新贡献者从这里开始
 

@@ -36,7 +36,7 @@
 | 下载、安装进度 | `components/ui/download-meter.tsx` 的 `DownloadMeter`；按钮大小的位置用同文件的 `DownloadRing` | §4 Download progress |
 | 错误与通知 | `ErrorNotice`；短通知用 `lib/toast.ts` | §4 Error notices、§4 Toast |
 | 展开收起 | `components/ui/collapse.tsx` 的 `Collapse` | §14.4 |
-| 聊天内容 | `chatChrome.ts`、`activityRowChrome.ts` | §4 Desktop chat and operation authorization |
+| 聊天内容 | `chatChrome.ts`、`activityRowChrome.ts` | [聊天界面](./chat-surfaces.md) |
 | 设置页分区和行 | `components/ui/settings-rows.tsx` 的 `SettingsSection`、`SettingsCard`、`SettingsRow`、`SettingsField`、`SettingsBlock`、`SettingsPageHeader` | §4 Desktop settings rows |
 | 选颜色 | 语义 Token，不写色值 | §10 Token Selection Rules for New UI、§2 |
 | 亮暗模式 | 语义 Token | §10 Light / Dark Dual-Mode Delivery Gate |
@@ -56,6 +56,14 @@
 | 聊天正文的链接与可点性（§14.5） | [message-link-clickability.md](./message-link-clickability.md) |
 | 输入框工具栏的容器形变 | [container-transform.md](./container-transform.md) |
 | 功能介绍（第一次用到某个功能时的一页引导） | [feature-introduction.md](./feature-introduction.md) |
+| 新建任务页 | [new-task-home.md](./new-task-home.md) |
+| 任务侧栏、伙伴侧栏与任务筛选 | [task-sidebar.md](./task-sidebar.md) |
+| 模型供应商设置页 | [provider-settings-ui.md](./provider-settings-ui.md) |
+| 设置里的单页：设备访问、伙伴模型与能力、harness 版本 | [settings-pages.md](./settings-pages.md) |
+| 「开启协同」「创建新 Worker」弹窗 | [collaboration-worker.md](./collaboration-worker.md) |
+| 首次登录后的开始引导 | [first-run-guide.md](./first-run-guide.md) |
+| 聊天正文、群聊、频道与对话里的附件图片 | [chat-surfaces.md](./chat-surfaces.md) |
+| 远程连接 V2 | [remote-connection-v2.md](./remote-connection-v2.md) |
 | 应用壁纸 | [wallpaper.md](./wallpaper.md) |
 | macOS 菜单栏额度面板 | [macos-menu-bar-quota.md](./macos-menu-bar-quota.md) |
 | 附件预览 | [attachment-preview.md](./attachment-preview.md) |

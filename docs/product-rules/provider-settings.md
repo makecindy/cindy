@@ -2,7 +2,7 @@
 
 制定日期：2026-09-09。适用于现有与未来新增供应商，包括本机登录、独立登录、
 API 接入、Cindy AI 与本地模型服务。本文定义统一合同；当前实现与验证边界见末节。
-视觉正本见 [DESIGN §4 Provider detail header](../design-rules/DESIGN.md#provider-detail-header)。
+视觉正本见 [Provider detail header](../design-rules/provider-settings-ui.md#provider-detail-header)。
 
 新增连接根据 URL 识别并进入已有配置步骤的规则见
 [根据地址识别供应商](./provider-auto-detection.md)。

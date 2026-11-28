@@ -15,6 +15,20 @@
 | 聊天正文的链接与可点性 | [可点性信号](message-link-clickability.md) |
 | 输入框工具栏的容器形变 | [容器形变](container-transform.md) |
 | 功能介绍：第一次用到某个功能时带小动画的一页引导 | [功能介绍](feature-introduction.md) |
+| 新建任务页的内容位置与提示 | [新建任务页](new-task-home.md) |
+| 任务侧栏、伙伴侧栏与任务筛选 | [任务侧栏](task-sidebar.md) |
+| 模型供应商设置页的头部与折叠区 | [供应商设置页](provider-settings-ui.md) |
+| 设置里的单页：设备访问、伙伴模型与能力、harness 版本 | [设置里的单页](settings-pages.md) |
+| 「开启协同」「创建新 Worker」弹窗 | [Worker 创建弹窗](collaboration-worker.md) |
+| 首次登录后的开始引导 | [开始引导](first-run-guide.md) |
+| 聊天正文、群聊、频道与对话里的附件图片 | [聊天界面](chat-surfaces.md) |
+| 远程连接 V2 的拓扑与状态 | [远程连接 V2](remote-connection-v2.md) |
 | 应用壁纸 | [壁纸](wallpaper.md) |
 | macOS 菜单栏额度面板 | [菜单栏额度面板](macos-menu-bar-quota.md) |
 | 设计文档导航、迁移与历史裁决 | [设计系统索引](cindy-design-system.md) |
+
+## 往哪里写
+
+- **单个功能的界面规格写进专题文件。** 某个弹窗、某个页面、某段动效长什么样，只对这一个功能适用的，写进对应的专题文件；没有合适的就新建一个，在上表和 DESIGN.md「阅读路由」的专题表里各加一行，并在文件开头写明读取时机与适用路径（[开发工作流](../dev-rules/development-workflow.md) §4）。DESIGN.md 只在相关章节留一行入口：一句话说明，加一个链接。所有界面都适用的规则仍写进 DESIGN.md。
+- **新标题不写日期和来源。** 写「### Worker creation dialog」，不写「### Worker creation dialog (owner-approved, 2026-11-10)」。
+- **新规则不写来源括号。** 正文不写「(owner decision, 2026-11-28)」这类说明；谁在什么时候、为什么这样定，写进 [design-decision-log.md](design-decision-log.md)。
