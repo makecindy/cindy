@@ -141,13 +141,17 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).toContain(
       'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
-    expect(sessionItemSource).toContain('resolveSidebarRightStatus(sessionActivity)');
+    expect(sessionItemSource).toContain(
+      'resolveSessionRowRightStatus(sessionActivity, hasQueuedInput)',
+    );
     expect(sessionItemSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).toContain('projectSidebarSessionActivity({');
     expect(sessionCardSource).toContain(
       'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
-    expect(sessionCardSource).toContain('resolveSidebarRightStatus(sessionActivity)');
+    expect(sessionCardSource).toContain(
+      'resolveSessionRowRightStatus(sessionActivity, hasQueuedInput)',
+    );
     expect(sessionCardSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).not.toContain('isRemoteSessionActivityActive');
     expect(sessionItemSource).not.toContain('isRemoteSessionActivityActive');

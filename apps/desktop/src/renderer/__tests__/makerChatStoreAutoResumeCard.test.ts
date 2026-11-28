@@ -56,6 +56,8 @@ vi.mock('@/lib/composerDraftStore', () => ({
   }),
 }));
 
+import { hasUnpausedQueuedInput, resolveComposerRuntimeStatus } from '@/features/cc-agent/lib/queuedInputStatus';
+import { projectSidebarSessionActivity, resolveSessionRowRightStatus } from '@/features/cc-agent/sidebar/sidebarRightStatus';
 import { EMPTY_SESSION_STATE, handleStreamEvent, makerChatStore } from '@/lib/makerChatStore';
 import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import * as messageService from '@/lib/messageService';
@@ -441,6 +443,58 @@ describe('applyInputProjection 自愈进行中提示', () => {
     // Pausing the remaining queue does not cancel an already-drained retry.
     inputProjectionCb!(projection({ queuePaused: true, autoResumePending: PENDING_INFO }));
     expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning).toBe(true);
+  });
+
+  // #11299, unit: feed real store projections to the two Desktop status
+  // presenters. The former store-only assertion missed visibility and priority.
+  it('keeps the sidebar and composer consistent with the projected queue', () => {
+    const pendingQueue = [{ clientId: 'queued-1' }];
+    const present = (attentionKind?: 'error' | 'done' | 'awaiting') => {
+      const state = makerChatStore.getSnapshot(SID);
+      const isRunning = state.agentStatus.isRunning;
+      return {
+        sidebar: resolveSessionRowRightStatus(projectSidebarSessionActivity({
+          sessionId: SID,
+          isRunning,
+          attentionKind,
+          hasAttentionNotification: Boolean(attentionKind),
+          isUrgentFromContext: false,
+        }), makerChatStore.hasQueuedInput(SID)),
+        composer: resolveComposerRuntimeStatus({
+          pendingPlanReview: Boolean(state.pendingPlanReview),
+          isRunning,
+          waitingRemoteStart: false,
+          backgroundTasksActive: false,
+          hasRunningWorkflow: false,
+          hasQueuedInput: hasUnpausedQueuedInput({
+            queuedCount: state.pendingQueue.length,
+            queuePaused: state.queuePaused,
+            queueInteractionLocks: state.queueInteractionLocks,
+          }),
+        }),
+      };
+    };
+    const idle = { sidebar: 'time', composer: { visible: false, queuedWaiting: false } };
+    inputProjectionCb!(projection());
+    expect(present()).toEqual(idle);
+
+    inputProjectionCb!(projection({ pendingQueue }));
+    expect(present()).toEqual({
+      sidebar: 'queued', composer: { visible: true, queuedWaiting: true },
+    });
+    expect(present('error').sidebar).toBe('error');
+    expect(present('done').sidebar).toBe('done');
+    expect(present('awaiting').sidebar).toBe('awaiting');
+
+    inputProjectionCb!(projection({ pendingQueue, queuePaused: true }));
+    expect(present()).toEqual(idle);
+    inputProjectionCb!(projection({ pendingQueue, queueInteractionLocks: ['execution-pause'] }));
+    expect(present()).toEqual(idle);
+    inputProjectionCb!(projection({ pendingQueue }));
+    makerEventCb!({ sessionId: SID, event: { type: 'status', data: { isRunning: true } } });
+    expect(present()).toEqual({
+      sidebar: 'running', composer: { visible: true, queuedWaiting: false },
+    });
   });
 
   it('进度更新时同一张卡的 systemCardData 必须跟着变(1/5 → 2/5)', () => {

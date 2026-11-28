@@ -159,6 +159,7 @@ vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
     ensureInitialMessages: mocks.ensureInitialMessages,
     subscribeAll: () => () => {},
+    hasQueuedInput: () => false,
     hasPendingIssueConfirm: () => false,
     getRunningSnapshot: () =>
       new Map(

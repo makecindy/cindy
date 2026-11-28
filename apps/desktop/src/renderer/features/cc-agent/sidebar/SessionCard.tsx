@@ -93,6 +93,7 @@ import { useOfflineInboxIntent } from '@/features/device-link/offlineInboxIntent
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { resolveSessionCardBody } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import { useSessionQueuedInput } from '@/hooks/useSessionQueuedInput';
 import {
   mergeOrcaLeadAttentionKind,
   pendingOrcaWorkerQuestion,
@@ -102,7 +103,7 @@ import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyC
 import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProjectsStore';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
-import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
+import { projectSidebarSessionActivity, resolveSessionRowRightStatus } from './sidebarRightStatus';
 import { useSidebarIssueConfirm } from './useSidebarIssueConfirm';
 import { Tip } from '@/components/ui/tooltip';
 import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
@@ -224,7 +225,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;
-  const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
+  // 队列里还有没派发的消息 → 会话不是空闲：气泡已经标「排队中」，
+  // 侧栏行不能按空闲渲染(同一个事实，两处一致)(#11299)。
+  const hasQueuedInput = useSessionQueuedInput(session.id);
+  const rightStatusKind = resolveSessionRowRightStatus(sessionActivity, hasQueuedInput);
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
   const activityIso = inboxMode && session.status === 'archived'
