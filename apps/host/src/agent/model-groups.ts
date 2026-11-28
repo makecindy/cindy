@@ -155,10 +155,6 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
     },
     quotaWindows: async () => new Map(),
     usageProfile: (options) => (options?.dryRun ? autoUsageProfileStore.readForPreview(200) : autoUsageProfileStore.peek()),
-    autoModelPriorities: () => {
-      const priorities = autoUsageProfileStore.peek()?.modelPriorities;
-      return priorities && Object.keys(priorities).length > 0 ? priorities : undefined;
-    },
     onCommitPick: (candidate) => autoUsageProfileStore.recordPick(candidate),
     onDispose: () => autoUsageProfileStore.dispose(),
     pricing: () => ports.readPricing(),

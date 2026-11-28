@@ -113,7 +113,7 @@ const AUTO_USAGE_MAX_BONUS = 0.45;
 const AUTO_USAGE_FULL_CONFIDENCE = 2.5;
 /** 每个正在运行的并发任务在主力池里的负载扣分。 */
 const AUTO_RUNNING_PENALTY = 0.30;
-/** 主力池前两名综合分差在此范围内时，若第一名刚被用过则软轮转分摊。 */
+/** 主力池候选与最高分的差在此范围内时，可以轮转分摊。 */
 const AUTO_SOFT_ROTATE_GAP = 0.06;
 
 interface AutoRowInput {
@@ -129,10 +129,16 @@ interface AutoRowInput {
   running: number;
 }
 
+/** band 按优先级排列，从上次采用的位置接着选。 */
+function nextAutoCandidate<T extends { row: AutoRowInput }>(band: readonly T[], lastPickedKey?: string | null): T {
+  const previous = band.findIndex(({ row }) => row.key === lastPickedKey);
+  return band[(previous + 1) % band.length];
+}
+
 /**
  * 「自动（expiring）」选路核心（纯函数，无 IO）：
  * 1. 分层：主力池（未 5h 快满且非按量付费） > 兜底池（5h 快满的非按量 > 按量付费 API Key/网关）。
- * 2. Tier 1（快过期富余抢跑）：结合工作日/周末活跃节奏修正有效急迫度；若存在 >= 1.15 的订阅则优先消耗快过期额度，
+ * 2. Tier 1（快过期富余抢跑）：结合工作日/周末活跃节奏修正有效急迫度；若存在达到 2.0 的订阅则优先消耗快过期额度，
  *    同档内按空闲并发 > 本机平时用量 > 软轮转 > 列表顺序决胜。
  * 3. Tier 2（主力池综合编排）：健康订阅与读不到配额的非按量来源同台竞争，按「余量健康度 + 近 14 天本机用量习惯 - 并发负载」
  *    综合排序，相近分数下结合 lastPickedKey 软轮转，避免死用偏紧个人号或永远冷落共享/远端源。
@@ -191,26 +197,19 @@ function pickAutoCandidate<T extends AutoRowInput>(
     const idleBand = band.filter((item) => item.row.running === minRunning);
     const byUrgency = [...band].sort((a, b) => b.effectiveUrgency! - a.effectiveUrgency! || a.row.index - b.row.index)[0];
 
-    // 同档内按：空闲并发 -> 平时用量 -> 软轮转 -> 列表顺序
-    const totalBandUsage = idleBand.reduce((sum, item) => sum + item.usageWeight, 0);
-    const sortedIdle = [...idleBand].sort((a, b) => {
-      if (totalBandUsage > 0 && Math.abs(b.usageWeight - a.usageWeight) > 0.05) {
-        return b.usageWeight - a.usageWeight;
-      }
-      if (lastPickedKey && (a.row.key === lastPickedKey) !== (b.row.key === lastPickedKey)) {
-        return a.row.key === lastPickedKey ? 1 : -1;
-      }
-      return b.effectiveUrgency! - a.effectiveUrgency! || a.row.index - b.row.index;
-    });
-    const winner = sortedIdle[0];
+    // 只在并发相同、用量权重接近的候选之间轮转。
+    const topUsage = Math.max(...idleBand.map((item) => item.usageWeight));
+    const rotationBand = idleBand
+      .filter((item) => topUsage - item.usageWeight <= 0.05)
+      .sort((a, b) => b.effectiveUrgency! - a.effectiveUrgency! || a.row.index - b.row.index);
+    const winner = nextAutoCandidate(rotationBand, lastPickedKey);
     let why: ModelGroupTraceWhy = 'expiring';
     if (byUrgency.row !== winner.row && byUrgency.row.running > winner.row.running) {
       why = 'lessBusy';
     } else if (
       idleBand.length > 1
-      && totalBandUsage > 0
       && winner.usageWeight >= 0.5
-      && winner.row !== byUrgency.row
+      && topUsage - byUrgency.usageWeight > 0.05
     ) {
       why = 'usageHabit';
     }
@@ -235,21 +234,11 @@ function pickAutoCandidate<T extends AutoRowInput>(
   });
 
   const sorted = [...scored].sort((a, b) => b.totalScore - a.totalScore || a.row.index - b.row.index);
-  let rotated = false;
-  if (
-    sorted.length >= 2
-    && lastPickedKey
-    && sorted[0].row.key === lastPickedKey
-    && sorted[0].totalScore - sorted[1].totalScore <= AUTO_SOFT_ROTATE_GAP
-    && sorted[1].row.running <= sorted[0].row.running
-  ) {
-    const first = sorted[0];
-    sorted[0] = sorted[1];
-    sorted[1] = first;
-    rotated = true;
-  }
-
-  const winner = sorted[0];
+  const [leader] = sorted;
+  const rotationBand = sorted.filter((item) => leader.totalScore - item.totalScore <= AUTO_SOFT_ROTATE_GAP
+    && item.row.running <= leader.row.running);
+  const winner = nextAutoCandidate(rotationBand, lastPickedKey);
+  const rotated = winner !== leader;
   const bestWithoutBusy = scored.reduce((top, cur) => (cur.baseScore > top.baseScore ? cur : top));
   const bestWithoutUsage = scored.reduce((top, cur) =>
     (cur.quotaScore - cur.busyPenalty) > (top.quotaScore - top.busyPenalty) ? cur : top);

@@ -169,11 +169,6 @@ export const desktopModelGroupRuntime = createModelGroupRuntime({
   quotaWindows: (options) => quotaWindows(options),
   innerQuota: (source) => innerQuota(source),
   usageProfile: (options) => (options?.dryRun ? autoUsageProfileStore.readForPreview(200) : autoUsageProfileStore.peek()),
-  autoModelPriorities: () => {
-    const priorities = autoUsageProfileStore.peek()?.modelPriorities;
-    return priorities && Object.keys(priorities).length > 0 ? priorities : undefined;
-  },
-  runningCount: (source) => runningCountForSource(source),
   onCommitPick: (candidate) => autoUsageProfileStore.recordPick(candidate),
   onDispose: () => autoUsageProfileStore.dispose(),
   remoteInvocable: (providerId) => isRemoteProviderInvocationAllowed(providerId),

@@ -44,7 +44,6 @@ export interface ModelGroupRuntimePorts {
   quotaWindows(options?: { cached?: boolean; dryRun?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
   innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null>;
   usageProfile?(options?: { dryRun?: boolean }): AutoUsageProfileSnapshot | null | Promise<AutoUsageProfileSnapshot | null>;
-  autoModelPriorities?(): Record<string, number> | undefined;
   runningCount?(source: { providerId: string; agentDeviceId?: string | null }): number;
   onCommitPick?(candidate: { providerId: string; agentDeviceId?: string | null; model: string }): void;
   onDispose?(): void;
@@ -283,9 +282,13 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     };
   }
 
-  function autoModelPriorities(): Record<string, number> | undefined {
-    const map = ports.autoModelPriorities?.();
-    return map && Object.keys(map).length > 0 ? map : undefined;
+  /** 本机配置首读可等画像预热，发送仍走 resolver 的同步缓存读取。 */
+  async function autoModelPriorities(): Promise<Record<string, number> | undefined> {
+    const scope = ports.scope();
+    const cached = await ports.usageProfile?.();
+    const profile = cached ?? await ports.usageProfile?.({ dryRun: true });
+    const map = profile?.modelPriorities;
+    return scope === ports.scope() && map && Object.keys(map).length > 0 ? map : undefined;
   }
 
   function dispose(): void {

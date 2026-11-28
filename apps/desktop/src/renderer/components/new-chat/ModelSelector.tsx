@@ -92,6 +92,7 @@ import {
   withSourceRoutePluginEngines,
   withSourceRouteProviders,
 } from '@/features/model-groups/sourceRouteProviders';
+import { refreshModelGroups } from '@/features/model-groups/modelGroupsClient';
 import { buildModelGroupPickerRows, isModelGroupSelected, matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import {
@@ -1462,10 +1463,12 @@ function ModelSelectorContentView({
   agentSwitch,
   discoveringModels = false,
   interactionDisabled = false,
+  pickerOpen = true,
   gatewayPricing,
   referencePricing,
   modelAccessAccountTier,
 }: ModelSelectorContentProps & {
+  pickerOpen?: boolean;
   gatewayPricing: ModelPricingCatalog | null;
   referencePricing: ModelPricingCatalog | null;
   modelAccessAccountTier: ModelAccessAccountTier | null;
@@ -1670,18 +1673,30 @@ function ModelSelectorContentView({
     && !providersOverride && !sshCatalogProviders
     ? modelGroupsProp?.config ?? null
     : null;
-  const frozenAutoPrioritiesRef = useRef<Record<string, number> | null | undefined>(undefined);
-  if (frozenAutoPrioritiesRef.current === undefined) {
-    frozenAutoPrioritiesRef.current = rawHomeSourceRouteConfig?.autoModelPriorities ?? null;
-  } else if (frozenAutoPrioritiesRef.current === null && rawHomeSourceRouteConfig?.autoModelPriorities) {
-    frozenAutoPrioritiesRef.current = rawHomeSourceRouteConfig.autoModelPriorities;
+  const [autoPrioritySnapshot, setAutoPrioritySnapshot] = useState(() => ({
+    open: pickerOpen, priorities: rawHomeSourceRouteConfig?.autoModelPriorities,
+  }));
+  // MorphPopover can stay mounted through a close/reopen. Freeze even an empty
+  // snapshot for the entire opening, and capture fresh priorities on the next one.
+  if (autoPrioritySnapshot.open !== pickerOpen) {
+    setAutoPrioritySnapshot({
+      open: pickerOpen,
+      priorities: pickerOpen ? rawHomeSourceRouteConfig?.autoModelPriorities : autoPrioritySnapshot.priorities,
+    });
   }
+  const missingLocalAutoPriorities = pickerOpen && !homeDeviceId && !remoteAgent?.catalogHostDeviceId && !deviceIdProp
+    && !rawHomeSourceRouteConfig?.autoModelPriorities
+    && rawHomeSourceRouteConfig?.sourceRoutes?.some((route) => route.strategy === 'expiring' && !route.hidden);
+  useEffect(() => {
+    if (missingLocalAutoPriorities) void refreshModelGroups();
+  }, [missingLocalAutoPriorities]);
+  const frozenAutoPriorities = autoPrioritySnapshot.priorities;
   const homeSourceRouteConfig = useMemo(() => {
-    if (!rawHomeSourceRouteConfig) return null;
-    const frozen = frozenAutoPrioritiesRef.current;
-    if (frozen === rawHomeSourceRouteConfig.autoModelPriorities) return rawHomeSourceRouteConfig;
-    return { ...rawHomeSourceRouteConfig, ...(frozen ? { autoModelPriorities: frozen } : { autoModelPriorities: undefined }) };
-  }, [rawHomeSourceRouteConfig]);
+    if (!rawHomeSourceRouteConfig || frozenAutoPriorities === rawHomeSourceRouteConfig.autoModelPriorities) {
+      return rawHomeSourceRouteConfig;
+    }
+    return { ...rawHomeSourceRouteConfig, autoModelPriorities: frozenAutoPriorities };
+  }, [rawHomeSourceRouteConfig, frozenAutoPriorities]);
   const sourceRoutesListed = !!homeSourceRouteConfig && !remoteBrowse;
   const sourceRouteConfig = sourceRoutesListed ? homeSourceRouteConfig : null;
   const sourceRouteCatalogHostId = remoteAgent?.catalogHostDeviceId ?? homeDeviceId;
@@ -6037,6 +6052,7 @@ export function ModelSelector({
         </div>
       )}
     <ModelSelectorContentView
+      pickerOpen={open || keepOpenForAgentSwitch}
       modelId={modelId}
       effort={effort}
       onModelChange={onModelChange}

@@ -7,7 +7,7 @@
  * - 切账号即清（按 owner scope 隔离）。
  * - 热路径 0ms 同步读：`peek()` 永不 await SQLite；仅在后台异步节流预热与刷新。
  */
-import { gte, ne, and, or } from 'drizzle-orm';
+import { and, eq, gte, lte, ne, or } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current.js';
 import { localDayKey } from '../localDb/dailySpend.js';
 import { dailySessionUsage, sessions } from '../localDb/schema.js';
@@ -242,63 +242,46 @@ export async function readLocalAutoUsageSamples(
 ): Promise<AutoUsageSample[]> {
   const db = client.drizzle;
   const sinceDay = localDayKey(sinceMs);
+  const today = localDayKey(nowMs);
+  const sourceColumns = {
+    sessionId: sessions.id,
+    providerId: sessions.providerId,
+    agentDeviceId: sessions.agentDeviceId,
+    model: sessions.model,
+  };
   const [sessionRows, usageRows] = await Promise.all([
     db
-      .select({
-        id: sessions.id,
-        providerId: sessions.providerId,
-        agentDeviceId: sessions.agentDeviceId,
-        model: sessions.model,
-        userSendAt: sessions.userSendAt,
-        updatedAt: sessions.updatedAt,
-      })
+      .select({ ...sourceColumns, userSendAt: sessions.userSendAt, updatedAt: sessions.updatedAt })
       .from(sessions)
-      .where(
-        and(
-          ne(sessions.status, 'deleted'),
-          or(gte(sessions.updatedAt, sinceMs), gte(sessions.userSendAt, sinceMs)),
-        ),
-      )
+      .where(and(ne(sessions.status, 'deleted'), or(gte(sessions.updatedAt, sinceMs), gte(sessions.userSendAt, sinceMs))))
       .all(),
     db
-      .select({
-        day: dailySessionUsage.day,
-        sessionId: dailySessionUsage.sessionId,
-        tokens: dailySessionUsage.tokens,
-        updatedAt: dailySessionUsage.updatedAt,
-      })
+      .select({ ...sourceColumns, day: dailySessionUsage.day, tokens: dailySessionUsage.tokens, atMs: dailySessionUsage.updatedAt })
       .from(dailySessionUsage)
-      .where(gte(dailySessionUsage.day, sinceDay))
+      .innerJoin(sessions, eq(sessions.id, dailySessionUsage.sessionId))
+      .where(and(gte(dailySessionUsage.day, sinceDay), lte(dailySessionUsage.day, today), ne(sessions.status, 'deleted')))
       .all(),
   ]);
 
-  const tokensBySession = new Map<string, { tokens: number; latestAt: number }>();
-  for (const row of usageRows) {
-    const prev = tokensBySession.get(row.sessionId);
-    const t = Number.isFinite(row.tokens) && row.tokens > 0 ? row.tokens : 0;
-    const at = Number.isFinite(row.updatedAt) ? row.updatedAt : nowMs;
-    if (prev) {
-      prev.tokens += t;
-      if (at > prev.latestAt) prev.latestAt = at;
-    } else {
-      tokensBySession.set(row.sessionId, { tokens: t, latestAt: at });
-    }
+  const samples: AutoUsageSample[] = [];
+  const latestUsageDay = new Map<string, string>();
+  for (const { sessionId, providerId, agentDeviceId, model, day, tokens, atMs } of usageRows) {
+    if (!providerId) continue;
+    // The day was recorded in local time. Keep it even if the user has changed time zones.
+    const activityAt = localDayKey(atMs) === day ? atMs : new Date(`${day}T12:00:00`).getTime();
+    if (!Number.isFinite(activityAt) || activityAt < sinceMs) continue;
+    const previousDay = latestUsageDay.get(sessionId);
+    if (!previousDay || day > previousDay) latestUsageDay.set(sessionId, day);
+    samples.push({ sessionId, providerId, agentDeviceId, model: model ?? '', atMs: Math.min(activityAt, nowMs), tokens });
   }
 
-  const samples: AutoUsageSample[] = [];
-  for (const row of sessionRows) {
-    if (!row.providerId) continue;
-    const usage = tokensBySession.get(row.id);
-    const atMs = Math.max(row.userSendAt ?? 0, row.updatedAt ?? 0, usage?.latestAt ?? 0);
-    if (!Number.isFinite(atMs) || atMs <= 0) continue;
-    samples.push({
-      sessionId: row.id,
-      providerId: row.providerId,
-      agentDeviceId: row.agentDeviceId ?? null,
-      model: row.model ?? '',
-      atMs,
-      tokens: usage?.tokens ?? 0,
-    });
+  // Count unmetered sources, and a newer send whose token receipt has not arrived yet.
+  for (const { sessionId, providerId, agentDeviceId, model, userSendAt, updatedAt } of sessionRows) {
+    if (!providerId) continue;
+    const meteredThrough = latestUsageDay.get(sessionId);
+    const atMs = meteredThrough ? userSendAt : Math.max(userSendAt ?? 0, updatedAt);
+    if (atMs == null || atMs < sinceMs || (meteredThrough && localDayKey(atMs) <= meteredThrough)) continue;
+    samples.push({ sessionId, providerId, agentDeviceId, model: model ?? '', atMs });
   }
   return samples;
 }
@@ -313,7 +296,7 @@ export interface AutoUsageProfileStorePorts {
  * 内存用量画像缓存：
  * - `peek()` 永远 0ms 同步返回，不阻塞选模型与发消息；
  * - 过期或标脏时在后台静默刷新，按 owner scope 严格隔离；
- * - `readForPreview(maxWaitMs)` 仅在「试一下」冷启动时最多等 200ms。
+ * - `readForPreview(maxWaitMs)` 给「试一下」和冷启动的本机排序读取提供有上限的等待。
  */
 export function createAutoUsageProfileStore(ports: AutoUsageProfileStorePorts) {
   const now = ports.now ?? Date.now;
@@ -326,7 +309,7 @@ export function createAutoUsageProfileStore(ports: AutoUsageProfileStorePorts) {
     const promise = Promise.resolve()
       .then(() => ports.readSamples(startedAt - AUTO_USAGE_WINDOW_MS, startedAt))
       .then((samples) => {
-        if (ports.scope() !== scope) return null;
+        if (ports.scope() !== scope || inFlight?.promise !== promise) return null;
         const snapshot = buildAutoUsageProfile(samples, now());
         cached = { scope, snapshot, dirtyAt: null };
         return snapshot;
@@ -372,12 +355,13 @@ export function createAutoUsageProfileStore(ports: AutoUsageProfileStorePorts) {
     if (maxWaitMs <= 0) return existing;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([
+      const snapshot = await Promise.race([
         work,
         new Promise<AutoUsageProfileSnapshot | null>((resolve) => {
           timer = setTimeout(() => resolve(existing), maxWaitMs);
         }),
       ]);
+      return ports.scope() === scope ? snapshot : null;
     } finally {
       if (timer) clearTimeout(timer);
     }

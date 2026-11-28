@@ -15,6 +15,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
+import type { ModelGroupsConfig } from '../../shared/modelGroups';
 import { followedAccountSourceProvider } from '../components/new-chat/sourceSwitch';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
@@ -265,7 +266,8 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/state/providerModelMemory', () => ({
+vi.mock('@/state/providerModelMemory', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/state/providerModelMemory')>(),
   useProviderModelMemoryVersion: () => 0,
 }));
 
@@ -273,7 +275,7 @@ vi.mock('@/state/deviceLinkModelMirror', () => ({
   useDeviceLinkModelMirrorVersion: () => 0,
 }));
 
-import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { ModelSelector, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
 
@@ -1274,4 +1276,41 @@ describe('ModelSelector composer pill 引擎小标', () => {
     });
     expect(screen.getByRole('button').getAttribute('title')).toContain('已断开');
   });
+});
+
+// Unit / engineering conventions §7: the actual picker must keep its row
+// positions if local priorities arrive while it is open. Two models suffice.
+it('applies late Auto priorities on the next opening without moving visible rows', async () => {
+  const models = [{ id: 'model-a', name: 'Model A' }, { id: 'model-b', name: 'Model B' }]
+    .map((model) => ({ ...model, efforts: [], defaultEffort: null }));
+  providersRef.providers = [{
+    id: 'openai', name: 'OpenAI', source: 'builtin', connected: true,
+    agents: ['codex'], models: { codex: models }, routing: { codex: { enabled: true } },
+  }];
+  const config: ModelGroupsConfig = {
+    sourceRoutes: [{ id: 'auto:openai', name: 'OpenAI Auto', strategy: 'expiring', auto: true, sources: [{ providerId: 'openai' }] }],
+    routes: models.map(({ id, name }) => ({
+      id: 'src:' + id, name, strategy: 'expiring',
+      parent: { id: 'auto:openai', name: 'OpenAI Auto' },
+      candidates: [{ agentKind: 'codex', providerId: 'openai', model: id }],
+    })),
+  };
+  const props = { modelId: 'model-a', currentProviderId: 'openai', vendorKey: 'codex' as const,
+    effort: '', onModelChange: vi.fn(), onEffortChange: vi.fn(), remoteAgent: undefined, onUnifiedSelect: vi.fn() };
+  const picker = (next: ModelGroupsConfig) => <ModelSelectorContent {...props}
+    modelGroups={{ config: next, active: null, onSelect: vi.fn(), onAttach: vi.fn() }} />;
+  const rowLabels = () => screen.getAllByRole('option')
+    .map((row) => row.textContent?.match(/Model [AB]/)?.[0]).filter(Boolean);
+
+  const warmConfig = { ...config, autoModelPriorities: { 'model-b': 1 } };
+  const get = vi.fn(async () => warmConfig);
+  (window as unknown as { electronAPI: unknown }).electronAPI = { modelGroups: { get } };
+  const view = render(picker(config));
+  expect(rowLabels()).toEqual(['Model A', 'Model B']);
+  await waitFor(() => expect(get).toHaveBeenCalledOnce());
+  view.rerender(picker(warmConfig));
+  expect(rowLabels()).toEqual(['Model A', 'Model B']);
+  view.unmount();
+  render(picker(warmConfig));
+  expect(rowLabels()).toEqual(['Model B', 'Model A']);
 });

@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import {
+  modelGroupCandidateKey,
   modelGroupResolveResultForRemote,
   modelGroupResolveResultFromRemote,
   modelGroupsConfigForRemote,
@@ -30,6 +31,7 @@ import {
 } from '../autoUsageProfile.js';
 import { pickModelGroupCandidate, type ModelGroupCandidateFacts } from '../pick.js';
 import { createModelGroupResolver } from '../resolver.js';
+import { createModelGroupRuntime } from '../runtimeCore.js';
 
 const NOW = Date.UTC(2026, 10, 28, 3, 40); // Sat Nov 28 2026 11:40 CST
 const HOUR = 3_600_000;
@@ -75,6 +77,31 @@ describe('autoUsageProfile', () => {
     expect(profile.modelPriorities['gpt-5-mini']).toBeLessThan(profile.modelPriorities['gpt-6.2-astra']);
     expect(profile.modelPriorities['ancient-model']).toBeUndefined();
     expect(profile.activeDays).toBe(3);
+  });
+
+  // Unit: the local configuration read starts before background warmup;
+  // it must receive the ranking when the first history read completes.
+  it('returns local model priorities from the first cold profile read', async () => {
+    let loadSamples!: (samples: AutoUsageSample[]) => void;
+    const usage = createAutoUsageProfileStore({
+      scope: () => 'owner', now: () => NOW,
+      readSamples: () => new Promise((resolve) => { loadSamples = resolve; }),
+    });
+    const runtime = createModelGroupRuntime({
+      scope: () => 'owner',
+      localViews: async () => [],
+      localAgents: () => [],
+      harnessInstalled: async () => true,
+      quotaWindows: async () => new Map(),
+      usageProfile: (options) => options?.dryRun ? usage.readForPreview() : usage.peek(),
+      readSession: async () => null,
+      isShared: () => false,
+      hasGoal: async () => false,
+    });
+    const first = runtime.autoModelPriorities();
+    await Promise.resolve();
+    loadSamples([{ providerId: 'openai', model: 'gpt-6', atMs: NOW - HOUR, tokens: 50_000 }]);
+    await expect(first).resolves.toEqual({ 'gpt-6': 1 });
   });
 
   it('shortens effective remaining time when user is active on weekdays but not weekends', () => {
@@ -184,17 +211,18 @@ describe('pickModelGroupCandidate · smart Auto (expiring)', () => {
     expect(picked.trace[2]).toMatchObject({ state: 'picked', why: 'paygFallback' });
   });
 
-  it('soft-rotates between two evenly matched sources instead of hammering index 0', () => {
-    const two = candidates.slice(0, 2);
-    const first = pickModelGroupCandidate(autoRoute(two), [fact(null), fact(null)], { now: NOW });
-    expect(first.index).toBe(0);
-    const second = pickModelGroupCandidate(
-      autoRoute(two),
-      [fact(null), fact(null)],
-      { now: NOW, lastPickedKey: 'codex\u0000openai\u0000gpt-6.2-astra' },
-    );
-    expect(second.index).toBe(1);
-    expect(second.trace[1]).toMatchObject({ state: 'picked', why: 'autoBalance' });
+  // 最小回归：三条同分来源，旧行为只在前两条之间轮转。
+  it.each([{ windows: null }, { windows: [week(40, 20)] }])('soft-rotates through every matching source with quota $windows', ({ windows }) => {
+    const three = [...candidates.slice(0, 2), { ...candidates[0], providerId: 'another-subscription' }];
+    const route = autoRoute(three);
+    const facts = three.map(() => fact(windows));
+    let lastPickedKey: string | undefined;
+    const order = [0, 1, 2, 0].map(() => {
+      const picked = pickModelGroupCandidate(route, facts, { now: NOW, lastPickedKey });
+      lastPickedKey = modelGroupCandidateKey(three[picked.index!]);
+      return picked.index;
+    });
+    expect(order).toEqual([0, 1, 2, 0]);
   });
 });
 
