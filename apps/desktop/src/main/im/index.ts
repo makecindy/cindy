@@ -1,4 +1,5 @@
 import { wireIMessageOrchestrator } from './imessage/adapter';
+import { configureCloudWechatManagement } from '../host-settings/managementBots.js';
 /**
  * main/im/index.ts
  * ---------------------------------------------------------------------------
@@ -129,6 +130,8 @@ import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { throwIpcError } from '../utils/ipcValidate';
+import { registerCloudDomainCall } from '../host-settings/managementCalls';
+import { CLOUD_WECHAT_WORKING_DIR_SET } from '../../shared/cloudImSettings';
 import {
   readWechatChannelSettings,
   resetWechatWorkingDir,
@@ -283,6 +286,11 @@ export function startImOrchestrators(): void {
   wireWechatOrchestrator(wechatIm, WECHAT_CONFIG);
   wireWecomOrchestrator(wecomIm, WECOM_CONFIG);
 
+  configureCloudWechatManagement({
+    state: () => wechatIm.getState(),
+    authorize: signal => connectionLifecycle.runWhileStarted(() => wechatIm.authorize(signal)),
+    unbind: () => connectionLifecycle.runWhileStarted(() => wechatIm.unbind()),
+  });
   // 伙伴自有 IM 连接: 每条记录一份传输层 + 编排器, 与上面设置页那份并存。
   // 实例在 initializeImConnection 里按记录起, 这里只注入装配方式。
   configureBotImConnectionRuntime({
@@ -520,6 +528,25 @@ export function startImOrchestrators(): void {
       throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
     }
   });
+  // The owner's cloud settings page reads and resets the same settings, and sets a directory
+  // chosen in this instance's directory browser (there is no dialog to show here).
+  registerCloudDomainCall('wechatBot:get-channel-settings', () => readWechatChannelSettings());
+  registerCloudDomainCall('wechatBot:reset-working-directory', () => {
+    try {
+      return resetWechatWorkingDir();
+    } catch {
+      throwIpcError('INTERNAL', 'WECHAT_WORKING_DIR_UPDATE_FAILED');
+    }
+  });
+  registerCloudDomainCall(CLOUD_WECHAT_WORKING_DIR_SET, (selected) => {
+    if (typeof selected !== 'string' || selected.length > 4096)
+      throwIpcError('INVALID_PARAMS', 'a directory path is required');
+    try {
+      return writeWechatWorkingDir(selected as string);
+    } catch {
+      throwIpcError('INVALID_PARAMS', 'WECHAT_WORKING_DIR_INVALID');
+    }
+  });
 
   // bindingStore.preload() 故意不在这里跑 —— 它要 DbClient, 而 localDb 在
   // 用户登录后才 ensureReady (worker spawn + db open + smoke 后才 setCurrentDbClient)。
@@ -661,9 +688,9 @@ async function initializeImConnection(): Promise<void> {
     log.warn(`discord sessions workspaceKind backfill failed (non-fatal): ${msg}`);
   }
   activateImAccountBoundary();
-  await im.init();
-  // 伙伴自有连接跟在设置页那份后面起; 各自失败只记日志。
-  await startBotImConnections();
+  // 设置页那份与伙伴自有连接同时起, 互不等待(两边凭证与传输层实例各自独立);
+  // 各自失败只记日志。
+  await Promise.all([im.init(), startBotImConnections()]);
 }
 
 /**

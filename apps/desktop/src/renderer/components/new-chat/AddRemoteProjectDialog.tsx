@@ -439,7 +439,7 @@ export function AddRemoteProjectDialog({
                   type="button"
                   disabled={busy}
                   aria-label={t('newChat.addRemoteProject.cancel')}
-                  className="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-chip)] disabled:opacity-40"
+                  className="flex h-6 w-6 items-center justify-center rounded-lg transition-colors hover:bg-[var(--surface-chip)] disabled:opacity-40"
                   style={{ color: 'var(--text-secondary)' }}
                 >
                   <X size={16} />

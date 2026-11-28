@@ -1650,6 +1650,30 @@
       "regionHint": "cn",
       "models": [
         {
+          "id": "glm-5.4[1m]",
+          "name": "GLM-5.4 (1M)",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["claude-code"]
+        },
+        {
+          "id": "glm-5.4",
+          "name": "GLM-5.4",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["codex", "pi"],
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "max"
+            },
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
+        },
+        {
           "id": "glm-5.3[1m]",
           "name": "GLM-5.3 (1M)",
           "contextWindow": 1000000,
@@ -1723,6 +1747,30 @@
       "docsUrl": "https://docs.z.ai/devpack/overview",
       "regionHint": "global",
       "models": [
+        {
+          "id": "glm-5.4[1m]",
+          "name": "GLM-5.4 (1M)",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["claude-code"]
+        },
+        {
+          "id": "glm-5.4",
+          "name": "GLM-5.4",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["codex", "pi"],
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "max"
+            },
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
+        },
         {
           "id": "glm-5.3[1m]",
           "name": "GLM-5.3 (1M)",
@@ -2479,6 +2527,29 @@
         "pi": {
           "baseUrl": "https://amr-link.open-design.ai/v1",
           "modelsUrl": "https://amr-link.open-design.ai/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "command-code",
+      "name": "Command Code",
+      "docsUrl": "https://commandcode.ai/docs/provider",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://api.commandcode.ai/provider",
+          "modelsUrl": "https://api.commandcode.ai/provider/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://api.commandcode.ai/provider/v1",
+          "modelsUrl": "https://api.commandcode.ai/provider/v1/models",
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "https://api.commandcode.ai/provider/v1",
+          "modelsUrl": "https://api.commandcode.ai/provider/v1/models",
           "wireProtocol": "openai-chat"
         }
       }

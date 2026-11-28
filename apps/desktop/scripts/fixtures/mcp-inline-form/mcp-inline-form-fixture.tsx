@@ -27,8 +27,9 @@ void mountPage({
   },
   render: context => {
     rejectResult = context.case === 'result-error';
-    const request = { kind: 'mcp_setup' as const, requestId: 'mcp-form-fixture', proposal: {} };
-    const form = <McpSetupPrompt request={request} />;
+    const teammate = context.case === 'teammate';
+    const request = { kind: 'mcp_setup' as const, requestId: 'mcp-form-fixture', proposal: teammate ? { name: 'Example' } : {} };
+    const form = <McpSetupPrompt request={request} teammate={teammate} />;
     if (context.case === 'layout') return <AppFrame>
       <div className="relative min-h-0 flex-1" data-ui-mcp-layout>
         <MessageStream workingDir="/project" sessionId="mcp-form-fixture" messages={[]} historyLoaded

@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { MenubarState } from '../../shared/menubarQuota';
 
-/** macOS menu bar quota item toggle; re-reads on focus because the panel can change it too. */
+/** Local quota panel toggle. Re-read on focus because the macOS panel can change it too. */
 export function useMenubarSetting() {
   const [state, setState] = useState<MenubarState | null>(null);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(false);
   const generation = useRef(0);
-  const supported = window.electronAPI?.platform === 'darwin';
+  const platform = window.electronAPI?.platform;
+  const supported = platform === 'darwin' || platform === 'win32';
 
   const refresh = useCallback(async () => {
     const current = ++generation.current;

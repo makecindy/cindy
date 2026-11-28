@@ -900,6 +900,53 @@ describe('SessionRegistry getOAuthToken (subscription token refresh)', () => {
   });
 });
 
+// Regression: remote AskUserQuestion returned behavior:'allow' with empty answers even when
+// the desktop host dismissed the question (dismissed:true / behavior:'deny').
+describe('SessionRegistry AskUserQuestion dismissal', () => {
+  it('denies dismissed AskUserQuestion and allows answered questions', async () => {
+    const { factory: baseFactory } = buildFakeFactory();
+    let captured: SdkQueryFactoryOptions | undefined;
+    let nextResult: {
+      kind: 'ask_user_question';
+      behavior?: 'allow' | 'deny';
+      answers?: Record<string, string>;
+      dismissed?: boolean;
+      reason?: string;
+    } = {
+      kind: 'ask_user_question',
+      behavior: 'deny',
+      answers: {},
+      dismissed: true,
+      reason: 'question dismissed before user answered',
+    };
+    const registry = new SessionRegistry({
+      sdkQueryFactory: (opts) => {
+        captured = opts;
+        return baseFactory(opts);
+      },
+      onApprovalRequest: async () => nextResult,
+    });
+    registry.create({ sessionId: 's-ask', cwd: '/x', model: 'm', env: {} });
+    registry.attach('s-ask', () => undefined);
+    const input = { questions: [{ question: 'Deploy?' }] };
+
+    await expect(
+      captured!.canUseTool!('AskUserQuestion', input, { toolUseID: 'toolu_dismiss' }),
+    ).resolves.toEqual({
+      behavior: 'deny',
+      message: 'question dismissed before user answered',
+    });
+
+    nextResult = { kind: 'ask_user_question', answers: { 'Deploy?': 'Yes' } };
+    await expect(
+      captured!.canUseTool!('AskUserQuestion', input, { toolUseID: 'toolu_answer' }),
+    ).resolves.toEqual({
+      behavior: 'allow',
+      updatedInput: { ...input, answers: { 'Deploy?': 'Yes' } },
+    });
+  });
+});
+
 /* ============================== helpers ============================== */
 
 async function waitFor(

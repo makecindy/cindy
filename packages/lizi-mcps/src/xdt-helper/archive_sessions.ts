@@ -358,3 +358,36 @@ export function registerSnoozeSessionsTool(
     },
   });
 }
+
+export interface PinSessionsDeps {
+  getSessionContext(): LiziMcpSessionContext;
+  setSessionsPinned(params: { deviceId: string | null; sessionIds: string[]; pinned: boolean }): Promise<
+    | { ok: true; changed: { sessionId: string }[] }
+    | { ok: false; errorCode: string; message: string; changed: { sessionId: string }[]; failedSessionId: string; remainingSessionIds: string[] }
+  >;
+}
+
+export function registerPinSessionsTools(registry: XdtHelperToolRegistry, deps: PinSessionsDeps): void {
+  for (const pinned of [true, false]) {
+    registry.register({
+      name: pinned ? 'pin_sessions' : 'unpin_sessions',
+      category: 'control',
+      description: (pinned ? '置顶任务，保留已置顶任务的顺序。' : '取消任务置顶并清除置顶卡片摘要。') +
+        '每批 1–50 个本机任务或同一台远程电脑的 deviceId::sessionId。可操作当前任务。首次失败即停，返回已完成、失败及未执行的 ID。可用 list_sessions 或 get_task_digest 查询 pinned。',
+      inputShape: { session_ids: stringArrayParam(z.array(z.string().min(1)).min(1).max(MAX_BATCH_SIZE)) },
+      handler: async ({ session_ids }) => {
+        const batch = resolveBatch(session_ids, deps.getSessionContext(), { rejectCurrent: false });
+        if ('error' in batch) return batch.error;
+        const { deviceId, ids } = batch;
+        const qualify = (id: string) => deviceId ? `${deviceId}::${id}` : id;
+        const result = await deps.setSessionsPinned({ sessionIds: ids, deviceId, pinned });
+        const changed = result.changed.map(({ sessionId }) => ({ session_id: qualify(sessionId), pinned }));
+        if (result.ok) return okPayload({ count: changed.length, changed });
+        return errorPayload(result.errorCode, result.message, {
+          partial: changed.length > 0 || result.errorCode === 'REMOTE_RESULT_UNKNOWN',
+          changed, failed_session_id: qualify(result.failedSessionId), remaining_session_ids: result.remainingSessionIds.map(qualify),
+        });
+      },
+    });
+  }
+}

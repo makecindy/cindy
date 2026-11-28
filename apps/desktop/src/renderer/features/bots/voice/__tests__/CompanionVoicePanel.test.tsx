@@ -89,6 +89,29 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 afterEach(() => vi.useRealTimers());
+it('starts an explicitly selected realtime call without requiring any TTS model', async () => {
+  const ttsModels = vi.fn().mockRejectedValue(new Error('TTS catalog unavailable'));
+  window.electronAPI.voiceConversation.models = ttsModels;
+  const realtimeSelection = { mode: 'realtime' as const, providerId: 'openai', agent: 'codex' as const,
+    modelId: 'gpt-realtime-2', protocol: 'openai-realtime' as const, voice: 'marin' };
+  vi.mocked(window.electronAPI.voiceConversation.preference).mockResolvedValue({ selection: null, customized: false, realtimeSelection });
+  window.electronAPI.voiceConversation.realtimeModels = async () => [{ ...realtimeSelection, id: realtimeSelection.modelId, name: 'Realtime', providerName: 'OpenAI API', protocolLocked: true }];
+  render(panel());
+  await waitFor(() => expect(start).toHaveBeenCalledWith(expect.objectContaining(realtimeSelection)));
+  expect(audio.start).toHaveBeenCalledOnce();
+  expect(configure).not.toHaveBeenCalled();
+  expect(ttsModels).not.toHaveBeenCalled();
+});
+it('opens configuration when a saved realtime connection is unavailable without falling back to TTS', async () => {
+  vi.mocked(window.electronAPI.voiceConversation.preference).mockResolvedValue({ selection: { modelId: 'tts', voice: 'alloy' }, customized: false,
+    realtimeSelection: { mode: 'realtime', providerId: 'missing', agent: 'codex', modelId: 'gpt-realtime-2', protocol: 'openai-realtime', voice: 'marin' } });
+  models = [{ id: 'tts', name: 'Speech', protocol: 'openai' }];
+  window.electronAPI.voiceConversation.realtimeModels = async () => [];
+  render(panel());
+  await waitFor(() => expect(configure).toHaveBeenCalledOnce());
+  expect(start).not.toHaveBeenCalled();
+  expect(audio.start).not.toHaveBeenCalled();
+});
 const configure = vi.fn();
 const close = vi.fn();
 const panel = (blocked = false, taskBusy = false, open = true, taskFailure?: VoiceTaskFailure) => (
@@ -556,6 +579,22 @@ it('hides only the active call card and restores one folded record after End', a
 
 // Empty calls used to leave both a placeholder card and a standalone timestamp.
 // Filter before the real timeline grouping while retaining the saved source rows.
+it('shows send failure only on the user input, including in older interrupted call records', () => {
+  const record: VoiceCallRecord = {
+    version: 1, callId: 'interrupted', startedAt: 1000, handoffs: [],
+    turns: [
+      { id: 'a', role: 'assistant', text: 'Partial reply', createdAt: 1100, complete: true, failed: true },
+      { id: 'u', role: 'user', text: 'Unsent input', createdAt: 1200, complete: true, failed: true },
+    ],
+  };
+  const view = render(<VoiceCallTranscript record={record} live />);
+  for (const live of [true, false]) {
+    view.rerender(<VoiceCallTranscript record={record} live={live} />);
+    expect(screen.getByText('Partial reply')).toBeTruthy();
+    expect(screen.getByText('bots.voiceMode.callSendFailed').closest('[data-role]')?.getAttribute('data-role')).toBe('user');
+  }
+});
+
 it('shows the speaking prompt only in a live call and never renders a direct empty history card', () => {
   const record: VoiceCallRecord = {
     version: 1, callId: 'empty', startedAt: 1000, endedAt: 8241, turns: [], handoffs: [],

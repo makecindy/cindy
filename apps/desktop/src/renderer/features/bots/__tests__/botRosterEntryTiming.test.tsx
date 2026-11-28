@@ -46,6 +46,7 @@ vi.mock('../useRemoteBots', () => ({ markRemoteBotRead: vi.fn(), useRemoteBots: 
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => null,
   useDeviceLinkDeviceListRequestState: () => ({ status: 'ready', error: null }),
+  useDeviceLinkDeviceListAuthoritative: () => true,
 }));
 
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';

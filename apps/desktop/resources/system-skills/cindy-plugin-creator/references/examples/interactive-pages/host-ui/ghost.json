@@ -23,6 +23,7 @@
       ],
       "contributions": [
         { "id": "navigation", "title": "示例工作台", "position": "sidebar.navigation", "view": "board", "icon": "puzzle" },
+        { "id": "directory", "title": "Open in", "position": "workdir.menu", "view": "task-board", "presentation": "popover" },
         { "id": "task-menu", "title": "打开任务工作台", "position": "session.menu", "view": "task-board" },
         { "id": "settings-page", "title": "高级配置", "position": "settings.section", "view": "board" },
         { "id": "completion", "title": "示例引用", "position": "composer.completion", "tool": "complete", "trigger": "@" },

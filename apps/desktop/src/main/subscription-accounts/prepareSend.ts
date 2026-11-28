@@ -3,6 +3,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionS
 import { readAccountBinding, readPool } from './store.js';
 import { acquireSubscriptionAccount, codexSubscriptionAccountForHistoryHome } from './runtime.js';
 import { taskPoolRouteAllowsModel, readTaskPoolAccount } from './taskAccount.js';
+import { apiKeyPoolMember } from './apiKeyMembers.js';
 
 interface PrepareAccountSendDeps {
   readSession(id: string): Promise<SessionRowSnapshot | null>;
@@ -59,7 +60,8 @@ export async function prepareSubscriptionAccountForSend(
   const { provider } = task;
   const pool = readPool(provider);
   if (!pool || (pool.disconnected && task.providerId === provider)) return false;
-  const original = pool.accounts.find(account => account.id === task.accountId);
+  const original = pool.accounts.find(account => account.id === task.accountId)
+    ?? (provider === 'openai' ? apiKeyPoolMember(task.accountId) : undefined);
   if (original && !original.paused) return false;
   if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
   // The merged route's own model switches still apply; never widen access by moving.
@@ -68,7 +70,9 @@ export async function prepareSubscriptionAccountForSend(
   assertOwner();
 
   // Reserve a usable replacement before touching the old runtime or its history.
-  const lease = await acquireSubscriptionAccount(task.providerId, row!.model ?? undefined, []);
+  const lease = await acquireSubscriptionAccount(task.providerId, row!.model ?? undefined, [], false, {
+    includeApiKeys: true, agent: row?.agentKind === 'pi' ? 'pi' : 'codex',
+  });
   if (!lease) throw new Error('No subscription account is available');
   try {
     const assertCurrent = () => {

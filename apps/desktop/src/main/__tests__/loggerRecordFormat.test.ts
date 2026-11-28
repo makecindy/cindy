@@ -28,7 +28,10 @@ import {
   MAIN_LOG_RECORD_HEAD_RE,
   RECORD_FORMAT_SENTINEL_MSG,
 } from '../../shared/mainLogRecordFormat';
-import { createLogger, initLogger } from '../logger';
+import { createLogger, initLogger, setLogLevel } from '../logger';
+import { diagnosticOperation, StallDiagnostics } from '@cindy/device-link';
+import { collectLogs } from '../log-upload/collect';
+import { createSessionStartTimer, logSessionStartTiming } from '../maker-ipc/sessionStartTiming';
 
 let logDir = '';
 
@@ -75,6 +78,72 @@ function recordScopes(content: string): string[] {
 }
 
 describe('main 日志的记录边界（写侧）', () => {
+  // #11644: new operation labels must survive packaged INFO -> real writer ->
+  // collector, not only a mocked logger. Existing cases tested record boundaries.
+  // Unit with the file's existing isolated log fixture; no private input is logged.
+  it('preserves remote-agent operation labels through INFO writing and collection', async () => {
+    setLogLevel('info');
+    const diagnostics = new StallDiagnostics(message => createLogger('device-link').info(message));
+    try {
+      for (const command of [{ op: 'caps' }, { op: 'open' }, { op: 'PRIVATE_OP' }, { op: 'call', method: 'send' }]) {
+        diagnostics.record('request', { request: 'cafefeed', outcome: 'timeout',
+          operation: diagnosticOperation({ channel: 'maker:remote-agent:v1',
+            args: [{ ...command, payload: { json: 'PRIVATE_BODY' }, token: 'PRIVATE_TOKEN' }] }) });
+      }
+      diagnostics.flush();
+      await readMainLogContaining('"operation":"call:send"');
+      const collected = await collectLogs({
+        logDir, listDir: dir => fs.promises.readdir(dir),
+        openFile: async file => {
+          const data = await fs.promises.readFile(file).catch(() => null);
+          return data && { size: async () => data.length,
+            read: async (offset: number, length: number) => data.subarray(offset, offset + length), close: async () => {} };
+        },
+        now: Date.now, homeDir: '/unused-home', joinPath: path.join, yieldToEventLoop: async () => {},
+      }, { reason: 'manual', anchors: [] });
+      const rows = collected.records.filter(row => row.scope === 'device-link' && row.msg.includes('cafefeed'))
+        .map(row => JSON.parse(row.msg.slice('device-link diagnostic '.length)));
+      expect(rows.map(row => row.operation)).toEqual(['caps', 'open', 'other-remote-agent', 'call:send']);
+      expect(JSON.stringify(rows)).not.toContain('PRIVATE_');
+    } finally { diagnostics.flush(); setLogLevel('trace'); }
+  });
+
+  // Field reports of slow phone task creation need the per-stage start timing in an uploaded
+  // log; it must survive packaged INFO -> real writer -> collector and keep unknown kinds out.
+  it('uploads task start timing with fixed stage names only', async () => {
+    setLogLevel('info');
+    try {
+      let clock = 1_000;
+      for (const agentKind of ['codex', 'PRIVATE_KIND']) {
+        const timer = createSessionStartTimer({ agentKind, start: 'new', now: () => clock });
+        clock += 40; timer.lap('prepare');
+        clock += 9_000; timer.lap('providerGroup');
+        timer.attempt();
+        clock += 1_200; timer.lap('agentStart');
+        logSessionStartTiming(timer.finish('started'));
+      }
+      await readMainLogContaining('"agentKind":"other"');
+      const collected = await collectLogs({
+        logDir, listDir: dir => fs.promises.readdir(dir),
+        openFile: async file => {
+          const data = await fs.promises.readFile(file).catch(() => null);
+          return data && { size: async () => data.length,
+            read: async (offset: number, length: number) => data.subarray(offset, offset + length), close: async () => {} };
+        },
+        now: Date.now, homeDir: '/unused-home', joinPath: path.join, yieldToEventLoop: async () => {},
+      }, { reason: 'manual', anchors: [] });
+      const rows = collected.records.filter(row => row.scope === 'session-start-timing')
+        .map(row => JSON.parse(row.msg.slice('session start timing '.length)));
+      expect(rows).toEqual([
+        { agentKind: 'codex', start: 'new', outcome: 'started', attempts: 1, totalMs: 10_240,
+          stagesMs: { prepare: 40, providerGroup: 9_000, agentStart: 1_200 }, restMs: 0 },
+        { agentKind: 'other', start: 'new', outcome: 'started', attempts: 1, totalMs: 10_240,
+          stagesMs: { prepare: 40, providerGroup: 9_000, agentStart: 1_200 }, restMs: 0 },
+      ]);
+      expect(JSON.stringify(collected.records)).not.toContain('PRIVATE_');
+    } finally { setLogLevel('trace'); }
+  });
+
   it('打开当天文件时写下格式哨兵，且哨兵本身是一条合法记录', async () => {
     const content = await readMainLogContaining(RECORD_FORMAT_SENTINEL_MSG);
 

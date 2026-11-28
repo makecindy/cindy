@@ -97,6 +97,11 @@ export function useProviderAccountUsage(
   agent?: AgentKind,
   deviceId: string | null = null,
   options: { live?: boolean; active?: boolean; refreshEpoch?: number } = {},
+  /** Another device's account usage (the cloud instance settings page). */
+  reader?: (input: {
+    providerId: string;
+    forceRefresh: boolean;
+  }) => Promise<ProviderAccountUsageResult>,
 ): ProviderAccountUsageState {
   const live = options.live === true;
   const active = !live || options.active !== false;
@@ -168,11 +173,13 @@ export function useProviderAccountUsage(
         };
         const parseResult = opencodeGo ? parseOpenCodeGoAccountUsageResult : parseKimiAccountUsageResult;
         const channel = opencodeGo ? 'maker:usage:opencode-go' : 'maker:usage:kimi-coding';
-        const read = async () => deviceId
-          ? parseResult(await (scheduling
-              ? window.electronAPI.deviceLink.invoke(deviceId, channel, [input], scheduling)
-              : window.electronAPI.deviceLink.invoke(deviceId, channel, [input])))
-          : await window.electronAPI.maker.fetchProviderAccountUsage(input);
+        const read = async () => reader
+          ? await reader({ providerId: input.providerId, forceRefresh: input.forceRefresh })
+          : deviceId
+            ? parseResult(await (scheduling
+                ? window.electronAPI.deviceLink.invoke(deviceId, channel, [input], scheduling)
+                : window.electronAPI.deviceLink.invoke(deviceId, channel, [input])))
+            : await window.electronAPI.maker.fetchProviderAccountUsage(input);
         let next: ProviderAccountUsageResult;
         if (live && opencodeGo && !forceRefresh) {
           const observed = observePendingOpenCodeRead(owner, queryIdentity, lifecycle, read, invalidate => {
@@ -209,7 +216,7 @@ export function useProviderAccountUsage(
         }
       }
     },
-    [provider?.id, agent, identity, queryIdentity, supported, deviceId, owner, opencodeGo, live, lifecycle],
+    [provider?.id, agent, identity, queryIdentity, supported, deviceId, owner, opencodeGo, live, lifecycle, reader],
   );
 
   useEffect(() => {

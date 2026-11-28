@@ -18,7 +18,7 @@ const provider = (id: string, name?: string) => ({
 });
 const providers = [provider('openai'), provider('anthropic')];
 const group = {
-  strategy: 'least', autoSwitch: true,
+  strategy: 'expiring', autoSwitch: true,
   members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'fixture-executor', providerId: 'anthropic' }],
 };
 const entries = [provider('anthropic', 'Team Anthropic'), provider('openai', 'Private OpenAI')];
@@ -125,7 +125,7 @@ mountPage({
           if (ctx.case === 'empty-pool' && command.providerId === 'openai') {
             if (!subscriptionControl.connected) {
               if (command.action === 'login') throw new Error('[SUBSCRIPTION_ACCOUNT_FAILED] Could not update the subscription account');
-              return { providerId: 'openai', configured, strategy: 'least', accounts: [] };
+              return { providerId: 'openai', configured, strategy: 'expiring', accounts: [] };
             }
             if (command.action === 'add') (window as any).__uiPage.emit('subscriptionAccountsChanged', { providerId: 'openai' });
           }
@@ -134,13 +134,13 @@ mountPage({
             plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: ctx.case.startsWith('recovery-') && !(window as any).providerSourcesFixture.snapshot.providers[0].connected ? 'signed-out' : 'ready', directory,
             running: 0, paused: false, limit: 4, weight: 1 };
           if (ctx.case.startsWith('local-management') && command.providerId === 'openai') {
-            return { providerId: 'openai', configured: true, strategy: 'least', accounts: Array.from({ length: 5 }, (_, index) => ({
+            return { providerId: 'openai', configured: true, strategy: 'expiring', accounts: Array.from({ length: 5 }, (_, index) => ({
               ...defaultAccount, id: index === 0 ? 'default' : `account-${index}`,
               identity: `account${index + 1}@example.com`,
               status: index === 1 ? 'unavailable' : 'signed-out',
             })) };
           }
-          return { providerId: command.providerId, configured, strategy: 'least', accounts: configured ? [
+          return { providerId: command.providerId, configured, strategy: 'expiring', accounts: configured ? [
             { ...defaultAccount, usage: accountUsage(command.providerId, [12, 34, 8]) },
           ] : command.action === 'preview' ? [defaultAccount] : [] };
         },

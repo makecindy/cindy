@@ -95,6 +95,7 @@ export type {
  */
 export type DeviceLinkErrorCode = RelayErrorCode
   | 'CHANNEL_NOT_ALLOWED' // channel 不在远程调用白名单
+  | 'NOT_FOUND' // 精确读取已有任务的消息时，该消息不在可见历史中
   | 'ACCESS_REVOKED' // 被控端已撤销该控制端的访问权限(逐设备黑名单,被控端本地强制)
   | 'INVOKE_TIMEOUT' // 控制端等待 invoke-result 超时
   | 'PEER_RESET' // peer 传输复位；仅用于可安全重试的幂等读请求
@@ -130,6 +131,14 @@ export class DeviceLinkError extends Error {
 /** 判定错误是否击中 in-flight 请求(见 DeviceLinkError.inFlight)。 */
 export function isInFlightDeviceLinkError(err: unknown): boolean {
   return err instanceof DeviceLinkError && err.inFlight === true;
+}
+
+/** Local-only signal. The reliable sender has retained no business frame and wrote no fragment. */
+export class DeviceLinkUnsentInvokeError extends DeviceLinkError {
+  constructor() {
+    super('BACKPRESSURE', 'unsent invoke yielded to an available route');
+    this.inFlight = false;
+  }
 }
 
 // ─── 连接层 payload ───────────────────────────────────────────────────────────

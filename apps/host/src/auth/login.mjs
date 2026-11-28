@@ -50,8 +50,8 @@ function pickMethod(providers, requested) {
   throw new Error(`choose a login method with --method=: ${social.join(', ')}`);
 }
 
-async function enterpriseLoginMethod(client, organization, requested) {
-  const { connections } = await client.discoverSsoOrg(organization);
+async function enterpriseLoginMethod(client, organization, requested, discovery) {
+  const { connections } = discovery ?? await client.discoverSsoOrg(organization);
   const match = requested
     ? connections.find(({ connectionId }) => connectionId === requested)
     : connections.length === 1 ? connections[0] : undefined;
@@ -106,6 +106,7 @@ function listenOnLoopback(server) {
  *   openBrowser: (url: string) => Promise<void>,
  *   method?: string,
  *   organization?: string,
+ *   organizationDiscovery?: import('@cindy/auth-client').SsoOrgDiscovery,
  *   onAuthorizeUrl?: (url: string) => void,
  *   onSignedIn?: (accessToken: string) => Promise<void>,
  *   signal?: AbortSignal,
@@ -125,7 +126,7 @@ export async function runHostLogin(deps) {
     }
   } else {
     method = deps.organization
-      ? await enterpriseLoginMethod(deps.client, deps.organization, deps.method)
+      ? await enterpriseLoginMethod(deps.client, deps.organization, deps.method, deps.organizationDiscovery)
       : pickMethod(await deps.client.getProviders(), deps.method);
     const {verifier,challenge}=pkce();
     const authorization=deps.hostedCallbackUrl

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { currentOperationBudget, operationCheckpoint } from '../utils/operationBudget';
+import { currentOperationBudget, operationCheckpoint, SnapshotOperationDeadlineError } from '../utils/operationBudget';
 
 import {
   GitSnapshotCoordinator,
@@ -65,7 +65,12 @@ describe('durable snapshot dispatch intent', () => {
     const deps = makeDeps({ snapshotTimeoutMs: 50, recordTurnAttempt: () => pending.promise });
     const coordinator = new GitSnapshotCoordinator(deps);
     const result = coordinator.onTurnStart('s1');
-    const rejected = expect(result).rejects.toThrow('deadline');
+    // #10161 / unit: the stalled intent previously surfaced a generic snapshot
+    // deadline. The display error must name the send failure and keep its retry type.
+    const rejected = Promise.all([
+      expect(result).rejects.toBeInstanceOf(SnapshotOperationDeadlineError),
+      expect(result).rejects.toThrow(/^\[SNAPSHOT_DISPATCH_INTENT_TIMEOUT\]/),
+    ]);
     await vi.advanceTimersByTimeAsync(50);
     await rejected;
     expect(coordinator.hasPendingTurnStart('s1')).toBe(false);

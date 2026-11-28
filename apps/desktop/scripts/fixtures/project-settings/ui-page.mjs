@@ -175,7 +175,10 @@ export default {
       }
       if (ui.case === 'create-auto') {
         await page.evaluate(() => window.projectPickerCancelled = true);
-        await page.getByRole('button', { name: await ui.t('projectSettings.changeMainDirectory'), exact: true }).click();
+        const chooseFolder = page.getByRole('button', { name: await ui.t('projectSettings.chooseExistingFolder'), exact: true });
+        if (!(await chooseFolder.isVisible()))
+          throw new Error('The default location must name the action to choose an existing folder');
+        await chooseFolder.click();
         await page.getByText(await ui.t('projectSettings.automaticMain'), { exact: true }).waitFor();
         await page.evaluate(() => window.projectPickerCancelled = false);
       }
@@ -205,10 +208,11 @@ export default {
           window.projectPickerPath = path;
         }, path);
         await page
-          .getByRole('button', { name: await ui.t(path === '/Projects/First' ? 'projectSettings.changeMainDirectory' : 'projectSettings.addDirectory'), exact: true })
+          .getByRole('button', { name: await ui.t(path === '/Projects/First' ? 'projectSettings.chooseExistingFolder' : 'projectSettings.addDirectory'), exact: true })
           .click();
         if ((await nameInput.inputValue()) !== 'First') throw new Error('Selecting the main folder did not fill its name, or adding another folder changed it');
       }
+      await page.getByRole('button', { name: await ui.t('projectSettings.changeMainDirectory'), exact: true }).waitFor();
       await ui.capture('folder-name');
       // Clearing a name returns to automatic naming on the next folder choice.
       await nameInput.fill(' ');
@@ -237,7 +241,7 @@ export default {
         window.projectPickerPath = path;
       }, '/Projects/Cindy');
       await page
-        .getByRole('button', { name: await ui.t('projectSettings.changeMainDirectory'), exact: true })
+        .getByRole('button', { name: await ui.t('projectSettings.chooseExistingFolder'), exact: true })
         .click();
       await page.getByText('/Projects/Reference', { exact: true }).waitFor();
       if (
@@ -260,7 +264,7 @@ export default {
         window.projectPickerPath = path;
       }, '/Projects/Example');
       await page
-        .getByRole('button', { name: await ui.t('projectSettings.changeMainDirectory'), exact: true })
+        .getByRole('button', { name: await ui.t('projectSettings.chooseExistingFolder'), exact: true })
         .click();
       await page.evaluate(() => {
         window.projectPickerPath = '/Projects/Reference';
@@ -295,7 +299,7 @@ export default {
           window.projectPickerPath = path;
         }, '/Projects/Example');
         await page
-          .getByRole('button', { name: await ui.t(ui.case === 'create-legacy' ? 'projectSettings.chooseExistingFolder' : 'projectSettings.changeMainDirectory'), exact: true })
+          .getByRole('button', { name: await ui.t('projectSettings.chooseExistingFolder'), exact: true })
           .click();
         if ((await page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true }).inputValue()) !== 'My project') throw new Error('Choosing a folder replaced the manually entered name');
         await page.evaluate(() => {

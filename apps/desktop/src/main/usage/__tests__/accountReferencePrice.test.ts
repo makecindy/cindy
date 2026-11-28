@@ -1,5 +1,5 @@
 import { setActiveLedgerCurrency, __resetActiveLedgerCurrencyForTesting } from '../ledgerCurrency.js';
-import { applyModelPriceOverrides } from '../modelPriceOverrideStore.js';
+import { applyModelPriceOverrides, readModelPriceOverrideView } from '../modelPriceOverrideStore.js';
 import { resolveTurnCost } from '../turnCostCalculator.js';
 import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
@@ -10,7 +10,10 @@ import { providerReferencePriceQuote, getModelPriceQuote, modelPricingKey } from
 const accountCatalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider({
     id: 'openai-account', name: 'Account', auth: { method: 'oauth', native: 'codex' },
     runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.6-luna', name: 'Luna' }] } },
-  }), buildUserProvider({ id: 'router-account', name: 'Router', runtimes: {
+  }), {
+    ...BUNDLED_CATALOG.providers.find(provider => provider.id === 'openai')!,
+    id: 'openai-sub-fixture', subscriptionPool: 'openai' as const,
+  }, buildUserProvider({ id: 'router-account', name: 'Router', runtimes: {
     pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat', models: [
       { id: 'aion-labs/aion-3.0-mini', name: 'Aion' },
       { id: 'new/model', name: 'New', discoveredCost: { input: 0, output: 0.5 } },
@@ -85,6 +88,12 @@ describe('independent subscription account reference prices', () => {
       .toMatchObject({ currency: 'USD', source: 'provider-reference', inputPerMtok: 0.7, outputPerMtok: 1.4 });
     expect(getModelPriceQuote(pricing, 'router-account', 'new/model', 'pi'))
       .toMatchObject({ inputPerMtok: 0, outputPerMtok: 0.5 });
+    // An API account with discovery-only pricing must show its actual rate in Settings too.
+    const target = { providerId: 'router-account', agent: 'pi' as const, modelId: 'new/model' };
+    expect(readModelPriceOverrideView(target, accountCatalog.modelRegistry).reference)
+      .toEqual(getModelPriceQuote(pricing, target.providerId, target.modelId, target.agent));
+    expect(readModelPriceOverrideView({ ...target, agent: 'codex' }, accountCatalog.modelRegistry).reference)
+      .toBeNull();
     expect(getModelPriceQuote(pricing, 'another-account', 'new/model', 'pi')).toBeUndefined();
     expect(getModelPriceQuote(pricing, 'router-account', 'new/model', 'codex')).toBeUndefined();
     expect(getModelPriceQuote(pricing, 'openrouter-oauth', 'oauth/new', 'pi'))
@@ -111,6 +120,9 @@ describe('independent subscription account reference prices', () => {
     const actual = accountReferencePriceQuote('openai-account', 'gpt-5.6-luna', BUNDLED_CATALOG.modelRegistry, options);
     expect(actual).toEqual({ ...base, providerId: 'openai-account' });
     expect(getCodexProviderSubscriptionValuePrice('openai-account', 'gpt-5.6-luna', {}, options.at)).toEqual(actual);
+    // A generated pool has its own ID and no override. The public tariff follows subscriptionPool.
+    expect(getCodexProviderSubscriptionValuePrice('openai-sub-fixture', 'gpt-5.6-luna', {}, options.at))
+      .toEqual({ ...base, providerId: 'openai-sub-fixture' });
     expect(accountReferencePriceQuote('unrelated', 'gpt-5.6-luna', BUNDLED_CATALOG.modelRegistry, options)).toBeUndefined();
   });
   it('publishes distinct model keys for Codex and Pi without borrowing default account overrides', () => {
@@ -347,6 +359,12 @@ describe('API-key preset reference prices and static cost precedence', () => {
           models: [{ id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro' }],
         } } });
         const pricing = getReferenceModelPricing({ at: '2026-11-20', providers: [provider], overrides: {} });
+        const target = { providerId: provider.id, agent: 'pi' as const, modelId: 'kimi-k3.1-pro' };
+        expect(readModelPriceOverrideView(target, BUNDLED_CATALOG.modelRegistry, provider)).toMatchObject({
+          reference: { currency: 'CNY', inputPerMtok: 13 },
+          effective: { currency: 'CNY', inputPerMtok: 13 },
+          allowedCurrencies: currency === 'USD' ? ['USD'] : ['USD', 'CNY'],
+        });
         expect(resolveTurnCost({
           agent: 'pi', rawModel: 'kimi-k3.1-pro', pricing,
           tokens: { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },

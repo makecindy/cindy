@@ -366,7 +366,11 @@
       "close": "Close",
       "cancelRename": "Cancel rename",
       "createdBy": "Created by {{name}}",
-      "ownedBy": "Belongs to {{name}}"
+      "ownedBy": "Belongs to {{name}}",
+      "orcaRemoteLead": "Collaboration from {{device}}",
+      "createdByTask": "Opened by another task",
+      "createdByTaskNamed": "Opened by task “{{title}}”",
+      "unknownDevice": "another computer"
     },
     "accounts": {
       "title": "Switch account",
@@ -389,6 +393,7 @@
       "sortHeading": "Session sorting",
       "projectOrderHeading": "Project sorting",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
+      "pinnedOrderManualTip": "Touch and hold a pinned task, then drag to reorder.",
       "statusHeading": "Task status",
       "showDeviceTasks": "Show sessions",
       "openDevice": "Open",
@@ -422,7 +427,8 @@
         "all": "All",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin engine"
       },
       "filterLastActivityHeading": "Last activity",
       "filterLastActivity": {
@@ -477,7 +483,14 @@
         "nextWeek": "Next week",
         "indefinite": "Indefinitely",
         "custom": "Custom…",
-        "invalidTime": "Choose a future date and time within one year."
+        "invalidTime": "Choose a future date and time within one year.",
+        "pendingSync": "Pending sync",
+        "pendingArchiveSync": "Will archive when computer is online",
+        "offlineCompleteRejectedDirty": "“{{title}}” returned to Pending: uncommitted changes in its worktree need confirmation before archiving.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}” returned to Pending: new activity arrived on its computer while offline.",
+        "offlineCompleteRejectedRunning": "“{{title}}” returned to Pending: the task is currently running.",
+        "offlineCompleteRejectedAttached": "“{{title}}” returned to Pending: the task is currently attached or shared and could not be archived automatically.",
+        "offlineCompleteRejectedPreflight": "“{{title}}” returned to Pending: could not verify its worktree before archiving."
       },
       "taskListMode": {
         "enterInbox": "Switch to inbox",
@@ -512,7 +525,8 @@
           "all": "All",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "Plugin engine"
         },
         "lastActivity": {
           "1d": "1d",
@@ -521,7 +535,8 @@
           "30d": "30d",
           "all": "All"
         }
-      }
+      },
+      "partial": "Results may be incomplete. Narrow the keywords or search a specific project."
     },
     "renameDevice": {
       "title": "Rename Device",
@@ -828,9 +843,6 @@
     "connectionsEmpty": "No skills or connections selected.",
     "largeProfileRecovery": "This profile is too long to edit here. Edit the full profile on {{deviceName}}.",
     "addModel": "Add fallback model",
-    "removeModel": "Remove model",
-    "moveModelUp": "Move model up",
-    "backupModels": "Backup models ({{count}})",
     "settingsTitle": "Buddy settings",
     "name": "Name",
     "portraitNumber": "Portrait {{number}}",
@@ -957,6 +969,8 @@
     "timeout": "“{{device}}” isn’t ready yet. Make sure Cindy is open and online on that computer, then try again.",
     "conflict": "{{name}} has already moved to “{{device}}”.",
     "switchFailed": "Can’t change the main computer right now. Try again later.",
+    "skillTargetOutdated": "A Skill in {{name}} has a body larger than 64 KB, which the older Cindy on “{{device}}” cannot receive. Update Cindy on that computer before moving your buddy. Your buddy remains on the original computer",
+    "skillTargetOutdated_skill": "The older Cindy on “{{device}}” can’t receive the Skill “{{slug}}”. Its body is {{bodyBytes, number}} bytes, over the 64 KB limit. {{name}} is still running on the original computer. Update Cindy on the target computer and try again.",
     "unknownDevice": "another computer",
     "runsOn": "Runs on “{{device}}”",
     "homeTitle": "Main Computer",

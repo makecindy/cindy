@@ -147,22 +147,16 @@ describe('MemoryFts', () => {
     }
   });
 
-  it('MATCH 满额时 LIKE 臂先排除重复再截断, 子串命中不被挤出', () => {
-    // 3 条整 token 命中在 LIKE 臂质量分更高 (title + description + body 全命中),
-    // 加上自身已满 limit 3 — 若 LIKE 臂先截断再排除重复, 它们占满名额又把自身全部剥掉,
-    // 只有子串命中的 LinkedIn 就一起消失了。
-    for (let i = 0; i < 3; i++) {
-      const dense = record(`project_dense_${i}.md`, 'link link link');
-      fts.upsert({
-        ...dense,
-        frontmatter: { ...dense.frontmatter, title: 'link 速查', description: 'link 速查' },
-      });
-    }
-    fts.upsert(record('project_linkedin.md', 'LinkedIn 社交平台'));
+  it('MATCH 重复项占满 500 条 LIKE 候选时仍保留子串命中', () => {
+    // 500 条整词命中以较短正文排在唯一的子串命中前，排除重复须早于候选池截断。
+    fts.rebuild([
+      ...Array.from({ length: 500 }, (_, i) => record(`project_dense_${i}.md`, '缓存 说明')),
+      record('project_substring.md', '缓存位置说明'),
+    ]);
 
-    const hits = fts.search('link', { limit: 3 });
+    const hits = fts.search('缓存', { type: 'project', limit: 3 });
     expect(hits.length).toBe(3);
-    expect(hits.map((h) => h.filename)).toContain('project_linkedin.md');
+    expect(hits[2]?.filename).toBe('project_substring.md');
   });
 
   it('limit=1 且 MATCH 满额时不预留 (保住唯一最佳 MATCH)', () => {

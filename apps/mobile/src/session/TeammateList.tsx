@@ -112,7 +112,7 @@ export function useTeammateRowRenderer({ items, isOnline, connectionState, quiet
   const deviceNameSources = useMemo(() => items.map(row => ({
     deviceId: row.host.deviceId, name: row.host.deviceName,
   })), [items]);
-  const renderBot = (row: HostedRemoteCollectionItem, last: boolean, timeLabel?: string, actions?: TeammateRowActions) => {
+  const renderBot = (row: HostedRemoteCollectionItem, last: boolean) => {
     const display = row.item.display;
     const title = resolveRemoteText(display.title, i18n.language);
     const online = isOnline(row.host);
@@ -121,8 +121,8 @@ export function useTeammateRowRenderer({ items, isOnline, connectionState, quiet
       online, connected, quiet: !!quietPresence?.(row), activities, userId: user?.id ?? '', language: i18n.language });
     const ambiguous = (duplicateNames.get(title.normalize('NFKC').toLocaleLowerCase(i18n.language)) ?? 0) > 1;
     const timestamp = display.timestamp;
-    const time = timeLabel ?? (timestamp !== undefined && Number.isFinite(new Date(timestamp).getTime())
-      ? formatRemoteSessionSidebarTime(new Date(timestamp).toISOString(), now) : '');
+    const time = timestamp !== undefined && Number.isFinite(new Date(timestamp).getTime())
+      ? formatRemoteSessionSidebarTime(new Date(timestamp).toISOString(), now) : '';
     return <TeammateRow key={`bot:${row.key}`} rowKey={row.key} deviceId={row.host.deviceId} botId={row.item.ref.id}
       title={title} device={ambiguous ? deviceDisplayName(row.host.deviceId, row.host.deviceName, deviceNameSources) : undefined}
       rawPreview={!generating && display.preview ? resolveRemoteText(display.preview, i18n.language) : ''}
@@ -133,28 +133,16 @@ export function useTeammateRowRenderer({ items, isOnline, connectionState, quiet
       startedAt={generating ? display.generation!.startedAt : null}
       status={status}
       connected={connected} quiet={!!quietPresence?.(row)} attention={attention} waiting={waiting}
-      unread={unread} time={time} last={last} onSelect={select} actions={actions?.list} onAction={actions?.run} />;
+      unread={unread} time={time} last={last} onSelect={select} />;
   };
-  /**
-   * `timeLabel` replaces the activity time (the inbox shows when a snoozed row returns);
-   * `actions` are the row's swipe actions, offered to screen readers on the row itself.
-   */
-  return (entry: TeammateListEntry, last: boolean, timeLabel?: string, actions?: TeammateRowActions) => {
-    if (entry.kind === 'bot' || !groups) return renderBot(entry.row, last, timeLabel, actions);
+  return (entry: TeammateListEntry, last: boolean) => {
+    if (entry.kind === 'bot' || !groups) return renderBot(entry.row, last);
     return <BotGroupListRow key={`group:${entry.row.key}`} row={entry.row} online={groups.isOnline(entry.row.host)} last={last}
       onPress={() => groups.onSelect(entry.row)} />;
   };
 }
 
-/** Pass stable references: the row is memoized. */
-export interface TeammateRowActions {
-  list: readonly { name: string; label: string }[];
-  run(name: string): void;
-}
-
 interface TeammateRowProps {
-  actions?: TeammateRowActions['list'];
-  onAction?: TeammateRowActions['run'];
   status: TeammateStatus;
   rowKey: string; deviceId: string; botId: string; title: string; device?: string;
   rawPreview: string; subtitle: string;
@@ -170,7 +158,7 @@ interface TeammateRowProps {
 const TeammateAvatar = memo(RemoteCompanionAvatar);
 const TeammateRow = memo(function TeammateRow({ rowKey, deviceId, botId, title, device, rawPreview, subtitle,
   avatarKind, avatarValue, avatarFallback, avatarColor, generating, phase, startedAt,
-  connected, quiet, attention, waiting, unread, time, last, onSelect, status, actions, onAction }: TeammateRowProps) {
+  connected, quiet, attention, waiting, unread, time, last, onSelect, status }: TeammateRowProps) {
   const { t } = useTranslation();
   const preview = useMemo(() => rawPreview ? parseMobileMarkdownInlines(rawPreview)
     .map(inline => inline.type === 'image' ? inline.alt : inline.text).join('').replace(/\s+/g, ' ').trim() : '', [rawPreview]);
@@ -204,5 +192,5 @@ const TeammateRow = memo(function TeammateRow({ rowKey, deviceId, botId, title, 
     previewPrefix={connection ? undefined : prefix || undefined}
     previewPrefixTestID={attention ? 'teammate.attention' : undefined}
     unread={false} unreadLabel={t('devices.companions.unread')}
-    last={last} onPress={press} accessibilityActions={actions} onAccessibilityAction={onAction} />;
+    last={last} onPress={press} />;
 });

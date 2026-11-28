@@ -23,7 +23,6 @@ import { MANAGED_OLLAMA_PROVIDER_ID } from '../../shared/localModelRuntime.js';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 import { createLogger } from '../logger.js';
 import {
-  getActiveCatalog,
   getLocalCatalogOverridesSnapshot,
   resolveXdPiGatewayHintApi,
   resolveXdPiGatewayServerApi,
@@ -389,6 +388,72 @@ export async function readPiBundledModels(
 
 
 /**
+ * #12298: 订阅来源的连接态判定(供启动器接到 AgentDeps.isNativeProviderSourceConnected)。
+ *
+ * 断开的订阅仍留在会话目录里(重连后父会话可直接切换),但子代理路由不能列它:
+ * 按这些名字派发的子任务会在首次上游请求时必败(空 runId + 噪声失败通知)。
+ *
+ * 判定口径与「设置 → 模型供应商」列表一致,且是纯读(不触发绑定自愈、不写凭证文件):
+ *  · xAI 家族(内置 SuperGrok 与独立账号)读 Grok OAuth 登录态;
+ *  · Codex 家族账号读该账号自己的登录态(bridge 对非 'openai' 的 providerId 也用这一条);
+ *  · 'openai'(ChatGPT 订阅)两条凭证路径任一可用即算连接 —— 本机 Codex 登录与账号池,
+ *    bridge 实际按会话绑定的账号取凭证,只判一条会把仍可用的来源误删。
+ *
+ * 读不到结论的来源一律按「连接」处理:只在确知断开时剔除,宁可多列也不误伤可用来源。
+ *
+ * 桌面与 Node Host 各接各的凭证读数(port 注入),但判定规则共用这一份;连接态不进入
+ * provider 清单本身 —— 清单是桌面与 Host 的逐字节契约(host↔desktop parity)。
+ */
+export interface PiSubscriptionConnectionPorts {
+  /** 当前生效目录(判断来源属于哪个订阅家族)。 */
+  getActiveCatalog: () => Catalog;
+  /** SuperGrok OAuth 登录态(providerId 缺省即内置 'xai')。 */
+  hasGrokOAuthLogin: (providerId?: string) => boolean;
+  /** 独立 Codex 账号的登录态。 */
+  codexAccountState: (providerId: string) => { authenticated: boolean };
+  /** 本机 Codex(ChatGPT 订阅)登录态,纯读版。 */
+  hasCodexOAuthLoginReadOnly: () => boolean;
+  /**
+   * ChatGPT 账号池里是否还有已连接的账号。桌面有这个账号池;Node Host 的订阅账号以
+   * 独立来源出现(各自判自己的登录态),没有池可读 → 缺省即不读这一条。
+   */
+  hasConnectedSubscriptionPool?: (
+    providerId: string,
+    options?: { includeBoundAccounts?: boolean },
+  ) => boolean;
+  /** 读取结论失败时的兜底日志。 */
+  onReadFailure?: (providerId: string, error: unknown) => void;
+}
+
+export function createPiSubscriptionConnectionReader(
+  ports: PiSubscriptionConnectionPorts,
+): (providerId: string) => boolean {
+  const {
+    getActiveCatalog,
+    hasGrokOAuthLogin,
+    codexAccountState,
+    hasCodexOAuthLoginReadOnly,
+    hasConnectedSubscriptionPool,
+    onReadFailure,
+  } = ports;
+  return (providerId: string): boolean => {
+    try {
+      const account = getActiveCatalog().providers.find((provider) => provider.id === providerId);
+      const native = account?.auth.native;
+      if (native === 'xai' || providerId === 'xai') return hasGrokOAuthLogin(providerId);
+      if (native === 'codex') return codexAccountState(providerId).authenticated;
+      if (providerId === 'openai') {
+        return hasCodexOAuthLoginReadOnly()
+          || Boolean(hasConnectedSubscriptionPool?.('openai', { includeBoundAccounts: true }));
+      }
+    } catch (error) {
+      onReadFailure?.(providerId, error);
+    }
+    return true;
+  };
+}
+
+/**
  * Overlay Cindy's host-managed subscription endpoints onto PI's bundled
  * provider catalog. Resolved catalog metadata is authoritative for all subscription
  * models; the version-matched PI binary remains authoritative for native API and
@@ -469,6 +534,12 @@ export function buildPiSubscriptionNativeProviders(
         ];
       }),
     );
+    if (sourceProviderId === 'openai') {
+      // A saved ChatGPT selection may include the namespace even when the catalog uses wire IDs.
+      for (const model of models) {
+        if (!model.id.includes('/')) modelIdAliases[`chatgpt/${model.id}`] ??= model.id;
+      }
+    }
     providers.push({
       id: piProviderId,
       sourceProviderId,
@@ -546,15 +617,18 @@ export function buildPiSubscriptionNativeProviders(
   // Claude 订阅不给 Pi:它只供内置 Claude Code CLI 用自己的登录使用(Pi 原生 /login 不受影响)。
   add('openai', 'openai-codex', 'OpenAI (ChatGPT)', endpoint, 'chatgpt/');
   add('xai', 'xai', 'xAI (SuperGrok)', appendEndpointPath(endpoint, 'v1'), 'xai/');
-  // Independent Claude accounts are retired and never projected into Pi.
-  for (const account of catalog.providers.filter((provider) => provider.auth.native && provider.auth.native !== 'claude')) {
+  // Named OpenAI pools have subscriptionPool rather than auth.native. Both they
+  // and legacy independent connections need their own Pi runtime identity.
+  // Claude subscriptions remain exclusive to the native Claude Code harness.
+  for (const account of catalog.providers.filter((provider) => provider.subscriptionPool === 'openai'
+    || (provider.auth.native && provider.auth.native !== 'claude'))) {
     // Reuse the native subscription projection with this account's catalog. Unique provider IDs
     // have no bundled registry entry, so materialize native model metadata instead of inheriting it.
     const brand = account.auth.native === 'xai' ? 'xai' : 'openai';
     const api = brand === 'xai' ? 'openai-responses' as const : 'openai-codex-responses' as const;
     const accountCatalog = {
       ...catalog,
-      providers: [{ ...account, id: brand, auth: { method: 'oauth' as const } }],
+      providers: [{ ...account, id: brand, subscriptionPool: undefined, auth: { method: 'oauth' as const } }],
     };
     const projected = buildPiSubscriptionNativeProviders(
       accountCatalog, endpoint, bundledModelsByProvider, listedModelIdsByProvider,
@@ -942,6 +1016,8 @@ function isLoopbackUrl(baseUrl: string): boolean {
 
 /** What resolvePiNativeProviders and the xAI projection read from their host. */
 export interface PiNativeProviderPorts {
+  /** Live account-aware routing membership, including bound historical models. */
+  getCatalog(): Catalog;
   /** Loopback endpoint of the compat proxy (desktop: anthropic-compat-proxy-host.ts). */
   getClaudeEndpoint(): string;
   isAnthropicCompatProxyHandleReady(): boolean;
@@ -960,6 +1036,7 @@ export interface PiNativeProviderPorts {
 
 export function createPiNativeProviderResolver(ports: PiNativeProviderPorts) {
 const {
+  getCatalog,
   getClaudeEndpoint, isAnthropicCompatProxyHandleReady, resolvePiBinaryPath, isOpenAiSubscriptionProviderId,
   hasGrokOAuthLogin, listCustomProvidersWithSecureHeaders, readCustomProviderKey, ensureSharedGlobalSkills,
   ensureManagedOllamaReadyForSession, getUserDataDir,
@@ -972,11 +1049,12 @@ async function buildXaiPiNativeProvider(
   remote = false,
   providerId = 'xai',
 ): Promise<PiNativeProvidersResult> {
+  const catalog = getCatalog();
   const catalogModels =
-    getActiveCatalog().providers.find((provider) => provider.id === providerId)?.models.pi ?? [];
+    catalog.providers.find((provider) => provider.id === providerId)?.models.pi ?? [];
   // Reuse the subscription projection so SSH and local xAI receive identical
   // capacity, reasoning and input metadata, including newly discovered models.
-  const projected = buildPiSubscriptionNativeProviders(getActiveCatalog(), getClaudeEndpoint())
+  const projected = buildPiSubscriptionNativeProviders(catalog, getClaudeEndpoint())
     .providers.find(provider => provider.sourceProviderId === providerId);
   const models: PiNativeModelSpec[] = (projected?.models ?? []).map(model => ({
     ...model,
@@ -1124,7 +1202,7 @@ async function resolvePiNativeProviders(ctx: {
       }
     }
   }
-  const sessionCatalog = getActiveCatalog();
+  const sessionCatalog = getCatalog();
   const pinnedCatalog = ctx.sessionId && ctx.purpose !== 'preview' ? { ...sessionCatalog,
     providers: sessionCatalog.providers.map(provider => provider.id !== ctx.providerId ? provider : {
       ...provider, models: { ...provider.models, pi: provider.models.pi?.map(model => {
@@ -1136,7 +1214,7 @@ async function resolvePiNativeProviders(ctx: {
     }),
   } : sessionCatalog;
   const buildCustom = () => buildPiNativeProvidersFromConfigs(
-    mergeByokNativeConfigs(configs, getActiveCatalog().providers),
+    mergeByokNativeConfigs(configs, sessionCatalog.providers),
     readCustomProviderKey,
     (id, reason) => log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
     bundledModels ?? undefined,
@@ -1166,12 +1244,12 @@ async function resolvePiNativeProviders(ctx: {
   if (!isRemote && compatProxyReady) {
     const retainedOpenAiModel =
       ctx.resumeSessionId && ctx.providerId && isOpenAiSubscriptionProviderId(ctx.providerId)
-        ? resolvePiRuntimeModelDescriptor(getActiveCatalog(), ctx.providerId, ctx.model, {
+        ? resolvePiRuntimeModelDescriptor(sessionCatalog, ctx.providerId, ctx.model, {
             localOverrides: getLocalCatalogOverridesSnapshot(),
           })
         : null;
     subscriptions = buildPiSubscriptionNativeProviders(
-      getActiveCatalog(),
+      sessionCatalog,
       getClaudeEndpoint(),
       bundledModels ?? undefined,
       undefined,

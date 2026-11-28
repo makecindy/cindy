@@ -14,6 +14,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { __testing as vintageTesting } from '@/features/cc-agent/lib/sidebarInstallVintage';
+
 import {
   CREATORS_KEY,
   loadCreators,
@@ -23,6 +25,9 @@ import {
   VENDOR_KEY,
   loadVendor,
   persistVendor,
+  nextVendorAfterToggle,
+  harnessFilterPredicate,
+  type FilterVendor,
   PROJECTS_KEY,
   GROUP_BY_KEY,
   LAST_ACTIVITY_KEY,
@@ -290,10 +295,36 @@ describe('loadSortBy', () => {
 });
 
 describe('loadProjectOrder', () => {
-  beforeEach(() => installMemoryLocalStorage());
-  afterEach(() => uninstallLocalStorage());
+  beforeEach(() => {
+    installMemoryLocalStorage();
+    vintageTesting.resetMemo();
+  });
+  afterEach(() => {
+    uninstallLocalStorage();
+    vintageTesting.resetMemo();
+  });
 
-  it("defaults to 'activity' when storage is empty", () => {
+  // 2026-11-28 user decision: project rows keep a manual order by default. It applies to new
+  // installs only; an install already in use keeps following its tasks (sidebar-redesign-plan §3.0).
+  it('defaults a new install to the manual order and keeps it on the next launch', () => {
+    expect(loadProjectOrder()).toBe('custom');
+    // By the next launch the install has usage traces and is no longer "new": the choice must be saved.
+    localStorage.setItem('cc-agent.lastChatView.v1', '{"kind":"new"}');
+    vintageTesting.resetMemo();
+    expect(loadProjectOrder()).toBe('custom');
+  });
+
+  it.each([
+    ['classified as new by an earlier version', 'fresh'],
+    ['classified as upgraded by an earlier version', 'legacy'],
+  ])('keeps following tasks on an install %s', (_name, vintage) => {
+    localStorage.setItem(vintageTesting.INSTALL_VINTAGE_KEY, vintage);
+    expect(loadProjectOrder()).toBe('activity');
+    expect(localStorage.getItem(PROJECT_ORDER_KEY)).toBeNull();
+  });
+
+  it('keeps following tasks on an install that shows earlier use but was never classified', () => {
+    localStorage.setItem('sidebar.cardMode', 'card');
     expect(loadProjectOrder()).toBe('activity');
   });
 
@@ -888,19 +919,59 @@ describe('Harness filter persistence', () => {
   beforeEach(() => installMemoryLocalStorage());
   afterEach(() => uninstallLocalStorage());
 
-  it.each(['all', 'cc', 'codex', 'pi'] as const)(
-    'restores %s from the existing preference key',
-    (vendor) => {
-      persistVendor(vendor);
-      expect(localStorage.getItem(VENDOR_KEY)).toBe(vendor);
-      expect(loadVendor()).toBe(vendor);
-    },
-  );
+  // A single built-in choice keeps the pre-multi-select storage format, so a preference saved by
+  // an older version still loads and an older window still reads what this one saved.
+  it.each(['cc', 'codex', 'pi'] as const)('keeps the single built-in choice %s in the legacy format', (vendor) => {
+    localStorage.setItem(VENDOR_KEY, vendor);
+    expect(loadVendor()).toEqual([vendor]);
+    persistVendor([vendor]);
+    expect(localStorage.getItem(VENDOR_KEY)).toBe(vendor);
+  });
 
-  it('keeps the all default for absent or unknown harness values', () => {
+  it('restores several harnesses, including one a plugin provides', () => {
+    const selection = ['cc', 'acp-plugin:demo-plugin:engine'];
+    persistVendor(selection);
+    expect(loadVendor()).toEqual(selection);
+    persistVendor('all');
     expect(loadVendor()).toBe('all');
-    localStorage.setItem(VENDOR_KEY, 'unknown');
+  });
+
+  it('keeps the generic plugin-engine selection saved by #13285', () => {
+    localStorage.setItem(VENDOR_KEY, 'acp');
+    expect(loadVendor()).toEqual(['acp']);
+    const matches = harnessFilterPredicate(loadVendor());
+    expect(matches?.({ agentKind: 'acp', providerId: 'acp-plugin:example:engine' })).toBe(true);
+    expect(matches?.({ agentKind: 'cc' })).toBe(false);
+  });
+
+  it.each([null, 'unknown', '[]', '[1, ""]', '["cc"'])('falls back to all for the stored value %s', (raw) => {
+    if (raw !== null) localStorage.setItem(VENDOR_KEY, raw);
     expect(loadVendor()).toBe('all');
+  });
+
+  it('returns to all when the last selected harness is unchecked', () => {
+    expect(nextVendorAfterToggle('all', 'pi')).toEqual(['pi']);
+    expect(nextVendorAfterToggle(['pi'], 'codex')).toEqual(['pi', 'codex']);
+    expect(nextVendorAfterToggle(['pi'], 'pi')).toBe('all');
+  });
+
+  // Before 2026-11-28 the filter only knew cc / codex / pi: a plugin-harness task could not be
+  // selected, and choosing any built-in harness hid every one of them.
+  it('matches plugin-harness tasks by their own engine, not by a built-in harness', () => {
+    const engineA = { agentKind: 'acp', providerId: 'acp-plugin:demo-plugin:a' };
+    const engineB = { agentKind: 'acp', providerId: 'acp-plugin:demo-plugin:b' };
+    const claude = { agentKind: 'cc', providerId: 'anthropic' };
+    const visible = (selection: FilterVendor) => {
+      const matches = harnessFilterPredicate(selection);
+      return [engineA, engineB, claude, { agentKind: null }].filter((task) => !matches || matches(task));
+    };
+    expect(harnessFilterPredicate('all')).toBeNull();
+    expect(visible(['cc'])).toEqual([claude, { agentKind: null }]);
+    expect(visible([engineA.providerId])).toEqual([engineA]);
+    expect(visible(['cc', engineB.providerId])).toEqual([engineB, claude, { agentKind: null }]);
+    // A registered project with no task only records the agent kind: any selected plugin harness keeps it.
+    expect(harnessFilterPredicate([engineA.providerId])?.({ agentKind: 'acp' })).toBe(true);
+    expect(harnessFilterPredicate(['cc'])?.({ agentKind: 'acp' })).toBe(false);
   });
 });
 

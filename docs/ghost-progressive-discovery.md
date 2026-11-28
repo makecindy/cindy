@@ -154,6 +154,10 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
     （Desktop 侧 `composePiSystemPrompt` 预构建的产品段保持不变）。
 - **`ghost_list` 工具描述（副通道）**：同一 formatter 输出，与 system 段字节
   一致。副通道保证只看工具面的路径（以及历史行为）不回退。
+- **插件引擎（ACP）首轮说明**：插件引擎收不到 Cindy system 段，`AcpAgent.startSession`
+  把同一份花名册文本放进新会话首条消息前的说明（只在 Agent 接收了 `cindy` 网关时），
+  会话边界与 §3.4 相同（另一台电脑托管用快照、隔离伙伴不附、恢复会话不重复），见
+  `docs/plans/acp-plugin-bridge.md`「插件与 Skill 告知」。
 - 纯格式化函数下沉在 `packages/cindy-tools`，主进程与 MCP server 共用，避免两处
   实现漂移。
 

@@ -15,6 +15,7 @@ import {
 const state = vi.hoisted(() => ({
   authenticated: true,
   scope: 'cloud:owner:1',
+  settingsReads: vi.fn(),
   remoteControl: true,
   allowed: new Set<string>(['anthropic']),
   owned: [] as ProviderShareOwned[],
@@ -52,7 +53,7 @@ vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   remoteProviderAccessEpoch: () => '1',
 }));
 vi.mock('../remoteModelAccess.js', () => ({ remoteModelAccess: { allows: () => true } }));
-vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: state.remoteControl }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => { state.settingsReads(); return { remoteControlEnabled: state.remoteControl }; } }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: {
     listOwned: async () => {
@@ -103,6 +104,7 @@ import {
   PROVIDER_SHARE_REMOTE_LINK_WINDOW_MS,
   providerShareGuestAccess,
   ownedProviderShareGuestAccess,
+  withProviderShareGuestAccessSnapshot,
   providerShareGuestDenial,
   providerShareMemberMatcher,
   quietProviderShareRequests,
@@ -967,6 +969,48 @@ describe('provider share approval follows the computer that generated the link',
 });
 
 describe('provider share guest routing', () => {
+  // Unit regression from the Windows 0.1.145 logs: the model picker retries a known share after a
+  // failed membership read. Existing tests recover by calling the background poll directly.
+  it('recovers an unavailable share on an explicit catalog retry and joins concurrent retries', async () => {
+    state.received = [received('active')];
+    const list = vi.spyOn(providerShareApi, 'listReceived');
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    state.receivedError = true;
+    await refreshReceivedShares('poll');
+    list.mockClear();
+    await expect(resolveRemoteAgentTargetWhenReady('share:share-1')).rejects.toThrow(/DEVICE_LINK_NOT_CONNECTED/);
+    expect(list).not.toHaveBeenCalled();
+    state.receivedError = false;
+    const retry = () => resolveRemoteAgentTargetWhenReady('share:share-1', { retryDirectory: true });
+    const target = providerShareHostPeer('share-1', 'owner-mac');
+    await expect(Promise.all([retry(), retry()])).resolves.toEqual([target, target]);
+    expect(list).toHaveBeenCalledTimes(1);
+    await expect(retry()).resolves.toBe(target);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+
+  // Unit: a manual retry uses fresh membership, and a continuing failure cannot start a second read.
+  it.each([
+    ['offline', 'DEVICE_LINK_NOT_CONNECTED'],
+    ['removed', 'REMOTE_AGENT_SHARE_REMOVED'],
+    ['paused', 'REMOTE_AGENT_SHARE_PAUSED'],
+  ])('does not route an explicitly retried share when the refreshed list says %s', async (status, error) => {
+    state.received = [received('active')];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    state.receivedError = true;
+    await refreshReceivedShares('poll');
+    const list = vi.spyOn(providerShareApi, 'listReceived');
+    state.receivedError = status === 'offline';
+    state.received = status === 'paused' ? [received('paused')] : [];
+    const retry = () => resolveRemoteAgentTargetWhenReady('share:share-1', { retryDirectory: true });
+    await expect(retry()).rejects.toThrow(error);
+    await expect(retry()).rejects.toThrow(error);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
   it('distinguishes an authoritative empty membership list from startup, failure, disconnect and account switch', async () => {
     expect(getReceivedSharesSnapshot().confirmedRegions).toEqual([]);
     state.receivedError = true;
@@ -1471,4 +1515,25 @@ describe('provider share guest routing', () => {
     }
   });
 
+});
+
+// Unit: real common guest access reader. Two checks for one peer share one settings check,
+// another member cannot borrow it, and a later phase must observe remote-control revocation.
+// Incident: poll metadata amplification; previous access tests did not count repeated config checks.
+it.each(['remote-control', 'owner', 'provider'] as const)('reuses common access only within a synchronous phase and isolates members (%s)', async change => {
+  state.owned = [share([member('m1'), member('m2', 'paused')])];
+  startProviderShareHost(events());
+  await refreshProviderShareHost('test');
+  state.settingsReads.mockClear();
+  withProviderShareGuestAccessSnapshot(() => {
+    expect(providerShareGuestAccess(guest('m1'))).not.toBeNull();
+    expect(ownedProviderShareGuestAccess(guest('m1'))).not.toBeNull();
+    expect(ownedProviderShareGuestAccess(guest('m2'))).toBeNull();
+  });
+  expect(state.settingsReads).toHaveBeenCalledTimes(1);
+  if (change === 'remote-control') state.remoteControl = false;
+  else if (change === 'owner') state.scope = 'cloud:other:2';
+  else state.allowed.clear();
+  withProviderShareGuestAccessSnapshot(() => expect(ownedProviderShareGuestAccess(guest('m1'))).toBeNull());
+  expect(state.settingsReads).toHaveBeenCalledTimes(change === 'owner' ? 1 : 2);
 });

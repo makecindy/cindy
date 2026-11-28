@@ -13,6 +13,7 @@ import {
   type FinishSessionTerminalEventDeps,
 } from './sessionEventTerminal.js';
 import { recordSessionEventSnapshots } from './sessionEventSnapshots.js';
+import { recordSessionAcpTurnUsage } from './sessionAcpTurnUsage.js';
 import {
   recordSessionClaudeTurnUsage,
   type RecordSessionClaudeTurnUsageDeps,
@@ -75,6 +76,7 @@ export function handleSessionEvent(
     );
     recordSessionCodexTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
     recordSessionPiTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
+    recordSessionAcpTurnUsage(session, event);
     deps.recordProviderPartyUsage?.(session, event);
   };
   if (admitUsage === undefined) record();

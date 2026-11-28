@@ -322,3 +322,63 @@ describe('codex body recovery after WebSocket → HTTP fallback', () => {
     }
   });
 });
+
+describe('Codex Responses search dialect (Issue 8170)', () => {
+  afterEach(async () => {
+    unregister('session-search');
+    await disposeCodexProxy();
+  });
+
+  const search = { type: 'web_search', search_context_size: 'low' };
+  const ordinaryTool = { type: 'function', name: 'lookup', parameters: { type: 'object' } };
+  const payload = {
+    model: 'gpt-fixture',
+    input: 'Look up the fixture',
+    tools: [ordinaryTool, search],
+    tool_choice: { type: 'web_search' },
+  };
+  const rejected = "Invalid JSON data: tools[1].type: unknown variant `web_search`, expected one of `function`, `web_search_preview`, `mcp`";
+
+  it.each([
+    ['legacy', 200, 2],
+    ['modern', 200, 1],
+    ['unsupported', 400, 1],
+    ['rejected again', 400, 2],
+  ] as const)('uses one explicit retry for %s', async (dialect, expectedStatus, requestCount) => {
+    const sent: typeof payload[] = [];
+    const upstream = createServer(async (req, res) => {
+      const body = JSON.parse(await readBody(req)) as typeof payload;
+      sent.push(body);
+      const accepted = dialect === 'modern' || (dialect === 'legacy'
+        && body.tools[1]?.type === 'web_search_preview' && body.tool_choice.type === 'web_search_preview');
+      res.writeHead(accepted ? 200 : 400, { 'content-type': 'application/json', connection: 'close' });
+      res.end(JSON.stringify(accepted ? { id: 'resp_ok', output: [] } : {
+        error: {
+          code: 'json_parse_error',
+          message: dialect === 'unsupported' ? rejected.replace(', `web_search_preview`', '') : rejected,
+        },
+      }));
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    proxyUpstream.url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    try {
+      setCodexProxyAuthInjection('oauth-bearer');
+      await ensureCodexProxyReady();
+      registerComposed('session-search', 'thread-search', 'PRODUCT_PROMPT');
+      expect((await postReplay(payload, 'thread-search')).status).toBe(expectedStatus);
+      expect(sent).toHaveLength(requestCount);
+      expect(sent[0]!.tools).toEqual(payload.tools);
+      expect(sent[0]!.tool_choice).toEqual(payload.tool_choice);
+      if (requestCount === 2) {
+        expect(sent[1]).toEqual({
+          ...sent[0],
+          tools: [ordinaryTool, { ...search, type: 'web_search_preview' }],
+          tool_choice: { type: 'web_search_preview' },
+        });
+      }
+    } finally {
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+});

@@ -65,7 +65,7 @@ type RemoteInvokeDeps = {
     options?: { preSend?: () => void },
   ): Promise<InvokeResultPayload>;
 };
-type RemoteChange = { status: SessionStatusChangeItem['status'] } | { snoozedUntil: string | null };
+type RemoteChange = { status: SessionStatusChangeItem['status'] } | { snoozedUntil: string | null } | { pinnedAt: string | null };
 type RemoteItem = { sessionId: string; title: string | null; workingDir: string | null };
 
 /** Reuse the remote UI's narrow patch-meta service; no new channel, DB writes or retries. */
@@ -90,7 +90,14 @@ export function createRemoteSessionsSnoozeSetter(deps: RemoteInvokeDeps): NonNul
   };
 }
 
-function createRemoteSessionsPatcher(deps: RemoteInvokeDeps) {
+function confirmsRemoteChange(row: Record<string, unknown>, change: RemoteChange): boolean {
+  if ('status' in change) return row.status === change.status;
+  if ('snoozedUntil' in change) return row.snoozedUntil === change.snoozedUntil;
+  if (change.pinnedAt === null) return row.pinnedAt === null && row.summary === null;
+  return typeof row.pinnedAt === 'string' && Number.isFinite(Date.parse(row.pinnedAt));
+}
+
+export function createRemoteSessionsPatcher(deps: RemoteInvokeDeps) {
   return async (deviceId: string, sessionIds: string[], change: RemoteChange) => {
     const status = 'status' in change ? change.status : undefined;
     const assertActionCurrent = captureTaskActionSyncGuard();
@@ -140,13 +147,23 @@ function createRemoteSessionsPatcher(deps: RemoteInvokeDeps) {
           },
         };
         let promoted = false;
-        if (status === 'deleted') {
+        if (status === 'deleted' || 'pinnedAt' in change) {
           const snapshot = await deps.invoke(deviceId, 'local-db:sessions:get', [sessionId], options);
           assertCurrent();
           if (!snapshot.ok) return fail(index, failure(snapshot.error.code, snapshot.error.message));
-          const task = snapshot.result as { id?: string; sideChatPromoted?: boolean } | null;
+          const task = snapshot.result as { id?: string; sideChatPromoted?: boolean; pinnedAt?: unknown; status?: string; summary?: unknown } | null;
           if (task?.id !== sessionId) return fail(index, { errorCode: 'NOT_FOUND', message: '目标任务不存在。' });
-          promoted = task.sideChatPromoted === true;
+          if ('pinnedAt' in change) {
+            if (task.status === 'deleted') return fail(index, { errorCode: 'PRECONDITION_FAILED', message: '目标任务已删除。' });
+            if (task.pinnedAt !== null && (typeof task.pinnedAt !== 'string' || !Number.isFinite(Date.parse(task.pinnedAt))))
+              return fail(index, { errorCode: 'REMOTE_UNSUPPORTED', message: '目标电脑未返回置顶状态。' });
+            // Older hosts replace the timestamp on every patch; skip already-satisfied pins.
+            if (confirmsRemoteChange(task, change)) {
+              changed.push({ sessionId, title: null, workingDir: null });
+              continue;
+            }
+          }
+          promoted = status === 'deleted' && task.sideChatPromoted === true;
         }
         response = await deps.invoke(deviceId, 'local-db:sessions:patch-meta',
           [sessionId, promoted ? { status, deleteTarget: 'task' } : change], options);
@@ -175,7 +192,7 @@ function createRemoteSessionsPatcher(deps: RemoteInvokeDeps) {
       if (!response.ok) return fail(index, failure(response.error.code, response.error.message));
       const row = response.result as Record<string, unknown> | null;
       if (!row || typeof row !== 'object' || Array.isArray(row) || row.id !== sessionId
-        || ('status' in change ? row.status !== change.status : row.snoozedUntil !== change.snoozedUntil)) {
+        || !confirmsRemoteChange(row, change)) {
         return fail(index, unknownOutcome());
       }
       changed.push({

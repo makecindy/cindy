@@ -8,6 +8,7 @@
  *  - client: DeviceLinkClient(重连 / 心跳 / 请求配对状态机)
  */
 export * from "./protocol.js";
+export * from "./deviceNameMerge.js";
 export * from "./allowlist.js";
 export * from "./client.js";
 export * from "./routedClient.js";
@@ -39,6 +40,7 @@ export * from "./remoteClipboard.js";
 export * from "./remoteCursor.js";
 export * from "./peerRecoveryScheduler.js";
 export * from "./invokePolicy.js";
+export * from "./listingReadCoalescer.js";
 export * from "./filePeer.js";
 export * from "./peerTransferCooldown.js";
 export * from "./peerInvoke.js";
@@ -94,6 +96,7 @@ export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
 export * from "./machineStatus.js";
 export * from "./agentNetSwitch.js";
+export * from "./peerAppUpdate.js";
 export * from "./pluginPages.js";
 
 export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef } from './stallDiagnostics.js';

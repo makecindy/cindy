@@ -204,10 +204,10 @@ macOS 在用户请求的回放窗口实际显示前激活应用，再聚焦回�
 main 按所属窗口、顶层 frame 和当前 token 校验每次采集，只向面板发送裁剪后的像素；
 不授予 Renderer 通用屏幕媒体流，不扩大 device-link 的远程 IPC 白名单。
 Windows 滚动截图与录制由当前用户会话的截图 helper 直接读取已选矩形（单帧最多 3200 万像素），不启动 SYSTEM broker；
-Windows 首次定格按显示器独立选择采集路径。对 8 或 10 位、全范围 RGB 且传递函数可确认为 SDR 的显示器，
-helper 按物理坐标和原分辨率采集；自定义传递函数需由 DXGI 确认对应输出为 SDR。
-除标准 8 位 sRGB 外，原生帧必须附有该显示器的 ICC 配置。冻结预览使用此配置，导出时将选区转换到 sRGB 再合成标注。
-HDR、无法确认色彩空间、缺少必需的 ICC 或原生帧不可用时，用 Electron 补采对应显示器，保留其他屏幕的有效原生帧。
+Windows 首次定格按显示器独立选择采集路径。对符合采集条件的 8 或 10 位全范围 RGB 显示器，helper 按物理坐标和原分辨率采集。
+DXGI 确认对应输出为 HDR10（全范围 PQ / BT.2020）时，helper 优先通过 DXGI `DuplicateOutput1`（`R16G16B16A16_FLOAT` scRGB）读取合成帧，并按该屏 `SDRWhiteLevel` 归一化（含真 HDR 高光时做高光平滑压缩）后转为 sRGB 位图，不可用时回退 GDI；helper 标记 `sdrFromHdr`，主机直接使用该位图并忽略显示器 ICC，避免预览和导出时再次转换颜色。
+除标准 8 位 sRGB 外，原生 SDR 设备像素必须经 DXGI 确认对应输出为 SDR，并附有该显示器的 ICC 配置。Chromium 报告的 P3/sRGB 也可能来自 HDR10 屏。对已确认的 SDR 设备像素，冻结预览使用该屏 ICC，导出时将选区转换到 sRGB 再合成标注。
+色彩空间不受支持、所需的输出确认或 ICC 缺失、原生帧不可用或尺寸不匹配时，用 Electron 补采对应显示器，保留其他屏幕的有效原生帧。
 Windows helper 的 `frame` 请求可显式指定 `encoding: "bgra"`，响应为一行 JSON 头加
 `byteLength` 个原始像素字节；未指定时保留旧 Base64 JSON，新主机也接受旧 helper 的回复。
 主机按请求 ID、尺寸和 3200 万像素上限校验后才分配独立的定长缓冲，按管道分段填充，
@@ -264,7 +264,8 @@ auth-server）+ origin 命中 `setLoginCaptchaOriginResolver` 注入的 auth 端
 也不需要新增 preload / IPC 注入面。主窗 CSP 保持不动：挑战页是独立 origin 的 guest
 文档，`installContentSecurityPolicy` 只注入 app 自有文档，`frame-src 'none'` 也不约束
 `<webview>`。回归用例钉在 `main/__tests__/webview-security.test.ts` 的 captcha 分区
-测试组。
+测试组。云端登录辅助窗口复用该分支；其安全窗口工厂只为登录启用 captcha，
+并拒绝其他 partition 的 webview，不获得主窗口的通用浏览器能力。
 
 ## 4．preload 与 Context Bridge
 

@@ -15,7 +15,7 @@ vi.mock('@cindy/maker-core', () => ({
     if (!result.accepted) throw new Error('not dispatched');
   },
 }));
-import { openLocalAgentRuntime } from '../runtime.js';
+import { openLocalAgentRuntime, resolveLocalAgentClaudeSessionId } from '../runtime.js';
 import { createLocalAgentGroupRouteResolver, type LocalAgentRouteResolver } from '../groupRoute.js';
 import { LOCAL_AGENT_ROUTE } from '../catalog.js';
 import { LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
@@ -24,8 +24,9 @@ import {
   installLocalAgentVisibleSessionHost,
   takeOverLocalAgentVisibleSession,
 } from '../visibleSessions.js';
-import type { AgentEvent } from '@cindy/maker-core';
+import type { AgentEvent, Session } from '@cindy/maker-core';
 import { acquireSendToSessionLock } from '../../maker-ipc/sendToSessionLock.js';
+import { getSessionProvider } from '../../maker-host/session-provider-store.js';
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -40,23 +41,34 @@ function deferred() {
 }
 function handle(id: string) {
   const ended = deferred();
+  const statusListeners = new Set<Parameters<Session['onStatusChange']>[0]>();
+  let closed = false;
   return {
     sdkSessionId: id,
+    requestSessionId: id,
+    getStatus: () => closed ? 'closed' : 'active',
+    hasRecyclableProjectResourceDrift: () => false,
     send: vi.fn(async () => ({ accepted: true })),
     steer: vi.fn(async () => {}),
     abort: vi.fn(async () => {}),
     setEffort: vi.fn(async () => {}),
     setInteractionListener: vi.fn(),
     onEvent: vi.fn((_listener: (event: AgentEvent) => void) => () => {}),
-    onStatusChange: vi.fn(),
+    onStatusChange: vi.fn((listener: Parameters<Session['onStatusChange']>[0]) => {
+      statusListeners.add(listener);
+      return () => statusListeners.delete(listener);
+    }),
     beginTurnContinuationWait: vi.fn<() => string | null>(() => null),
     getObservedCurrentTurnTerminal: vi.fn(() => ({ kind: 'none' })),
     close: vi.fn(async () => {
+      closed = true;
       ended.resolve();
+      for (const listener of statusListeners) listener('closed');
+      statusListeners.clear();
     }),
   };
 }
-async function fixture(options: { visible?: boolean; route?: { deviceId: string; providerId: string }; resolveRoute?: LocalAgentRouteResolver; resume?: string; trackLoad?: Parameters<typeof openLocalAgentRuntime>[6] } = {}) {
+async function fixture(options: { visible?: boolean; engine?: 'claude-code' | 'pi'; route?: { deviceId: string; providerId: string }; resolveRoute?: LocalAgentRouteResolver; resume?: string; trackLoad?: Parameters<typeof openLocalAgentRuntime>[6] } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-local-runtime-'));
   cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
   const first = handle('first');
@@ -81,7 +93,7 @@ async function fixture(options: { visible?: boolean; route?: { deviceId: string;
         label: 'Model',
         provider: 'provider',
         model: 'model',
-        engine: 'pi',
+        engine: options.engine ?? 'pi',
         efforts: ['high'],
         images: true,
         isDefault: true,
@@ -113,6 +125,42 @@ async function inputFiles(directory: string) {
 const message = { parts: [{ type: 'text', text: 'hello' }], effort: 'high' };
 
 describe('local client runtime lifecycle', () => {
+  // #12325: the local API skips task creation; Claude's gateway still needs
+  // the selected provider for each request when two sources offer the same model.
+  it('keeps concurrent local Claude provider selections until their own handles close', async () => {
+    const [a, b] = await Promise.all(['provider-a', 'provider-b'].map(providerId =>
+      fixture({ engine: 'claude-code', resolveRoute: async () => ({ providerId }) }),
+    ));
+    const aId = a.maker.startLocalAgentSession.mock.calls[0][1].sessionId;
+    const bId = b.maker.startLocalAgentSession.mock.calls[0][1].sessionId;
+    a.first.requestSessionId = 'native-a';
+    b.first.requestSessionId = 'native-b';
+
+    expect(getSessionProvider(aId)).toBe('provider-a');
+    expect(getSessionProvider(bId)).toBe('provider-b');
+    expect(resolveLocalAgentClaudeSessionId('native-a')).toBe(aId);
+    expect(resolveLocalAgentClaudeSessionId('native-b')).toBe(bId);
+    await a.runtime.close();
+    expect(getSessionProvider(aId)).toBeNull();
+    expect(resolveLocalAgentClaudeSessionId('native-a')).toBeNull();
+    expect(getSessionProvider(bId)).toBe('provider-b');
+    expect(resolveLocalAgentClaudeSessionId('native-b')).toBe(bId);
+  });
+
+  it('clears the old request identity and provider when a Claude instructions rebuild fails', async () => {
+    const f = await fixture({ engine: 'claude-code' });
+    const sessionId = f.maker.startLocalAgentSession.mock.calls[0][1].sessionId;
+    f.maker.startLocalAgentSession.mockImplementationOnce(async () => {
+      expect(resolveLocalAgentClaudeSessionId('first')).toBeNull();
+      expect(getSessionProvider(sessionId)).toBe('provider');
+      throw new Error('native start failed');
+    });
+    await f.runtime.call('instructions', { instructions: 'new context' });
+    await expect(f.runtime.call('send', message)).rejects.toThrow('native start failed');
+    expect(getSessionProvider(sessionId)).toBeNull();
+    expect(resolveLocalAgentClaudeSessionId('first')).toBeNull();
+  });
+
   // PR #7697: local providers skipped their local group. Exercise open/resume
   // through the runtime and its persisted native resume binding.
   it('uses the local group strategy and retains its selected route on resume', async () => {
@@ -483,8 +531,8 @@ describe('local client runtime lifecycle', () => {
     expect(f.maker.startLocalAgentSession).toHaveBeenCalledTimes(1);
     expect(f.first.send).not.toHaveBeenCalled();
   });
-  it('closes a late replacement engine instead of sending after its grant was closed', async () => {
-    const f = await fixture(),
+  it.each(['pi', 'claude-code'] as const)('closes a late %s replacement engine after its grant was closed', async (engine) => {
+    const f = await fixture({ engine }),
       entered = deferred(),
       held = deferred(),
       late = handle('late');
@@ -504,6 +552,8 @@ describe('local client runtime lifecycle', () => {
     expect(late.close).toHaveBeenCalledTimes(1);
     expect(late.close).toHaveBeenCalledWith({ reason: 'account-boundary' });
     expect(late.send).not.toHaveBeenCalled();
+    expect(getSessionProvider(f.maker.startLocalAgentSession.mock.calls[0][1].sessionId)).toBeNull();
+    expect(resolveLocalAgentClaudeSessionId('late')).toBeNull();
   });
   it('rebuilds again when instructions change while a rebuild is still starting', async () => {
     const f = await fixture(),

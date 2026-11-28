@@ -25,6 +25,8 @@ import {
 import { authorizeSharedTaskOperation } from '@cindy/device-link';
 import type { SharedTaskPeerCapture } from '../../device-link/sharedTaskDispatch';
 import { createSharedTaskSettingGuard } from '../sharedTaskSetting';
+import { isTrustedAppRendererEventForLocation } from '../../security/trustedAppRenderer';
+import { throwIpcError } from '../../utils/ipcValidate';
 
 function makeRow(overrides: Partial<AgentSwitchSessionRow> = {}): AgentSwitchSessionRow {
   return {
@@ -87,6 +89,54 @@ const validParams = {
   model: 'gpt-5.5',
   providerId: null,
 };
+
+describe('manual SWITCH_SESSION_AGENT takeover', () => {
+  // Unit, PR #12422: the registered IPC handler must retire a reconnect before
+  // it can run while the picker waits on the send lock. Existing validation
+  // tests never admitted a request. Either valid selection alone is enough.
+  it.each([
+    { selection: 'engine-only', options: undefined },
+    { selection: 'computer', options: { agentDeviceId: 'another-computer' } },
+  ])('notifies recovery before waiting for the send lock for a manual $selection selection', async ({ options }) => {
+    const order: string[] = [];
+    const afterLock = new Error('locked route application');
+    const withSessionLock = vi.fn(async () => { order.push('lock'); throw afterLock; });
+    const { deps } = makeDeps({ withSessionLock });
+    const notify = vi.fn(() => { order.push('takeover'); });
+    const ipc = new IpcHarness();
+    registerMakerSessionAgentSwitchHandler(ipc, deps, notify);
+
+    await expect(ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'gpt-5.5', null,
+      undefined, undefined, options)).rejects.toBe(afterLock);
+
+    expect(notify).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 's1');
+    expect(withSessionLock).toHaveBeenCalledExactlyOnceWith('s1', expect.any(Function));
+    expect(order).toEqual(['takeover', 'lock']);
+  });
+
+  // Unit, PR #12422: an otherwise valid local invoke without a trusted frame
+  // must fail at the Desktop sender gate, before cancelling recovery or locking.
+  it('rejects a frame-less local caller before it can supersede recovery', async () => {
+    const withSessionLock = vi.fn(async () => { throw new Error('unexpected lock'); });
+    const cancelStart = vi.fn();
+    const { deps } = makeDeps({ withSessionLock, cancelPendingRemoteStart: cancelStart });
+    const noteUserAction = vi.fn();
+    const ipc = new IpcHarness();
+    registerMakerSessionAgentSwitchHandler(ipc, deps, (event, sessionId) => {
+      if (!isTrustedAppRendererEventForLocation(event as Parameters<typeof isTrustedAppRendererEventForLocation>[0],
+        { devServerUrl: null, packagedRendererFile: '/app/index.html' })) {
+        throwIpcError('PERMISSION_DENIED', 'untrusted sender');
+      }
+      noteUserAction(sessionId);
+    });
+
+    await expect(ipc.invokeFrom(42, MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'gpt-5.5', null))
+      .rejects.toThrow('PERMISSION_DENIED');
+    expect(noteUserAction).not.toHaveBeenCalled();
+    expect(cancelStart).not.toHaveBeenCalled();
+    expect(withSessionLock).not.toHaveBeenCalled();
+  });
+});
 
 // #10893, unit: same-device group members are distinct provider connections.
 // The old same-engine no-op retained the old provider/native session. Exercise
@@ -674,6 +724,32 @@ describe('same-engine selection at send', () => {
     expect(h.apply).toHaveBeenCalledOnce();
   });
 
+  // Unit: selection cancels an in-flight recovery before taking the lock.
+  // A guest or malformed request must leave recovery untouched, with or without a location.
+  it('rejects unauthorized or malformed switch requests before notifying recovery', async () => {
+    const h = sharedSelectionHarness();
+    const withSessionLock = vi.fn(async () => { throw new Error('unexpected lock'); });
+    h.deps.withSessionLock = withSessionLock;
+    const cancelStart = vi.fn();
+    h.deps.cancelPendingRemoteStart = cancelStart;
+    const ipc = new IpcHarness();
+    const onUserSwitchRequested = vi.fn();
+    registerMakerSessionAgentSwitchHandler(ipc, h.deps, onUserSwitchRequested);
+    const select = (agentDeviceId?: string, model = 'gpt-6-astra') => ipc.invoke(
+      MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', model, 'openai', undefined, undefined,
+      agentDeviceId === undefined ? undefined : { agentDeviceId },
+    );
+    await expect(runDeviceLinkInvokeContext(h.context, () => select('another-computer')))
+      .rejects.toThrow('shared task guests cannot move');
+    await expect(runDeviceLinkInvokeContext(h.context, () => select())).rejects.toThrow('PERMISSION_DENIED');
+    await expect(select('invalid device!')).rejects.toThrow('INVALID_PARAMS');
+    await expect(select(undefined, '')).rejects.toThrow('INVALID_PARAMS');
+    expect(h.context.sharedTaskSetting.admitted).toBe(false);
+    expect(onUserSwitchRequested).not.toHaveBeenCalled();
+    expect(cancelStart).not.toHaveBeenCalled();
+    expect(withSessionLock).not.toHaveBeenCalled();
+  });
+
   it.each(['revoked', 'other-task', 'during-preflight'] as const)(
     'keeps the owner choice pending when guest access fails (%s)', async (failure) => {
       const h = sharedSelectionHarness(failure === 'other-task' ? 'other-task' : 's1');
@@ -767,6 +843,21 @@ describe('same-engine selection at send', () => {
     expect(h.row().providerId).toBe('openai');
     await applyPendingAgentSwitchIfIdle(h.deps, 's1');
     expect(h.row().providerId).toBe('xd');
+  });
+
+  // #12771 (unit): a confirmed catalog mismatch blocks repeated sends until a fresh pick.
+  it('holds a rejected Pi selection and lets the next pick land', async () => {
+    const h = selectionHarness();
+    const invalid: PendingAgentSwitchIntent = { sameAgentSelection: true, targetAgentKind: 'pi', model: 'a', providerId: 'B' };
+    h.pending.set('s1', invalid);
+    h.apply.mockRejectedValueOnce(Object.assign(new Error('missing model'), { code: 'MODEL_SELECTION_UNAVAILABLE' }));
+    await expect(applyPendingAgentSwitchIfIdle(h.deps, 's1')).rejects.toHaveProperty('code', 'MODEL_SELECTION_UNAVAILABLE');
+    await expect(applyPendingAgentSwitchIfIdle(h.deps, 's1')).rejects.toHaveProperty('code', 'MODEL_SELECTION_UNAVAILABLE');
+    expect(h.apply).toHaveBeenCalledTimes(1);
+    h.pending.set('s1', { sameAgentSelection: true, targetAgentKind: 'pi', model: 'b', providerId: 'B' });
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.row()).toMatchObject({ model: 'b', providerId: 'B' });
+    expect(h.pending.get('s1')).toBeUndefined();
   });
 
   it('does not apply before a running turn settles, or when send has been canceled', async () => {
@@ -1512,7 +1603,9 @@ describe('deferred switch (turn running)', () => {
     expect(calls).toEqual([]);
   });
 
-  it('applyPendingAgentSwitchIfIdle:执行失败吞掉不抛(不阻塞发送),pending 保留供下次重试', async () => {
+  // Unit regression: preserve Dash's ordinary fail-continue policy, while the
+  // public intent must report the failed preparation and its real cause.
+  it('applyPendingAgentSwitchIfIdle:执行失败继续发送，公开失败原因并保留目标供重试', async () => {
     const { deps, store } = makeDepsWithPending({
       applyAgentSwitchToDb: vi.fn(async () => {
         throw new Error('db locked');
@@ -1521,7 +1614,46 @@ describe('deferred switch (turn running)', () => {
     store.set('s1', { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: null });
     await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).resolves.toBeUndefined();
     expect(store.has('s1')).toBe(true);
+    expect(store.get('s1')).toMatchObject({ preparation: 'failed', preparationError: 'db locked' });
     expect(deps.log.warn).toHaveBeenCalled();
+  });
+
+  // Production apply, unit: an unresolved catalog read must expose preparation,
+  // time out without late close/commit, and leave a newer selection untouched.
+  // Existing failures were immediate and never exercised a late read result.
+  it('times out read-only preparation and ignores its late result after re-selection', async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    const read = new Promise<string | undefined>(resolve => { release = () => resolve(undefined); });
+    const { deps, store } = makeDepsWithPending({ assertModelRouteUsable: vi.fn(() => read),
+      onPendingSwitchChanged: vi.fn() });
+    store.set('s1', { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' });
+    try {
+      const applying = applyPendingAgentSwitchIfIdle(deps, 's1');
+      expect(store.get('s1')?.preparation).toBe('preparing');
+      await vi.advanceTimersByTimeAsync(120_000);
+      await applying;
+      expect(store.get('s1')).toMatchObject({ preparation: 'failed', preparationError: expect.stringContaining('timed out') });
+      const newer = { targetAgentKind: 'pi' as const, model: 'newer', providerId: 'xd' };
+      store.set('s1', newer);
+      release();
+      await read;
+      expect(store.get('s1')).toBe(newer);
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    } finally { release(); vi.useRealTimers(); }
+  });
+
+  it('Stop cancels read-only preparation without starting or committing a switch', async () => {
+    const controller = new AbortController();
+    const { deps, store } = makeDepsWithPending({ assertModelRouteUsable: vi.fn(() => new Promise<string | undefined>(() => {})) });
+    store.set('s1', { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' });
+    const applying = applyPendingAgentSwitchIfIdle(deps, 's1', { signal: controller.signal });
+    controller.abort(new Error('Stopped by user'));
+    await expect(applying).rejects.toThrow('Stopped by user');
+    expect(store.get('s1')?.preparation).toBeUndefined();
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
   });
 
   it('applyPendingAgentSwitchIfIdle:同 session 并发调用复用同一 in-flight,只执行一次切换', async () => {
@@ -1560,7 +1692,7 @@ describe('deferred switch (turn running)', () => {
     });
     store.set('s1', { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: null });
 
-    await applyPendingAgentSwitchIfIdle(deps, 's1', { signal: controller.signal });
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1', { signal: controller.signal })).rejects.toThrow();
 
     expect(calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending']);
     expect(store.has('s1')).toBe(false);
@@ -2680,7 +2812,7 @@ describe('换到供应商组那一项：由组选一台能用的电脑(provider-
       's1',
       expect.objectContaining({ model: 'claude-opus-5-5', providerId: 'xd' }),
       true,
-      undefined,
+      expect.any(Function),
       undefined,
     );
     expect(row.model).toBe('claude-opus-5-5');

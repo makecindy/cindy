@@ -366,7 +366,11 @@
       "close": "닫기",
       "cancelRename": "이름 변경 취소",
       "createdBy": "{{name}}이(가) 생성",
-      "ownedBy": "{{name}} 소속"
+      "ownedBy": "{{name}} 소속",
+      "orcaRemoteLead": "{{device}}에서 온 협업",
+      "createdByTask": "다른 작업에서 생성됨",
+      "createdByTaskNamed": "「{{title}}」 작업에서 생성됨",
+      "unknownDevice": "다른 컴퓨터"
     },
     "accounts": {
       "title": "계정 전환",
@@ -389,6 +393,7 @@
       "sortHeading": "작업 정렬",
       "projectOrderHeading": "프로젝트 정렬",
       "projectOrderManualTip": "프로젝트 행을 길게 누른 뒤 드래그하면 순서를 바꿀 수 있습니다. 그룹 안 작업은 위 정렬을 따릅니다.",
+      "pinnedOrderManualTip": "고정된 작업을 길게 누른 뒤 드래그하면 순서를 바꿀 수 있습니다.",
       "statusHeading": "작업 상태",
       "showDeviceTasks": "작업 보기",
       "openDevice": "열기",
@@ -422,7 +427,8 @@
         "all": "전체",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "플러그인 엔진"
       },
       "filterLastActivityHeading": "최근 활동",
       "filterLastActivity": {
@@ -477,7 +483,14 @@
         "nextWeek": "다음 주",
         "indefinite": "무기한",
         "custom": "직접 설정…",
-        "invalidTime": "1년 이내의 미래 날짜와 시간을 선택하세요."
+        "invalidTime": "1년 이내의 미래 날짜와 시간을 선택하세요.",
+        "pendingSync": "동기화 대기 중",
+        "pendingArchiveSync": "컴퓨터가 온라인이 되면 자동 보관",
+        "offlineCompleteRejectedDirty": "“{{title}}”을(를) 대기 중으로 되돌렸습니다: worktree에 커밋되지 않은 변경 사항이 있어 확인 후 보관해야 합니다.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}”을(를) 대기 중으로 되돌렸습니다: 오프라인 동안 이 작업에 새 활동이 있었습니다.",
+        "offlineCompleteRejectedRunning": "“{{title}}”을(를) 대기 중으로 되돌렸습니다: 작업이 현재 실행 중입니다.",
+        "offlineCompleteRejectedAttached": "“{{title}}”을(를) 대기 중으로 되돌렸습니다: 연결되었거나 공유 중인 작업이라 자동 보관되지 않았습니다.",
+        "offlineCompleteRejectedPreflight": "“{{title}}”을(를) 대기 중으로 되돌렸습니다: 보관 전에 worktree 상태를 확인할 수 없었습니다."
       },
       "taskListMode": {
         "enterInbox": "받은 편지함으로 전환",
@@ -512,7 +525,8 @@
           "all": "전체",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "플러그인 엔진"
         },
         "lastActivity": {
           "1d": "1일",
@@ -521,7 +535,8 @@
           "30d": "30일",
           "all": "전체"
         }
-      }
+      },
+      "partial": "일부 결과가 누락될 수 있습니다. 더 구체적인 키워드를 사용하거나 프로젝트를 지정하세요."
     },
     "renameDevice": {
       "title": "기기 이름 변경",
@@ -828,9 +843,6 @@
     "connectionsEmpty": "선택한 스킬이나 연결이 없습니다",
     "largeProfileRecovery": "이 프로필은 너무 길어 여기서 편집할 수 없습니다. {{deviceName}}에서 전체 프로필을 편집하세요.",
     "addModel": "대체 모델 추가",
-    "removeModel": "모델 제거",
-    "moveModelUp": "모델 위로 이동",
-    "backupModels": "예비 모델 ({{count}})",
     "settingsTitle": "동반자 설정",
     "name": "이름",
     "portraitNumber": "아바타 {{number}}",
@@ -957,6 +969,8 @@
     "timeout": "“{{device}}”이(가) 아직 준비되지 않았습니다. 그 컴퓨터에서 Cindy가 열려 있고 온라인인지 확인한 뒤 다시 시도하세요.",
     "conflict": "{{name}}은(는) 이미 “{{device}}”(으)로 옮겨졌습니다.",
     "switchFailed": "지금은 주 컴퓨터를 바꿀 수 없습니다. 잠시 후 다시 시도하세요.",
+    "skillTargetOutdated": "“{{name}}”에 본문이 64 KB를 초과하는 스킬이 있어 “{{device}}”의 이전 버전 Cindy가 받을 수 없습니다. 해당 컴퓨터의 Cindy를 업데이트한 후 동반자를 옮기세요. 동반자는 기존 컴퓨터에 그대로 있습니다",
+    "skillTargetOutdated_skill": "“{{device}}”의 이전 버전 Cindy는 “{{slug}}” 스킬을 받을 수 없습니다. 본문이 {{bodyBytes, number}}바이트로 64 KB 제한을 초과합니다. “{{name}}”은 기존 컴퓨터에서 계속 실행 중입니다. 대상 컴퓨터에서 Cindy를 업데이트한 후 다시 시도하세요.",
     "unknownDevice": "다른 컴퓨터",
     "runsOn": "“{{device}}”에서 실행 중",
     "homeTitle": "주 컴퓨터",

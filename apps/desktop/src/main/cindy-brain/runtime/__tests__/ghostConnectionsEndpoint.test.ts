@@ -140,6 +140,30 @@ describe('ghostConnectionsEndpoint · GET /connections', () => {
     expect(out.body).not.toContain('glpat-1234567890ab');
   });
 
+  it('glab-cli 声明合并本机 glab 已登录域名(只读、零 token),同 host 以用户保存的连接优先', async () => {
+    const manager = new GhostConnectionManager({ vault: makeVault() });
+    const glabDecls = new Map([['gitlab', { label: 'GitLab 实例', maxConnections: 8, source: 'glab-cli' as const }]]);
+    const onlyGlab = await handleGhostConnectionsRequest({
+      method: 'GET', pathname: '/connections', readBodyText: async () => '',
+      decls: glabDecls, manager, ghostId: G, confirmAddHost: async () => true,
+      readGlabHosts: async () => ['Git.Example.com'],
+    });
+    expect(JSON.parse(onlyGlab.body!)[0].connections).toEqual([
+      { id: 'glab:git.example.com', host: 'git.example.com', label: null, isDefault: true, tail: null, source: 'glab-cli' },
+    ]);
+
+    manager.upsert(G, 'gitlab', { host: 'git.example.com', token: 'glpat-override1234', max: 8 });
+    const overridden = await handleGhostConnectionsRequest({
+      method: 'GET', pathname: '/connections', readBodyText: async () => '',
+      decls: glabDecls, manager, ghostId: G, confirmAddHost: async () => true,
+      readGlabHosts: async () => ['git.example.com', 'second.example.com'],
+    });
+    expect(JSON.parse(overridden.body!)[0].connections).toEqual([
+      expect.objectContaining({ host: 'git.example.com', isDefault: true, tail: '1234' }),
+      { id: 'glab:second.example.com', host: 'second.example.com', label: null, isDefault: false, tail: null, source: 'glab-cli' },
+    ]);
+  });
+
   it('根路径只认 GET,其它方法 405', async () => {
     for (const method of ['POST', 'PUT', 'DELETE']) {
       expect((await call({ method, pathname: '/connections' })).status).toBe(405);

@@ -5,6 +5,7 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
+import { useModelSettingsSource } from '@/components/settings/modelSettingsSource';
 import type {
   ModelImageInputTarget,
   ModelImageInputView,
@@ -18,6 +19,15 @@ export function useModelImageInputOverride(target: ModelImageInputTarget | null)
   const key = JSON.stringify(target);
   const stableTarget = useMemo<ModelImageInputTarget | null>(() => JSON.parse(key), [key]);
   const [state, setState] = useState({ ...EMPTY, key, loading: true, error: false });
+  // Another device's settings (cloud instance page) answer instead of this device.
+  const source = useModelSettingsSource();
+  const remote = source !== null;
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
+  // Resolved when a request runs, like a direct preload call.
+  const maker = () => sourceRef.current?.maker ?? window.electronAPI?.maker;
+  // An older device runtime cannot read or change this override.
+  const unavailable = remote && !source.maker.getModelImageInputOverride;
   const generation = useRef(0);
   const pendingWrite = useRef<{
     request: number;
@@ -37,10 +47,12 @@ export function useModelImageInputOverride(target: ModelImageInputTarget | null)
         return;
       }
       const request = ++generation.current;
-      if (!stableTarget) {
+      const api = maker();
+      if (!stableTarget || !api?.getModelImageInputOverride || !api.setModelImageInputOverride) {
         setState({ ...EMPTY, key, loading: false, error: false });
         return;
       }
+      const { getModelImageInputOverride, setModelImageInputOverride } = api;
       const owner = getDataOwnerGeneration();
       if (write) pendingWrite.current = { request, owner, refresh: false };
       const stamp = { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation };
@@ -49,7 +61,7 @@ export function useModelImageInputOverride(target: ModelImageInputTarget | null)
         let view: ModelImageInputView;
         do {
           if (pendingWrite.current?.request === request) pendingWrite.current.refresh = false;
-          view = await window.electronAPI.maker.getModelImageInputOverride(stableTarget);
+          view = await getModelImageInputOverride(stableTarget);
         } while (
           current() &&
           pendingWrite.current?.request === request &&
@@ -60,11 +72,7 @@ export function useModelImageInputOverride(target: ModelImageInputTarget | null)
       setState((prev) => ({ ...prev, loading: true, error: false }));
       try {
         let view = write
-          ? await window.electronAPI.maker.setModelImageInputOverride(
-              stableTarget,
-              write.value,
-              stamp,
-            )
+          ? await setModelImageInputOverride(stableTarget, write.value, stamp)
           : await read();
         if (write && current() && pendingWrite.current?.refresh) {
           view = await read();
@@ -95,7 +103,8 @@ export function useModelImageInputOverride(target: ModelImageInputTarget | null)
     setState({ ...EMPTY, key, loading: stableTarget !== null, error: false });
     let active = true;
     let observedOwner = getDataOwnerGeneration();
-    const unsubscribeOwner = window.electronAPI?.onAuthStateChange?.(() => {
+    // This device's owner and provider changes say nothing about another device's override.
+    const unsubscribeOwner = remote ? undefined : window.electronAPI?.onAuthStateChange?.(() => {
       // AuthContext publishes the accepted owner fence synchronously while
       // handling this push. Wait until every listener has seen the event.
       queueMicrotask(() => {
@@ -105,7 +114,7 @@ export function useModelImageInputOverride(target: ModelImageInputTarget | null)
         void run();
       });
     });
-    const unsubscribe = window.electronAPI?.maker?.onProvidersChanged?.(() => {
+    const unsubscribe = remote ? undefined : window.electronAPI?.maker?.onProvidersChanged?.(() => {
       void run();
     });
     void run();
@@ -115,8 +124,8 @@ export function useModelImageInputOverride(target: ModelImageInputTarget | null)
       unsubscribe?.();
       generation.current += 1;
     };
-  }, [run, stableTarget, key]);
+  }, [run, stableTarget, key, remote]);
 
   const setValue = useCallback((value: boolean | null) => run({ value }), [run]);
-  return { ...(state.key === key ? state : { ...EMPTY, loading: true, error: false }), setValue };
+  return { ...(state.key === key ? state : { ...EMPTY, loading: true, error: false }), unavailable, setValue };
 }

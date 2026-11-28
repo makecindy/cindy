@@ -1,10 +1,18 @@
 import { useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
+import { FileLightbox } from '../../../src/renderer/components/chat/FileLightbox';
 import { TextLightbox } from '../../../src/renderer/components/chat/TextLightbox';
 import { ImageLightbox } from '../../../src/renderer/components/chat/ImageLightbox';
+import { FileChangedBadge } from '../../../src/renderer/components/chat/FilePreviewLightboxHost';
+import { ChatSessionFileProvider } from '../../../src/renderer/components/chat/ChatSessionFileContext';
+import { LOCAL_FILE_ORIGIN } from '../../../src/renderer/lib/sessionFileOrigin';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastContainer';
 
-const ZIP = '/fixture/2026-11-03-八张信用卡发票与核对清单.zip';
+const SHEET = '/fixture/2026-11-03-发票核对清单.xlsx';
+const SHEET_CACHE = '/fixture/cache-473d6dd49fb70e80510e-internal-name.xlsx';
 const MARKDOWN = '/fixture/2026-11-03-发票核对说明.md';
+// 远端取回后的本地副本路径(stale 场景:远端不可达,只剩这份历史副本)。
+const CACHED_SHEET = '/fixture/cached/2026-11-03-发票核对清单.xlsx';
 
 const markdown = [
   '# 发票核对说明',
@@ -44,7 +52,7 @@ function Conversation() {
         已整理完成：八张发票按卡片分组，金额不一致的两条单独标出，核对清单和原始发票一起打包。
       </div>
       <div className="w-fit rounded-xl border border-[var(--border-default)] px-4 py-3 text-13">
-        2026-11-03-八张信用卡发票与核对清单.zip · 269.4 KB
+        2026-11-03-发票核对清单.xlsx · 59.7 KB
       </div>
       <div className="max-w-[640px] text-14 leading-relaxed text-[var(--text-secondary)]">
         需要的话，我可以再按月份拆分成单独的表格。
@@ -53,43 +61,81 @@ function Conversation() {
   );
 }
 
-function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
+function Fixture({ kind }: { kind: 'sheet' | 'markdown' | 'image' | 'changed' | 'stale' }) {
   const [open, setOpen] = useState(true);
   const [image] = useState(sampleImage);
+  // stale 场景是远程会话:取回只拿到历史副本,面板上要标出来。
+  const remote = kind === 'stale';
   return (
-    <>
+    <ChatSessionFileProvider
+      value={{
+        sessionId: 'fixture-session',
+        workingDir: '/fixture',
+        origin: remote ? { kind: 'device', deviceId: 'device-1' } : LOCAL_FILE_ORIGIN,
+      }}
+    >
       <Conversation />
-      {open && kind === 'zip' && <TextLightbox filePath={ZIP} onClose={() => setOpen(false)} />}
+      <ToastContainer />
+      {open && kind === 'sheet' && <FileLightbox filePath={SHEET_CACHE} fileName={SHEET.split('/').pop()} onClose={() => setOpen(false)} />}
       {open && kind === 'markdown' && (
         <TextLightbox filePath={MARKDOWN} onClose={() => setOpen(false)} />
+      )}
+      {open && kind === 'changed' && (
+        <TextLightbox
+          filePath={MARKDOWN}
+          onClose={() => setOpen(false)}
+          changedBadge={<FileChangedBadge onClick={() => {}} />}
+        />
+      )}
+      {open && kind === 'stale' && (
+        <FileLightbox filePath={SHEET} fileName={SHEET.split('/').pop()} onClose={() => setOpen(false)} />
       )}
       {open && kind === 'image' && (
         <ImageLightbox src={image} filename="示例图片.png" onClose={() => setOpen(false)} />
       )}
-    </>
+    </ChatSessionFileProvider>
   );
 }
 
 mountPage({
   route: '/',
   host: () => ({
+    platform: 'win32',
+    openSystemPreview: async () => true,
     fileBrowser: {
+      // 远程取回:只拿到历史副本(stale),面板上要标出来。
+      chatFetch: async () => ({
+        ok: true,
+        cachePath: CACHED_SHEET,
+        size: 61_133,
+        stale: true,
+      }),
       readFile: async () => ({ ok: false, code: 'BINARY_FILE', message: 'binary' }),
       stat: async ({ relPath }: { relPath: string }) => ({
         relPath,
-        size: 275_866,
+        size: 61_133,
         mtimeMs: new Date('2026-11-03T18:33:00+08:00').getTime(),
         isDirectory: false,
       }),
       onEvent: subscription('file-browser'),
     },
     readTextFilePreview: async () => ({ success: true, data: markdown, size: markdown.length }),
-    showItemInFolder: async () => ({ success: true }),
+    showItemInFolder: async () => ({ success: false }),
     openPath: async () => '',
   }),
   render: (ctx) => (
     <Fixture
-      kind={ctx.case === 'markdown' ? 'markdown' : ctx.case === 'image' ? 'image' : 'zip'}
+      kind={
+        ctx.case === 'markdown'
+          ? 'markdown'
+          : ctx.case === 'image'
+            ? 'image'
+            : ctx.case === 'changed'
+              ? 'changed'
+              : ctx.case === 'stale'
+                ? 'stale'
+                : 'sheet'
+      }
     />
   ),
 });

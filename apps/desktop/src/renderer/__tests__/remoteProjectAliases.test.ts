@@ -31,6 +31,21 @@ afterEach(() => {
 });
 
 describe('Desktop project alias mirror adapter', () => {
+  // Unit: restore one offline shard, then process a host rename and clear before a late cache read.
+  it('keeps an offline name until sync replaces or clears it', async () => {
+    const cached = { aliases: snapshot('Cached').aliases, platform: 'darwin' };
+    remoteProjectAliases.hydrate('a', cached);
+    remoteProjectAliases.suspend('a');
+    expect(remoteProjectAliases.getSnapshot().get('a')?.aliases).toEqual(cached.aliases);
+    invoke.mockResolvedValueOnce(snapshot('Renamed'));
+    await remoteProjectAliases.refresh('a', () => true);
+    expect(remoteProjectAliases.getSnapshot().get('a')?.aliases).toEqual(snapshot('Renamed').aliases);
+    invoke.mockResolvedValueOnce({ ...snapshot(''), aliases: [] });
+    await remoteProjectAliases.refresh('a', () => true);
+    remoteProjectAliases.hydrate('a', cached);
+    expect(remoteProjectAliases.getSnapshot().get('a')?.aliases).toEqual([]);
+  });
+
   it('reads the owning host without writing local aliases and preserves other device snapshots', async () => {
     invoke.mockResolvedValueOnce(snapshot('A')).mockResolvedValueOnce(snapshot('B'));
     await remoteProjectAliases.refresh('a', () => true);

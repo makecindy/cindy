@@ -10,6 +10,7 @@ import { uniquePluginInstallCandidate } from '../../../../shared/pluginMarket';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
+import { installReviewedMarketRelease } from './installReviewedMarketRelease';
 import { pluginMarketErrorKey } from './pluginMarketErrorKey';
 import {
   marketItemForInstalledGhost,
@@ -146,11 +147,7 @@ export async function makePluginUsableInPlace(target: PluginInPlaceTarget): Prom
     if (detail.ghostId !== candidate.ghostId || detail.namespace !== candidate.namespace ||
         (target.requireRemoteTaskView && detail.manifest.taskView?.remote !== true)) return { status: 'unavailable' };
     if (detail.installState !== 'not-installed') return { status: 'page', route: marketRoute(detail.pluginId) };
-    const { ghost } = await window.electronAPI.pluginMarket.install(detail.pluginId, {
-      expectedReleaseId: detail.releaseId,
-      expectedManifest: detail.manifest,
-      allowSourceReplacement: false,
-    });
+    const { ghost } = await installReviewedMarketRelease(detail);
     await turnOnInProject(ghost, target.workingDir);
     return { status: 'ready', ghost, changed: 'installed' };
   } catch (error) {
