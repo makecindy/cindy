@@ -45,7 +45,8 @@ function ensureWorkingDir(appId: string, userId?: string): string {
 
 export interface DiscordAdapterOptions {
   /** 伙伴自有连接：主人私聊进伙伴主任务，频道 / thread 进各自群专线。 */
-  companionBotId?: string;
+  /** 交给哪位伙伴: 固定 id(伙伴自有连接), 或每次现读(设置页那份个人机器人的「谁来回复」)。 */
+  companionBotId?: string | (() => string | null);
   connectionKey?: string;
 }
 
@@ -54,7 +55,10 @@ export function buildDiscordAdapter(
   config: ImOrchestratorConfig,
   options: DiscordAdapterOptions = {},
 ): ImChannelAdapter {
-  const companion = Boolean(options.companionBotId);
+  // 交给伙伴与否按每条消息现读: 设置页那份个人机器人可以随时在「谁来回复」里切换。
+  const isCompanion = (): boolean => Boolean(
+    typeof options.companionBotId === 'function' ? options.companionBotId() : options.companionBotId,
+  );
   // 完全访问是主人对这条任务的明确授权: 只有主人触发的轮次取缔逐轮确认策略,
   // 对象身份记录这批 policy(WeakSet 不延长排队 policy 的生命周期)。
   const ownerTurnPolicies = new WeakSet<object>();
@@ -116,7 +120,7 @@ export function buildDiscordAdapter(
         channel: 'discord', im: discordIm, botId: event.contextId,
         laneUserId: event.senderId, chatId: event.chatId ?? event.senderId,
         chatKind: decodeDiscordLaneUserId(event.senderId) ? 'group' : 'direct', requesterIsOwner,
-        triggerMessageId: event.messageId.split('|').at(-1) ?? '', companion,
+        triggerMessageId: event.messageId.split('|').at(-1) ?? '', companion: isCompanion(),
         assertCurrent: origin.assertCurrent,
       };
     },
@@ -136,7 +140,7 @@ export function buildDiscordAdapter(
     // 主人触发的轮次不另挂策略, 成员 / 外部用户触发的轮次只在破坏性动作上要主人确认。
     turnPermissionPolicyFor: (event) => {
       if (!event.speaker || !decodeDiscordLaneUserId(event.senderId)) return undefined;
-      if (companion) {
+      if (isCompanion()) {
         return event.speaker.isOwner ? undefined : createDiscordChannelTurnPermissionPolicy(event.messageId, false);
       }
       const policy = createDiscordChannelTurnPermissionPolicy(event.messageId, event.speaker.isOwner);
@@ -146,7 +150,7 @@ export function buildDiscordAdapter(
     // 个人 bot: 只有主人轮次的策略在完全访问下可取缔; 伙伴: 完全访问是主人对伙伴的明确授权,
     // 三种 Agent 都无法兑现逐轮策略, 成员轮次同样取缔而不是拒跑(要成员动手前先确认, 把伙伴设成 Auto 或 Ask)。
     turnPolicyOptionalForMode: (mode, policy) =>
-      mode === 'bypassPermissions' && (companion || ownerTurnPolicies.has(policy)),
+      mode === 'bypassPermissions' && (isCompanion() || ownerTurnPolicies.has(policy)),
     // 频道只给本 lane 的收图历史(access: 'lane'), 绝不给跨 lane / 私聊检索; 私聊走共享兜底。
     groupHistoryAccessFor: (event): GroupHistoryAccessScope | undefined => {
       const lane = decodeDiscordLaneUserId(event.senderId);

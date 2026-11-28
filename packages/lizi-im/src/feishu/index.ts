@@ -61,8 +61,11 @@ export interface FeishuIMOptions {
   secretKeyPrefix?: string;
   /** 是否注册 `feishuBot:*` 设置卡 IPC 并广播状态(缺省 true; 第二份实例必须关掉)。 */
   ipc?: boolean;
-  /** 允许非主人的群 @ 进业务层；私聊只认已绑定主人，命令仍只认主人。 */
-  guests?: boolean;
+  /**
+   * 允许非主人的群 @ 进业务层；私聊只认已绑定主人，命令仍只认主人。函数形式按群现读（个人机器人的
+   * 「群成员也能提问」）。
+   */
+  guests?: boolean | ((chatId: string) => boolean);
   /** Process-local notice ownership; secondary hosts may chat without announcing global presence. */
   shouldAnnounceLifecycle?: () => boolean;
 }
@@ -103,7 +106,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       log: this.log,
       secretKeyPrefix: options.secretKeyPrefix ?? '',
       ipc: options.ipc !== false,
-      guests: options.guests === true,
+      ...(options.guests !== undefined ? { guests: options.guests } : {}),
       shouldAnnounceLifecycle: options.shouldAnnounceLifecycle,
     });
     // 设置页那份(无前缀、带 IPC)就是默认作用域: 单测直接调模块函数、Electron IPC 进来
