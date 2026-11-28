@@ -8357,6 +8357,7 @@
         "back": "Voltar",
         "retry": "Tentar novamente",
         "layout": {
+          "bindingSummary": "Mapeamento de botões",
           "title": "Controlos",
           "description": "Clique num controlo para alterar a sua função. Ao premir um botão no comando, o controlo correspondente ilumina-se aqui.",
           "clickToEdit": "Clique para definir",
