@@ -35,6 +35,8 @@ export function EffortSlider({
   labelOf,
   onChange,
   disabled = false,
+  compact = false,
+  className,
 }: {
   /** 该 (模型, 引擎) 支持的档位,低 → 高。长度必须 ≥2。 */
   stops: readonly Effort[];
@@ -46,12 +48,17 @@ export function EffortSlider({
   labelOf: (effort: Effort) => string;
   onChange: (effort: Effort) => void;
   disabled?: boolean;
+  /** 紧凑模式(用于面板底栏等窄高区域):收紧轨道高度并隐藏底部端点标签。 */
+  compact?: boolean;
+  className?: string;
 }) {
   const { t } = useTranslation();
   const trackRef = useRef<HTMLDivElement>(null);
   // 拖动中的连续坐标(0..n-1)。null = 未拖动,一切按 value 渲染。
   const [dragPos, setDragPos] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
+  // 本地乐观锁定态:松手 commit 后先锁定在目标档位,防止同步清 dragPos 时因父级状态尚未回流而闪回旧档。
+  const [committedValue, setCommittedValue] = useState<Effort | null>(null);
   const draggingRef = useRef(false);
   const pointerIdRef = useRef<number | null>(null);
 
@@ -61,10 +68,27 @@ export function EffortSlider({
     draggingRef.current = false;
     pointerIdRef.current = null;
     setDragPos(null);
+    setCommittedValue(null);
   }, [stopsKey]);
 
+  useEffect(() => {
+    if (committedValue !== null && value === committedValue) {
+      setCommittedValue(null);
+    }
+  }, [committedValue, value]);
+
+  useEffect(() => {
+    if (committedValue === null) return;
+    const timer = setTimeout(() => {
+      setCommittedValue(null);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [committedValue]);
+
+  const effectiveValue =
+    committedValue && stops.includes(committedValue) ? committedValue : value;
   const lastIndex = Math.max(0, stops.length - 1);
-  const valueIndex = Math.max(0, value ? stops.indexOf(value) : -1);
+  const valueIndex = Math.max(0, effectiveValue ? stops.indexOf(effectiveValue) : -1);
   const activeIndex = dragPos === null ? valueIndex : Math.round(dragPos);
   const activeStop = stops[Math.min(lastIndex, Math.max(0, activeIndex))] ?? stops[0];
   const position = dragPos ?? valueIndex;
@@ -84,9 +108,12 @@ export function EffortSlider({
   const commit = useCallback(
     (index: number) => {
       const next = stops[Math.min(lastIndex, Math.max(0, index))];
-      if (next && next !== value) onChange(next);
+      if (next && next !== effectiveValue) {
+        setCommittedValue(next);
+        onChange(next);
+      }
     },
-    [lastIndex, onChange, stops, value],
+    [effectiveValue, lastIndex, onChange, stops],
   );
 
   // pointerup 挂在 document 上:拖出滑杆范围松手也要收尾,否则 dragging 态卡住、
@@ -163,7 +190,11 @@ export function EffortSlider({
 
   return (
     <div
-      className={cn('group/effort relative min-w-0 flex-1 pl-1.5 pr-2.5', disabled && 'opacity-50')}
+      className={cn(
+        'group/effort relative min-w-0 flex-1 pl-1.5 pr-2.5',
+        disabled && 'opacity-50',
+        className,
+      )}
     >
       <div
         ref={trackRef}
@@ -179,7 +210,8 @@ export function EffortSlider({
         onPointerDown={onPointerDown}
         onKeyDown={onKeyDown}
         className={cn(
-          'cindy-effort-slider relative flex h-[38px] touch-none items-center',
+          'cindy-effort-slider relative flex touch-none items-center outline-none focus:outline-none',
+          compact ? 'h-6' : 'h-[38px]',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         )}
       >
@@ -238,18 +270,20 @@ export function EffortSlider({
           </div>
         </div>
       </div>
-      {/* 端点标签只在拖动时浮现:静态时它们既占视觉又没人看(设计稿 v4)。 */}
-      <div
-        aria-hidden
-        className={cn(
-          'pointer-events-none absolute inset-x-1 -bottom-0.5 flex justify-between text-10 text-[var(--text-tertiary)]',
-          'transition-opacity duration-150',
-          dragging ? 'opacity-100' : 'opacity-0',
-        )}
-      >
-        <span>{t('newChat.modelSelector.unified.effortEndFast')}</span>
-        <span>{t('newChat.modelSelector.unified.effortEndSmart')}</span>
-      </div>
+      {/* 端点标签只在非紧凑模式拖动时浮现:静态时它们既占视觉又没人看(设计稿 v4)。 */}
+      {!compact && (
+        <div
+          aria-hidden
+          className={cn(
+            'pointer-events-none absolute inset-x-1 -bottom-0.5 flex justify-between text-10 text-[var(--text-tertiary)]',
+            'transition-opacity duration-150',
+            dragging ? 'opacity-100' : 'opacity-0',
+          )}
+        >
+          <span>{t('newChat.modelSelector.unified.effortEndFast')}</span>
+          <span>{t('newChat.modelSelector.unified.effortEndSmart')}</span>
+        </div>
+      )}
     </div>
   );
 }
