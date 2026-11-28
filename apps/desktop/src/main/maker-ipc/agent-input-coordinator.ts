@@ -1542,6 +1542,14 @@ export class AgentInputCoordinator {
     return texts;
   }
 
+  /** A persisted user row and an input still in pre-dispatch hooks both precede this boundary. */
+  getDispatchedInput(sessionId: string, clientIds: readonly string[]) {
+    const active = this.states.get(sessionId)?.activeTurn;
+    if (!active?.item || !isActiveTurnDispatched(active) || !clientIds.includes(active.item.clientId)) return undefined;
+    const agentKind = this.deps.getAgentKind(sessionId);
+    return agentKind ? { clientId: active.item.clientId, agentKind } : undefined;
+  }
+
   /** O(1), main-owned input attribution before synchronous provider events settle the turn. */
   getActiveInputClientId(sessionId: string, vendorGeneration?: number): string | null {
     const state = this.states.get(sessionId);
