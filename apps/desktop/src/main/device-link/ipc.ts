@@ -44,7 +44,7 @@ import {
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { ServerApiError, serverApiFetch } from '../serverApiClient.desktop';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
+import { deviceLinkApiFetch, officialDeviceLinkApiBase, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
 import {
   __resetDirectoryThrottleForTests,
   clearDirectoryRetryDeadline,
@@ -65,11 +65,19 @@ import {
   type DeviceLinkPeerPathPreference,
   type DeviceLinkState,
   type DeviceLinkPeerLinksSnapshot,
+  type DeviceLinkProxyVerdict,
 } from '../../shared/deviceLinkIpc';
 import type { AgentNetRejoinOutcome } from './deviceRejoin.js';
 import {
+  probeOutboundPathFor,
+  type OutboundPathSnapshot,
+} from '../maker-host/outbound-proxy-resolver.js';
+import {
   getDeviceLinkStatus,
   getDirectDataDeviceIds,
+  deviceLinkPeerTransportUrl,
+  deviceLinkPeerDataPath,
+  deviceLinkPeerPinnedProxy,
   hasOfflineDirectPath,
   isDeviceDataPathAvailable,
   isPeerControlAvailable,
@@ -199,6 +207,11 @@ export interface DeviceLinkIpcDeps {
   getPeerLinks(): DeviceLinkPeerLinksSnapshot;
   /** 远程连接拓扑:持久化并立即应用单台设备的 Agent-Net 选路偏好 */
   setPeerPathPreference?(deviceId: string, preference: DeviceLinkPeerPathPreference): Promise<void>;
+  /**
+   * 出站路径诊断探针(#9537):解析跨设备通道候选 origin 的当前代理判定,不发业务请求。
+   * 收 origin 候选列表:同账号走当前中转,共享任务在自建中转下走独立官方连接。
+   */
+  probeProxyVerdict(upstreamUrls: readonly string[]): Promise<OutboundPathSnapshot | null>;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
   /** 本机被移除后「重新加入」(deviceRejoin.ts)。 */
@@ -278,6 +291,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
       await setPeerPathPreference(deviceId, preference);
       setAgentNetPeerPathPreference(deviceId, preference);
     },
+    probeProxyVerdict: probeOutboundPathFor,
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     rejoin: rejoinThisDevice,
@@ -398,6 +412,54 @@ export async function handleSetPeerPathPreference(
   }
   await deps.setPeerPathPreference?.(id, preference);
   return { deviceId: id, preference };
+}
+
+/**
+ * 出站路径判定(#9537):按跨设备通道 origin 解析当前系统/env 代理,给渲染侧在连接
+ * 反复失败时提示「本机可能在走代理」。null = 没判定(候选判定冲突 / 解析未落快照),
+ * 渲染侧按无提示处理;`unknown`(没问出来)照实透传,渲染侧不得当事实用。
+ *
+ * 首选探针目标是**这个对端控制通道实际使用的 WebSocket URL**(协议 + path 都与真实
+ * socket 一致,PAC / env 可按协议或路径给出不同答案)。拿不到时(无 deviceId / client
+ * 未就绪 / 主连接由 agent-net 承载)退回两条 REST 线路 origin:同账号设备走当前中转
+ * (官方或自建);自建中转选中时,共享任务走独立的官方连接(自建中转不转发跨账号帧,见
+ * routedClient crossAccountConnection),无自建中转时两者相同、退化为单候选。判定不
+ * 一致(PAC 逐 path / NO_PROXY / loopback 直连例外)时探针返回 null —— 宁可不报,
+ * 也不谎称走了代理。
+ *
+ * 有**活的 socket** 时以它建连时钉住的判定为准(见 deviceLinkPeerPinnedProxy):
+ * 探针是「现在的配置解析出来是什么」,socket 是「它当初选定的出口」,两者可能已经
+ * 不一致(系统 / PAC 代理在建连之后被改过)。报告后者才是这条连接的真相。
+ */
+export async function handleGetProxyVerdict(
+  deps: DeviceLinkIpcDeps,
+  deviceId?: string,
+): Promise<DeviceLinkProxyVerdict | null> {
+  // 指名了设备、且它此刻的数据面路径是直连:可靠帧走 directChannelForSend,中继那条
+  // WebSocket 根本不承载这次流量(client.ts 的 sendReliableFrames 先试直连、失败才回落
+  // 中继)。这时探中继 URL 的代理得到的是一条「自信的假提示」—— 用户看到「本机可能在走
+  // 代理」,而卡住的那条路根本没走中转(例如应用/数据库超时)。宁可不报。
+  if (deviceId && deviceLinkPeerDataPath(deviceId) === 'direct') return null;
+  // 活着的 socket 走没走代理,问**它建连时钉住的判定**,不要重新解析当前配置:系统 /
+  // PAC 代理在 socket 建立之后改过,重新解析得到的结论可能与这条 socket 正好相反 ——
+  // banner 会指认一个根本没在用的代理,或者漏报真实在用的那个(Codex review P1)。
+  const pinned = deviceId ? deviceLinkPeerPinnedProxy(deviceId) : null;
+  if (pinned) {
+    return pinned.kind === 'proxy'
+      ? { kind: 'proxy', proxy: pinned.proxy }
+      : { kind: 'direct', proxy: null };
+  }
+  const transportUrl = deviceId ? deviceLinkPeerTransportUrl(deviceId) : null;
+  // 指名了设备、却查不到它实际走的 transport URL(主连接由 agent-net 承载 / 对端在
+  // scoped 路由连接上 / client 未就绪):这条对端根本不走下面那两条 REST base,探它们
+  // 得到的代理与本对端无关 —— 报出来是一条自信的假提示。宁可不给判定。
+  if (deviceId && !transportUrl) return null;
+  const candidates = transportUrl
+    ? [transportUrl]
+    : [resolveDeviceLinkApiBase(), officialDeviceLinkApiBase()];
+  const snap = await deps.probeProxyVerdict(candidates);
+  if (!snap) return null;
+  return { kind: snap.kind, proxy: snap.proxy ?? null };
 }
 
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
@@ -2053,6 +2115,14 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; preference?: unknown };
     return handleSetPeerPathPreference(deps, p.deviceId, p.preference);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PROXY_VERDICT, (e, deviceId: unknown) => {
+    // 本机只读诊断(系统/env 代理判定,不进隧道):与 GET_PEER_LINKS 同门槛。
+    // deviceId = 当前会话的对端(共享任务 peer id 亦可),用来取它实际走的 transport URL。
+    assertTrustedAppRendererEvent(e);
+    return gated(() =>
+      handleGetProxyVerdict(deps, typeof deviceId === 'string' && deviceId ? deviceId : undefined),
+    )();
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();

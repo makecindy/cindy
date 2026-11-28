@@ -20,6 +20,9 @@ export const DEVICE_LINK_INVOKE = {
   GET_PEER_LINKS: 'device-link:get-peer-links',
   /** 远程连接拓扑:设置本机到指定设备的 Agent-Net 线路偏好(auto / direct / relay,纯本机持久化并通知对端) */
   SET_PEER_PATH_PREFERENCE: 'device-link:set-peer-path-preference',
+  /** 本机出站路径诊断:跨设备通道 origin 的系统/env代理判定(纯本机读,不进隧道;供连接失败时给排查提示)。
+   *  payload: deviceId?(当前会话对端,用来取它实际走的 transport URL) */
+  GET_PROXY_VERDICT: 'device-link:get-proxy-verdict',
   /** 重命名设备 */
   RENAME_DEVICE: 'device-link:rename-device',
   /** 删除离线设备档案 */
@@ -328,4 +331,16 @@ export interface DeviceLinkPeerLinksSnapshot {
   relayTransport?: 'udp' | 'websocket';
   /** 本机到主 relay 的往返，取数据实际走的那条路:UDP 是登记到确认，WebSocket 是心跳;离线 / 未测得为 null */
   relayRttMs: number | null;
+}
+/**
+ * GET_PROXY_VERDICT 返回的本机出站路径判定(#9537):当前系统/env 代理下,跨设备通道
+ * origin 实际走代理还是直连。kind 语义与 maker-host/outbound-proxy-resolver 的
+ * OutboundPathSnapshot 一致——`unknown` 是「没问出判定」的 fail-open 兜底,不是「确认
+ * 无代理」,渲染侧不得据 unknown 提示;只有 `proxy`(且带脱敏地址)才可作为「本机正在
+ * 使用代理」的事实展示。
+ */
+export interface DeviceLinkProxyVerdict {
+  kind: 'proxy' | 'direct' | 'unsupported' | 'unknown';
+  /** kind='proxy' 时的脱敏代理地址(scheme://host:port);其余为 null。 */
+  proxy: string | null;
 }

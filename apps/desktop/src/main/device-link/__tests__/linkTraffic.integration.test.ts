@@ -21,7 +21,14 @@ vi.mock('../../appSessionState', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(session.directory, session.owner, ...parts),
   isAppSessionBoundaryPending: () => false,
 }));
-vi.mock('../../maker-host/outbound-fetch.desktop', () => ({ createOutboundHttpAgent: async () => undefined }));
+// 建连用的出站 agent 与它选定的判定(linkWebSocket.desktop 走这一支,#9537 的诊断靠它)。
+vi.mock('../../maker-host/outbound-fetch.desktop', () => ({
+  createOutboundHttpAgent: async () => undefined,
+  createOutboundHttpAgentWithDecision: async () => ({
+    agent: undefined,
+    decision: { kind: 'direct', reason: 'no-proxy' },
+  }),
+}));
 
 it('counts encoded relay bytes once, pins late close bytes to their owner and restores both routes', async () => {
   session.directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-link-traffic-'));

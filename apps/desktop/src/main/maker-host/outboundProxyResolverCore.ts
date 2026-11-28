@@ -414,6 +414,26 @@ export function createOutboundProxyResolver(ports: OutboundProxyResolverPorts) {
   }
 
   /**
+   * 取**精确那个解析键**的出站路径判定;没记录过则返回 null。
+   *
+   * 与 getOutboundPathSnapshotFor 的区别只在**粒度**:那个按 origin 归组,同 origin 下
+   * 只要有两条结论不一致的判定就整组放弃(宁可不报也不谎报);这个只认一把键
+   * (协议归一 + host + path),不给别的 path 的判定掺进来。
+   *
+   * 诊断探针(probeOutboundPathFor)要的就是这个粒度:它自己刚按同一把尺子解析过
+   * 那个键,本次请求走的就是它 —— 同 origin 下另一条 path 走另一条 PAC 规则是 PAC
+   * 的正常用法(PAC 本来就能按 path 写规则),拿那种差异当「冲突」会把**本次**的
+   * 正确结论一起丢掉(快照又不会随时间清掉,一次分歧就长期查不出结论)。
+   * 真正需要「候选之间结论一致」的场合(调用方不知道失败那次走的是哪条线路),
+   * 由调用方在候选之间自行比较 —— 探针正是这么做的。
+   */
+  function getOutboundPathSnapshotByKey(
+    resolveKey: string,
+  ): OutboundPathSnapshot | null {
+    return outboundPathByKey.get(resolveKey) ?? null;
+  }
+
+  /**
    * 两个 proxy host 共用的出站代理解析器(单例,系统代理缓存共享)。
    * per-request 由 anthropic-compat-proxy 以最终上游 origin 调用;loopback 上游
    * 在包侧已被过滤,不会到这里。
@@ -444,6 +464,7 @@ export function createOutboundProxyResolver(ports: OutboundProxyResolverPorts) {
   return {
     resolveDesktopOutboundProxy,
     getOutboundPathSnapshotFor,
+    getOutboundPathSnapshotByKey,
     resetOutboundProxyResolverStateForTest,
   };
 }
