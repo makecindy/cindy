@@ -49,7 +49,7 @@ import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i1
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { readPluginEnginePoolView } from '../plugin-engine-accounts/runtime.js';
+import { onPluginEngineAccountsChanged, readPluginEnginePoolView } from '../plugin-engine-accounts/runtime.js';
 import { readPluginHarnessUsage } from '../cindy-brain/pluginHarnesses.js';
 import { listPluginEngineViews, onPluginEnginesChanged } from '../maker-ipc/pluginEnginesIpc.js';
 import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuCodingPlanAccountUsage } from '../maker-host/provider-account-usage.js';
@@ -352,12 +352,14 @@ export class QuotaOverviewService {
     this.started = true;
     this.currentSettings = readMenubarSettings();
     this.usageOwnerId = getActiveAppSession().dataOwnerId;
+    const accountsChanged = () => {
+      this.accountsRevision += 1;
+      this.scheduleRebuild();
+    };
     this.disposers.push(
       observeUsageChanges(() => this.scheduleRebuild()),
-      onSubscriptionAccountsChanged(() => {
-        this.accountsRevision += 1;
-        this.scheduleRebuild();
-      }),
+      onSubscriptionAccountsChanged(accountsChanged),
+      onPluginEngineAccountsChanged(accountsChanged),
       onPluginEnginesChanged(() => {
         this.accountsRevision += 1;
         this.pluginUsage.clear();

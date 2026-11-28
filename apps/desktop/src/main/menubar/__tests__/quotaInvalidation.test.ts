@@ -19,7 +19,8 @@ const mocks = vi.hoisted(() => ({
   openRemoteSettings: vi.fn(), onHelperMessage: null as null | ((message: MenubarHelperMessage) => void),
   pool: null as SubscriptionPoolView | null, poolRead: vi.fn(), poolRefresh: vi.fn(),
   poolListeners: new Set<() => void>(),
-  pluginEngines: [] as Array<{ key: string; providerId: string; ghostId: string; harnessId: string; name: string; availability: { state: 'available' | 'unavailable' | 'unknown' }; reportsUsage?: true; models: Array<{ id: string; displayName: string }>; permissionModes: []; defaultPermissionMode: 'ask' }>,
+  pluginEngines: [] as import('../../../shared/pluginEngines').PluginEngineView[],
+  pluginAccountListeners: new Set<() => void>(), pluginPoolRead: vi.fn(),
   pluginUsageRead: vi.fn(),
   pluginEngineListeners: new Set<() => void>(),
   applyDraftRoute: vi.fn(),
@@ -71,6 +72,13 @@ vi.mock('../../subscription-accounts/runtime.js', () => ({
   refreshSubscriptionPool: (...args: unknown[]) => mocks.poolRefresh(...args),
   onSubscriptionAccountsChanged: (listener: () => void) => { mocks.poolListeners.add(listener); return () => mocks.poolListeners.delete(listener); },
 }));
+vi.mock('../../plugin-engine-accounts/runtime.js', () => ({
+  readPluginEnginePoolView: (...args: unknown[]) => mocks.pluginPoolRead(...args),
+  onPluginEngineAccountsChanged: (listener: () => void) => {
+    mocks.pluginAccountListeners.add(listener);
+    return () => mocks.pluginAccountListeners.delete(listener);
+  },
+}));
 vi.mock('../../subscription-accounts/store.js', () => ({ readPool: (providerId: string) => providerId === 'openai' ? mocks.pool : null }));
 vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
   readPluginHarnessUsage: (key: string) => mocks.pluginUsageRead(key),
@@ -116,6 +124,7 @@ beforeEach(() => {
   mocks.openOverviewSession.mockReset(); mocks.openLocalSession.mockReset();
   mocks.openRemoteSettings.mockReset(); mocks.onHelperMessage = null;
   mocks.pool = null; mocks.poolRead.mockReset(); mocks.poolRefresh.mockReset(); mocks.poolListeners.clear();
+  mocks.pluginPoolRead.mockReset(); mocks.pluginAccountListeners.clear();
   mocks.pluginEngines = []; mocks.pluginUsageRead.mockReset(); mocks.pluginEngineListeners.clear(); mocks.applyDraftRoute.mockReset();
   mocks.settings = {}; mocks.deviceLink = false; mocks.listDevices.mockReset();
   subscriptions.__testing.reset();
@@ -161,6 +170,29 @@ it('does not fall back to balance after the account generation changes during a 
     expect(mocks.balanceFetch.mock.calls.map(([path]) => path)).toEqual(['/api/model-access/credit-usage']);
     expect(overview.latest()).toBeNull();
   } finally { release(); }
+});
+
+// Unit (#13776): pausing an account changes its pool without changing the engine catalog.
+it('removes a paused plugin account from the live overview on its pool notification', async () => {
+  const providerId = 'acp-plugin:agy:agy';
+  mocks.pluginEngines = [{ key: 'agy:agy', providerId, ghostId: 'agy', harnessId: 'agy', name: 'Antigravity',
+    availability: { state: 'available' }, reportsUsage: true, models: [], permissionModes: [], defaultPermissionMode: 'ask',
+    accounts: { methods: [{ id: 'login', label: 'Login', kind: 'browser' }] } }];
+  const account = { id: 'extra', paused: false, limit: 1, weight: 1, directory: '', running: 0,
+    status: 'ready' as const, usage: { plugin: { updatedAt: Date.now(), windows: [{ label: 'Weekly', remainingPercent: 61 }] } } };
+  mocks.pluginPoolRead.mockResolvedValue({ providerId, configured: true, strategy: 'rotate', accounts: [account] });
+  mocks.collect.mockImplementation((deps: MenubarCollectDeps) => collectActual({ ...deps,
+    readUsage: async () => null, readBalance: async () => null, activities: () => [],
+  }));
+  const stop = overview.acquire();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(overview.latest()?.view.sources).toMatchObject([{ id: providerId + ':account:extra', value: '61' }]);
+  account.paused = true;
+  for (const notify of mocks.pluginAccountListeners) notify();
+  await vi.advanceTimersByTimeAsync(400);
+  expect(overview.latest()?.view.sources).toEqual([]);
+  stop();
+  expect(mocks.pluginAccountListeners.size).toBe(0);
 });
 
 // #10110 review, unit: real native refresh message -> overview -> collector ->
