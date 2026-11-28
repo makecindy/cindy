@@ -13,19 +13,23 @@ const pending = new Map<string, ChatReplyQuote>();
 const listeners = new Set<() => void>();
 const notify = () => { for (const listener of listeners) listener(); };
 
-export function setPendingCompanionReplyQuote(sessionId: string, quote: ChatReplyQuote | null): void {
-  if (quote) pending.set(sessionId, quote);
-  else if (!pending.delete(sessionId)) return;
+export function companionReplyQuoteScope(deviceId: string, sessionId: string): string {
+  return JSON.stringify([deviceId, sessionId]);
+}
+
+export function setPendingCompanionReplyQuote(scope: string, quote: ChatReplyQuote | null): void {
+  if (quote) pending.set(scope, quote);
+  else if (!pending.delete(scope)) return;
   notify();
 }
 
-export function getPendingCompanionReplyQuote(sessionId: string | null | undefined): ChatReplyQuote | null {
-  return sessionId ? pending.get(sessionId) ?? null : null;
+export function getPendingCompanionReplyQuote(scope: string | null | undefined): ChatReplyQuote | null {
+  return scope ? pending.get(scope) ?? null : null;
 }
 
 /** Drop the quote that was just sent, unless another one replaced it meanwhile. */
-export function clearSentCompanionReplyQuote(sessionId: string, sent: ChatReplyQuote): void {
-  if (pending.get(sessionId) === sent) setPendingCompanionReplyQuote(sessionId, null);
+export function clearSentCompanionReplyQuote(scope: string, sent: ChatReplyQuote): void {
+  if (pending.get(scope) === sent) setPendingCompanionReplyQuote(scope, null);
 }
 
 const subscribe = (listener: () => void) => {
@@ -33,8 +37,8 @@ const subscribe = (listener: () => void) => {
   return () => { listeners.delete(listener); };
 };
 
-export function usePendingCompanionReplyQuote(sessionId: string | null | undefined): ChatReplyQuote | null {
-  return useSyncExternalStore(subscribe, () => getPendingCompanionReplyQuote(sessionId), () => null);
+export function usePendingCompanionReplyQuote(scope: string | null | undefined): ChatReplyQuote | null {
+  return useSyncExternalStore(subscribe, () => getPendingCompanionReplyQuote(scope), () => null);
 }
 
 export type QuotableMessage = Pick<NormalizedRemoteMessage, 'kind' | 'body' | 'attachments'> & {

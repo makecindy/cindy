@@ -195,6 +195,48 @@ describe('GhostSettingsWebview layout ownership', () => {
     expect((webview as HTMLElement).style.opacity).toBe('1');
   });
 
+  it('separates an unavailable remote page from a guest crash and reloads without replaying a save', async () => {
+    let receive!: (value: { viewId: string; status: 'unavailable' | 'write-unconfirmed' }) => void;
+    const open = vi.fn().mockRejectedValueOnce(new Error('TIMEOUT')).mockResolvedValue({
+      id: 'view-b',
+      partition: 'remote-plugin-settings:view-b',
+      src: 'cindy-ghost://example-settings-layout/settings.html',
+    });
+    vi.stubGlobal('electronAPI', {
+      ghosts: {
+        openRemoteSettings: open,
+        closeRemoteSettings: vi.fn(async () => {}),
+        onRemoteSettingsDirectory: () => () => {},
+        onRemoteSettingsStatus: (listener: typeof receive) => {
+          receive = listener;
+          return () => {};
+        },
+      },
+    });
+    const { ghost, view } = renderSettings();
+    view.rerender(<GhostSettingsWebview ghost={ghost} remoteDeviceId="B" />);
+    await screen.findByText('settings.ghosts.remote.configurationReadFailed');
+    expect(screen.queryByText('settings.ghosts.panelError.crashed')).toBeNull();
+    expect(view.container.querySelector('webview')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.remote.refreshConfiguration' }));
+    await waitFor(() => expect(view.container.querySelector('webview')).not.toBeNull());
+    act(() => receive({ viewId: 'unrelated', status: 'write-unconfirmed' }));
+    expect(screen.queryByText('settings.ghosts.remote.settingsWriteUnconfirmed')).toBeNull();
+    act(() => receive({ viewId: 'view-b', status: 'write-unconfirmed' }));
+    expect(screen.getByText('settings.ghosts.remote.settingsWriteUnconfirmed')).toBeTruthy();
+    expect(view.container.querySelector('webview')).not.toBeNull();
+    act(() => receive({ viewId: 'view-b', status: 'unavailable' }));
+    expect(screen.getByText('settings.ghosts.remote.configurationReadFailed')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.remote.settingsWriteUnconfirmed')).toBeTruthy();
+    expect(view.container.querySelector('webview')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.remote.refreshConfiguration' }));
+    await waitFor(() => expect(view.container.querySelector('webview')).not.toBeNull());
+    expect(open).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText('settings.ghosts.remote.settingsWriteUnconfirmed')).toBeNull();
+    fireEvent(view.container.querySelector('webview')!, new Event('render-process-gone'));
+    expect(screen.getByText('settings.ghosts.panelError.crashed')).toBeTruthy();
+  });
+
   it('keeps the target page and directory picker bound to B, and closes the lease on unmount', async () => {
     let receive!: (value: { viewId: string; request: { id: string; expiresAt: number } }) => void;
     const unsubscribe = vi.fn(),
@@ -210,6 +252,7 @@ describe('GhostSettingsWebview layout ownership', () => {
         openRemoteSettings: open,
         closeRemoteSettings: close,
         answerRemoteSettingsDirectory: answer,
+        onRemoteSettingsStatus: () => () => {},
         onRemoteSettingsDirectory: (listener: typeof receive) => {
           receive = listener;
           return unsubscribe;

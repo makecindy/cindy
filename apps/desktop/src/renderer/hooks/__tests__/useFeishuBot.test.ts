@@ -2,6 +2,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFeishuBot, type FeishuBotStatus } from '../useFeishuBot';
+import { toast } from '@/lib/toast';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -88,6 +89,19 @@ describe('useFeishuBot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  // Unit: a failed lifecycle write had no visible failure outcome. Drive the
+  // real settings hook using the status already confirmed by Main.
+  it('keeps the Feishu lifecycle setting when a new value is refused', async () => {
+    const { api } = installFeishuApi();
+    const { result } = renderHook(() => useFeishuBot());
+    await waitFor(() => expect(result.current.hasLoadedState).toBe(true));
+    api.setLifecycleAnnouncement.mockRejectedValueOnce(new Error('fixture save failed'));
+    await act(async () => result.current.setLifecycleAnnouncement(false));
+    expect(api.setLifecycleAnnouncement).toHaveBeenCalledExactlyOnceWith(false);
+    expect(result.current.lifecycleAnnouncement).toBe(true);
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('ipcError.INTERNAL');
   });
 
   // Unit regression: reconnect previously overwrote newer transport status and

@@ -1,4 +1,5 @@
 import { FILE_BROWSER_EVENT_CHANNEL, FILE_BROWSER_REMOTE_OP_CHANNEL, fsWatchTopic, isSharedTaskPeer, parseFsWatchTopic, parseSharedTaskPeer, isSharedTaskAttachment, type InvokePayload, type InvokeResultPayload, type SharedTaskQueueItem } from '@cindy/device-link';
+import { GIT_REVIEW_REMOTE_OP_CHANNEL } from '@cindy/device-link';
 import type { SharedTaskHost } from './sharedTaskHost.js';
 import * as subscriptions from './subscriptions.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
@@ -292,6 +293,14 @@ export function assertSharedTaskInvoke(
       if (phase === 'invoke' && channel === 'device-link:subscribe' && !verifiedFsWatchTopics.has(topic)) deny();
     }
     return;
+  }
+  if (channel === GIT_REVIEW_REMOTE_OP_CHANNEL) {
+    const request = record(args[0]);
+    const query = record(request?.payload);
+    if (args.length !== 1 || !query || query.sessionId !== sessionId || !capture.authorize('file.read')) deny();
+    if (request?.op === 'get') return;
+    if (request?.op === 'file-diff' && (query.source === 'staged' || query.source === 'unstaged')) return;
+    deny();
   }
   if (channel === FILE_BROWSER_REMOTE_OP_CHANNEL) {
     // Workdir ownership needs the host DB; device-op binds it before any file access.

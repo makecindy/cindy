@@ -10,6 +10,12 @@ export interface RemoteModelFavorite {
   effort?: string;
   fast?: true | "ultrafast";
 }
+/**
+ * 插件引擎收藏在收藏通道上的 agent 占位值：旧客户端的 parseModelFavorites 只接受
+ * cc / codex / pi，整表校验不通过会整份丢弃。插件引擎靠 acp-plugin: 来源键识别，
+ * 新客户端解析时忽略 agent，旧客户端把它当成不认识的供应商静默隐藏、不会错派到内置引擎。
+ */
+export const PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = "cc" as const;
 export type ModelFavoriteMutation =
   | { kind: "add"; item: Omit<RemoteModelFavorite, "uid"> }
   | {

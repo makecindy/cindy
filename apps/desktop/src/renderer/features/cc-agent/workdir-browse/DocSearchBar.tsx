@@ -100,7 +100,7 @@ export const DocSearchBar = forwardRef<HTMLInputElement, DocSearchBarProps>(
           disabled={!query || total === 0}
           onClick={onPrev}
           className={cn(
-            'flex h-6 w-6 items-center justify-center rounded',
+            'flex h-6 w-6 items-center justify-center rounded-lg',
             'hover:bg-titlebar-button-hover',
             'disabled:opacity-40 disabled:hover:bg-transparent',
             'focus-visible:outline-none',
@@ -114,7 +114,7 @@ export const DocSearchBar = forwardRef<HTMLInputElement, DocSearchBarProps>(
           disabled={!query || total === 0}
           onClick={onNext}
           className={cn(
-            'flex h-6 w-6 items-center justify-center rounded',
+            'flex h-6 w-6 items-center justify-center rounded-lg',
             'hover:bg-titlebar-button-hover',
             'disabled:opacity-40 disabled:hover:bg-transparent',
             'focus-visible:outline-none',
@@ -127,7 +127,7 @@ export const DocSearchBar = forwardRef<HTMLInputElement, DocSearchBarProps>(
           aria-label={t('ccAgent.workdirBrowse.docSearch.close')}
           onClick={onClose}
           className={cn(
-            'flex h-6 w-6 items-center justify-center rounded',
+            'flex h-6 w-6 items-center justify-center rounded-lg',
             'hover:bg-titlebar-button-hover',
             'focus-visible:outline-none',
           )}

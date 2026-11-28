@@ -15,9 +15,11 @@ import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { retainReportingPluginEngines } from './pluginEngineUsage';
 
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityEngine } from '@cindy/maker-shared/branding';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
+  subscribeDataOwnerGeneration,
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
@@ -56,11 +58,26 @@ export function requestPluginEnginesRefresh(targetGhostId?: string): void {
 let engines: readonly PluginEngineView[] = NO_ENGINES;
 const listeners = new Set<() => void>();
 let detachPush: (() => void) | null = null;
+let detachOwner: (() => void) | null = null;
+let snapshotOwner = getDataOwnerGeneration();
 /** Bumped by every push, so a slower initial read never overwrites a newer pushed list. */
 let generation = 0;
+/**
+ * Whether `engines` is what this computer offers now: true once a push or the read of the current
+ * subscription has arrived (or that read has failed, so nothing more is coming). The list kept from
+ * an earlier subscription is shown meanwhile, but it may miss an engine enabled since.
+ */
+let settled = false;
+
+function settle(): void {
+  if (settled) return;
+  settled = true;
+  for (const listener of listeners) listener();
+}
 
 function setEngines(next: readonly PluginEngineView[]): void {
-  retainReportingPluginEngines(getDataOwnerGeneration(), null, next);
+  snapshotOwner = getDataOwnerGeneration();
+  retainReportingPluginEngines(snapshotOwner, null, next);
   engines = next.length === 0 ? NO_ENGINES : next;
   for (const listener of listeners) listener();
 }
@@ -71,32 +88,62 @@ function sanitize(raw: unknown): readonly PluginEngineView[] {
     !!engine && typeof engine === 'object'
     && typeof (engine as PluginEngineView).providerId === 'string'
     && typeof (engine as PluginEngineView).name === 'string'
-    && Array.isArray((engine as PluginEngineView).models));
+    && Array.isArray((engine as PluginEngineView).models))
+    .map((engine) => isAntigravityEngine(engine)
+      ? { ...engine, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }
+      : engine);
 }
 
 function attach(): void {
   const api = pluginEnginesApi();
-  if (!api?.listPluginEngines || !api.onPluginEnginesChanged) return;
+  if (!api?.listPluginEngines || !api.onPluginEnginesChanged) {
+    // No engines can ever arrive here: an empty list is the answer, not a pending read.
+    settled = true;
+    return;
+  }
+  const owner = getDataOwnerGeneration();
   detachPush = api.onPluginEnginesChanged((list) => {
+    if (!isDataOwnerGenerationCurrent(owner)) return;
     generation += 1;
+    settled = true;
     setEngines(sanitize(list));
   });
   const readGeneration = generation;
   api.listPluginEngines()
     .then((list) => {
-      if (readGeneration === generation) setEngines(sanitize(list));
+      if (readGeneration !== generation || !isDataOwnerGenerationCurrent(owner)) return;
+      settled = true;
+      setEngines(sanitize(list));
     })
-    .catch((err: unknown) => log.warn('plugin engines unavailable', err));
+    .catch((err: unknown) => {
+      log.warn('plugin engines unavailable', err);
+      if (readGeneration === generation && isDataOwnerGenerationCurrent(owner)) settle();
+    });
 }
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  if (listeners.size === 1 && !detachPush) attach();
+  if (listeners.size === 1) {
+    detachOwner = subscribeDataOwnerGeneration(() => {
+      generation += 1;
+      detachPush?.();
+      detachPush = null;
+      settled = false;
+      setEngines(NO_ENGINES);
+      attach();
+    });
+    attach();
+  }
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0 && detachPush) {
-      detachPush();
+    if (listeners.size === 0) {
+      generation += 1;
+      detachOwner?.();
+      detachOwner = null;
+      detachPush?.();
       detachPush = null;
+      // Changes are no longer heard: the kept list is a cache until the next subscription reads again.
+      settled = false;
     }
   };
 }
@@ -106,11 +153,27 @@ function subscribeDisabled(): () => void {
 }
 
 function snapshot(): readonly PluginEngineView[] {
-  return engines;
+  return isDataOwnerGenerationCurrent(snapshotOwner) ? engines : NO_ENGINES;
 }
 
 function emptySnapshot(): readonly PluginEngineView[] {
   return NO_ENGINES;
+}
+
+function settledSnapshot(): boolean {
+  return settled && isDataOwnerGenerationCurrent(snapshotOwner);
+}
+
+function unsettledSnapshot(): boolean {
+  return false;
+}
+
+/**
+ * Whether `usePluginEngines()` already shows this computer's current engines. False while it still
+ * shows the list of an earlier visit: wait for it before concluding that an engine does not exist.
+ */
+export function usePluginEnginesSettled(): boolean {
+  return useSyncExternalStore(subscribe, settledSnapshot, unsettledSnapshot);
 }
 
 /** The engines this computer offers; empty when `enabled` is false or no plugin declares one. */
@@ -586,6 +649,7 @@ export function resetPluginEnginesStoreForTests(): void {
   activeRefreshTimers.clear();
   listeners.clear();
   generation = 0;
+  settled = false;
   engines = NO_ENGINES;
   deviceCatalogues = new WeakMap();
 }

@@ -322,6 +322,15 @@ describe('discord server channel lanes', () => {
     expect(await adapter.prepareAgentTurnText?.({ ...event('9876543210'), speaker: undefined })).toBeNull();
   });
 
+  // Unit regression for PR #12389: the adapter's speaker-label test only sends text.
+  // A bare @ with no quote must let the model infer intent from the discussion and ask if unclear.
+  // File runtime: 2.66s.
+  it('uses recent discussion to interpret a bare mention without a quote', async () => {
+    const turn = await adapter.prepareAgentTurnText?.({ ...event(LANE), text: '', invoked: true });
+    expect(turn?.agentText).toContain('结合最近的讨论判断');
+    expect(turn?.agentText).toContain('无法判断时直接询问用户');
+  });
+
   it('teammate connection follows the teammate permission mode: owner turns carry no policy, member turns only confirm destructive actions', () => {
     const im = { getOwnerUserId: () => '1' } as unknown as DiscordIM;
     const teammate = buildDiscordAdapter(im, CONFIG, { companionBotId: 'bot-mia' });

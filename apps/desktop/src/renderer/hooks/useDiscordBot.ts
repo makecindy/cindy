@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 const log = createLogger('useDiscordBot');
 export const OWNER_USER_ID_PATTERN = /^\d{17,20}$/;
@@ -121,14 +122,16 @@ export function useDiscordBot(): UseDiscordBotReturn {
       if (cachedState) {
         cachedState = { ...cachedState, lifecycleAnnouncement: result.lifecycleAnnouncement };
       }
+      if (!result.ok) toast.error(t('ipcError.INTERNAL'));
     }).catch((err) => {
       if (requestVersion !== lifecycleRequestVersionRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       log.error('setLifecycleAnnouncement failed:', msg);
       setLifecycleAnnouncementState(previous);
       if (cachedState) cachedState = { ...cachedState, lifecycleAnnouncement: previous };
+      toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'ipcError.INTERNAL' })));
     });
-  }, [lifecycleAnnouncement]);
+  }, [lifecycleAnnouncement, t]);
 
   const connect = useCallback(async () => {
     if (isSaving) return false;

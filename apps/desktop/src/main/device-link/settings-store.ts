@@ -20,6 +20,7 @@ import type { withAvailabilityPolicyMutation } from './providerShareAvailability
  * 仲裁场景,见 ./ownership.ts)。缓存按文件 mtime 失效——任何实例写入后,其它实例
  * 下一次 read 会检测到 mtime 变化并从盘上重载,保证被动实例改的授权(允许被控开关 /
  * 撤销控制端)能被持有 relay 连接的实例看到;持有者对变化的响应轮询在 index.ts。
+ * 分享准入可显式复用最长 60 秒的文件检查窗口；普通读取与锁内写入仍即时检查。
  */
 
 import type { app } from 'electron';
@@ -39,6 +40,11 @@ export interface DeviceLinkSettings {
   agentNetChangedBy?: { deviceId: string; deviceName: string; at: number; enabled: boolean } | null;
   /** 远程打开 Agent-Net 后等待确认的那一次;没确认前由被切的电脑自己兜底退回(agentNetRemoteSwitch.ts)。 */
   agentNetPendingSwitch?: { switchId: string; controllerId: string; previous: boolean; deadlineAt: number; pid: number; restoring?: boolean } | null;
+  /**
+   * 开关是因为这台电脑在账号里被移除过才自动关掉的（selfHostedRelayRuntime.ts，2026-11-26）；远程连接页据此提示重新打开即可重新加入，
+   * 开关再变就清掉。只在为真时出现，旧文件与默认值的形状不变。
+   */
+  agentNetRemoved?: boolean;
   /** Full desktop viewing/input is a separate, local opt-in. */
   remoteDesktopEnabled: boolean;
   remoteControlEnabled: boolean;
@@ -102,6 +108,7 @@ function normalize(raw: unknown): DeviceLinkSettings {
     // 远程切换的两条记录只在发生过时出现，旧文件与默认值的形状不变。
     ...optional('agentNetChangedBy', normalizeAgentNetChange(r.agentNetChangedBy)),
     ...optional('agentNetPendingSwitch', normalizeAgentNetPendingSwitch(r.agentNetPendingSwitch)),
+    ...(r.agentNetRemoved === true ? { agentNetRemoved: true } : {}),
     remoteDesktopEnabled: r.remoteDesktopEnabled === true,
     remoteControlEnabled: r.remoteControlEnabled === true,
     keepAwake: r.keepAwake === true,
@@ -174,8 +181,10 @@ function normalizeDeviceNameMap(raw: unknown): Record<string, string> {
 }
 
 let cached: DeviceLinkSettings | null = null;
-/** 缓存对应的文件 mtimeMs;文件不存在时为 null。mtime 变化 → 缓存失效重载(跨实例写入可见)。 */
-let cachedMtimeMs: number | null = null;
+/** Identity also detects atomic replacements whose mtime was preserved. Missing is null. */
+let cachedIdentity: string | null = null;
+let cachedPath: string | null = null;
+let lastCheckedAt = -Infinity;
 /**
  * Writes require a readable baseline after a filesystem failure or when the Host preserves
  * malformed JSON. Both cases use fail-closed defaults while the file is unreadable.
@@ -184,24 +193,37 @@ let cachedUnreadable = false;
 const READ_RETRY_DELAY_MS = 1_000;
 let retryReadAt = 0;
 
-function statMtimeMs(file: string): number | null {
+function statFileIdentity(file: string): string | null {
   try {
-    return fs.statSync(file).mtimeMs;
+    const stat = fs.statSync(file);
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
 }
 
-function readDeviceLinkSettings(forceRead = false): DeviceLinkSettings {
-  if (!forceRead && retryReadAt !== 0 && performance.now() < retryReadAt) return { ...DEFAULTS };
+/** Share admission may reuse a bounded file check; other readers and writers stay fresh. */
+function readDeviceLinkSettings(forceRead = false, maxAgeMs = 0): DeviceLinkSettings {
   const file = settingsFilePath();
-  let mtimeMs: number | null;
+  if (cachedPath !== file) {
+    cached = null;
+    cachedIdentity = null;
+    cachedUnreadable = false;
+    retryReadAt = 0;
+    cachedPath = file;
+  }
+  if (!forceRead && retryReadAt !== 0 && performance.now() < retryReadAt) return { ...DEFAULTS };
+  const at = performance.now();
+  if (!forceRead && cached && cachedPath === file && Number.isFinite(maxAgeMs)
+    && at >= lastCheckedAt && at - lastCheckedAt < maxAgeMs) return cached;
+  lastCheckedAt = at;
+  let identity: string | null;
   let contents: string | undefined;
   try {
-    mtimeMs = statMtimeMs(file);
-    if (!forceRead && cached && mtimeMs === cachedMtimeMs) return cached;
-    if (mtimeMs !== null) contents = fs.readFileSync(file, 'utf-8');
+    identity = statFileIdentity(file);
+    if (!forceRead && cached && identity === cachedIdentity) return cached;
+    if (identity !== null) contents = fs.readFileSync(file, 'utf-8');
   } catch (error) {
     // An I/O error does not tell us whether the file is valid. Keep it intact, drop the
     // old grant, and let the next eligible read retry even if the mtime hasn't changed.
@@ -221,7 +243,7 @@ function readDeviceLinkSettings(forceRead = false): DeviceLinkSettings {
   try {
     if (contents !== undefined) {
       cached = normalize(JSON.parse(contents));
-      cachedMtimeMs = mtimeMs;
+      cachedIdentity = identity;
       cachedUnreadable = false;
       return cached;
     }
@@ -232,14 +254,14 @@ function readDeviceLinkSettings(forceRead = false): DeviceLinkSettings {
     });
     if (isPreservingUnreadableSettingsFilesByDefault()) {
       cached = { ...DEFAULTS };
-      cachedMtimeMs = mtimeMs;
+      cachedIdentity = identity;
       cachedUnreadable = true;
       return cached;
     }
     try { fs.unlinkSync(file); } catch { /* no-op */ }
   }
   cached = { ...DEFAULTS };
-  cachedMtimeMs = null;
+  cachedIdentity = null;
   cachedUnreadable = false;
   return cached;
 }
@@ -343,7 +365,7 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
   // 不把 next 记入缓存:rename 与下一次 stat 之间理论上仍可能被替换(锁外读者),
   // 直接失效缓存,下一次 read 从盘上重载。
   cached = null;
-  cachedMtimeMs = null;
+  cachedIdentity = null;
   return nextValue;
 }
 

@@ -71,27 +71,81 @@ describe('Codex thread MCP server tools', () => {
     await expect(readCodexThreadMcpServerTools(invoke, 't', 'custom_omc')).rejects.toThrow(/repeated a cursor/);
   });
 
-  // #12646: a healthy helper must not hide a failed gateway. The single-server
-  // cases do not cover independent cursors when the batch reads legacy pages.
-  // Unit tier: production reader with two gateways and a missing server.
-  it('keeps server selectors and cursors independent during a batch read', async () => {
-    const request = vi.fn(async (_method: string, params: Record<string, unknown>): Promise<Page> => {
-      if (params.serverName === 'cindy_helper') return {
-        nextCursor: null, data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }],
-      };
-      if (params.serverName === 'cindy') return params.cursor === null
-        ? { nextCursor: 'next', data: [] }
-        : { nextCursor: null, data: [{ name: 'cindy', runtimeStatus: 'failed', tools: { ghost_info: {} } }] };
-      return { nextCursor: null, data: [] };
-    });
-    const invoke = request as Parameters<typeof readCodexThreadMcpServersTools>[0];
-    const reports = await readCodexThreadMcpServersTools(invoke, 'thread-1', ['cindy_helper', 'cindy', 'missing', 'cindy']);
+  // Unit tier, production batch reader: native accepts only one serverName.
+  // The existing selector fixture only paginated the gateway. Use the same
+  // cursor for both healthy helper and failed gateway to catch cursor sharing.
+  it('selects each gateway independently and keeps pagination scoped to that selector', async () => {
+    const pages: Record<string, Record<string, Page>> = {
+      cindy_helper: {
+        first: { nextCursor: 'next', data: [] },
+        next: { nextCursor: null, data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }] },
+      },
+      cindy: {
+        first: { nextCursor: 'next', data: [] },
+        next: { nextCursor: null, data: [{ name: 'cindy', runtimeStatus: 'failed', tools: { ghost_info: {} } }] },
+      },
+      missing: { first: { nextCursor: null, data: [] } },
+    };
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
+      pages[String(params.serverName)]![String(params.cursor ?? 'first')]!);
+    const reports = await readCodexThreadMcpServersTools(request as Parameters<typeof readCodexThreadMcpServersTools>[0],
+      'thread-1', ['cindy_helper', 'cindy', 'missing', 'cindy_helper']);
     expect(reports.get('cindy_helper')).toMatchObject({ state: 'connected' });
     expect(reports.get('cindy')).toEqual({ state: 'failed', tools: [] });
     expect(reports.get('missing')).toEqual({ state: 'not-mounted', tools: [] });
     expect(request.mock.calls.map(([, params]) => [params.threadId, params.serverName, params.cursor])).toEqual([
       ['thread-1', 'cindy_helper', null], ['thread-1', 'cindy', null], ['thread-1', 'missing', null],
-      ['thread-1', 'cindy', 'next'],
+      ['thread-1', 'cindy_helper', 'next'], ['thread-1', 'cindy', 'next'],
     ]);
+  });
+
+  it('reads each target from legacy pages that ignore the server selector', async () => {
+    const { request, invoke } = requestFor({
+      first: { nextCursor: 'next', data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }] },
+      next: { nextCursor: null, data: [{ name: 'cindy', runtimeStatus: 'failed', tools: { ghost_info: {} } }] },
+    });
+    const reports = await readCodexThreadMcpServersTools(invoke, 'thread-1', ['cindy_helper', 'cindy']);
+    expect(reports.get('cindy_helper')).toMatchObject({ state: 'connected' });
+    expect(reports.get('cindy')).toEqual({ state: 'failed', tools: [] });
+    expect(request.mock.calls.map(([, params]) => [params.serverName, params.cursor])).toEqual([
+      ['cindy_helper', null], ['cindy', null], ['cindy', 'next'],
+    ]);
+  });
+
+  // Every selector shares the same deadline, including later pages. The
+  // independent-selector fixture above does not exercise time or page bounds.
+  // Unit tier, fake clock; no sockets or real waits.
+  it('passes only the remaining batch budget to later selected pages', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const request = vi.fn(async (_method: string, params: Record<string, unknown>, _options: { timeoutMs: number }) => {
+        vi.setSystemTime(Date.now() + (params.serverName === 'cindy_helper' ? 3_000 : 1_000));
+        return params.serverName === 'cindy' && params.cursor === null
+          ? { data: [], nextCursor: 'next' }
+          : { data: [{ name: params.serverName, runtimeStatus: 'failed' }], nextCursor: null };
+      });
+      const reports = await readCodexThreadMcpServersTools(request as Parameters<typeof readCodexThreadMcpServersTools>[0],
+        't', ['cindy_helper', 'cindy']);
+      expect([...reports.values()].map(report => report.state)).toEqual(['failed', 'failed']);
+      expect(request.mock.calls.map(([, , options]) => options.timeoutMs)).toEqual([5_000, 2_000, 1_000]);
+      vi.setSystemTime(0);
+      request.mockClear();
+      await expect(readCodexThreadMcpServersTools(request as Parameters<typeof readCodexThreadMcpServersTools>[0],
+        't', ['cindy_helper', 'cindy'], 3_000)).rejects.toThrow(/timed out/);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('caps each selected server at five pages and makes no requests for an empty batch', async () => {
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) => ({
+      data: [], nextCursor: params.serverName === 'cindy_helper' ? null : String(Number(params.cursor ?? 0) + 1),
+    }));
+    const invoke = request as Parameters<typeof readCodexThreadMcpServersTools>[0];
+    expect(await readCodexThreadMcpServersTools(invoke, 't', [])).toEqual(new Map());
+    expect(request).not.toHaveBeenCalled();
+    await expect(readCodexThreadMcpServersTools(invoke, 't', ['cindy_helper', 'cindy'])).rejects.toThrow(/exceeded 5 pages/);
+    expect(request.mock.calls.filter(([, params]) => params.serverName === 'cindy')).toHaveLength(5);
+    expect(request.mock.calls.filter(([, params]) => params.serverName === 'cindy_helper')).toHaveLength(1);
   });
 });

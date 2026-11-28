@@ -176,6 +176,12 @@ describe('pi remote file ops command hygiene', () => {
       .rejects.toThrow(`remote stat failed (exit 1): ${code}`);
   });
 
+  it('stat keeps arbitrary remote stderr and private filenames out of errors', async () => {
+    const { host } = makeHostExec('', 1, 'EPRIVATE');
+    await expect(createRemotePiFileOps(host).stat('/private/report.md'))
+      .rejects.toThrow(/^remote stat failed \(exit 1\) while checking a remote path$/);
+  });
+
   it('stat rejects malformed successful responses without exposing command output', async () => {
     const { host } = fakeHost('unexpected remote output');
     await expect(createRemotePiFileOps(host).stat('/private/AGENTS.md'))

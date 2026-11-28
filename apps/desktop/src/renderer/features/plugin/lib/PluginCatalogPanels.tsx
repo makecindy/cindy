@@ -8,7 +8,7 @@ export function PluginCatalogPanels({ scrollRef, query, children }: {
   useLayoutEffect(() => {
     const root = scrollRef.current, element = panel;
     if (!root || !element) return;
-    const tabs = root.querySelector<HTMLElement>('.sticky');
+    const tabs = root.querySelector<HTMLElement>('.plugin-catalog-heading');
     const measure = () => {
       element.style.minHeight = `${Math.max(0, root.clientHeight - (tabs?.offsetHeight ?? 0))}px`;
     };

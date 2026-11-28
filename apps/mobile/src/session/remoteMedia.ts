@@ -2,6 +2,8 @@ import { peerMediaUri, peerMediaExpiry, releasePeerMedia } from "@/device-link/p
 import { peerMediaPlayback } from '@/device-link/peerFileRegistry';
 import { isLocalAgentNetMediaReceipt } from '@/device-link/agentNetLocalMediaReceipt';
 import type { NormalizedToolMedia } from "@/session/messageNormalize";
+import type { RemoteMediaDiskCache } from "./remoteMediaDiskCache";
+import { isCanonicalBase64 } from "@cindy/maker-shared";
 import {
   isPayloadDesktopLocalMediaUrl,
   isPayloadDirectPreviewableUrl,
@@ -187,6 +189,28 @@ export function localCopyResolvedMedia(
     // 本地文件不过期;被 LRU/OS 清掉时 Image onError → forceRefresh 重取自愈。
     expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
     previewable: true,
+  };
+}
+
+export async function cacheInlineRemoteMedia(
+  kind: NormalizedToolMedia["kind"] | "file",
+  resolved: MobileResolvedRemoteMedia,
+  diskCache: Pick<RemoteMediaDiskCache, "storeBytes" | "lookup">,
+  diskSource: string,
+): Promise<MobileResolvedRemoteMedia> {
+  const { inlineBase64, url, mimeType, size, expiresAt, previewable } = resolved;
+  // The HTTPS WebView needs the inline audio URL to play.
+  if (!inlineBase64 || kind === "audio") return resolved;
+
+  await diskCache.storeBytes(diskSource, inlineBase64, mimeType).catch(() => undefined);
+  const hit = await diskCache.lookup(diskSource).catch(() => null);
+  return {
+    url: hit?.uri ?? url,
+    ossKey: "",
+    mimeType,
+    size: hit?.size ?? size,
+    expiresAt,
+    previewable,
   };
 }
 
@@ -379,9 +403,7 @@ function isValidInlineResult(
     Number.isSafeInteger(value.size) &&
     value.size >= 0 &&
     value.inlineBase64.length <= 1024 * 1024 &&
-    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-      value.inlineBase64,
-    ) &&
+    isCanonicalBase64(value.inlineBase64) &&
     (value.inlineBase64.length / 4) * 3 -
       (value.inlineBase64.endsWith("==")
         ? 2

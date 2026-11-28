@@ -7,15 +7,16 @@
  */
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
+  useTranslation: () => ({ t: (key: string, values?: { name?: string }) => values?.name ? `${key} ${values.name}` : key }),
 }));
 
-// 预览卡内容不在本文件的覆盖范围(Content 直接丢掉,与原先 Tip stub 只透传
-// children 等价)。Provider 放一个隐藏结构标记,直接断言当前 DOM 中的实例数,
+// 直接展示预览内容，省去 Radix 延时；Provider 放一个隐藏标记以断言实例数，
 // 避免 Windows 全量 shard 高负载时 useEffect 挂载计数尚未刷新造成误报。
 vi.mock('@/components/ui/tooltip', () => ({
   Tooltip: {
@@ -27,12 +28,14 @@ vi.mock('@/components/ui/tooltip', () => ({
     ),
     Root: ({ children }: { children: ReactNode }) => <>{children}</>,
     Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-    Content: () => null,
+    Content: ({ children }: { children: ReactNode }) => <div role="tooltip">{children}</div>,
   },
 }));
 
+import { sessionsStore } from '@/lib/sessionsStore';
+import * as sessionOrigin from '@/features/device-link/stickySessionOrigin';
 import { MessageNavRail } from '../MessageNavRail';
-import { NAV_RAIL_ACTIVE_FUDGE_PX, type NavRailEntry } from '../messageNavRailModel';
+import { deriveNavRailEntries, NAV_RAIL_ACTIVE_FUDGE_PX, type NavRailEntry } from '../messageNavRailModel';
 
 class ResizeObserverStub {
   observe() {}
@@ -73,21 +76,15 @@ function buildScrollContainer(
   return root;
 }
 
-const ENTRIES: NavRailEntry[] = [
-  { id: 'u1', preview: '第一问' },
-  { id: 'u2', preview: '第二问' },
-  { id: 'u3', preview: '第三问' },
-  { id: 'u4', preview: '第四问' },
-  { id: 'u5', preview: '第五问' },
-];
+const ENTRIES: NavRailEntry[] = ['第一问', '第二问', '第三问', '第四问', '第五问'].map((preview, index) => ({
+  id: `u${index + 1}`, preview, sender: {}, isOwn: true,
+}));
 
-const MIXED_ENTRIES: NavRailEntry[] = [
-  { id: 'u1', preview: '第一问' },
-  { id: 'u2', preview: '自动任务提问', isAutomation: true },
-  { id: 'u3', preview: '第三问' },
-  { id: 'u4', preview: '第四问' },
-  { id: 'u5', preview: '第五问' },
-];
+const MIXED_ENTRIES = [...ENTRIES];
+MIXED_ENTRIES[1] = {
+  id: 'u2', preview: '自动任务提问', sender: { automationOrigin: { kind: 'scheduler' } },
+  isOwn: false, isAutomation: true,
+};
 
 describe('MessageNavRail', () => {
   beforeEach(() => {
@@ -124,6 +121,52 @@ describe('MessageNavRail', () => {
     expect(buttons[1].getAttribute('aria-current')).toBe('true');
     expect(buttons[0].getAttribute('aria-current')).toBeNull();
     expect(buttons[2].getAttribute('aria-current')).toBeNull();
+  });
+
+  // Unit / DESIGN.md §4 Desktop message nav rail preview：原用例只看刻度。
+  // 同一张导轨混入一条非本人输入时，只有本人的预览正文可使用用户气泡底框。
+  it('只有本人提问使用用户气泡底框，其他来源展示聊天的署名', async () => {
+    const hostId = 'remote-receiver';
+    const hostDevice = vi.spyOn(sessionOrigin, 'getStickySessionDeviceId').mockImplementation(
+      (id) => id === hostId ? 'remote-device' : undefined,
+    );
+    const localTitle = vi.spyOn(sessionsStore, 'getTitleById').mockReturnValue('本机同 ID 的任务');
+    const row = { role: 'user' as const, createdAt: '2026-11-24T10:30:00' };
+    const entries = deriveNavRailEntries([
+      { ...row, clientId: 'me', content: '我的问题', sourceDevice: { deviceId: 'phone', platform: 'mobile', name: 'iPhone' } },
+      // Orca 标题只写角色，聊天在它前面另有发送方任务的来源标签，预览同样保留。
+      { ...row, clientId: 'worker', content: JSON.stringify({ orcaSource: 'worker', content: '进展' }),
+        automationOrigin: { kind: 'session', senderSessionId: 'lead', senderSessionTitle: 'Lead 任务' } },
+      // 发送方和设备是聊天里两个独立标签，非本人来源也要保留设备。
+      { ...row, clientId: 'plugin', content: '插件来信', sourcePlugin: { pluginId: 'plugin' },
+        sourceDevice: { deviceId: 'tablet', platform: 'mobile', name: 'iPad' } },
+      { ...row, clientId: 'task', content: '其他任务', automationOrigin: { kind: 'session', senderSessionId: 'origin', senderSessionTitle: '远端任务标题' } },
+      { ...row, clientId: 'timer', content: '定时任务', automationOrigin: { kind: 'scheduler' } },
+      { ...row, clientId: 'im', content: '群消息', hookSource: {
+        im: 'slack', origin: { sender: { name: 'Lee', isOwner: false } },
+      } },
+    ]);
+    const root = buildScrollContainer(1000, []);
+    render(<MemoryRouter><MessageNavRail sessionId={hostId} resetKey="view-1" entries={entries} scrollRef={{ current: root }}
+      contentMaxWidth={880} bottomOffset={200} onJump={vi.fn()} /></MemoryRouter>);
+    const cards = await screen.findAllByRole('tooltip');
+    expect(cards[0].textContent).toContain('iPhone');
+    expect(cards[0].querySelector('time')?.dateTime).toBe(row.createdAt);
+    expect(cards[1].textContent).toContain('Lead 任务');
+    expect(cards[2].textContent).toContain('iPad');
+    expect(cards[3].textContent).toContain('远端任务标题');
+    localTitle.mockRestore();
+    hostDevice.mockRestore();
+    const labels = ['chat.messageNavRail.you', 'chat.userMessage.orcaFromWorker', 'chat.userMessage.pluginSent',
+      'chat.userMessage.sessionSent', 'chat.userMessage.automationSent', 'chat.threadContext.memberFromPlatform'];
+    cards.forEach((card, i) => {
+      expect(card.textContent).toContain(labels[i]);
+      const question = screen.getByText(entries[i].preview);
+      const frame = question.closest('[class*="rounded"]');
+      if (i === 0) expect(frame?.className).toContain('--msg-user-bg');
+      else expect(frame).toBeNull();
+    });
+    expect(cards).toHaveLength(labels.length);
   });
 
   it('整条导轨只挂一个 TooltipProvider(而不是每根刻度一个)', async () => {
@@ -189,13 +232,13 @@ describe('MessageNavRail', () => {
       { id: 'u5', top: 900 },
     ]);
     render(
-      <MessageNavRail
+      <MemoryRouter><MessageNavRail
         entries={MIXED_ENTRIES}
         scrollRef={{ current: root }}
         contentMaxWidth={880}
         bottomOffset={200}
         onJump={vi.fn()}
-      />,
+      /></MemoryRouter>,
     );
     await waitFor(() => {
       expect(screen.getAllByRole('button')).toHaveLength(5);

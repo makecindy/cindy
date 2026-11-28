@@ -1,12 +1,25 @@
 export type SchedulerEvent =
   | { type: 'fired'; scheduleId: string; runId: string }
   | { type: 'completed'; scheduleId: string; runId: string; sessionId: string }
-  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string }
+  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string; silenced?: boolean }
   | { type: 'deferred'; scheduleId: string; runId: string }
-  /** 前置检查脚本(preRunHook)exit 2 拦截:run 记 'skipped' 生而已读;sessionId 为留痕会话 id,可为空串(留痕失败时)。 */
-  | { type: 'skipped'; scheduleId: string; runId: string; sessionId: string }
+  /** 前置检查脚本(preRunHook)exit 2 拦截:run 记 'skipped' 生而已读;sessionId 为留痕会话 id,可为空串。新主机会附带排期时间戳与检查恢复标记。 */
+  | {
+      type: 'skipped';
+      scheduleId: string;
+      runId: string;
+      sessionId: string;
+      lastFiredAt?: number;
+      lastFinishedAt?: number;
+      nextFireAt?: number;
+      preRunCheckSucceeded?: boolean;
+    }
   | { type: 'session-bound'; scheduleId: string; runId: string; sessionId: string }
-  | { type: 'changed'; scheduleId: string }
+  /**
+   * skippedRunId 标识宿主为兼容旧客户端(只认 changed 刷新下次时间)在 skipped 之后有界合并补发的事件;
+   * 旧端忽略未知字段照常重拉,已原位应用同次 skipped 补丁的现代端可据此去重。
+   */
+  | { type: 'changed'; scheduleId: string; skippedRunId?: string }
   | { type: 'read'; scheduleId: string }
   | { type: 'all-read' }
   | { type: 'ready' }
@@ -75,19 +88,44 @@ export function normalizeSchedulerEvent(value: unknown): NormalizedSchedulerEven
       const runId = readString(value.runId);
       if (!scheduleId || !runId) return unknownEvent(type);
       const sessionId = readString(value.sessionId);
-      return sessionId
-        ? { type, scheduleId, runId, error: readString(value.error) ?? '', sessionId }
-        : { type, scheduleId, runId, error: readString(value.error) ?? '' };
+      const silenced = value.silenced === true;
+      return {
+        type,
+        scheduleId,
+        runId,
+        error: readString(value.error) ?? '',
+        ...(sessionId ? { sessionId } : {}),
+        ...(silenced ? { silenced: true } : {}),
+      };
     }
     case 'skipped': {
-      // sessionId 与 completed 不同**允许空串**:desktop engine 在留痕会话创建失败时
-      // emit sessionId=''(fail-soft),不能因此把整个事件打成 unknown 触发全量刷新。
+      // sessionId 与 completed 不同**允许空串**:desktop engine 在留痕会话创建失败或
+      // 普通前置检查空跳时 emit sessionId=''(fail-soft),不能因此把整个事件打成 unknown。
+      // 新主机可选附带排期时间戳与 preRunCheckSucceeded,旧主机缺省仍合法。
       const scheduleId = readString(value.scheduleId);
       const runId = readString(value.runId);
       if (!scheduleId || !runId) return unknownEvent(type);
-      return { type, scheduleId, runId, sessionId: readString(value.sessionId) ?? '' };
+      const lastFiredAt = readFiniteNumber(value.lastFiredAt);
+      const lastFinishedAt = readFiniteNumber(value.lastFinishedAt);
+      const nextFireAt = readFiniteNumber(value.nextFireAt);
+      const preRunCheckSucceeded = value.preRunCheckSucceeded === true;
+      return {
+        type,
+        scheduleId,
+        runId,
+        sessionId: readString(value.sessionId) ?? '',
+        ...(lastFiredAt !== undefined ? { lastFiredAt } : {}),
+        ...(lastFinishedAt !== undefined ? { lastFinishedAt } : {}),
+        ...(nextFireAt !== undefined ? { nextFireAt } : {}),
+        ...(preRunCheckSucceeded ? { preRunCheckSucceeded: true } : {}),
+      };
     }
-    case 'changed':
+    case 'changed': {
+      const scheduleId = readString(value.scheduleId);
+      if (!scheduleId) return unknownEvent(type);
+      const skippedRunId = readString(value.skippedRunId);
+      return skippedRunId ? { type, scheduleId, skippedRunId } : { type, scheduleId };
+    }
     case 'read': {
       const scheduleId = readString(value.scheduleId);
       return scheduleId ? { type, scheduleId } : unknownEvent(type);
@@ -99,6 +137,20 @@ export function normalizeSchedulerEvent(value: unknown): NormalizedSchedulerEven
     default:
       return unknownEvent(type);
   }
+}
+
+export function isPatchableSkippedScheduleEvent(
+  event: NormalizedSchedulerEvent,
+): event is Extract<SchedulerEvent, { type: 'skipped' }> & {
+  lastFinishedAt: number;
+  nextFireAt: number;
+} {
+  return (
+    event.type === 'skipped' &&
+    event.sessionId === '' &&
+    event.lastFinishedAt !== undefined &&
+    event.nextFireAt !== undefined
+  );
 }
 
 export function projectScheduleEvent(value: unknown): ScheduleEventProjection {
@@ -144,22 +196,27 @@ export function projectNormalizedScheduleEvent(event: NormalizedSchedulerEvent):
         sessionIndex: true,
         unreadSummary: true,
       }, 'may-increase', runPatch(event.scheduleId, event.runId, event.sessionId, 'terminal'));
-    case 'skipped':
-      // 与 completed 的差别:skipped run 生而已读,不影响未读徽标(unreadSummary=false /
-      // unreadImpact='none');留痕会话可能新建,sessionIndex 仍要刷。
+    case 'skipped': {
+      // 携带完整完成/下次时间戳且无留痕会话的周期空跳由现代端原位补丁收口(不额外重拉索引或会话表);
+      // 故障恢复或冷启首检由宿主紧跟广播真实 changed(无 skippedRunId)并在持有旧失败快照的客户端升级刷新;
+      // 旧主机无时间戳或有留痕 sessionId 时保留 sessionIndex=true 兼容重拉。
+      const patchable = isPatchableSkippedScheduleEvent(event);
       return projection(event, {
         runRefresh: { mode: 'schedule', scheduleId: event.scheduleId },
         scheduleList: false,
-        sessionIndex: true,
-        unreadSummary: false,
+        sessionIndex: !patchable,
+        unreadSummary: !patchable && event.preRunCheckSucceeded === true,
       }, 'none', runPatch(event.scheduleId, event.runId, event.sessionId || null, 'terminal'));
-    case 'failed':
+    }
+    case 'failed': {
+      const silenced = event.silenced === true;
       return projection(event, {
         runRefresh: { mode: 'schedule', scheduleId: event.scheduleId },
         scheduleList: false,
         sessionIndex: true,
-        unreadSummary: true,
-      }, 'may-increase', runPatch(event.scheduleId, event.runId, event.sessionId ?? null, 'terminal'));
+        unreadSummary: !silenced,
+      }, silenced ? 'none' : 'may-increase', runPatch(event.scheduleId, event.runId, event.sessionId ?? null, 'terminal'));
+    }
     case 'session-bound':
       return projection(event, {
         runRefresh: { mode: 'schedule', scheduleId: event.scheduleId },
@@ -235,6 +292,10 @@ function unknownEvent(rawType: string | null): NormalizedSchedulerEvent {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

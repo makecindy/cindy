@@ -13,20 +13,21 @@ export function createMakerStartupGate() {
       waiters.clear();
     },
     /** A timed-out caller is removed and must not start work when startup finishes later. */
-    wait(timeoutMs: number): Promise<boolean> {
-      if (timeoutMs <= 0) return Promise.resolve(false);
+    wait(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+      if (timeoutMs <= 0 || signal?.aborted) return Promise.resolve(false);
       if (complete) return Promise.resolve(true);
       return new Promise((resolve) => {
-        const wake = () => {
+        const finish = (ready: boolean) => {
           clearTimeout(timer);
           waiters.delete(wake);
-          resolve(true);
+          signal?.removeEventListener('abort', abort);
+          resolve(ready);
         };
-        const timer = setTimeout(() => {
-          waiters.delete(wake);
-          resolve(false);
-        }, timeoutMs);
+        const wake = () => finish(true);
+        const abort = () => finish(false);
+        const timer = setTimeout(abort, timeoutMs);
         waiters.add(wake);
+        signal?.addEventListener('abort', abort, { once: true });
       });
     },
   };

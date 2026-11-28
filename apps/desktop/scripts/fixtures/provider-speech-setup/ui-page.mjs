@@ -37,7 +37,7 @@ export default {
       await page.getByRole('menuitem', { name: await ui.t('bots.voiceMode.realtime.add'), exact: true }).click();
       const model = page.getByRole('checkbox', { name: /qwen-audio-3.0-realtime-plus/ });
       await model.waitFor();
-      assert.equal(await model.getAttribute('aria-checked'), 'false');
+      assert.equal(await model.isChecked(), false);
       await model.click();
       if (ui.case === 'realtime-token-plan') assert.equal(await page.getByRole('checkbox', { name: /qwen-audio-3.1/ }).count(), 0);
       await ui.capture('realtime-models');
@@ -113,7 +113,7 @@ export default {
             : 'speech-2.8-turbo';
     const recommended = page.getByRole('checkbox', { name: new RegExp(recommendedId) });
     await recommended.waitFor();
-    assert.equal(await recommended.getAttribute('aria-checked'), 'true');
+    assert.equal(await recommended.isChecked(), true);
     if (ui.case.startsWith('token-plan'))
       assert.equal(await page.getByRole('checkbox', { name: /cosyvoice/ }).count(), 0);
     if (ui.case === 'bailian') {

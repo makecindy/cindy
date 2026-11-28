@@ -3,6 +3,7 @@ import { InvokeScheduler } from "../invokeScheduler.js";
 import { DeviceLinkError } from "../protocol.js";
 import { isBackgroundInvoke, bypassInvokeScheduling, isInteractiveInvoke, resolveInvokePriority } from "../invokePolicy.js";
 import { sharedTaskGuestPeer, sharedTaskHostPeer } from "../sharedTaskPeer.js";
+import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
 import { StallDiagnostics } from '../stallDiagnostics.js';
 
 function deferred() {
@@ -96,7 +97,8 @@ describe("invoke admission", () => {
     await Promise.all(results);
   });
 
-  const sameHost = ["host", sharedTaskHostPeer("task-a", "host"), sharedTaskGuestPeer("task-b", "member", "host")];
+  const sameHost = ["host", sharedTaskHostPeer("task-a", "host"), sharedTaskGuestPeer("task-b", "member", "host"),
+    providerShareHostPeer('share-a', 'host'), providerShareGuestPeer('share-b', 'member', 'host')];
 
   it.each([false, true])("shares physical-host active and waiting limits across scoped peers (background=%s)", async (background) => {
     const scheduler = new InvokeScheduler();
@@ -337,6 +339,7 @@ describe("invoke admission", () => {
     expect(resolveInvokePriority("local-db:messages:view")).toBe("foreground");
     expect(resolveInvokePriority("local-db:messages:view", true)).toBe("background");
     expect(resolveInvokePriority("git-context:pr-status")).toBe("background");
+    expect(resolveInvokePriority("maker:usage:zhipu-coding-plan")).toBe("background");
     expect(resolveInvokePriority("maker:predict-prompt")).toBe("background");
     const remote = 'maker:remote-agent:v1';
     for (const request of [

@@ -186,6 +186,13 @@ export function useTelegramBot(): UseTelegramBotReturn {
     try {
       const result = await window.electronAPI.telegramBot.disconnect();
       setStatus(result.status);
+      if (result.status.kind === 'error') {
+        if (cachedState) cachedState = { ...cachedState, status: result.status };
+        toast.error(t('logic.toasts.telegramBotDisconnectFailed', {
+          message: describeTelegramStatusFailure(result.status, t),
+        }));
+        return;
+      }
       setOwnerUserIdState('');
       setTokenState('');
       setBotUsername(null);

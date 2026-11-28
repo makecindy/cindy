@@ -150,6 +150,23 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+// #12427 diagnostic follow-up: real prepare entry; existing quote tests only cover successful parsing.
+// Unit: included-file syntax failures must identify their source without returning argument values.
+it.each([
+  ['# header\r\nserver {\r\n  proxy_set_header Authorization private-test-token\r\n}', 'Invalid Nginx directive', 3, 3, 'proxy_set_header'],
+  ['# header\nserver {\n  set $secret "private-test-token', 'Invalid Nginx token', 3, 15, null],
+  ['# header\nserver {\n  set $secret ${private-test-token', 'Unclosed Nginx variable', 3, 15, null],
+  ['# header\nserver {\n  set $secret private-test-token;', 'Unclosed Nginx block', 2, 1, 'server'],
+] as const)('reports safe source coordinates for %s', (source, reason, line, column, directive) => {
+  h.files.set(site, source);
+  let message = '';
+  try { prepare(); } catch (error) { message = (error as Error).message; }
+  expect(message).toContain(`${reason} at ${JSON.stringify(site)}:${line}:${column}`);
+  if (directive) expect(message).toContain(`(directive: ${directive})`);
+  expect(message).not.toContain('private-test-token');
+  expect(h.signals).toEqual([]);
+});
+
 it('preserves quoted log format delimiters before a server in an included file (#12427)', () => {
   const format = `log_format site_total escape=json '{' # comment with }
     '"uri":"$request_uri"' "}" ";";\n`;
