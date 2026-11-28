@@ -100,9 +100,10 @@ export function buildModelsSyncRequest(baseUrl: string | (() => string), canSwit
       timeoutMs: XD_MODELS_SYNC_TIMEOUT_MS,
       // Client V5 requests landed in cbb830cb6 (2026-08-27); standalone audio parsing
       // followed in 5c47051ac (2026-09-10). Earlier V5 parsers reject the whole list
-      // for audio_speech with agents: [], so schemaVersion=5 alone cannot prove support.
+      // for standalone media modes with agents: [], so schemaVersion=5 alone cannot
+      // prove support (audio_speech, evaluation, realtime, rerank each opt in here).
       headers: {
-        'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing,evaluation,rerank' +
+        'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing,evaluation,realtime,rerank' +
           (canSwitchAutoEngines ? ',silent_switch' : ''),
       },
       // 模型权限随订阅权益变化，强制刷新不能命中 Electron HTTP cache。
