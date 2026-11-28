@@ -1796,6 +1796,7 @@ interface ElectronAPI {
     runtimeStates: () => Promise<{ states: Record<string, string> }>;
     /** 面板错误态「重载意识」:清熔断记账 + 重新拉起沙箱。 */
     reload: (id: string) => Promise<{ state: string }>;
+    setViewDirectoryContext: (guestId: number, source: import('../shared/pluginViewDirectoryContext').PluginViewDirectorySource | null) => Promise<void>;
     /** Library(持久作品库)设置面:概览/选位置/绑定/迁移/回默认/解绑/删除。 */
     usageSummary: (id: string) => Promise<import('../shared/pluginUsage').PluginUsageSummary | null>;
     usageHistory: () => Promise<{ subjectId: string; ghostId: string; displayName: string; sourceKind: string }[]>;

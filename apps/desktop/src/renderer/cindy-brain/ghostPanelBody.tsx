@@ -1,3 +1,4 @@
+import type { PluginViewDirectorySource } from '../../shared/pluginViewDirectoryContext';
 import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
@@ -205,6 +206,9 @@ export function GhostWebviewBody({
   query,
   wallpaperCanvas = false,
   onHostNode,
+  directorySource,
+  directoryRevision,
+  directoryVisible = true,
 }: {
   ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'> & Partial<Pick<InstalledGhost, 'approval'>>;
   html: string | undefined;
@@ -216,6 +220,10 @@ export function GhostWebviewBody({
   /** Main-view pages share the host canvas, including when docked or detached. */
   wallpaperCanvas?: boolean;
   onHostNode?: (node: HTMLDivElement | null) => void;
+  directorySource?: PluginViewDirectorySource | null;
+  /** Reload when the task's effective directory changes without changing its ID. */
+  directoryRevision?: string;
+  directoryVisible?: boolean;
 }): ReactNode {
   const { manifest } = ghost;
   const instanceId = installedGhostStoragePart(ghost);
@@ -228,6 +236,12 @@ export function GhostWebviewBody({
   // The host is swapping this instance's library on disk. Drop the webview
   // until the swap and the partition clear finish, then load from disk again,
   // so the old page cannot write its state over the swapped library.
+  const directoryTaskId = directorySource?.kind === 'task' ? directorySource.sessionId : undefined;
+  const directoryProject = directorySource?.kind === 'project' ? directorySource.projectDir : undefined;
+  const directoryVisibilityRef = useRef(directoryVisible);
+  directoryVisibilityRef.current = directoryVisible;
+  const deliverDirectoryRef = useRef<(() => void) | null>(null);
+  useEffect(() => { if (directoryVisible) deliverDirectoryRef.current?.(); }, [directoryVisible]);
   const [librarySwapping, setLibrarySwapping] = useState(false);
   useEffect(() => window.electronAPI?.ghosts?.onLibraryReplaced?.((payload) => {
     if (payload?.id !== instanceId) return;
@@ -279,7 +293,22 @@ export function GhostWebviewBody({
         if (!disposed) injector.inject();
       }, 50);
     };
-    const onDomReady = () => injector.onDomReady();
+    let directoryPending = false;
+    const deliverDirectory = () => {
+      if (!directoryPending || !directoryVisibilityRef.current || disposed) return;
+      directoryPending = false;
+      const source: PluginViewDirectorySource | null = directoryTaskId
+        ? { kind: 'task', sessionId: directoryTaskId }
+        : directoryProject ? { kind: 'project', projectDir: directoryProject } : null;
+      if (!source) return;
+      void window.electronAPI.ghosts.setViewDirectoryContext?.(webview.getWebContentsId(), source).catch(() => {});
+    };
+    deliverDirectoryRef.current = deliverDirectory;
+    const onDomReady = () => {
+      injector.onDomReady();
+      directoryPending = true;
+      deliverDirectory();
+    };
     const onGone = () => {
       if (disposed) return;
       crashMarkedRef.current = true;
@@ -331,6 +360,7 @@ export function GhostWebviewBody({
       crashMarkedRef.current = false;
       log.info('webview destroyed', { instanceId, aliveMs: Date.now() - createdAt, reason });
       disposed = true;
+      deliverDirectoryRef.current = null;
       injector.dispose();
       if (themeTimer !== null) clearTimeout(themeTimer);
       unobserveTheme();
@@ -345,7 +375,7 @@ export function GhostWebviewBody({
     };
     // version 入依赖:原位更新换版后 webview 重挂载,面板立刻跑新代码
     // (供片协议直读安装目录,不重挂会一直渲染旧版缓存的页面)。
-  }, [crashed, generation, librarySwapping, instanceId, approvalToken, partitionClaim, manifest.id, manifest.version, manifest.resolvedLocale, html, query, wallpaperCanvas]);
+  }, [crashed, generation, librarySwapping, instanceId, approvalToken, partitionClaim, manifest.id, manifest.version, manifest.resolvedLocale, html, query, wallpaperCanvas, directoryTaskId, directoryProject, directoryRevision]);
 
   if (crashed) {
     return (

@@ -1,3 +1,5 @@
+import { PluginNavigationDirectorySource } from '@/cindy-brain/pluginViewDirectorySource';
+import type { PluginViewDirectorySource } from '../../../shared/pluginViewDirectoryContext';
 import { useHeaderProjectMenu, useProjectSettings } from '@/state/headerProjectMenu';
 /**
  * Sidebar Shell（纯外壳层）
@@ -47,6 +49,7 @@ const RAIL_WIDTH = 78;
 interface SidebarProps {
   pluginSections?: readonly PluginUiEntry[];
   pluginSessionId?: string | null;
+  pluginDirectorySource?: PluginViewDirectorySource | null;
   /** 完全隐藏（左上角 toggle / ⌘B）——w-0，与旧版语义一致。 */
   isCollapsed: boolean;
   /** rail 模式（拖动边框拉到最窄触发）——64px 竖排文字列，与 isCollapsed 独立。 */
@@ -97,6 +100,7 @@ export function Sidebar({
   peekDrawerProps,
   pluginSections,
   pluginSessionId = null,
+  pluginDirectorySource = null,
 }: SidebarProps) {
   const sidebarRef = useRef<HTMLElement>(null);
   useSidebarMaterial(sidebarRef);
@@ -258,32 +262,34 @@ export function Sidebar({
           (CCAgentSidebarUpper 的结果 overlay)这两个兄弟子树的共同祖先处,只实例化一次
           会话搜索状态,经 context 共享。外壳本身仍不感知搜索细节,只负责放置 Provider。 */}
         {shouldMountFeatureContent && (
-          <ConversationSearchProvider>
-            {/* 顶部常驻动作/导航列表(新建 / 自动任务 / Skill / 搜索)。
-              取代原 HorizontalTabbar:同级等权列表行,无单独项目 Tab。
-              rail（收窄）态放不下,隐藏——rail 自身承担入口;展开后回归。
-              完全隐藏态 w-0 自然裁掉。 */}
-            {/* 任务列表页把「新建」以外的行搬进自己的列表滚动区(向上滚一起滚走,
-              对齐 Codex);此时这里只渲染固定的「新建」。其它视图仍整块渲染常驻行。 */}
-            {isRail ? (
-              // 任务视图的 rail 自己按导航偏好渲染全部入口;其它 Feature 只借伙伴图标。
-              !ownsTopNavScrollableRows && <SidebarTopNav section="rail" />
-            ) : (
-              <SidebarTopNav section={ownsTopNavScrollableRows ? 'pinned' : 'all'} />
-            )}
+          <PluginNavigationDirectorySource.Provider value={pluginDirectorySource}>
+            <ConversationSearchProvider>
+              {/* 顶部常驻动作/导航列表(新建 / 自动任务 / Skill / 搜索)。
+                取代原 HorizontalTabbar:同级等权列表行,无单独项目 Tab。
+                rail（收窄）态放不下,隐藏——rail 自身承担入口;展开后回归。
+                完全隐藏态 w-0 自然裁掉。 */}
+              {/* 任务列表页把「新建」以外的行搬进自己的列表滚动区(向上滚一起滚走,
+                对齐 Codex);此时这里只渲染固定的「新建」。其它视图仍整块渲染常驻行。 */}
+              {isRail ? (
+                // 任务视图的 rail 自己按导航偏好渲染全部入口;其它 Feature 只借伙伴图标。
+                !ownsTopNavScrollableRows && <SidebarTopNav section="rail" />
+              ) : (
+                <SidebarTopNav section={ownsTopNavScrollableRows ? 'pinned' : 'all'} />
+              )}
 
-            {/* Upper: feature-injected content slot.
-              The current Feature Layout injects either an expanded or collapsed
-              sidebar tree through the FeatureSidebarSlotContext. Shell renders
-              whatever it's given. If no feature is active (e.g. /settings with
-              the intentionally empty SettingsSidebarUpper), this simply leaves
-              the upper area blank. */}
-            <div className="flex flex-1 flex-col overflow-hidden">
-              <InboxUnreadReporter.Provider value={setInboxUnread}>{upperContent}</InboxUnreadReporter.Provider>
-            </div>
-            {!!pluginSections?.length && !isRail && (!isCollapsed || isPeek) &&
-              <PluginUiSidebarSections entries={pluginSections} sessionId={pluginSessionId} />}
-          </ConversationSearchProvider>
+              {/* Upper: feature-injected content slot.
+                The current Feature Layout injects either an expanded or collapsed
+                sidebar tree through the FeatureSidebarSlotContext. Shell renders
+                whatever it's given. If no feature is active (e.g. /settings with
+                the intentionally empty SettingsSidebarUpper), this simply leaves
+                the upper area blank. */}
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <InboxUnreadReporter.Provider value={setInboxUnread}>{upperContent}</InboxUnreadReporter.Provider>
+              </div>
+              {!!pluginSections?.length && !isRail && (!isCollapsed || isPeek) &&
+                <PluginUiSidebarSections entries={pluginSections} sessionId={pluginSessionId} />}
+            </ConversationSearchProvider>
+          </PluginNavigationDirectorySource.Provider>
         )}
 
         {/* Update banner: shown only when a verified update is ready

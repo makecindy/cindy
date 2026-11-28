@@ -1,3 +1,4 @@
+import { SET_PLUGIN_VIEW_DIRECTORY_CONTEXT, type PluginViewDirectorySource } from '../shared/pluginViewDirectoryContext';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { invokeOpenPath } from './openPath';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
@@ -352,6 +353,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('ghosts:model-picker:resolve', { requestId, route }),
     listSync: (): { ghosts: unknown[] } => ipcRenderer.sendSync('ghosts:list'),
     reload: (id: string): Promise<{ state: string }> => ipcRenderer.invoke('ghosts:reload', id),
+    setViewDirectoryContext: (guestId: number, source: PluginViewDirectorySource | null): Promise<void> =>
+      ipcRenderer.invoke(SET_PLUGIN_VIEW_DIRECTORY_CONTEXT, guestId, source),
     openRetirement: (id: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('ghosts:open-retirement', id),
     acknowledgeRetirement: (id: string): Promise<{ ok: true }> =>

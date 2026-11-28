@@ -2,12 +2,14 @@
 
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { InstalledGhost } from '../../../../shared/ghost';
 import { CONTENT_HEADER_HEIGHT_PX, ContentHeaderSlot } from '@/components/layout/ContentHeader';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  locationState: null as unknown,
   ghostId: 'workspace',
   routeCapable: [] as Array<Record<string, unknown>>,
   runtimeState: 'running',
@@ -24,6 +26,7 @@ vi.mock('@/hooks/useMacFullscreen', () => ({
 vi.mock('react-router-dom', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => mocks.navigate,
+  useLocation: () => ({ pathname: '/apps/workspace', state: mocks.locationState }),
   useParams: () => ({ ghostId: mocks.ghostId }),
 }));
 vi.mock('@/cindy-brain/ghostMainViews', () => ({
@@ -33,8 +36,8 @@ vi.mock('@/cindy-brain/runtimeStates', () => ({
   useGhostRuntimeState: () => mocks.runtimeState,
 }));
 vi.mock('@/cindy-brain/ghostPanelBody', () => ({
-  GhostWebviewBody: ({ html, ghost }: { html?: string; ghost: InstalledGhost }) => (
-    <div data-testid="webview" data-dir={ghost.dir}>{html}</div>
+  GhostWebviewBody: ({ html, ghost, directorySource }: { html?: string; ghost: InstalledGhost; directorySource?: unknown }) => (
+    <div data-testid="webview" data-dir={ghost.dir} data-directory-source={JSON.stringify(directorySource)}>{html}</div>
   ),
   GhostPanelError: ({ state }: { state: string }) => <div data-testid="error">{state}</div>,
 }));
@@ -89,6 +92,8 @@ function renderInHeaderSlot(options: Parameters<typeof HeaderSlotView>[0] = {}) 
 
 beforeEach(() => {
   mocks.navigate.mockReset();
+  mocks.locationState = null;
+  setDataOwnerGeneration('owner-a', 1);
   mocks.registerSidebar.mockReset();
   mocks.ghostId = 'workspace';
   mocks.runtimeState = 'running';
@@ -415,4 +420,23 @@ describe('GhostMainViewHost · 单实例视图守卫', () => {
     });
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
+});
+
+// Unit: the route must give its initial task to the approved page only. The
+// existing entry tests lack a captured route state and a stale owner binding.
+it('supplies captured directory context only under the same owner and page approval', () => {
+  const item = mocks.routeCapable[0];
+  const original = item.installedGhost as InstalledGhost;
+  const optedIn = { ...original, manifest: { ...original.manifest, viewDirectoryContext: true as const } };
+  const directorySource = { kind: 'task', sessionId: 'fixture-task' };
+  mocks.locationState = { directorySource, directoryOwner: { dataOwnerId: 'owner-a', generation: 1 } };
+  item.installedGhost = optedIn;
+  const { rerender } = render(<GhostMainViewHost />);
+  expect(screen.getByTestId('webview').getAttribute('data-directory-source')).toBeNull();
+  item.installedGhost = { ...optedIn, viewDirectoryContextApproved: true };
+  rerender(<GhostMainViewHost />);
+  expect(screen.getByTestId('webview').getAttribute('data-directory-source')).toBe(JSON.stringify(directorySource));
+  setDataOwnerGeneration('owner-b', 2);
+  rerender(<GhostMainViewHost />);
+  expect(screen.getByTestId('webview').getAttribute('data-directory-source')).toBeNull();
 });

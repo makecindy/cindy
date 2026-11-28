@@ -23,6 +23,7 @@ const render = (ui: ReactElement, options?: RenderOptions) =>
 
 const m = vi.hoisted(() => ({
   openSideChat: vi.fn(async () => true),
+  openPluginTask: vi.fn(async () => {}),
   canSideChat: false,
   ghosts: [] as unknown[],
   profiles: [] as Array<{ id: string; sessions: Array<{ id: string; role: string }> }>,
@@ -47,6 +48,7 @@ vi.mock('@/features/bots/botStore', () => ({
     bot.sessions.find((session) => session.role === 'canonical')?.id,
 }));
 vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { subscribe: () => () => {}, findById: (id: string) => m.rows.get(id) ?? null } }));
+vi.mock('../lib/openPluginTaskTab', () => ({ openPluginTaskTab: m.openPluginTask }));
 vi.mock('../lib/openSideChatTab', () => ({
   canOpenSideChat: () => m.canSideChat,
   openSideChatTab: m.openSideChat,
@@ -58,11 +60,12 @@ function registerMenu(kind: TabKindId, labelKey: string, order: number, extra: P
     TabBody: () => null, TabPillTitle: () => null, defaultState: () => null });
 }
 
-function Entries({ sessionId, onSelect, both = false, subagentsAvailable = false, sideChatPlacement, ...selectionOptions }: {
+function Entries({ sessionId, onSelect, both = false, subagentsAvailable = false, localTask, sideChatPlacement, ...selectionOptions }: {
   sessionId: string; onSelect: (kind: TabKindId) => void; both?: boolean; subagentsAvailable?: boolean;
   sideChatPlacement?: SideChatTabPlacement;
+  localTask?: boolean;
 } & TabCreationSelectionOptions) {
-  const menu = useTabCreationMenu({ sessionId, subagentsAvailable, onSelect, sideChatPlacement });
+  const menu = useTabCreationMenu({ sessionId, subagentsAvailable, onSelect, sideChatPlacement, localTask });
   return <>
     <div data-testid="menu"><AddTabDropdown open={false} anchorRef={createRef<HTMLElement>()}
       menu={menu} onClose={vi.fn()} {...selectionOptions} /></div>
@@ -251,4 +254,29 @@ it.each(['menu', 'empty'])('opens plugins in the selected group and reports exis
   );
   fireEvent.click(within(screen.getByTestId(surface)).getByText('Alpha'));
   expect(onGlobalTabSelected).toHaveBeenLastCalledWith('g_alpha', true);
+});
+
+// Unit: an approved task view adds a task-local choice alongside the existing
+// global view. The identical declaration in an old receipt stays global-only.
+it.each([false, true])('keeps the global choice and adds the approved task page (%s)', approved => {
+  m.ghosts = [{
+    dir: '/plugins/directory-inspector', enabled: true,
+    approval: { state: 'approved', revision: 'receipt' },
+    ...(approved ? { viewDirectoryContextApproved: true } : {}),
+    manifest: { id: 'directory-inspector', name: 'Directory inspector', viewDirectoryContext: true,
+      mainView: { html: 'main.html', title: 'Inspector' }, taskView: { html: 'task.html', title: 'Task inspector' } },
+  }];
+  const onGlobalTabSelected = vi.fn();
+  render(<Entries sessionId="task-1" localTask onSelect={vi.fn()} onGlobalTabSelected={onGlobalTabSelected} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Inspector' }));
+  expect(onGlobalTabSelected).toHaveBeenCalledExactlyOnceWith(expect.any(String), false);
+  expect(m.openPluginTask).not.toHaveBeenCalled();
+  const taskEntry = screen.queryByRole('button', { name: 'Task inspector' });
+  if (!approved) {
+    expect(taskEntry).toBeNull();
+    return;
+  }
+  expect(taskEntry).not.toBeNull();
+  fireEvent.click(taskEntry!);
+  expect(m.openPluginTask).toHaveBeenCalledExactlyOnceWith('task-1', 'directory-inspector', expect.any(Object));
 });

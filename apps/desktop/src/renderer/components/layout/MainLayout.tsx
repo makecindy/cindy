@@ -1,3 +1,4 @@
+import { navigationPluginDirectorySource } from '@/cindy-brain/pluginViewDirectorySource';
 import { useRightSidebarMaximizeEscape } from './useRightSidebarMaximizeEscape';
 import { toast } from '@/lib/toast';
 import { openSettingsNavigation } from '@/lib/settingsNavigation';
@@ -1341,6 +1342,10 @@ export function MainLayout() {
   }, []);
 
   // 边页签组(左 / 上 / 下)的宿主上下文:与右侧栏拿到的会话上下文同一份。
+  const pluginDirectorySource = useMemo(() => navigationPluginDirectorySource(location.pathname, {
+    sessionId: rightSidebarSessionId,
+    ...rightSidebarWorkdirInfo,
+  }), [location.pathname, rightSidebarSessionId, rightSidebarWorkdirInfo]);
   const tabGroupHost = useMemo<TabGroupHostValue>(
     () => ({
       sessionId: rightSidebarSessionId,
@@ -1828,6 +1833,7 @@ export function MainLayout() {
             <Sidebar
               pluginSections={pluginSidebarSections}
               pluginSessionId={rightSidebarSessionId}
+              pluginDirectorySource={pluginDirectorySource}
               isCollapsed={isSidebarCollapsed}
               // peek 抽屉恒以展开态呈现(预览完整列表),rail 视觉在 peek 期强制关闭。
               isRail={sidebarPeek.isPeekVisible ? false : isRailMode}

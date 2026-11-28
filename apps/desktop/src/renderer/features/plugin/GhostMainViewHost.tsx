@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import { useGhostMainViews } from '@/cindy-brain/ghostMainViews';
 import { GhostPanelError, GhostWebviewBody } from '@/cindy-brain/ghostPanelBody';
@@ -11,12 +11,19 @@ import {
 import { WINDOW_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useSingleInstanceViewGuard } from '@/features/right-sidebar/pluginPlacement';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { isDataOwnerGenerationCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { hasApprovedGhostViewDirectoryContext } from '../../../shared/ghost';
+import type { PluginViewDirectorySource } from '../../../shared/pluginViewDirectoryContext';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 
 /** Route boundary that resolves only an approved, enabled manifest main-view entry. */
 export function GhostMainViewHost() {
   const { ghostId = '' } = useParams<{ ghostId: string }>();
   const navigate = useNavigate();
+  const state = useLocation().state as {
+    directorySource?: PluginViewDirectorySource;
+    directoryOwner?: DataOwnerGeneration;
+  } | null;
   const { routeCapable } = useGhostMainViews();
   const item = routeCapable.find((candidate) => candidate.instanceId === ghostId);
   const runtimeState = useGhostRuntimeState(
@@ -34,6 +41,9 @@ export function GhostMainViewHost() {
   if (!item) return <div className="h-full w-full bg-content-area" />;
 
   const { manifest, installedGhost } = item;
+  const directorySource = hasApprovedGhostViewDirectoryContext(installedGhost) &&
+    state?.directoryOwner && isDataOwnerGenerationCurrent(state.directoryOwner)
+    ? state.directorySource : undefined;
   const broken = runtimeState === 'crashed' || runtimeState === 'fused';
   return (
     <section
@@ -54,7 +64,7 @@ export function GhostMainViewHost() {
       {broken ? (
         <GhostPanelError ghost={installedGhost} state={runtimeState} />
       ) : (
-        <GhostWebviewBody key={installedGhostStoragePart(installedGhost)} ghost={installedGhost} html={manifest.mainView?.html} wallpaperCanvas />
+        <GhostWebviewBody key={installedGhostStoragePart(installedGhost)} ghost={installedGhost} html={manifest.mainView?.html} wallpaperCanvas directorySource={directorySource} />
       )}
     </section>
   );

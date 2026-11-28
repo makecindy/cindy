@@ -1,7 +1,8 @@
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { getActiveGlobalTabId, requestRevealSessionTab, setActiveGlobalTabId } from '../globalTabs';
 import { addTab, ensureHydrated, getBucket, patchTabState, setActiveTab } from '../store';
 import type { PluginTaskTabState } from '../plugins/plugin-task';
-import { getTabGroup, setGroupActiveTabId } from '../tabGroups';
+import { getTabGroup, setGroupActiveTabId, type TabGroupId } from '../tabGroups';
 import { isTabPoppedOut } from '@/lib/sidebarTabWindowState';
 import { routeSidebarCommand } from './detachedSidebarRouting';
 import { requestRightSidebarVisibility } from './sidebarCommands';
@@ -14,7 +15,9 @@ import { requestRightSidebarVisibility } from './sidebarCommands';
 export async function openPluginTaskTab(
   sessionId: string,
   instanceId: string,
-  options: { userInitiated?: boolean; resourceViewId?: string; resourceInput?: Record<string, unknown>; resourceWorkingDir?: string } = {},
+  options: { userInitiated?: boolean; resourceViewId?: string; resourceInput?: Record<string, unknown>; resourceWorkingDir?: string;
+    placement?: { groupId?: TabGroupId; onSelected?: (tabId: string, existed: boolean) => void };
+  } = {},
 ): Promise<void> {
   const userInitiated = options.userInitiated !== false;
   const resource = {
@@ -22,12 +25,15 @@ export async function openPluginTaskTab(
     ...(options.resourceInput ? { resourceInput: options.resourceInput } : {}),
     ...(options.resourceWorkingDir ? { resourceWorkingDir: options.resourceWorkingDir } : {}),
   };
+  const owner = getDataOwnerGeneration();
   const route = await routeSidebarCommand(
     { type: 'open-plugin-task', sessionId, instanceId, ...resource },
     { userInitiated },
   );
+  if (!isDataOwnerGenerationCurrent(owner)) return;
   if (route === 'attached') {
     await ensureHydrated(sessionId);
+    if (!isDataOwnerGenerationCurrent(owner)) return;
     const bucket = getBucket(sessionId);
     const existing = bucket.tabs.find(
       (tab) =>
@@ -41,10 +47,16 @@ export async function openPluginTaskTab(
         await patchTabState(sessionId, existing.id, state => ({ ...(state as PluginTaskTabState), resourceInput: options.resourceInput ?? {}, resourceWorkingDir: options.resourceWorkingDir }));
       }
       await setActiveTab(sessionId, existing.id, { userInitiated });
+      if (isDataOwnerGenerationCurrent(owner)) options.placement?.onSelected?.(existing.id, true);
     } else {
-      tabId = (await addTab(sessionId, 'plugin-task', { instanceId, ...resource } satisfies PluginTaskTabState))
+      tabId = (await addTab(sessionId, 'plugin-task', { instanceId, ...resource } satisfies PluginTaskTabState,
+        options.placement && {
+          groupId: options.placement.groupId,
+          onOptimisticAdd: id => options.placement?.onSelected?.(id, false),
+        }))
         .id;
     }
+    if (!isDataOwnerGenerationCurrent(owner)) return;
     if (tabId) {
       // 跨任务导航可能尚未挂载目标 Shell，不能只发送会丢失的一次性 reveal。
       // 直接写既有激活位；组归属和弹出位置仍以用户的放置记忆为准。

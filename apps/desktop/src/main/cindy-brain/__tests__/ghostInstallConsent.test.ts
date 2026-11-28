@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   validateGhostManifest,
   getApprovedGhostHostUi,
+  hasApprovedGhostViewDirectoryContext,
+  validateStoredGhostManifest,
   type GhostInstallApproval,
   type GhostManifest,
   type InstalledGhost,
@@ -16,6 +18,7 @@ import {
   confirmedCindyModelActions,
   confirmedHarnesses,
   confirmedFileOpenerExtensions,
+  confirmedViewDirectoryContext,
   confirmedTaskCapability,
   confirmedUiCapability,
   type GhostInstallConsentPrompt,
@@ -617,4 +620,28 @@ it('records companions consent only when that capability was shown', async () =>
   expect(confirmedTaskCapability(decision, before, next, 'companions')).toBe(true);
   expect(confirmedTaskCapability(decision, before, next, 'observe')).toBeUndefined();
   expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'companions')).toBeUndefined();
+});
+
+// Unit: the same declaration was previously an unknown extension. An older
+// receipt stays usable, and only a confirmation that can display the new
+// permission grants the directory context after installation or update.
+it('requires an explicit directory-context approval on an existing declaration', async () => {
+  const { slots, ...prior } = manifest(['api.example.com']);
+  const parsed = validateGhostManifest({
+    ...prior, viewDirectoryContext: true, mainView: { html: 'main.html' },
+  });
+  if (!parsed.ok) throw new Error(parsed.reason);
+  const next = parsed.manifest;
+  const old = installed(next);
+  expect(hasApprovedGhostViewDirectoryContext(old)).toBe(false);
+  const compatible = validateStoredGhostManifest({ ...prior, mainView: next.mainView, viewDirectoryContext: 'old-extension' });
+  expect(compatible).toMatchObject({ ok: true, manifest: { viewDirectoryContext: 'old-extension' } });
+  const capable = Object.assign(vi.fn<GhostInstallConsentPrompt>(async () => true), { viewDirectoryContextApproval: true as const });
+  const policy = { mode: 'prompt', initiator: 'user', origin: 'local-file' } as const;
+  const legacy = await obtainGhostInstallConsent({ ...policy, prompt: userPrompt(true) }, old, next, 'fixture');
+  expect(confirmedViewDirectoryContext(legacy, old, next)).toBeUndefined();
+  const current = await obtainGhostInstallConsent({ ...policy, prompt: capable }, old, next, 'fixture');
+  expect(capable.mock.calls[0]?.[0]).toMatchObject({ facts: { added: [{ key: 'view-directory-context' }] } });
+  const approval = confirmedViewDirectoryContext(current, old, next);
+  expect(hasApprovedGhostViewDirectoryContext({ ...old, viewDirectoryContextApproved: approval })).toBe(true);
 });

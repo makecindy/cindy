@@ -1,3 +1,4 @@
+import { sidebarPluginDirectorySource } from '@/cindy-brain/pluginViewDirectorySource';
 /**
  * RightSidebarShell —— 右侧栏内容容器(TabBar + TabBody),挂在外壳 aside 之内。
  *
@@ -652,6 +653,7 @@ export function RightSidebarShell({
   const creationMenu = useTabCreationMenu({
     sessionId, subagentsAvailable: subagentsEnabled, onSelect: handleAdd,
     reviewAvailable: tabAvailability.reviewAvailable,
+    localTask: sidebarPluginDirectorySource({ sessionId, workdir, remoteHostId, deviceLinkDeviceId })?.kind === 'task',
     sideChatPlacement: soloMode
       ? { onOptimisticAdd: (tabId) => { setHostedActiveTabId(tabId); onTabCreated?.(tabId); } }
       : isPrimaryGroup ? undefined : { groupId },

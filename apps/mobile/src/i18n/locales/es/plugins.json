@@ -295,6 +295,8 @@
       "workspace": "Puede solicitar crear una entrada de sesión para una carpeta de proyecto en la barra lateral",
       "workspaceDetail": "Cuando te lo pide, eliges la carpeta tú mismo o ves la ruta completa en una tarjeta de confirmación antes de decidir; mientras atiende una llamada que tú iniciaste, las subcarpetas dentro del directorio de trabajo de la sesión actual se usan directamente sin un aviso adicional. Las carpetas que ya tienen una sesión se reutilizan y lo que se crea es una sesión vacía: nada comienza a ejecutarse por sí solo.",
       "sessionContext": "Puede saber en qué carpeta de proyecto está trabajando la sesión actual",
+      "viewDirectoryContext": "Contexto de carpetas de proyectos y tareas",
+      "viewDirectoryContextDetail": "Comparte las rutas con las páginas del complemento al abrirlas desde un proyecto o una tarea local. La tarea puede usar un árbol de trabajo de Git independiente. El acceso a archivos requiere permisos propios.",
       "sessionContextDetail": "Comparte solo datos de ubicación (ID de sesión y ruta de la carpeta del proyecto) mientras funciona para la sesión actual: no se concede contenido de archivos ni acceso a archivos.",
       "liveScreen": "Ver y controlar pantallas de dispositivos en tu teléfono u otros ordenadores",
       "liveScreenDetail": "A través del escritorio remoto, tu teléfono o tus otros ordenadores pueden mostrar las pantallas de dispositivos que ofrece (como simuladores) y enviarles toques, botones y texto. Solo se conecta cuando lo abres desde uno de esos dispositivos y no muestra nada más de este ordenador.",

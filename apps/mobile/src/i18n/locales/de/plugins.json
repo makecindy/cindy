@@ -294,6 +294,8 @@
       "workspace": "Kann darum bitten, einen Sitzungseintrag für einen Projektordner in der Seitenleiste zu erstellen",
       "workspaceDetail": "Bei einer Anfrage wählst du entweder selbst den Ordner aus oder siehst vor deiner Entscheidung den vollständigen Pfad auf einer Bestätigungskarte. Während es einen von dir gestarteten Aufruf bearbeitet, werden Unterordner im Arbeitsverzeichnis der aktuellen Sitzung direkt ohne zusätzliche Rückfrage verwendet. Ordner, die bereits eine Sitzung haben, werden wiederverwendet. Erstellt wird eine leere Sitzung – nichts startet von selbst.",
       "sessionContext": "Kann erfahren, in welchem Projektordner die aktuelle Sitzung arbeitet",
+      "viewDirectoryContext": "Ordnerkontext für Projekte und Aufgaben",
+      "viewDirectoryContextDetail": "Beim Öffnen aus einem lokalen Projekt oder einer lokalen Aufgabe erhält die Plugin-Seite Ordnerpfade. Aufgaben können einen eigenen Git-Worktree verwenden. Der Dateizugriff erfordert eigene Berechtigungen.",
       "sessionContextDetail": "Teilt nur Angaben zum Speicherort (Sitzungs-ID und Projektordnerpfad), während es für die aktuelle Sitzung arbeitet – keine Dateiinhalte, und es wird kein Dateizugriff gewährt.",
       "liveScreen": "Geräte-Bildschirme auf dem Telefon oder anderen Computern ansehen und bedienen",
       "liveScreenDetail": "Über den Remote-Desktop können Ihr Telefon oder Ihre anderen Computer die Geräte-Bildschirme anzeigen, die es bereitstellt (zum Beispiel Simulatoren), und Berührungen, Tasten und Text an sie senden. Die Verbindung besteht nur, wenn Sie sie von einem dieser Geräte aus öffnen, und es wird nichts anderes von diesem Computer angezeigt.",

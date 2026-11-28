@@ -40,6 +40,7 @@ export type GhostInstallConsentPrompt = ((
 ) => Promise<boolean>) & {
   /** Main-owned negotiation: legacy remote controllers cannot approve page capabilities. */
   uiCapabilityApproval?: boolean;
+  viewDirectoryContextApproval?: true;
 };
 
 export type GhostInstallConsentPolicy =
@@ -61,7 +62,7 @@ export type GhostInstallConsentPolicy =
 
 /** 求得的确认结论；随安装请求一路交到安装锁内复核。 */
 export type GhostInstallConsentDecision =
-  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true }
+  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true; viewDirectoryContextApproval?: true }
   /** 求确认时判定无需确认；落位前必须仍然无需确认。 */
   | { mode: 'unprompted' }
   | { mode: 'exempt'; reason: 'server-default-install' };
@@ -123,6 +124,18 @@ export function confirmedHarnesses(
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === 'harnesses') ? declared : [];
+}
+
+/** A confirmation must have displayed the new path disclosure. */
+export function confirmedViewDirectoryContext(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): true | undefined {
+  if (decision.mode !== 'confirmed' || decision.viewDirectoryContextApproval !== true) return undefined;
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === 'view-directory-context') ? true : undefined;
 }
 
 /** Approved extensions shown in the install or update confirmation. */
@@ -235,6 +248,7 @@ export async function obtainGhostInstallConsent(
   }
   return {
     mode: 'confirmed',
+    ...(policy.prompt.viewDirectoryContextApproval === true ? { viewDirectoryContextApproval: true as const } : {}),
     ...(policy.prompt.uiCapabilityApproval === false ? { uiCapabilityUnsupported: true as const } : {}),
     ...(forced ? { forced: true as const } : {}),
     key: ghostInstallConsentKey(

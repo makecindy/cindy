@@ -1374,6 +1374,16 @@ panel / mainView 同一 Ghost WebView 沙箱（专属分区，仅有下述页面
 必须遵守第 5 节的存量兼容红线，并核对第 7 节的旧客户端降级缺口。
 新的导航符号通过可选 `mainView.preferredIcon` 渐进提供。旧客户端忽略此提示，未知名称回退至 `mainView.icon` 或拼图。
 
+#### 插件页面的项目与任务目录
+
+`viewDirectoryContext: true` 是插件页面独立选择的权限，要求声明 `mainView` 或 `taskView`。
+安装／更新提示确认后由宿主写入可选 receipt 事实 `viewDirectoryContextApproved`。
+旧批准与未知字段保留原行为，不推断授权。包内入口沿用原有 guest 分区、导航、CSP 和主题。
+授权宿主窗口为已绑定的 guest 提交上下文，Main 读取真实任务的本机路径，并在发送前复核
+owner、实例批准、文档和目录级停用设置。项目路径与任务工作路径独立，后者可能是 Git worktree。
+上下文只给入口的顶层文档，不经过 URL、日志、模型或远程 IPC，不授予文件或其它能力。
+接口见 [插件页面目录上下文](protocol-compatibility/plugin-view-directory-context.md)。
+
 反向同样成立：改校验必须同步手册；改手册宣称的新能力必须真有实现。`forge.test.ts` 的
 关键章节存在性测试只是最低闸，不替代逐条人工核对。
 

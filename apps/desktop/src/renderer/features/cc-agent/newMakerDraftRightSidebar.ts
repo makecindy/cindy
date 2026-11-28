@@ -27,6 +27,10 @@ export const DRAFT_RIGHT_SIDEBAR_TOGGLE_DRAG_STYLE = {
  * 项目草稿还没有真实 sessionId，但 RSB store/布局都以 sessionId 分桶。
  * 用 workdir 做内存态临时桶，避免项目 A 的右栏 tab 泄漏到项目 B。
  */
+export function isProjectDraftRightSidebarSessionId(sessionId: string): boolean {
+  return sessionId.startsWith(PROJECT_DRAFT_RSB_SESSION_PREFIX);
+}
+
 export function makeProjectDraftRightSidebarSessionId(workdir: string): string {
   return `${PROJECT_DRAFT_RSB_SESSION_PREFIX}local:${workdir}`;
 }
@@ -41,7 +45,7 @@ export function makeProjectDraftRightSidebarSessionId(workdir: string): string {
  * sessionId 原样返回(会话页 composer 的草稿键就是 sessionId)。
  */
 export function composerDraftKeyForRightSidebarSession(sessionId: string): string {
-  return sessionId.startsWith(PROJECT_DRAFT_RSB_SESSION_PREFIX)
+  return isProjectDraftRightSidebarSessionId(sessionId)
     ? NEW_MAKER_DRAFT_KEY
     : sessionId;
 }

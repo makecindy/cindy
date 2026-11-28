@@ -18,8 +18,9 @@ import { pluginSourceTooltip } from '@cindy/maker-shared/mcp-apps';
  */
 
 import { Puzzle } from 'lucide-react';
+import { sidebarPluginDirectorySource } from '@/cindy-brain/pluginViewDirectorySource';
 import { PluginUiView } from '@/cindy-brain/PluginUiView';
-import { getApprovedGhostHostUi } from '../../../../../shared/ghost';
+import { getApprovedGhostHostUi, hasApprovedGhostViewDirectoryContext } from '../../../../../shared/ghost';
 import type { TFunction } from 'i18next';
 
 import { GhostPanelError, GhostWebviewBody } from '@/cindy-brain/ghostPanelBody';
@@ -91,7 +92,7 @@ function RemotePluginTaskWebview({
   );
 }
 
-function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
+function PluginTaskBody({ state, ctx, active, shellVisible }: TabKindBodyProps<PluginTaskTabState>) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
   const runtimeState = useGhostRuntimeState(state.instanceId);
   // 归属未知时只保留页签和选中位,不为可能属于远端的任务加载本机插件页。
@@ -99,6 +100,7 @@ function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
   // 停用 / 卸载的瞬间可用性投影已把页签隐藏,这里只兜住收起前的一两帧。
   if (!ghost || ghost.enabled === false) return null;
   const remoteDevice = ctx.deviceLinkDeviceId;
+  const directorySource = hasApprovedGhostViewDirectoryContext(ghost) ? sidebarPluginDirectorySource(ctx) : null;
   if (state.resourceViewId) return remoteDevice === null
     ? <PluginUiView chrome="panel" sizing="fill" ghost={ghost} viewId={state.resourceViewId} sessionId={ctx.sessionId} composerPlacement={ctx.tabId} input={state.resourceInput}
         context={state.resourceWorkingDir ? { workingDir: state.resourceWorkingDir } : undefined} />
@@ -122,6 +124,9 @@ function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
           ghost={ghost}
           html={ghost.manifest.taskView.html}
           query={`session=${encodeURIComponent(ctx.sessionId)}`}
+          directorySource={directorySource}
+          directoryRevision={directorySource ? ctx.workdir : undefined}
+          directoryVisible={active !== false && shellVisible !== false}
         />
       )}
     </div>

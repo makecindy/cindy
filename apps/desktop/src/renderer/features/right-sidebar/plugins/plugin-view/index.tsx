@@ -12,8 +12,9 @@ import { pluginSourceTooltip } from '@cindy/maker-shared/mcp-apps';
  */
 
 import { Puzzle } from 'lucide-react';
+import { sidebarPluginDirectorySource } from '@/cindy-brain/pluginViewDirectorySource';
 import { PluginUiView } from '@/cindy-brain/PluginUiView';
-import { getApprovedGhostHostUi } from '../../../../../shared/ghost';
+import { getApprovedGhostHostUi, hasApprovedGhostViewDirectoryContext } from '../../../../../shared/ghost';
 import type { TFunction } from 'i18next';
 
 import {
@@ -60,7 +61,7 @@ function PluginViewTabPillIcon({ state }: { state: PluginViewTabState }) {
   return <Icon size={13} />;
 }
 
-function PluginViewBody({ state }: TabKindBodyProps<PluginViewTabState>) {
+function PluginViewBody({ state, ctx, active, shellVisible }: TabKindBodyProps<PluginViewTabState>) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
   const runtimeState = useGhostRuntimeState(state.instanceId);
   // 停用 / 卸载的瞬间投影层已把页签隐藏,这里只兜住收起前的一两帧。
@@ -71,6 +72,7 @@ function PluginViewBody({ state }: TabKindBodyProps<PluginViewTabState>) {
   }
   // 按页签记录的页面选内容:主视图入口放进侧栏的是 mainView,停靠面板自动出现的是 panel。
   const view = effectivePluginView(state, ghost);
+  const directorySource = hasApprovedGhostViewDirectoryContext(ghost) ? sidebarPluginDirectorySource(ctx) : null;
   const panelHtml =
     view === 'panel' && ghost.manifest.panel?.position !== 'tab'
       ? ghost.manifest.panel?.html
@@ -80,7 +82,9 @@ function PluginViewBody({ state }: TabKindBodyProps<PluginViewTabState>) {
       {panelHtml ? (
         <GhostChipPanelBody ghost={ghost} />
       ) : (
-        <GhostWebviewBody ghost={ghost} html={ghost.manifest.mainView?.html} wallpaperCanvas />
+        <GhostWebviewBody ghost={ghost} html={ghost.manifest.mainView?.html} wallpaperCanvas
+          directorySource={directorySource} directoryRevision={directorySource ? ctx.workdir : undefined}
+          directoryVisible={active !== false && shellVisible !== false} />
       )}
     </div>
   );

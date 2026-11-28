@@ -49,6 +49,7 @@ import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { AttentionDot, type DotTone } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { useGhostMainViews, type GhostMainViewItem } from '@/cindy-brain/ghostMainViews';
+import { useOpenPluginMainView } from '@/cindy-brain/pluginViewDirectorySource';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
@@ -252,6 +253,7 @@ function SidebarNavigationMoreMenu({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const openPluginMainView = useOpenPluginMainView();
   // A press on a plugin item's manage button reaches the item's own select next;
   // this flag routes that one selection to the plugin details instead of its page.
   const openDetailsRef = useRef(false);
@@ -284,7 +286,8 @@ function SidebarNavigationMoreMenu({
                 onSelect={() => {
                   const openDetails = openDetailsRef.current;
                   openDetailsRef.current = false;
-                  navigate(openDetails ? `/settings?tab=ghosts&ghost=${ghostId}` : `/apps/${ghostId}`);
+                  if (openDetails) navigate(`/settings?tab=ghosts&ghost=${ghostId}`);
+                  else openPluginMainView(app);
                 }}
                 className="group/more-app gap-2.5"
               >

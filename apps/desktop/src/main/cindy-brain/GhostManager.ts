@@ -3248,6 +3248,7 @@ export class GhostManager {
           ...approvedCindyModelActionsField(receipt.approvedCindyModelActions, receipt.manifest),
           ...approvedHarnessesField(receipt.approvedHarnesses, receipt.manifest),
           ...approvedFileOpenerExtensionsField(receipt.approvedFileOpenerExtensions, receipt.manifest),
+          ...(receipt.viewDirectoryContextApproved === true ? { viewDirectoryContextApproved: true as const } : {}),
           ...(receipt.checksCapabilityApproved === true ? { checksCapabilityApproved: true as const } : {}),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
@@ -4209,6 +4210,7 @@ export class GhostManager {
       /** Task engines whose permission row the user saw in this confirmation. */
       approvedHarnesses?: readonly string[];
       approvedFileOpenerExtensions?: readonly string[];
+      viewDirectoryContextApproved?: true;
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       checksCapabilityApproved?: true;
@@ -4249,6 +4251,7 @@ export class GhostManager {
       /** Task engines whose permission row the user saw in this confirmation. */
       approvedHarnesses?: readonly string[];
       approvedFileOpenerExtensions?: readonly string[];
+      viewDirectoryContextApproved?: true;
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       checksCapabilityApproved?: true;
@@ -4433,6 +4436,7 @@ export class GhostManager {
           approvedCindyModelActions: opts?.approvedCindyModelActions,
           approvedHarnesses: opts?.approvedHarnesses,
           approvedFileOpenerExtensions: opts?.approvedFileOpenerExtensions,
+          viewDirectoryContextApproved: opts?.viewDirectoryContextApproved,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           ...(opts?.checksCapabilityApproved === true && approvedManifest.agent?.checks === true ? { checksCapabilityApproved: true as const } : {}),
@@ -4571,6 +4575,7 @@ export class GhostManager {
       /** Task engines whose permission row the user saw in this confirmation. */
       approvedHarnesses?: readonly string[];
       approvedFileOpenerExtensions?: readonly string[];
+      viewDirectoryContextApproved?: true;
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       checksCapabilityApproved?: true;
@@ -4616,6 +4621,7 @@ export class GhostManager {
       /** Task engines whose permission row the user saw in this confirmation. */
       approvedHarnesses?: readonly string[];
       approvedFileOpenerExtensions?: readonly string[];
+      viewDirectoryContextApproved?: true;
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       checksCapabilityApproved?: true;
@@ -4956,6 +4962,9 @@ export class GhostManager {
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedCindyModelActions ?? [] : []),
         ],
         // 执行引擎同口径：同实例延续已批准 id(按新 manifest 过滤)，本次确认新显示的并入，换源不继承。
+        viewDirectoryContextApproved: opts.viewDirectoryContextApproved ??
+          (archiveId === undefined && approvalResult.state === 'approved'
+            ? approvalResult.receipt.viewDirectoryContextApproved : undefined),
         approvedFileOpenerExtensions: [
           ...(opts.approvedFileOpenerExtensions ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved'
@@ -5403,6 +5412,7 @@ export class GhostManager {
         // 随包种子与控制节点同口径：Cindy 自己发布，声明的执行引擎随版本视为已批准。
         approvedHarnesses: declaredGhostHarnesses(approvedManifest).map((harness) => harness.id),
         approvedFileOpenerExtensions: approvedManifest.fileOpener?.extensions,
+        viewDirectoryContextApproved: current.state === 'approved' ? current.receipt.viewDirectoryContextApproved : undefined,
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&

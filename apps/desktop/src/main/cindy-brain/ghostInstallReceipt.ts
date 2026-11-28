@@ -157,6 +157,7 @@ export interface GhostInstallReceipt {
    */
   approvedHarnesses?: string[];
   approvedFileOpenerExtensions?: string[];
+  viewDirectoryContextApproved?: true;
   checksCapabilityApproved?: true;
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
@@ -1341,6 +1342,7 @@ export function approvedFileOpenerExtensionsField(raw: unknown, manifest: GhostM
 export function createGhostInstallReceipt(input: {
   approvedHarnesses?: readonly string[];
   approvedFileOpenerExtensions?: readonly string[];
+  viewDirectoryContextApproved?: true;
   approvedCindyModelActions?: readonly string[];
   simulatorPreviousRelId?: string;
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
@@ -1397,6 +1399,7 @@ export function createGhostInstallReceipt(input: {
     ...approvedCindyModelActionsField(input.approvedCindyModelActions, input.manifest),
     ...approvedHarnessesField(input.approvedHarnesses, input.manifest),
     ...approvedFileOpenerExtensionsField(input.approvedFileOpenerExtensions, input.manifest),
+    ...(input.viewDirectoryContextApproved === true && input.manifest.viewDirectoryContext === true ? { viewDirectoryContextApproved: true as const } : {}),
     ...(input.checksCapabilityApproved === true ? { checksCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
@@ -1621,6 +1624,7 @@ function validateReceipt(
       ...approvedCindyModelActionsField(value.approvedCindyModelActions, manifestResult.manifest),
       ...approvedHarnessesField(value.approvedHarnesses, manifestResult.manifest),
       ...approvedFileOpenerExtensionsField(value.approvedFileOpenerExtensions, manifestResult.manifest),
+      ...(value.viewDirectoryContextApproved === true && manifestResult.manifest.viewDirectoryContext === true ? { viewDirectoryContextApproved: true as const } : {}),
       ...(value.checksCapabilityApproved === true ? { checksCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),

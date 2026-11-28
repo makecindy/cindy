@@ -1876,6 +1876,8 @@ export interface GhostManifest {
   settingsHeight?: number;
   /** 本插件是否使用宿主默认配置卡；缺省/true 启用，false 隐藏且不读取该插件的卡片配置。 */
   showTaskPreferences?: boolean;
+  /** Allow a locally opened mainView or taskView to receive directory context after approval. */
+  viewDirectoryContext?: true;
   /**
    * 本插件是一个 IM 入口，使用 IM 共用的项目与模型（需同时声明 agent.tasks 与 agent.targets）。
    * 只影响宿主展示：「IM 机器人」设置页列出它并显示「项目与模型」；不授予任何能力。
@@ -2109,6 +2111,7 @@ export interface InstalledGhost {
   approvedHarnesses?: string[];
   /** File extensions granted by the host install or update confirmation. */
   approvedFileOpenerExtensions?: string[];
+  viewDirectoryContextApproved?: true;
   checksCapabilityApproved?: true;
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
@@ -2393,6 +2396,12 @@ export function ghostHostUiPermissionItems(manifest: GhostManifest): GhostPermis
     key: `ui:host:${subject.key}`, kind: 'panel', labelKey: 'uiHost', detailKey: 'uiHostAccess',
     detailArgs: { subject: subject.key, access: subject.detail },
   })) : [];
+}
+
+/** Historical declarations need a matching Host-written approval. */
+export function hasApprovedGhostViewDirectoryContext(ghost: InstalledGhost): boolean {
+  return ghost.enabled && ghost.approval?.state === 'approved' &&
+    ghost.viewDirectoryContextApproved === true && ghost.manifest.viewDirectoryContext === true;
 }
 
 /** Host UI follows the enabled installation's manifest, independently of legacy page approval. */
@@ -2804,6 +2813,14 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       kind: 'live-screen',
       labelKey: 'liveScreen',
       detailKey: 'liveScreenDetail',
+    });
+  }
+  if (manifest.viewDirectoryContext === true && (manifest.mainView || manifest.taskView)) {
+    items.push({
+      key: 'view-directory-context',
+      kind: 'session-context',
+      labelKey: 'viewDirectoryContext',
+      detailKey: 'viewDirectoryContextDetail',
     });
   }
   // session-context 槽:派活时可获知当前会话的项目目录位置(路径信息,
@@ -3280,6 +3297,7 @@ export function diffInstalledGhostPermissionItems(
       subscribe: withoutUnapprovedControlPoints(installed),
       tools: withoutUnapprovedAutoTools(installed),
       harnesses: withoutUnapprovedHarnesses(installed),
+      viewDirectoryContext: installed.viewDirectoryContextApproved ? installed.manifest.viewDirectoryContext : undefined,
       fileOpener: installed.approvedFileOpenerExtensions?.length
         ? { extensions: installed.approvedFileOpenerExtensions } : undefined,
       agent: installed.checksCapabilityApproved === true ? installed.manifest.agent
@@ -5088,6 +5106,12 @@ function validateGhostManifestInput(
   }
   if (raw.settingsHtml !== undefined && !isSafeGhostRelativePath(raw.settingsHtml)) {
     return { ok: false, reason: 'settingsHtml 必须是安装目录内的安全相对路径' };
+  }
+  if (!preserveHistoricalParameterSize && raw.viewDirectoryContext !== undefined && raw.viewDirectoryContext !== true) {
+    return { ok: false, reason: 'viewDirectoryContext 只接受 true' };
+  }
+  if (!preserveHistoricalParameterSize && raw.viewDirectoryContext === true && !mainView && !taskView) {
+    return { ok: false, reason: 'viewDirectoryContext 需要 mainView 或 taskView' };
   }
   if (raw.showTaskPreferences !== undefined && typeof raw.showTaskPreferences !== 'boolean') {
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
@@ -7253,6 +7277,7 @@ function validateGhostManifestInput(
       ...(raw.settingsHtml !== undefined ? { settingsHtml: raw.settingsHtml as string } : {}),
       ...(raw.mobile !== undefined ? { mobile: raw.mobile as GhostManifest['mobile'] } : {}),
       ...(raw.settingsHeight !== undefined ? { settingsHeight: raw.settingsHeight as number } : {}),
+      ...(raw.viewDirectoryContext === true ? { viewDirectoryContext: true as const } : {}),
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),

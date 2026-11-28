@@ -196,3 +196,26 @@ describe('GhostWebviewBody', () => {
     expect(webview.getAttribute('src')).toBe('cindy-ghost://helper/main-view.html');
   });
 });
+
+// Unit: older pages use the same guest URL and theme. A hidden contextual page
+// waits until visible and changing the effective directory drops the old guest.
+it('hands off the current context once for a visible guest and replaces it on directory change', () => {
+  const setViewDirectoryContext = vi.fn(async () => {});
+  vi.stubGlobal('electronAPI', { ghosts: { setViewDirectoryContext } });
+  const ghost = { manifest, dir: '/plugins/workspace' };
+  const directorySource = { kind: 'task', sessionId: 'task-a' } as const;
+  const { container, rerender } = render(<GhostWebviewBody ghost={ghost} html="main-view.html"
+    directorySource={directorySource} directoryRevision="/fixture/project" directoryVisible={false} />);
+  const original = container.querySelector('webview')!;
+  Object.defineProperty(original, 'getWebContentsId', { value: () => 10 });
+  fireEvent(original, new Event('dom-ready'));
+  expect(setViewDirectoryContext).not.toHaveBeenCalled();
+  rerender(<GhostWebviewBody ghost={ghost} html="main-view.html" directorySource={directorySource}
+    directoryRevision="/fixture/project" />);
+  expect(setViewDirectoryContext).toHaveBeenCalledExactlyOnceWith(10, directorySource);
+  expect(original.getAttribute('src')).toBe('cindy-ghost://workspace/main-view.html');
+  rerender(<GhostWebviewBody ghost={ghost} html="main-view.html" directorySource={directorySource}
+    directoryRevision="/fixture/project-worktree" />);
+  expect(original.isConnected).toBe(false);
+  expect(container.querySelector('webview')).not.toBe(original);
+});

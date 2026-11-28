@@ -1,3 +1,4 @@
+import { bindPluginViewDirectoryGuest } from './cindy-brain/pluginViewDirectoryContext.js';
 /**
  * webview-security — RSB 内置浏览器 (web-browser plugin) 用的 `<webview>` 加固。
  *
@@ -34,7 +35,7 @@ import {
   LOGIN_CAPTCHA_PAGE_PATH,
   LOGIN_CAPTCHA_PARTITION,
 } from '../shared/webviewPartition';
-import { GHOST_PARTITION_PREFIX, ghostInstallApprovalToken, type GhostPanelMediaTarget } from '../shared/ghost';
+import { GHOST_PARTITION_PREFIX, ghostInstallApprovalToken, hasApprovedGhostViewDirectoryContext, type GhostPanelMediaTarget } from '../shared/ghost';
 import { installedGhostStoragePart } from '../shared/pluginIdentity';
 import { getActiveAppSession, type AppSessionMode } from './appSessionState.js';
 import {
@@ -52,6 +53,7 @@ import {
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
 import { ghostMediaHandoverDragScript, ghostMediaHandoverTargetTracker } from './cindy-brain/ghostMediaHandoverTargetTracker.js';
+import { isGhostDisabledForWorkdir } from './cindy-brain/ghostWorkdirPrefs.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
 import { REMOTE_PLUGIN_SETTINGS_PARTITION } from '../shared/remotePluginSettings.js';
 import { resolveRemoteSettingsAttach } from './cindy-brain/remotePluginSettingsController.js';
@@ -185,7 +187,7 @@ export function authorizeGhostWebviewAttach(
   webPreferences: Record<string, unknown>,
   params: Record<string, string>,
   resolver: GhostWebviewAttachResolver = resolveGhostWebviewAttach,
-): { id: string; instanceId: string; owner: { mode: AppSessionMode; dataOwnerId: string }; isCurrent(): boolean } | null {
+): { id: string; instanceId: string; owner: { mode: AppSessionMode; dataOwnerId: string }; directoryContextEntry?: string; isCurrent(): boolean } | null {
   let resolved: ReturnType<GhostWebviewAttachResolver> = null;
   try {
     resolved = resolver(params.partition, params.src);
@@ -211,7 +213,13 @@ export function authorizeGhostWebviewAttach(
   applyGhostWebviewHardening(webPreferences, params);
   // A single page-scoped picker method; never reuse the logic page or main-window bridge.
   webPreferences.preload = path.join(__dirname, 'ghostPagePreload.js');
+  const { manifest } = resolved.ghost;
+  const entry = new URL(entryUrl);
+  const directoryContextEntry = hasApprovedGhostViewDirectoryContext(resolved.ghost) &&
+    [manifest.mainView?.html, manifest.taskView?.html].some(html => html && new URL(html, `${entry.protocol}//${entry.host}/`).pathname === entry.pathname)
+    ? entry.href : undefined;
   return {
+    ...(directoryContextEntry ? { directoryContextEntry } : {}),
     id: resolved.ghost.manifest.id,
     instanceId,
     owner: resolved.owner,
@@ -1079,6 +1087,11 @@ export function installWebviewHardener(): void {
         registerGhostWebContents(guestContents.id);
         attachGhostPageModelPicker(contents, guestContents, authorized.instanceId,
           () => authorized.isCurrent());
+        if (authorized.directoryContextEntry) {
+          bindPluginViewDirectoryGuest(contents, guestContents, authorized.directoryContextEntry,
+            () => authorized.isCurrent() && isGhostGuestOwnerActive(authorized.owner),
+            dir => isGhostDisabledForWorkdir(authorized.instanceId, dir));
+        }
         installNativeTrackpad(contents, guestContents, () => {
           if (!isGhostGuestOwnerActive(authorized.owner)) return false;
           return authorized.isCurrent();
