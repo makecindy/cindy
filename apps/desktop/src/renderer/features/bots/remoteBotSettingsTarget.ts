@@ -13,6 +13,7 @@ import { extractIpcError } from '../../utils/ipcError';
 import { normalizeDbProfile, type BotProfile, type BotProfileUpdatePatch } from './botStore';
 import type { BotCapabilityEntry, BotCapabilityKind, BotSettingsTarget } from './botSettingsTarget';
 import { invokeBotSettings, splitProfilePatch } from './remoteBotSettingsClient';
+import { forgetBotAppearance } from './botAppearance';
 import { useRemoteBots } from './useRemoteBots';
 
 export interface RemoteBotSettingsInput {
@@ -292,6 +293,8 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
           keepTaskHistory: request.keepTaskHistory,
         });
         if (result.status !== 'deleted') await profiles.refresh();
+        // The teammate's own wallpaper was imported and stored on this (controlling) computer.
+        else await forgetBotAppearance(botId);
         return result;
       },
     },

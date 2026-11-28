@@ -478,6 +478,47 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
 实现见 `RemoteTeammateSettings.tsx`、`remoteBotSettingsTarget.ts`、`localBotSettingsTarget.ts`、`BotSettingsDrawer.tsx`，
 主机侧见 `main/localDb/ipc/botRemoteSettingsHost.ts` 与 `botRemoteSettingsOps.ts`；手机见 Mobile `CompanionProfileSheet.tsx`。
 
+### 伙伴外观（2026-11-24，提案，待维护者确认）
+
+伙伴设置首页最后一行「外观」：主题、壁纸各一个下拉，默认「跟随应用设置」。主题可选全部内置与本地主题，
+壁纸可选「无」、内置壁纸与这位伙伴自己的图片或视频（「自定义壁纸」一行可选择、替换、移除，格式与
+大小限制同全局自定义壁纸）。焦点所在的伙伴视图（`/bots/:botId/**`，含远程伙伴；
+分屏时只认获得焦点的面板）存在选择时整窗换上它的主题和壁纸，离开或失焦即回到全局外观。远程伙伴所在电脑
+版本过旧、只能用旧版远程设置页时没有这一行。
+
+- 只存本机 renderer localStorage `bots.appearance`（按伙伴 ID 记录显式覆盖），与全局 `theme.familyId`
+  同层；不进伙伴资料、数据库或跨端协议，不写 `appearance-settings.json`，也不改全局主题选择。
+- 覆盖只在内存中投影（`renderer/appearance/appearanceOverride.ts`）：主题经 `useTheme` 的同一解析与
+  `presentTheme` 应用，壁纸经同一张 `WallpaperSettingsProvider` 画布绘制，不新增第二张画布。
+- 伙伴配色显示期间，保存的全局主题若不经本窗口选择而改变（其他窗口保存、本地主题被改或被删、系统明暗切换），本窗口
+  照常让主题包的共享默认层跟上保存的主题（`syncSavedThemeDefaults`），配色不动；否则之后在本窗口
+  选内置主题时不知道有主题包要清。
+- 指向的本地主题被删除时回落全局，不改写记录；选「跟随应用设置」删除该项。
+- 伙伴自己的图片／视频与全局自定义壁纸同在 client-wallpaper 媒体库：引用只记在 main 的
+  `userData/bot-wallpapers.json`（伙伴 ID → 媒体 URL），回收读取同一张引用表，读不了就延后清理，
+  不会误删任何一张。localStorage 只记「选了自定义」；媒体缺失时按跟随全局显示，绝不借用全局自定义图片。
+  伙伴的壁纸带视频（场景壁纸或自己的 MP4）时，「外观」页多一行「展示方式」（静态／动态），只记给这位
+  伙伴（`bots.appearance` 的 `wallpaperMotion`），未选时跟随应用设置，不改全局壁纸设置。
+  伙伴的视频无法播放时，提示出现在这位伙伴的「外观」页（`playbackFailedUrl` 按实际失败的媒体记录），
+  不会把全局自定义壁纸标成无法播放。
+  伙伴选的内置壁纸下载失败时，这位伙伴的「外观」页给出提示与「重试下载」，下载中在壁纸一行说明；
+  下载状态按屏幕上那张壁纸记（`downloadWallpaperId`），应用的壁纸设置只在它是自己保存的那张时显示。
+  删除伙伴时与头像等自定义资源一起删除它的图片（`botLifecycleService` 删除收尾，失败只记日志）；远程伙伴的
+  图片存在控制端，由控制端在对方确认删除后自行清理（`forgetBotAppearance`）。
+  通道 `appearance-settings:{get,import,remove}-bot-wallpaper(s)` 与推送 `bot-wallpapers-changed`
+  只在本机桌面，不进远程白名单；文件路径只来自原生选择器。
+  引用表的读、写、回收读取全部异步，IPC 路径不做同步 I/O。只有严格读取一种读法：写入在跨进程锁内先
+  严格读取再原子替换，表损坏时拒绝改写并保留原文件；显示用的内存快照只缓存成功的读取或写入，
+  读取失败按没有伙伴壁纸显示但下次订阅会重读；推送只发给 app-content 窗口，
+  只读字体的工具窗口拿不到任何伙伴的媒体 URL。
+- 覆盖只作用于当前窗口的配色与壁纸画布。原生窗口背景（vibrancy）、Dock 图标与主题快照由 main 对所有
+  窗口统一应用，继续跟随全局主题；主题包的共享默认层（字体、壁纸、动效）也不随伙伴进出准备或清除，
+  因此伙伴选主题包时只换配色，全局主题包的默认壁纸等在伙伴视图里照常保留。
+- 实现与回归：`features/bots/botAppearance.ts`、`BotAppearanceSettings.tsx`、`main/bot-wallpaper-settings.ts`；
+  `botWallpaperSettings.test.ts`、
+  `botAppearanceSettings.test.tsx`，以及 `useTheme.test.tsx`、`useWallpaperSettings.test.tsx`、
+  `customWallpaper.test.ts` 的伙伴外观用例。
+
 ### 伙伴的项目在界面上（2026-11-08 主人裁决）
 
 桌面与手机的下列入口按伙伴身份组织项目。IM 项目选择遵循本节末尾的独立约定：

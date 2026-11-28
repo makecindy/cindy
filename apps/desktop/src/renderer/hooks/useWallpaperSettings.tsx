@@ -29,6 +29,11 @@ import { useWallpaperAsset } from './useWallpaperAsset';
 import { useWallpaperBackground } from './useWallpaperBackground';
 import { useReducedMotion } from './useReducedMotion';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
+import {
+  useAppearanceOverrideCustomWallpaperUrl,
+  useAppearanceOverrideWallpaperMotion,
+  useAppearanceOverrideWallpaperId,
+} from '../appearance/appearanceOverride';
 import type { DownloadRetryReason } from '@/../shared/downloadProgress';
 
 export interface WallpaperSettings {
@@ -46,6 +51,13 @@ export interface WallpaperSettings {
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
   playbackFailed: boolean;
+  /** The media whose playback failed, global or view-scoped; empty when none. */
+  playbackFailedUrl: string;
+  /**
+   * The wallpaper the download state below belongs to: the one on screen, which is a
+   * view-scoped wallpaper (a teammate's own) while one is shown, else the saved one.
+   */
+  downloadWallpaperId: WallpaperId;
   downloadPending: boolean;
   downloadFailed: boolean;
   downloadProgress: number;
@@ -111,21 +123,35 @@ export function WallpaperSettingsProvider({
   const [failedUrl, setFailedUrl] = useState('');
   const lastBlurRef = useRef(10);
   if (settings.wallpaperBlur) lastBlurRef.current = settings.wallpaperBlur;
-  const onPlaybackFailure = useCallback(
-    () => setFailedUrl(settings.customWallpaperUrl ?? ''),
-    [settings.customWallpaperUrl],
-  );
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
-  const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
+  // A view-scoped wallpaper (a teammate's own) replaces only what is drawn; the saved
+  // settings, and everything the settings page reads and writes, stay unchanged.
+  const overrideWallpaperId = useAppearanceOverrideWallpaperId();
+  const overrideCustomUrl = useAppearanceOverrideCustomWallpaperUrl();
+  const overrideMotion = useAppearanceOverrideWallpaperMotion();
+  const shown = useMemo<WallpaperSettings>(() => {
+    if (!overrideWallpaperId) return settings;
+    const wallpaperMotion = overrideMotion ?? settings.wallpaperMotion;
+    if (overrideWallpaperId !== 'custom') return { ...settings, wallpaperId: overrideWallpaperId, wallpaperMotion };
+    // A teammate's own image or video; never fall through to the global custom media.
+    return { ...settings, wallpaperId: 'custom', wallpaperMotion, customWallpaperUrl: overrideCustomUrl ?? '', customWallpaperFallbackUrl: undefined };
+  }, [overrideWallpaperId, overrideCustomUrl, overrideMotion, settings]);
+  // Record the media that actually failed: a teammate's broken video must not mark the
+  // global custom wallpaper as unplayable in settings.
+  const onPlaybackFailure = useCallback(
+    () => setFailedUrl(shown.customWallpaperUrl ?? ''),
+    [shown.customWallpaperUrl],
+  );
+  const visibility = visibilityPreview ?? getBackgroundVisibility(shown, isDark);
   const reducedMotion = useReducedMotion() || settings.motion === 0;
-  const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
+  const imageAsset = useWallpaperAsset(shown.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
-    settings.wallpaperId,
+    shown.wallpaperId,
     'video',
-    visibility > 0 && settings.wallpaperMotion === 'dynamic' && !reducedMotion,
+    visibility > 0 && shown.wallpaperMotion === 'dynamic' && !reducedMotion,
   );
   const downloadPending = imageAsset.loading || videoAsset.loading;
   const downloadFailed = imageAsset.failed || videoAsset.failed;
@@ -137,27 +163,27 @@ export function WallpaperSettingsProvider({
     imageAsset.retry();
     videoAsset.retry();
   }, [imageAsset.retry, videoAsset.retry]);
-  const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
+  const customUrl = normalizeCustomWallpaperUrl(shown.customWallpaperUrl);
   const background =
-    settings.wallpaperId === 'custom'
+    shown.wallpaperId === 'custom'
       ? customUrl
         ? isCustomWallpaperVideo(customUrl)
-          ? settings.customWallpaperFallbackUrl ? `url("${normalizeCustomWallpaperUrl(settings.customWallpaperFallbackUrl)}")` : 'none'
+          ? shown.customWallpaperFallbackUrl ? `url("${normalizeCustomWallpaperUrl(shown.customWallpaperFallbackUrl)}")` : 'none'
           : `url("${customUrl}")`
         : undefined
       : imageAsset.url
         ? `url("${imageAsset.url}")`
-        : getBuiltinWallpaperBackground(settings.wallpaperId);
+        : getBuiltinWallpaperBackground(shown.wallpaperId);
   useWallpaperBackground({
     background,
     // 0% keeps the original window backdrop (frosted sidebar over the theme material)
     // until opt-in; above it, the sidebar tint follows the same transparency.
-    desktopBackground: desktopBackground && settings.wallpaperId === 'none' && visibility > 0,
+    desktopBackground: desktopBackground && shown.wallpaperId === 'none' && visibility > 0,
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,
     decodeUrl:
-      settings.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
+      shown.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
         ? customUrl || undefined
         : undefined,
   });
@@ -310,6 +336,8 @@ export function WallpaperSettingsProvider({
       visibility,
       lastBlur: lastBlurRef.current,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
+      playbackFailedUrl: failedUrl,
+      downloadWallpaperId: shown.wallpaperId,
       downloadPending,
       downloadFailed,
       downloadProgress,
@@ -336,6 +364,7 @@ export function WallpaperSettingsProvider({
       settings.wallpaperBlur,
       failedUrl,
       visibility,
+      shown.wallpaperId,
       downloadPending,
       downloadFailed,
       downloadProgress,
@@ -349,9 +378,9 @@ export function WallpaperSettingsProvider({
       <WallpaperSettingsContext.Provider value={value}>
         {visibility > 0 && (
           <WallpaperVideo
-            wallpaperId={settings.wallpaperId}
-            motion={settings.wallpaperMotion}
-            customWallpaperUrl={settings.customWallpaperUrl}
+            wallpaperId={shown.wallpaperId}
+            motion={shown.wallpaperMotion}
+            customWallpaperUrl={shown.customWallpaperUrl}
             officialVideoUrl={videoAsset.url}
             onFailure={onPlaybackFailure}
             onReady={onPlaybackReady}
@@ -368,4 +397,19 @@ export function useWallpaperSettings(): WallpaperSettingsContextValue {
   if (!context)
     throw new Error('useWallpaperSettings must be used within WallpaperSettingsProvider');
   return context;
+}
+
+/**
+ * For pages that show a view-scoped wallpaper's own state (a teammate's appearance page):
+ * the media whose playback failed, the download state of the wallpaper on screen, and the
+ * saved motion a view follows until it chooses its own. Undefined in a window without a
+ * wallpaper provider.
+ */
+export function useOptionalWallpaperSettings():
+  | Pick<
+      WallpaperSettingsContextValue,
+      'playbackFailedUrl' | 'wallpaperMotion' | 'downloadWallpaperId' | 'downloadPending' | 'downloadFailed' | 'retryDownload'
+    >
+  | undefined {
+  return useContext(WallpaperSettingsContext);
 }

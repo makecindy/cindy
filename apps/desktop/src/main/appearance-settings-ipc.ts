@@ -39,6 +39,9 @@ import { APPEARANCE_RESET_FIELDS, appearanceResetPatch } from './appearance/defi
 import { applyDockIcon } from './app-icon.js';
 import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
 import { LOCAL_THEME_SUFFIX } from '../shared/local-themes.js';
+import { isBotWallpaperKey } from '../shared/botWallpapers.js';
+import { broadcastBotWallpapers, loadBotWallpapers } from './bot-wallpaper-settings.js';
+import { importBotWallpaper, removeBotWallpaper } from './custom-wallpaper.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -124,6 +127,40 @@ export function registerAppearanceSettingsIpc(): void {
       const settings = readAppearanceSettings();
       broadcast(settings);
       return settings;
+    } catch {
+      throwIpcError('INTERNAL', 'Unable to remove wallpaper image');
+    }
+  });
+
+  // Teammate wallpapers stay local to this Desktop like the global custom wallpaper:
+  // no remote allowlist, and the file path still comes only from the native picker.
+  ipcMain.handle('appearance-settings:get-bot-wallpapers', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return loadBotWallpapers();
+  });
+
+  ipcMain.handle('appearance-settings:import-bot-wallpaper', async (event, botId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!isBotWallpaperKey(botId)) throwIpcError('INVALID_PARAMS', 'Invalid teammate');
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent) throwIpcError('INVALID_PARAMS', 'Wallpaper picker requires an application window');
+    try {
+      if (!(await importBotWallpaper(parent, botId))) return null;
+      return broadcastBotWallpapers();
+    } catch (error) {
+      throwIpcError(
+        extractIpcError(error)?.code === 'INVALID_PARAMS' ? 'INVALID_PARAMS' : 'INTERNAL',
+        'Unable to import wallpaper image',
+      );
+    }
+  });
+
+  ipcMain.handle('appearance-settings:remove-bot-wallpaper', async (event, botId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!isBotWallpaperKey(botId)) throwIpcError('INVALID_PARAMS', 'Invalid teammate');
+    try {
+      await removeBotWallpaper(botId);
+      return broadcastBotWallpapers();
     } catch {
       throwIpcError('INTERNAL', 'Unable to remove wallpaper image');
     }

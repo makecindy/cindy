@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createElement, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 
@@ -9,8 +9,16 @@ import {
   tryGetFamily,
 } from '../themes/families';
 import { onLocalThemesChange } from '../themes/local-themes';
-import { prepareThemeSelection, presentTheme } from '../appearance/AppearancePresenter';
+import {
+  restoreSavedTheme,
+  prepareThemeSelection,
+  presentPaletteOnly,
+  syncSavedThemeDefaults,
+  trackSavedTheme,
+  presentTheme,
+} from '../appearance/AppearancePresenter';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
+import { getAppearanceOverride, useAppearanceOverrideFamilyId } from '../appearance/appearanceOverride';
 import type { ThemeType } from '../themes/types';
 
 export type Theme = 'system' | 'light' | 'dark';
@@ -98,17 +106,29 @@ export function getStoredFamilyId(): string {
   return DEFAULT_FAMILY_ID;
 }
 
-function resolveActiveTheme(mode: Theme) {
+/**
+ * A view-scoped override (a teammate's own theme) wins over the saved family while it is
+ * shown. It is never written to storage; an ID that no longer resolves (a removed local
+ * theme) falls back to the saved family.
+ */
+function overrideFamilyId(): string | null {
+  const id = getAppearanceOverride()?.familyId;
+  return id && tryGetFamily(id) ? id : null;
+}
+
+function resolveActiveTheme(mode: Theme, savedOnly = false) {
   const isDark = resolveIsDark(mode);
-  return resolveFamilyVariant(getStoredFamilyId(), isDark ? 'dark' : 'light');
+  const familyId = (savedOnly ? null : overrideFamilyId()) ?? getStoredFamilyId();
+  return resolveFamilyVariant(familyId, isDark ? 'dark' : 'light');
 }
 
-function resolveSessionActiveTheme(mode: Theme) {
-  return resolveActiveTheme(firstLaunchLightSession === true ? 'light' : mode);
+function resolveSessionActiveTheme(mode: Theme, savedOnly = false) {
+  return resolveActiveTheme(firstLaunchLightSession === true ? 'light' : mode, savedOnly);
 }
 
-function resolveSessionIsDark(mode: Theme): boolean {
-  return resolveSessionActiveTheme(mode).theme.type === 'dark';
+/** `savedOnly` resolves the saved theme, ignoring a view-scoped override. */
+function resolveSessionIsDark(mode: Theme, savedOnly = false): boolean {
+  return resolveSessionActiveTheme(mode, savedOnly).theme.type === 'dark';
 }
 
 function systemModeFollowsSystem(familyId: string): boolean {
@@ -131,6 +151,8 @@ function disableTransitionsTemporarily(): void {
   });
 }
 
+let leavingOverride = false;
+
 export function applyThemeClass(theme: Theme, force = false, prepare = true): void {
   const root = document.documentElement;
   const wasDark = root.classList.contains('dark');
@@ -138,6 +160,9 @@ export function applyThemeClass(theme: Theme, force = false, prepare = true): vo
   // 重放与系统色变化都不会把登录界面翻回暗色;门由登录页卸载时结束。
   const { theme: nextTheme } = resolveSessionActiveTheme(theme);
   const nextDark = nextTheme.type === 'dark';
+  const overridden = overrideFamilyId() !== null;
+  // Before the short-circuit: the saved variant can change while the shown palette does not.
+  if (overridden) trackSavedTheme(resolveSessionActiveTheme(theme, true).theme);
 
   if (!force && nextDark === wasDark && root.dataset.theme === nextTheme.id) {
     return;
@@ -147,12 +172,33 @@ export function applyThemeClass(theme: Theme, force = false, prepare = true): vo
     disableTransitionsTemporarily();
   }
 
-  presentTheme(nextTheme, true, prepare);
+  // A view-scoped override is this window's palette only. Theme-package defaults
+  // (fonts, wallpaper, motion) live in the shared AppearanceService and reach every
+  // window, so showing an override never prepares or clears them. They follow the saved
+  // theme: explicit choices prepare themselves, changes from outside this window go through
+  // `applyExternalThemeChange`, and leaving re-prepares only if the two still differ.
+  if (overridden) {
+    presentPaletteOnly(nextTheme);
+    return;
+  }
+  if (leavingOverride) restoreSavedTheme(nextTheme);
+  else presentTheme(nextTheme, true, prepare);
+}
+
+/**
+ * A saved choice that changes without being chosen in this window (another window's storage
+ * event, a local theme edited or removed, the system switching light/dark) is not prepared
+ * by `applyThemeClass` while a view-scoped palette is shown; keep the shared defaults in
+ * step with it here.
+ */
+function applyExternalThemeChange(theme: Theme, force = false): void {
+  applyThemeClass(theme, force);
+  if (overrideFamilyId() !== null) syncSavedThemeDefaults(resolveSessionActiveTheme(theme, true).theme);
 }
 
 /** 无 ThemeProvider 的窗口用。 */
 export function followLocalThemeChanges(): () => void {
-  return onLocalThemesChange(() => applyThemeClass(getStoredTheme(), true));
+  return onLocalThemesChange(() => applyExternalThemeChange(getStoredTheme(), true));
 }
 
 /** Share browser selection synchronization with lightweight windows, without a Provider. */
@@ -162,13 +208,13 @@ export function followThemeSelectionChanges(onChange?: (choice: ThemeChoice) => 
       const next = e.newValue;
       if (next === 'light' || next === 'dark' || next === 'system') {
         onChange?.({ theme: next });
-        applyThemeClass(next);
+        applyExternalThemeChange(next);
       }
     } else if (e.key === FAMILY_KEY) {
       const next = e.newValue;
       if (next && tryGetFamily(next)) {
         onChange?.({ familyId: next });
-        applyThemeClass(getStoredTheme());
+        applyExternalThemeChange(getStoredTheme());
       }
     }
   };
@@ -294,6 +340,13 @@ export function ThemeProvider({
   // Invalidate memos that depend on family membership when local themes change.
   // Read latest values from storage to avoid closure staleness races.
   const [localThemeRev, bumpLocalThemeRev] = useReducer((n: number) => n + 1, 0);
+  const requestedOverrideFamily = useAppearanceOverrideFamilyId();
+  const overrideFamily = useMemo(() => {
+    void localThemeRev;
+    return requestedOverrideFamily && tryGetFamily(requestedOverrideFamily) ? requestedOverrideFamily : null;
+  }, [requestedOverrideFamily, localThemeRev]);
+  // The family actually on screen: a teammate's theme while its chat is open, else the saved one.
+  const shownFamilyId = overrideFamily ?? familyId;
   useEffect(() => onLocalThemesChange(() => {
     let rawFamily: string | null = null;
     try { rawFamily = localStorage.getItem(FAMILY_KEY); } catch { /* ok */ }
@@ -303,7 +356,7 @@ export function ThemeProvider({
       try { localStorage.setItem(FAMILY_KEY, fallback); } catch { /* ok */ }
     }
     bumpLocalThemeRev();
-    applyThemeClass(getStoredTheme(), true);
+    applyExternalThemeChange(getStoredTheme(), true);
   }), []);
 
   const setSelection = useCallback((choice: ThemeChoice, current?: () => boolean) => {
@@ -337,6 +390,22 @@ export function ThemeProvider({
     applyThemeClass(theme);
   }, [theme]);
 
+  // Entering or leaving a teammate with its own theme. Mount already applied the right
+  // variant above; only later changes reapply (package defaults follow the shown theme).
+  const appliedOverride = useRef(overrideFamily);
+  useEffect(() => {
+    if (appliedOverride.current === overrideFamily) return;
+    const leaving = overrideFamily === null;
+    appliedOverride.current = overrideFamily;
+    // Leaving restores the saved palette only: the shared package projection was never changed.
+    leavingOverride = leaving;
+    try {
+      applyThemeClass(theme, true);
+    } finally {
+      leavingOverride = false;
+    }
+  }, [overrideFamily, theme]);
+
   useEffect(() => {
     window.electronAPI?.setUpdateRelaunchTheme?.(
       document.documentElement.classList.contains('dark') ? 'dark' : 'light',
@@ -351,7 +420,7 @@ export function ThemeProvider({
     const handleChange = () => {
       setSystemPrefersDark(mediaQuery.matches);
       if (theme === 'system') {
-        applyThemeClass('system');
+        applyExternalThemeChange('system');
       }
     };
     mediaQuery.addEventListener('change', handleChange);
@@ -384,9 +453,12 @@ export function ThemeProvider({
       const state = `${covered}:${desktopBlur}`;
       if (state === lastState) return;
       lastState = state;
+      // The native backdrop, dock icon and theme snapshot are application-wide (main
+      // applies them to every window), so they follow the saved theme, never a
+      // teammate's view-scoped one.
       window.electronAPI?.theme?.applyVibrancy?.(
         familyId,
-        resolveSessionIsDark(theme),
+        resolveSessionIsDark(theme, true),
         theme,
         systemModeFollowsSystem(familyId),
         covered,
@@ -412,7 +484,7 @@ export function ThemeProvider({
     void localThemeRev;
     const active = resolveSessionActiveTheme(theme).theme;
     return !!(active.packageSha256 && active.appearance);
-  }, [familyId, theme, systemPrefersDark, localThemeRev]);
+  }, [shownFamilyId, theme, systemPrefersDark, localThemeRev]);
   const [appearanceReduced, setAppearanceReduced] = useState(false);
   useEffect(() => {
     if (!packageActive) { setAppearanceReduced(false); return; }

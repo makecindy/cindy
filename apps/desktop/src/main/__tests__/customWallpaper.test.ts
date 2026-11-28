@@ -35,7 +35,9 @@ vi.mock('../appSessionState.js', () => ({
   },
 }));
 import {
+  importBotWallpaper,
   importCustomWallpaper,
+  removeBotWallpaper,
   removeCustomWallpaper,
   prepareWallpaperImage,
   savePluginWallpaper,
@@ -45,6 +47,7 @@ import {
   readCustomWallpaperUrl,
   readReferencedClientWallpaperUrls,
 } from '../custom-wallpaper-settings';
+import { loadBotWallpapers } from '../bot-wallpaper-settings';
 import {
   writeBlob,
   readFile,
@@ -226,11 +229,49 @@ describe('client-owned custom wallpaper lifecycle', () => {
     expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(1);
   });
 
-  it('refuses recycling when custom references are unreadable or invalid instead of dropping the video', () => {
+  // Teammate wallpapers share the client-wallpaper media library, so replacing the global
+  // image (or another teammate's) must not recycle a teammate's own image; removing a
+  // teammate's image frees only that file. Minimal input: global red, bot-1 blue,
+  // bot-2 green, then replace global and remove bot-2; unit tier, real files and recycler.
+  it('keeps each teammate image across other imports and recycles it only when that teammate removes it', async () => {
+    await selectImage('red');
+    await importCustomWallpaper(parent);
+    await selectImage('blue');
+    await importBotWallpaper(parent, 'bot-1');
+    await selectImage('green');
+    await importBotWallpaper(parent, 'bot-2');
+    const { 'bot-1': first, 'bot-2': second } = await loadBotWallpapers();
+    expect(first).toMatch(/^cindy-media:\/\/client-wallpaper\/[0-9a-f]{64}\.webp$/);
+    expect(second).not.toBe(first);
+    await selectImage('yellow');
+    await importCustomWallpaper(parent);
+    await expect(readClientWallpaperFile(first!)).resolves.toBeDefined();
+    await expect(readClientWallpaperFile(second!)).resolves.toBeDefined();
+    await removeBotWallpaper('bot-2');
+    expect(await loadBotWallpapers()).toEqual({ 'bot-1': first });
+    await expect(readClientWallpaperFile(second!)).rejects.toThrow();
+    await expect(readClientWallpaperFile(first!)).resolves.toBeDefined();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(2);
+  });
+
+  // Review of makecindy/cindy#12542 (06f9cfc): parseable but malformed content used to read
+  // as "no references", so the next import or removal could delete a teammate's media.
+  it('refuses recycling when teammate wallpaper references are unreadable or malformed', async () => {
+    const file = path.join(h.dir, 'bot-wallpapers.json');
+    for (const content of [
+      '{broken', '[]', 'null', '{"wallpapers":[]}', '{"wallpapers":"x"}',
+      '{"wallpapers":{"bot-1":"file:///private.webp"}}',
+    ]) {
+      fs.writeFileSync(file, content);
+      await expect(readReferencedClientWallpaperUrls(), content).rejects.toThrow();
+    }
+  });
+
+  it('refuses recycling when custom references are unreadable or invalid instead of dropping the video', async () => {
     const file = path.join(h.dir, 'custom-wallpaper.json');
     for (const content of ['{broken', '[]', 'null', '{"url":"file:///private.mp4"}']) {
       fs.writeFileSync(file, content);
-      expect(() => readReferencedClientWallpaperUrls()).toThrow();
+      await expect(readReferencedClientWallpaperUrls()).rejects.toThrow();
     }
   });
 

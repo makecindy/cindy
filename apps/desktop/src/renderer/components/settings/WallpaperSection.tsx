@@ -42,6 +42,7 @@ export function WallpaperSection() {
     wallpaperMotion,
     customWallpaperUrl,
     playbackFailed,
+    downloadWallpaperId,
     downloadPending,
     downloadFailed,
     downloadProgress,
@@ -89,8 +90,11 @@ export function WallpaperSection() {
   // the last nonzero strength (kept in the provider, which outlives this section).
   const desktopBlurSwitch = wallpaperId === 'none' && window.electronAPI?.platform === 'win32';
   const customVideo = isCustomWallpaperVideo(customWallpaperUrl);
-  const downloading = isCdnWallpaper(wallpaperId) && downloadPending;
-  const retryable = isCdnWallpaper(wallpaperId) && downloadFailed && !downloadPending;
+  // The download state follows the wallpaper on screen; while a teammate's own wallpaper is
+  // shown it is not about the saved one this page edits.
+  const ownDownload = isCdnWallpaper(wallpaperId) && downloadWallpaperId === wallpaperId;
+  const downloading = ownDownload && downloadPending;
+  const retryable = ownDownload && downloadFailed && !downloadPending;
   const progressRatio = Number.isFinite(downloadProgress)
     ? Math.min(1, Math.max(0, downloadProgress))
     : 0;

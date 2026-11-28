@@ -106,8 +106,9 @@ describe.each(['main', 'sidebar'] as const)('%s preload appearance snapshot', (k
       expect(exposed.maker.claimLegacyModelVisibilityOwner().canWriteOwnerScoped).toBe(false);
     } else {
       expect(Object.keys(bridge).sort()).toEqual([
-        'ensureWallpaperImage', 'ensureWallpaperVideo', 'get', 'getSync', 'importWallpaper', 'loadPluginFont',
-        'onChanged', 'onWallpaperDownloadProgress', 'removeWallpaper', 'reset', 'resetFields', 'selectTheme', 'setPatch',
+        'ensureWallpaperImage', 'ensureWallpaperVideo', 'get', 'getBotWallpapers', 'getSync', 'importBotWallpaper',
+        'importWallpaper', 'loadPluginFont', 'onBotWallpapersChanged', 'onChanged', 'onWallpaperDownloadProgress',
+        'removeBotWallpaper', 'removeWallpaper', 'reset', 'resetFields', 'selectTheme', 'setPatch',
       ]);
       // Full themes add only trusted app-content mutations; sidebar above stays
       // read-only. Exercise the real preload routing, not a handwritten bridge.
@@ -118,6 +119,9 @@ describe.each(['main', 'sidebar'] as const)('%s preload appearance snapshot', (k
       expect(mocks.invoke).toHaveBeenLastCalledWith('appearance-settings:select-theme', null);
       await exposed.appearanceSettings.resetFields(['terminalSize']);
       expect(mocks.invoke).toHaveBeenLastCalledWith('appearance-settings:reset-fields', ['terminalSize']);
+      // A teammate's own wallpaper (makecindy/cindy#12542) is a trusted app-content mutation too.
+      await exposed.appearanceSettings.removeBotWallpaper('bot-1');
+      expect(mocks.invoke).toHaveBeenLastCalledWith('appearance-settings:remove-bot-wallpaper', 'bot-1');
     }
   });
 });

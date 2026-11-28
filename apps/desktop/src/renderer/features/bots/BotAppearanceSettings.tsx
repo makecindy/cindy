@@ -1,0 +1,248 @@
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { ImagePlus } from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { extractIpcError } from '@/utils/ipcError';
+
+import { Select } from '@/components/ui/select';
+import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { useOptionalWallpaperSettings } from '@/hooks/useWallpaperSettings';
+import { SegmentedControl } from '@/components/ui/segmented-control';
+import { isCdnWallpaper, isSceneWallpaper } from '@/lib/wallpaper';
+import { getThemeFamilies, tryGetFamily, type ThemeFamily } from '@/themes/families';
+import { onLocalThemesChange } from '@/themes/local-themes';
+import {
+  SELECTABLE_WALLPAPER_IDS,
+  RETIRED_WALLPAPER_IDS,
+  isCustomWallpaperVideo,
+  type WallpaperMotion,
+} from '@/../shared/appearanceSettings';
+import { isLocalThemeId } from '../../../shared/local-themes';
+
+import { useBotTranslation } from './botPronounContext';
+import {
+  getBotAppearance,
+  importBotCustomWallpaper,
+  isBotWallpaperId,
+  removeBotCustomWallpaper,
+  setBotAppearance,
+  useBotAppearance,
+  useBotCustomWallpaperUrl,
+  type BotWallpaperId,
+} from './botAppearance';
+
+/** Radix Select needs a non-empty value; real family and wallpaper IDs never start with a colon. */
+const FOLLOW = ':follow';
+
+/**
+ * 伙伴「外观」页：主题、壁纸各一行，默认跟随全局。只在本机生效，改动即时作用于背后的对话。
+ */
+export function BotAppearanceSettings({ botId }: { botId: string }) {
+  const { t } = useBotTranslation();
+  const appearance = useBotAppearance(botId);
+  const [localThemesVersion, bumpLocalThemes] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => onLocalThemesChange(bumpLocalThemes), []);
+  const families = useMemo<ThemeFamily[]>(() => {
+    void localThemesVersion;
+    return getThemeFamilies();
+  }, [localThemesVersion]);
+  const familyLabel = (family: ThemeFamily) =>
+    isLocalThemeId(family.id) ? `${family.name} ${t('settings.appearance.localBadge')}` : family.name;
+  // A removed local theme no longer applies; show the row as following the global theme.
+  const familyValue = appearance.familyId && tryGetFamily(appearance.familyId) ? appearance.familyId : FOLLOW;
+
+  // A retired wallpaper stays listed only while this teammate still uses it, like the global picker.
+  const wallpaperIds = useMemo<BotWallpaperId[]>(() => {
+    const ids: BotWallpaperId[] = [...SELECTABLE_WALLPAPER_IDS];
+    const retired = RETIRED_WALLPAPER_IDS.find((id) => id === appearance.wallpaperId);
+    return retired ? [ids[0]!, retired, ...ids.slice(1)] : ids;
+  }, [appearance.wallpaperId]);
+  const customUrl = useBotCustomWallpaperUrl(botId);
+  // Custom without its media is shown (and applied) as following the global wallpaper.
+  const wallpaperValue =
+    appearance.wallpaperId === 'custom' && !customUrl ? FOLLOW : (appearance.wallpaperId ?? FOLLOW);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  // One import or removal at a time, also for the picker opened from the wallpaper row.
+  const working = useRef(false);
+  // The drawer can move to another teammate without remounting this page.
+  useEffect(() => setError(''), [botId]);
+  const wallpaper = useOptionalWallpaperSettings();
+  const playbackFailed =
+    appearance.wallpaperId === 'custom' && !!customUrl && wallpaper?.playbackFailedUrl === customUrl;
+  // A built-in wallpaper is downloaded on first use. The provider reports the wallpaper on
+  // screen, so this is the teammate's own only while its view is the one shown.
+  const ownDownload =
+    !!appearance.wallpaperId &&
+    isCdnWallpaper(appearance.wallpaperId) &&
+    wallpaper?.downloadWallpaperId === appearance.wallpaperId;
+  const downloading = ownDownload && !!wallpaper?.downloadPending;
+  const downloadFailed = ownDownload && !!wallpaper?.downloadFailed && !downloading;
+  // Same rule as the app's wallpaper settings: only wallpapers with a video offer the choice.
+  const canMove = appearance.wallpaperId === 'custom'
+    ? !!customUrl && isCustomWallpaperVideo(customUrl)
+    : !!appearance.wallpaperId && isSceneWallpaper(appearance.wallpaperId);
+  // Follows the app's setting until chosen for this teammate.
+  const motion: WallpaperMotion = appearance.wallpaperMotion ?? wallpaper?.wallpaperMotion ?? 'static';
+
+  const chooseImage = async () => {
+    if (working.current) return;
+    working.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      if (await importBotCustomWallpaper(botId)) setBotAppearance(botId, { wallpaperId: 'custom' });
+    } catch (failure) {
+      setError(
+        t(
+          extractIpcError(failure)?.code === 'INVALID_PARAMS'
+            ? 'settings.appearance.wallpaper.customInvalid'
+            : 'settings.appearance.wallpaper.customFailed',
+        ),
+      );
+    } finally {
+      working.current = false;
+      setBusy(false);
+    }
+  };
+  const removeImage = async () => {
+    if (working.current) return;
+    working.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      await removeBotCustomWallpaper(botId);
+      // Read the choice again: the user may have picked another wallpaper meanwhile.
+      if (getBotAppearance(botId).wallpaperId === 'custom') setBotAppearance(botId, { wallpaperId: null });
+    } catch {
+      setError(t('settings.appearance.wallpaper.customFailed'));
+    } finally {
+      working.current = false;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="pt-3">
+      <p className="mb-3 px-1 text-12 leading-5 text-[var(--text-secondary)]">
+        {t('bots.appearance.hint')}
+      </p>
+      <SettingsCard>
+        <SettingsRow
+          title={t('bots.appearance.theme')}
+          wrap
+          trailing={
+            <Select
+              data-settings-search-action="Teammate appearance lives in its own settings drawer, outside the settings index"
+              label={t('bots.appearance.theme')}
+              value={familyValue}
+              options={[
+                { value: FOLLOW, label: t('bots.appearance.followGlobal') },
+                ...families.map((family) => ({ value: family.id, label: familyLabel(family) })),
+              ]}
+              truncateOptions
+              size="compact"
+              width="sm"
+              className="shrink-0"
+              onValueChange={(value) => setBotAppearance(botId, { familyId: value === FOLLOW ? null : value })}
+            />
+          }
+        />
+        <SettingsRow
+          title={t('bots.appearance.wallpaper')}
+          hint={downloading ? t('settings.appearance.wallpaper.downloading') : undefined}
+          wrap
+          trailing={
+            <Select
+              data-settings-search-action="Teammate appearance lives in its own settings drawer, outside the settings index"
+              label={t('bots.appearance.wallpaper')}
+              value={wallpaperValue}
+              // An import or removal settles the choice when it returns; no other choice meanwhile.
+              disabled={busy}
+              options={[
+                { value: FOLLOW, label: t('bots.appearance.followGlobal') },
+                ...wallpaperIds.map((id) => ({ value: id, label: t('settings.appearance.wallpaper.options.' + id) })),
+              ]}
+              truncateOptions
+              size="compact"
+              width="sm"
+              className="shrink-0"
+              onValueChange={(value) => {
+                // Picking custom before this teammate has its own image opens the file picker first.
+                if (value === 'custom' && !customUrl) {
+                  void chooseImage();
+                  return;
+                }
+                setBotAppearance(botId, { wallpaperId: value !== FOLLOW && isBotWallpaperId(value) ? value : null });
+              }}
+            />
+          }
+        />
+        {canMove && (
+          <SettingsRow
+            title={t('settings.appearance.wallpaper.motionLabel')}
+            hint={t('settings.appearance.wallpaper.motionHint')}
+            wrap
+            trailing={
+              <SegmentedControl
+                data-settings-search-action="Teammate appearance lives in its own settings drawer, outside the settings index"
+                aria-label={t('settings.appearance.wallpaper.motionLabel')}
+                value={motion}
+                onValueChange={(value: WallpaperMotion) => setBotAppearance(botId, { wallpaperMotion: value })}
+                options={[
+                  { value: 'static', label: t('settings.appearance.wallpaper.motionStatic') },
+                  { value: 'dynamic', label: t('settings.appearance.wallpaper.motionDynamic') },
+                ]}
+              />
+            }
+          />
+        )}
+        <SettingsRow
+          title={t('settings.appearance.wallpaper.options.custom')}
+          hint={t('settings.appearance.wallpaper.customHint')}
+          wrap
+          trailing={
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <Button variant="secondary" size="sm" type="button" disabled={busy} onClick={() => void chooseImage()}>
+                <ImagePlus size={14} aria-hidden="true" />
+                {t(`settings.appearance.wallpaper.${busy ? 'customBusy' : customUrl ? 'customReplace' : 'customChoose'}`)}
+              </Button>
+              {customUrl && (
+                <Button
+                  variant="secondary"
+                  tone="danger"
+                  size="sm"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void removeImage()}
+                >
+                  {t('settings.appearance.wallpaper.customRemove')}
+                </Button>
+              )}
+            </div>
+          }
+        />
+      </SettingsCard>
+      {(error || playbackFailed) && (
+        <ErrorNotice
+          role="alert"
+          className="mt-3"
+          message={error || t('settings.appearance.wallpaper.customPlaybackFailed')}
+        />
+      )}
+      {downloadFailed && (
+        <ErrorNotice
+          role="alert"
+          className="mt-3"
+          message={t('settings.appearance.wallpaper.downloadFailed')}
+          actions={
+            <Button variant="secondary" size="sm" type="button" onClick={() => wallpaper?.retryDownload()}>
+              {t('settings.appearance.wallpaper.retryDownload')}
+            </Button>
+          }
+        />
+      )}
+    </div>
+  );
+}

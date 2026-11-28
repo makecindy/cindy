@@ -14,17 +14,26 @@ import { createElement, type ReactNode } from 'react';
 import '../../themes/colors';
 import { bootstrapLocalThemesSync, getLocalThemes } from '../../themes/local-themes';
 import { themeService } from '../../themes/theme-service';
-import { tryGetFamily } from '../../themes/families';
+import { findFamilyByThemeId, tryGetFamily } from '../../themes/families';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../../shared/appearanceSettings';
+import { prepareThemeSelection } from '../../appearance/AppearancePresenter';
 import type { LocalThemesResult } from '../../../shared/local-themes';
 import {
   __resetLoginFirstLaunchLightGateForTest,
+  applyThemeClass,
   endLoginFirstLaunchLightGate,
   followLocalThemeChanges,
   getInitialThemeVariant,
   ThemeProvider,
   useTheme,
 } from '../useTheme';
+import {
+  __resetBotAppearanceCacheForTest,
+  BOT_APPEARANCE_STORAGE_KEY,
+  getBotAppearance,
+  setBotAppearance,
+  useBotAppearanceOverride,
+} from '../../features/bots/botAppearance';
 
 const applyVibrancyMock = vi.fn();
 vi.mock('../../lib/toast', () => ({ toast: { error: vi.fn() } }));
@@ -32,11 +41,12 @@ vi.mock('../../i18n', () => ({ default: { t: (key: string) => key } }));
 let systemPrefersDark = false;
 
 // jsdom 无 matchMedia,ThemeProvider 初始化与 system 模式需要它。
+const systemModeListeners = new Set<() => void>();
 vi.stubGlobal('matchMedia', (q: string) => ({
-  matches: systemPrefersDark,
+  get matches() { return systemPrefersDark; },
   media: q,
-  addEventListener: () => {},
-  removeEventListener: () => {},
+  addEventListener: (_type: string, listener: () => void) => { systemModeListeners.add(listener); },
+  removeEventListener: (_type: string, listener: () => void) => { systemModeListeners.delete(listener); },
 }));
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -77,6 +87,299 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
   // Earlier migration tests asserted the replacement ownership, not this
   // compatibility contract. A throwing Host plus an old dark/default choice
   // reproduces both the startup regression and the lost synchronous setter.
+  // Teammate appearance: opening a teammate's chat shows its own theme family, the
+  // focused pane wins over a background one, and leaving restores the saved family.
+  // The saved `theme.familyId` and the app-wide native backdrop must never change
+  // (review of makecindy/cindy#12542: vibrancy is broadcast to every window). Minimal
+  // input: saved "cindy", teammate "default"; unit tier, real ThemeProvider.
+  it('shows a teammate theme while its view holds the override and restores the saved one', () => {
+    localStorage.setItem('theme.familyId', 'cindy');
+    localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify({ 'bot-1': { familyId: 'default' } }));
+    const applied = vi.mocked(themeService.applyTheme);
+    const shownFamily = () => findFamilyByThemeId(applied.mock.lastCall?.[0].id)?.id;
+    const { rerender, unmount } = renderHook(
+      ({ focused, background }: { focused: string | null; background: string | null }) => {
+        useBotAppearanceOverride(focused);
+        useBotAppearanceOverride(background);
+      },
+      { wrapper, initialProps: { focused: 'bot-1' as string | null, background: null as string | null } },
+    );
+    expect(shownFamily()).toBe('default');
+    // The native backdrop is application-wide (main applies it to every window): it keeps
+    // following the saved family instead of the teammate's view-scoped one.
+    expect(applyVibrancyMock.mock.lastCall?.[0]).toBe('cindy');
+    expect(applyVibrancyMock.mock.calls.some(([family]) => family === 'default')).toBe(false);
+    // A background pane releasing (or holding nothing) cannot clear the focused override.
+    rerender({ focused: 'bot-1', background: 'bot-2' });
+    rerender({ focused: 'bot-1', background: null });
+    expect(shownFamily()).toBe('default');
+    rerender({ focused: null, background: null });
+    expect(shownFamily()).toBe('cindy');
+    expect(applyVibrancyMock.mock.lastCall?.[0]).toBe('cindy');
+    expect(localStorage.getItem('theme.familyId')).toBe('cindy');
+    unmount();
+  });
+
+  // Review of makecindy/cindy#12542: theme-package defaults (fonts, wallpaper, motion) are one
+  // shared projection broadcast to every window. Entering a teammate with a builtin theme
+  // used to call selectTheme(null), dropping the global package's wallpaper everywhere.
+  // Minimal input: saved package family, teammate "default"; enter then leave.
+  it('never prepares or clears shared theme-package defaults for a teammate theme', async () => {
+    const installLocal = (themes: LocalThemesResult['themes']) => {
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, themes, diagnostics: [] }), onChanged: () => () => {},
+      } });
+      bootstrapLocalThemesSync();
+    };
+    installLocal([{ id: 'paper-light-local', family: 'paper', name: 'Paper', type: 'light', colors: {},
+      packageSha256: 'a'.repeat(64), appearance: { motion: 0 } }]);
+    const selectTheme = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+    Object.assign(window.electronAPI, { appearanceSettings: {
+      getSync: () => DEFAULT_APPEARANCE_SETTINGS, onChanged: () => () => {}, selectTheme,
+    } });
+    localStorage.setItem('theme.familyId', 'paper-local');
+    localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify({ 'bot-1': { familyId: 'default' } }));
+    const applied = vi.mocked(themeService.applyTheme);
+    const { rerender, unmount } = renderHook(
+      ({ botId }: { botId: string | null }) => useBotAppearanceOverride(botId),
+      { wrapper, initialProps: { botId: null as string | null } },
+    );
+    await act(async () => {});
+    const prepared = selectTheme.mock.calls.length;
+    rerender({ botId: 'bot-1' });
+    await act(async () => {});
+    expect(findFamilyByThemeId(applied.mock.lastCall?.[0].id)?.id).toBe('default');
+    rerender({ botId: null });
+    await act(async () => {});
+    expect(applied.mock.lastCall?.[0].id).toBe('paper-light-local');
+    expect(selectTheme).toHaveBeenCalledTimes(prepared);
+    // Leave a builtin saved theme so the module's package selection does not leak.
+    localStorage.setItem('theme.familyId', 'default');
+    act(() => applyThemeClass('light', true));
+    unmount();
+    installLocal([]);
+  });
+
+  // Review of makecindy/cindy#12542 (06f9cfc): a teammate palette must not rewrite the
+  // record of which package main prepared. Otherwise (a) switching the global theme to a
+  // builtin from a teammate page never sends selectTheme(null), and (b) a system light/dark
+  // flip during the override leaves the shared defaults on the old variant after leaving.
+  // Minimal input: saved package family with light and dark variants, teammate on builtin;
+  // unit tier through the real ThemeProvider and override hook.
+  describe('keeps shared package defaults in step with the saved theme around a teammate theme', () => {
+    const installPaper = () => {
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, diagnostics: [], themes: [
+          { id: 'paper-light-local', family: 'paper', name: 'Paper', type: 'light', colors: {},
+            packageSha256: 'a'.repeat(64), appearance: { motion: 0 } },
+          { id: 'paper-dark-local', family: 'paper', name: 'Paper', type: 'dark', colors: {},
+            packageSha256: 'b'.repeat(64), appearance: { motion: 0 } },
+          { id: 'ink-light-local', family: 'ink', name: 'Ink', type: 'light', colors: {},
+            packageSha256: 'c'.repeat(64), appearance: { motion: 0 } },
+        ] }), onChanged: () => () => {},
+      } });
+      bootstrapLocalThemesSync();
+    };
+    const cleanupPaper = () => {
+      localStorage.setItem('theme.familyId', 'default');
+      localStorage.setItem('theme', 'light');
+      systemPrefersDark = false;
+      act(() => applyThemeClass('light', true));
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, diagnostics: [], themes: [] }), onChanged: () => () => {},
+      } });
+      bootstrapLocalThemesSync();
+    };
+    const setup = (mode: 'light' | 'system') => {
+      installPaper();
+      const selectTheme = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+      Object.assign(window.electronAPI, { appearanceSettings: {
+        getSync: () => DEFAULT_APPEARANCE_SETTINGS, onChanged: () => () => {}, selectTheme,
+      } });
+      localStorage.setItem('theme', mode);
+      localStorage.setItem('theme.familyId', 'paper-local');
+      localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify({ 'bot-1': { familyId: 'default' } }));
+      // Main holds the saved package, as after startup or choosing it.
+      act(() => applyThemeClass(mode, true));
+      const hook = renderHook(
+        ({ botId }: { botId: string | null }) => { useBotAppearanceOverride(botId); return useTheme(); },
+        { wrapper, initialProps: { botId: null as string | null } },
+      );
+      return { selectTheme, ...hook };
+    };
+
+    it('clears the package when the global theme becomes a builtin on a teammate page', async () => {
+      const { selectTheme, result, rerender, unmount } = setup('light');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      await act(async () => { await result.current.setFamily('default'); });
+      expect(selectTheme).toHaveBeenCalledExactlyOnceWith(null);
+      rerender({ botId: null });
+      await act(async () => {});
+      expect(selectTheme).toHaveBeenCalledOnce();
+      unmount();
+      cleanupPaper();
+    });
+
+    // Review of 1fb840e: an expired package request (e.g. an Agent preference change that
+    // took too long) rolled back from the palette on screen, which is the teammate's, so it
+    // cleared the saved package A for every window. It must restore A and keep the palette.
+    it('rolls an expired package request back to the saved package, keeping the teammate palette', async () => {
+      const { selectTheme, rerender, unmount } = setup('light');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      const applied = vi.mocked(themeService.applyTheme);
+      const ink = getLocalThemes().find((theme) => theme.id === 'ink-light-local')!;
+      await act(async () => { await prepareThemeSelection(ink, () => {}, () => false); });
+      expect(selectTheme.mock.calls).toEqual([
+        [{ mode: 'light', familyId: 'ink-local' }],
+        [{ mode: 'light', familyId: 'paper-local' }],
+      ]);
+      expect(findFamilyByThemeId(applied.mock.lastCall?.[0].id)?.id).toBe('default');
+      rerender({ botId: null });
+      await act(async () => {});
+      unmount();
+      cleanupPaper();
+    });
+
+    // Review of c4430b7: the saved snapshot was only refreshed by presentTheme, which a
+    // teammate page never calls. After the global package was switched A -> B there, an
+    // expired request rolled the shared defaults back to A while storage said B.
+    // Minimal input: saved package paper, switch to ink on a teammate page, then an expired request.
+    it('rolls an expired request back to the package chosen on the teammate page', async () => {
+      const { selectTheme, result, rerender, unmount } = setup('light');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      await act(async () => { await result.current.setFamily('ink-local'); });
+      expect(localStorage.getItem('theme.familyId')).toBe('ink-local');
+      selectTheme.mockClear();
+      const paper = getLocalThemes().find((theme) => theme.id === 'paper-light-local')!;
+      await act(async () => { await prepareThemeSelection(paper, () => {}, () => false); });
+      expect(selectTheme.mock.calls).toEqual([
+        [{ mode: 'light', familyId: 'paper-local' }],
+        [{ mode: 'light', familyId: 'ink-local' }],
+      ]);
+      rerender({ botId: null });
+      await act(async () => {});
+      unmount();
+      cleanupPaper();
+    });
+
+    // Review of 7bb1323: leaving a teammate page while a global package choice was still
+    // waiting for main re-prepared the old saved package, which cancelled the pending choice
+    // only because the view changed. Minimal input: saved paper, choose ink on a teammate
+    // page, leave before main answers.
+    it('lets a pending global package choice finish when the teammate page is left meanwhile', async () => {
+      const { selectTheme, result, rerender, unmount } = setup('light');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      let answer!: (value: typeof DEFAULT_APPEARANCE_SETTINGS) => void;
+      selectTheme.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+      let chosen!: Promise<boolean> | void;
+      act(() => { chosen = result.current.setFamily('ink-local') as Promise<boolean> | void; });
+      rerender({ botId: null });
+      await act(async () => {});
+      expect(selectTheme.mock.calls).toEqual([[{ mode: 'light', familyId: 'ink-local' }]]);
+      await act(async () => { answer(DEFAULT_APPEARANCE_SETTINGS); await chosen; });
+      expect(await chosen).toBe(true);
+      expect(localStorage.getItem('theme.familyId')).toBe('ink-local');
+      expect(selectTheme).toHaveBeenCalledOnce();
+      unmount();
+      cleanupPaper();
+    });
+
+    // The shared defaults reach every window, the teammate's too, so they follow the system
+    // right away (f6bf04d review: saved changes from outside this window stay in step) and
+    // leaving has nothing left to prepare.
+    it('prepares the new system variant when light/dark flips behind a teammate palette', async () => {
+      systemPrefersDark = false;
+      const { selectTheme, rerender, unmount } = setup('system');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      systemPrefersDark = true;
+      act(() => { for (const listener of [...systemModeListeners]) listener(); });
+      await act(async () => {});
+      expect(selectTheme).toHaveBeenCalledExactlyOnceWith({ mode: 'dark', familyId: 'paper-local' });
+      rerender({ botId: null });
+      await act(async () => {});
+      expect(selectTheme).toHaveBeenCalledOnce();
+      unmount();
+      cleanupPaper();
+    });
+
+    // Review of f6bf04d: a package chosen in another window reaches this one as a storage
+    // event. Behind a teammate palette it only updated the rollback snapshot, so this
+    // window never learned that main holds a package and a later builtin choice here sent
+    // no selectTheme(null). Minimal input: saved builtin, teammate palette shown, another
+    // window saves the package, then this window chooses a builtin.
+    it('clears a package another window chose while a teammate palette was shown', async () => {
+      const { selectTheme, result, rerender, unmount } = setup('light');
+      await act(async () => { await result.current.setFamily('cindy'); });
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      localStorage.setItem('theme.familyId', 'paper-local');
+      act(() => dispatchStorage('theme.familyId', 'paper-local'));
+      await act(async () => {});
+      selectTheme.mockClear();
+      await act(async () => { await result.current.setFamily('cindy'); });
+      expect(selectTheme).toHaveBeenCalledExactlyOnceWith(null);
+      rerender({ botId: null });
+      await act(async () => {});
+      expect(selectTheme).toHaveBeenCalledOnce();
+      unmount();
+      cleanupPaper();
+    });
+
+    // Same gap for a local theme removed behind a teammate palette: the saved choice falls
+    // back to a builtin, so the removed package's shared defaults must be cleared right away.
+    // Minimal input: saved package, teammate palette shown, the package's themes disappear.
+    it('clears the saved package when its local theme is removed behind a teammate palette', async () => {
+      const { selectTheme, rerender, unmount } = setup('light');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      let removeThemes!: (payload: unknown) => void;
+      Object.assign(window.electronAPI.localThemes, {
+        onChanged: (listener: (payload: unknown) => void) => { removeThemes = listener; return () => {}; },
+      });
+      bootstrapLocalThemesSync();
+      act(() => removeThemes({ success: true, diagnostics: [], themes: [] }));
+      await act(async () => {});
+      expect(selectTheme).toHaveBeenCalledExactlyOnceWith(null);
+      unmount();
+      cleanupPaper();
+    });
+  });
+
+  // Review of makecindy/cindy#12542: when storage is full, the in-memory fallback was
+  // overwritten by the next read of the stale stored value, so the choice jumped back.
+  // Minimal input: setItem throws once; the window must keep showing the new choice.
+  it('keeps a teammate appearance chosen while storage writes fail', () => {
+    __resetBotAppearanceCacheForTest();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    setBotAppearance('bot-1', { familyId: 'default' });
+    expect(getBotAppearance('bot-1').familyId).toBe('default');
+    setItem.mockRestore();
+    setBotAppearance('bot-1', { wallpaperId: 'night-launch' });
+    expect(JSON.parse(localStorage.getItem(BOT_APPEARANCE_STORAGE_KEY)!)).toEqual({
+      'bot-1': { familyId: 'default', wallpaperId: 'night-launch' },
+    });
+    __resetBotAppearanceCacheForTest();
+  });
+
   it('starts and switches builtin themes from legacy storage even when Host settings are unreadable', () => {
     const unavailable = vi.fn(() => { throw new Error('Appearance file unreadable'); });
     Object.assign(window.electronAPI, { appearanceSettings: {

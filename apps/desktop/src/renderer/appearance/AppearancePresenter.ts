@@ -8,6 +8,14 @@ import { LOCAL_THEME_SUFFIX } from '../../shared/local-themes';
 import type { ThemeSelection } from '../../shared/appearanceDefinition';
 
 let packageSelection: ThemeSelection | undefined;
+/** The explicit package choice still waiting for main; cleared when it settles. */
+let pendingSelection: ThemeSelection | undefined;
+/**
+ * The saved (global) theme as last resolved by the caller. While a view-scoped palette is
+ * shown, `themeService.getCurrentTheme()` is that palette, so rollbacks use this instead.
+ */
+let savedTheme: Theme | undefined;
+let paletteOverridden = false;
 
 function packageThemeSelection(theme: Theme): ThemeSelection | undefined {
   return theme.packageSha256 && theme.appearance ? {
@@ -32,18 +40,26 @@ export function prepareThemeSelection(theme: Theme, commit: () => void, current:
   const requested = packageSelection = value;
   const bridge = window.electronAPI?.appearanceSettings;
   if (!bridge?.selectTheme) { notifyThemeAppearanceFailure(); return Promise.resolve(false); }
+  pendingSelection = requested;
+  const settle = () => { if (pendingSelection === requested) pendingSelection = undefined; };
   return bridge.selectTheme(value).then(() => {
+    settle();
     if (packageSelection !== requested) return false;
     if (!current()) {
       // An expired Agent request never becomes the saved choice. Rebuild only
       // the Host defaults from the palette that is still selected.
-      const active = themeService.getCurrentTheme();
-      if (active) presentTheme(active, false);
+      const active = savedTheme ?? themeService.getCurrentTheme();
+      if (active) {
+        // Behind a teammate palette, restore only the shared defaults: the palette stays.
+        if (paletteOverridden) prepareSharedDefaults(active, false);
+        else presentTheme(active, false);
+      }
       return false;
     }
     commit();
     return true;
   }).catch(() => {
+    settle();
     if (packageSelection === requested && current()) notifyThemeAppearanceFailure();
     return false;
   });
@@ -51,9 +67,15 @@ export function prepareThemeSelection(theme: Theme, commit: () => void, current:
 
 /** Preserve synchronous palette application; only packages prepare extra defaults. */
 export function presentTheme(theme: Theme, notifyFailure = true, prepare = true): void {
+  themeService.applyTheme(theme);
+  savedTheme = theme;
+  paletteOverridden = false;
+  prepareSharedDefaults(theme, notifyFailure, prepare);
+}
+
+function prepareSharedDefaults(theme: Theme, notifyFailure: boolean, prepare = true): void {
   const previous = packageSelection;
   const value = packageThemeSelection(theme);
-  themeService.applyTheme(theme);
   packageSelection = value;
   if (!prepare) return;
   if (!packageSelection && !previous) return;
@@ -66,6 +88,53 @@ export function presentTheme(theme: Theme, notifyFailure = true, prepare = true)
       if (notifyFailure) notifyThemeAppearanceFailure();
       else window.electronAPI?.logToMain?.('warn', 'renderer/appearance', 'Theme package restore failed; saved selection retained');
     });
+}
+
+/**
+ * A view-scoped palette (a teammate's own theme) for this window only. The shared package
+ * defaults, and the record of which package main has prepared, stay untouched, so a later
+ * global change or leaving the view still compares against what main actually holds.
+ */
+export function presentPaletteOnly(theme: Theme): void {
+  themeService.applyTheme(theme);
+  paletteOverridden = true;
+}
+
+/**
+ * The saved choice can change behind a view-scoped palette without being presented; an
+ * expired request must roll back to the latest one.
+ */
+export function trackSavedTheme(theme: Theme): void {
+  savedTheme = theme;
+}
+
+/**
+ * The saved choice changed without being chosen in this window (another window saved it, a
+ * local theme was edited or removed, the system switched light/dark) while a view-scoped
+ * palette is shown. The palette stays; the shared
+ * defaults and the record of what main holds follow the saved theme, as they do in a window
+ * without a view-scoped palette. Without this, a later builtin choice here would not know
+ * there is a package to clear.
+ */
+export function syncSavedThemeDefaults(theme: Theme): void {
+  savedTheme = theme;
+  prepareSharedDefaults(theme, true);
+}
+
+/**
+ * Back to the saved palette when a view-scoped one is released. The shared defaults were
+ * never changed for the view, so they are prepared again only if the saved variant changed
+ * meanwhile. A global choice still waiting for main keeps its request: it commits or rolls
+ * back on its own, and re-preparing here would cancel it just because the view changed.
+ */
+export function restoreSavedTheme(theme: Theme): void {
+  themeService.applyTheme(theme);
+  savedTheme = theme;
+  paletteOverridden = false;
+  if (pendingSelection && pendingSelection === packageSelection) return;
+  const value = packageThemeSelection(theme);
+  if (value?.mode === packageSelection?.mode && value?.familyId === packageSelection?.familyId) return;
+  prepareSharedDefaults(theme, true);
 }
 
 /** Errors use the existing toast; translation/notice modules stay off the default path. */
