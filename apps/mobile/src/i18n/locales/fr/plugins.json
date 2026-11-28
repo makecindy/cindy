@@ -245,6 +245,7 @@
       "panelTab": "Panneau « {{title}} » · s'ouvre dans la page Plugins",
       "mainView": "Peut ajouter une entrée « {{title}} » à la barre latérale de Cindy",
       "mainViewDetail": "Son ouverture affiche la vue principale dans le bac à sable du plugin et ne donne accès ni aux fichiers, ni au réseau, ni aux identifiants.",
+      "localServicePage": "Intégrer une page de service local",
       "code": "Code exécutable",
       "codeDetail": "S'exécute dans un bac à sable isolé, sans accès à vos fichiers ni au réseau.",
       "resident": "Toujours actif (démarre à l'activation et conserve un processus en arrière-plan même au repos)",

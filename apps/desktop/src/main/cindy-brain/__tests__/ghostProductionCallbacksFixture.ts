@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import ts from 'typescript';
-import { confirmedAutoTools, confirmedCindyModelActions, confirmedFileOpenerExtensions, confirmedHarnesses } from '../ghostInstallConsent.js';
+import { confirmedAutoTools, confirmedCindyModelActions, confirmedFileOpenerExtensions, confirmedHarnesses, confirmedLocalServiceUrl } from '../ghostInstallConsent.js';
 import { setPluginEnabled } from '../pluginEnableService.js';
 import { createGhostExecutionPipe } from '../executionPipe.js';
 import { setTaskChangeListener } from '../../localDb/taskEvents.js';
@@ -44,6 +44,7 @@ const productionIdentityDeps = {
   confirmedFileOpenerExtensions,
   confirmedCindyModelActions,
   confirmedHarnesses,
+  confirmedLocalServiceUrl,
   ghostInstallTargetContext,
   resolveForgeInstallTarget,
   installedGhostPhysicalRelId,

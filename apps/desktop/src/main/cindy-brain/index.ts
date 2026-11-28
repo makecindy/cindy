@@ -628,6 +628,7 @@ import {
   confirmedHarnesses,
   confirmedFileOpenerExtensions,
   confirmedUiCapability,
+  confirmedLocalServiceUrl,
   obtainGhostInstallConsent,
   type GhostInstallConsentDecision,
   type GhostInstallConsentPrompt,
@@ -744,6 +745,9 @@ import {
 } from './previewGate.js';
 import { runGhostExternalLinkNavigation } from './ghostExternalLinkNavigation.js';
 import { runGhostPreviewNavigation } from './ghostPreviewNavigation.js';
+import { reconcileGhostLocalServiceGuests } from './ghostLocalServiceGuests.js';
+import { GHOST_LOCAL_SERVICE_PARTITION } from '../../shared/ghostLocalServicePage.js';
+import { approvedGhostLocalServicePageUrl } from '../../shared/ghost.js';
 import { ownerScopedGhostPartitionForInstalledGhost, resolveGhostWebviewPartitionClaim } from './ghostWebviewPartition.js';
 import { createGhostResourceUsageReader } from './ghostResourceUsage.js';
 import {
@@ -4491,6 +4495,7 @@ export function createWindowGhostInstallConsentPrompt(
       { onDecision },
     );
   };
+  prompt.localServicePageApproval = true;
   return prompt;
 }
 
@@ -8330,6 +8335,7 @@ async function installAndDockLocked(
     taskCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
     targetCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'targets'),
     uiCapabilityApproved: confirmedUiCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
+    approvedLocalServiceUrl: confirmedLocalServiceUrl(opts.consent.decision, installedBefore, opts.consent.manifest),
     delegationCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'delegation'),
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
@@ -8531,6 +8537,7 @@ async function updateLocalGhostPackageLocked(
           taskCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest),
           targetCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'targets'),
           uiCapabilityApproved: confirmedUiCapability(consent, previousGhost, inspected.manifest),
+          approvedLocalServiceUrl: confirmedLocalServiceUrl(consent, previousGhost, inspected.manifest),
           delegationCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'delegation'),
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
@@ -9140,6 +9147,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           taskCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest),
           targetCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'targets'),
           uiCapabilityApproved: confirmedUiCapability(expected.consent, installed, inspected.manifest),
+          approvedLocalServiceUrl: confirmedLocalServiceUrl(expected.consent, installed, inspected.manifest),
           delegationCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'delegation'),
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
@@ -12568,6 +12576,25 @@ export function resolveGhostWebviewAttach(
   };
 }
 
+/** Main revalidates the declared entry, physical installation and local account. */
+export function resolveGhostLocalServiceAttach(instanceId: string, src: string) {
+  if (!isPluginInstanceKey(instanceId) || typeof src !== 'string' || isAppSessionBoundaryPending()) return null;
+  const owner = getActiveAppSession();
+  const ghost = getGhostManager().findInstalledInstance(instanceId);
+  if (!ghost?.enabled || !isGhostAvailableForActiveSession(instanceId) || installedGhostStoragePart(ghost) !== instanceId ||
+      approvedGhostLocalServicePageUrl(ghost) !== src ||
+      libraryRestartRequiredReason(instanceId) !== null) return null;
+  const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, owner);
+  if (!partition) return null;
+  return {
+    partition: GHOST_LOCAL_SERVICE_PARTITION + partition,
+    origin: new URL(src).origin,
+    isCurrent: (current: InstalledGhost | undefined) =>
+      current?.enabled === true && approvedGhostLocalServicePageUrl(current) === src &&
+      ownerScopedGhostPartitionForInstalledGhost(current, getActiveAppSession()) === partition,
+  };
+}
+
 /** Local and remote project controls share persistence and scoped policy invalidation. */
 function setGhostWorkdirDisabledAndNotify(workdir: string, storedId: string, disabled: boolean): string[] {
   const wasDisabled = isGhostDisabledForWorkdir(storedId, workdir);
@@ -12612,6 +12639,7 @@ function broadcastGhostsChanged(
   },
 ): void {
   if (!opts?.projectionOnly) {
+    reconcileGhostLocalServiceGuests(ghosts);
     if (hasPluginHostTools()) reconcilePluginHostTools(new Map(ghosts.filter(ghost => hasPluginHostToolGroupApproval(ghost, 'computer'))
       .map(ghost => [installedGhostStoragePart(ghost), ghostInstallApprovalToken(ghost.approval)])));
     taskEventIndex.replace(ghosts, getGhostOwnerPushStamp());

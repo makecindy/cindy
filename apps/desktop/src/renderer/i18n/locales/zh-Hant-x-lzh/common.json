@@ -8926,6 +8926,7 @@
         "panelTab": "面板「{{title}}」· 於法器頁內啟之",
         "mainView": "可於 Cindy 左側導覽增「{{title}}」入口",
         "mainViewDetail": "點之則於法器沙箱中啟主視圖，不因此得檔案、網路或憑證之存取權柄。",
+        "localServicePage": "嵌入本機服務頁面",
         "taskView": "差事頁「{{title}}」· 於差事側欄啟之",
         "taskViewDetail": "頁籤隨差事切換，於法器沙箱中啟之，不因此得檔案、網路或憑證之存取權柄。",
         "code": "可行程式碼",

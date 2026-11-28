@@ -9059,6 +9059,7 @@
         "panelTab": "Panneau « {{title}} » · s'ouvre dans la page Plugins",
         "mainView": "Peut ajouter une entrée « {{title}} » à la navigation de gauche de Cindy",
         "mainViewDetail": "Son ouverture affiche la vue principale dans le bac à sable du plugin et ne donne accès ni aux fichiers, ni au réseau, ni aux identifiants.",
+        "localServicePage": "Intégrer une page de service local",
         "taskView": "Page de tâche « {{title}} » · s'ouvre dans la barre latérale de la tâche",
         "taskViewDetail": "L'onglet suit la tâche et s'ouvre dans le bac à sable du plugin ; il ne donne accès ni aux fichiers, ni au réseau, ni aux identifiants.",
         "code": "Code exécutable",

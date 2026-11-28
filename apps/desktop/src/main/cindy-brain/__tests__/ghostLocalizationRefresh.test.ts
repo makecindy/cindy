@@ -24,7 +24,7 @@ function routing(activeComputer = true) {
   const taskEventIndex = new GhostTaskEventIndex();
   const installation = {
     apps: vi.fn(), manifest: vi.fn(), unread: vi.fn(), browser: vi.fn(), computer: vi.fn(), skills: vi.fn(), index: vi.fn(),
-    taskEvents: vi.spyOn(taskEventIndex, 'replace'),
+    taskEvents: vi.spyOn(taskEventIndex, 'replace'), localServiceGuests: vi.fn(),
   };
   const push = vi.fn(), remote = vi.fn(), setupChanged = vi.fn(), contextChanged = vi.fn(), harnesses = vi.fn();
   const list = vi.fn(() => ghosts);
@@ -35,6 +35,7 @@ function routing(activeComputer = true) {
     taskEventIndex, getGhostOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
     currentGhostAppContext: () => ({ context: { region: 'global' } }), getResolvedMainLocale: () => 'en',
     refreshGhostLocalizationIfChanged, sendToGhostLogic: contextChanged,
+    reconcileGhostLocalServiceGuests: installation.localServiceGuests,
     refreshPluginApps: installation.apps, getGhostSetupManifestTracker: () => ({ note: installation.manifest }),
     sweepRevokedGhostUnread: installation.unread, getGhostBrowserExtensionSlot: () => ({ reconcile: installation.browser }),
     hasPluginHostTools: () => activeComputer,
@@ -66,6 +67,7 @@ it('projects a locale change without installation effects, while real roster cha
   expect(apps).toHaveBeenCalledTimes(2);
   for (const effect of Object.values(installation)) expect(effect).toHaveBeenCalledOnce();
   expect(r.harnesses).toHaveBeenCalledTimes(2);
+  expect(installation.localServiceGuests).toHaveBeenCalledWith(r.ghosts);
   expect(installation.computer).toHaveBeenCalledWith(new Map([['plugin-a', 'approved:fixture']]));
 });
 

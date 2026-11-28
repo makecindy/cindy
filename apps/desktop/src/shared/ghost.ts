@@ -1,5 +1,6 @@
+import { GHOST_LOCAL_SERVICE_PERMISSION } from './ghostLocalServicePage.js';
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { getGhostGithubReleaseRepository, declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
+import { ghostLocalServicePageUrl, getGhostGithubReleaseRepository, declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
 import { isValidGhostNetworkHostPattern as isValidPluginNetworkHostPattern, ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
 export { ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, ghostMcpAppsValidationError, parseGhostMcpApps } from '@cindy/plugin-protocol';
@@ -581,6 +582,8 @@ export const GHOST_TAB_SIDES = ['left', 'right', 'top', 'bottom'] as const;
 export type GhostTabSide = (typeof GHOST_TAB_SIDES)[number];
 
 export interface GhostMainViewDecl {
+  /** Desktop local service entry. The bundled html remains the fallback. */
+  localServiceUrl?: string;
   /** 侧边栏与页面标题；缺省回退插件 name。 */
   title?: string;
   /** 侧边栏使用的 Cindy 系统线性图标；缺省为 puzzle。 */
@@ -2088,6 +2091,8 @@ export interface InstalledGhost {
   /** Independent Host consent for cross-task/companion target access. */
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
+  /** Exact entry shown in a local install/update confirmation. */
+  approvedLocalServiceUrl?: string;
   /** Read-only remote management projection; never persisted as approval. */
   uiPromptSuppressed?: true;
   delegationCapabilityApproved?: true;
@@ -2900,6 +2905,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       detailKey: 'mainViewDetail',
     });
   }
+  const localServiceUrl = ghostLocalServicePageUrl(manifest.mainView?.localServiceUrl);
+  if (localServiceUrl) {
+    items.push({
+      key: GHOST_LOCAL_SERVICE_PERMISSION,
+      kind: 'main-view',
+      labelKey: 'localServicePage',
+      detail: localServiceUrl,
+    });
+  }
   if (manifest.taskView) {
     items.push({
       key: 'task-view',
@@ -3267,6 +3281,9 @@ export function diffInstalledGhostPermissionItems(
     // Older Hosts preserved ui without granting page capabilities.
     const previous = {
       ...installed.manifest,
+      ...(installed.manifest.mainView ? { mainView: { ...installed.manifest.mainView,
+        localServiceUrl: approvedGhostLocalServicePageUrl(installed),
+      } } : {}),
       mcpApps: installed.manifest.mcpApps && typeof installed.manifest.mcpApps === 'object'
         ? { ...installed.manifest.mcpApps as object,
           ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
@@ -5035,6 +5052,10 @@ function validateGhostManifestInput(
       if (!(GHOST_TAB_SIDES as readonly unknown[]).includes(raw.mainView.side)) {
         return { ok: false, reason: `mainView.side 必须是 ${GHOST_TAB_SIDES.join(' / ')}` };
       }
+    }
+    if (!preserveHistoricalParameterSize && raw.mainView.localServiceUrl !== undefined &&
+        !ghostLocalServicePageUrl(raw.mainView.localServiceUrl)) {
+      return { ok: false, reason: 'mainView.localServiceUrl 必须是带显式非默认端口的规范 HTTP 回环地址，不含凭证、查询串或片段' };
     }
     mainView = {
       ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon', 'preferredIcon', 'open', 'side', 'multiple']),
@@ -10676,6 +10697,14 @@ export type GhostPipeRoutineRequest =
   | { type: 'routine-request'; action: 'subscriptions' };
 
 /** A historical unknown declaration is not authorization. */
+export function approvedGhostLocalServicePageUrl(
+  ghost: Pick<InstalledGhost, 'manifest' | 'approvedLocalServiceUrl'> & Partial<Pick<InstalledGhost, 'approval'>>,
+): string | undefined {
+  if (ghost.approval?.state !== 'approved') return undefined;
+  const url = ghostLocalServicePageUrl(ghost.manifest.mainView?.localServiceUrl);
+  return url === ghost.approvedLocalServiceUrl ? url : undefined;
+}
+
 export function hasGhostUiPermission(ghost: InstalledGhost): boolean {
   return ghost.enabled && ghost.approval.state === 'approved' && ghost.uiCapabilityApproved === true
     && pluginHasToolUi(ghost.manifest);

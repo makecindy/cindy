@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readBoundedFileNoFollow, readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
-import { isValidPluginNamespace, isValidPluginResourceId } from '@cindy/plugin-protocol';
+import { ghostLocalServicePageUrl, isValidPluginNamespace, isValidPluginResourceId } from '@cindy/plugin-protocol';
 import { validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 
 import {
@@ -134,6 +134,7 @@ export interface GhostInstallReceipt {
   taskCapabilityApproved?: true;
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
+  approvedLocalServiceUrl?: string;
   /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
   unavailableUiResources?: true;
   delegationCapabilityApproved?: true;
@@ -1347,6 +1348,7 @@ export function createGhostInstallReceipt(input: {
   taskCapabilityApproved?: true;
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
+  approvedLocalServiceUrl?: string;
   /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
   unavailableUiResources?: true;
   delegationCapabilityApproved?: true;
@@ -1387,6 +1389,9 @@ export function createGhostInstallReceipt(input: {
     skillContentSha256: input.skillContentSha256,
     ...(input.unavailableUiResources === true ? { unavailableUiResources: true as const } : {}),
     ...(input.uiCapabilityApproved === true ? { uiCapabilityApproved: true as const } : {}),
+    ...(input.approvedLocalServiceUrl !== undefined &&
+      input.approvedLocalServiceUrl === ghostLocalServicePageUrl(input.manifest.mainView?.localServiceUrl)
+      ? { approvedLocalServiceUrl: input.approvedLocalServiceUrl } : {}),
     ...(input.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
     ...(input.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
     ...(input.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
@@ -1611,6 +1616,9 @@ function validateReceipt(
       skillContentSha256,
       ...(value.unavailableUiResources === true ? { unavailableUiResources: true as const } : {}),
       ...(value.uiCapabilityApproved === true ? { uiCapabilityApproved: true as const } : {}),
+      ...(typeof value.approvedLocalServiceUrl === 'string' &&
+        value.approvedLocalServiceUrl === ghostLocalServicePageUrl(manifestResult.manifest.mainView?.localServiceUrl)
+        ? { approvedLocalServiceUrl: value.approvedLocalServiceUrl } : {}),
       ...(value.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
       ...(value.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
       ...(value.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),

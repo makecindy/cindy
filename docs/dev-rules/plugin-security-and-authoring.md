@@ -1349,6 +1349,11 @@ Forge 新装默认 root，不按当前登录组织自动创建组织实例。已
 
 `mainView` 的现行协议在 `FORGE_GUIDE` §4.20；v2 的 `main-view` 只保留输入兼容。
 
+`mainView.localServiceUrl` 由本机安装或更新对话框按完整回环地址批准。宿主在账号与插件实例专属
+内存分区承载该页面，复用主视图入口和语义主题。未声明或未获批时沿用 `mainView.html`，存量插件
+无需重新批准。该 guest 与包内自绘页不同，不装任何宿主桥。请求、撤权和旧版本回退见
+[插件嵌入本机服务页面](protocol-compatibility/plugin-local-service-page.md)。
+
 `taskView`（跟对话的任务页）的现行协议在 `FORGE_GUIDE` §4.22；v2 对应 `task-view` 槽。
 任务页页签（右侧栏 kind `plugin-task`）存在各任务自己的页签桶里，随任务切换；页面与
 panel / mainView 同一 Ghost WebView 沙箱（专属分区，仅有下述页面选模桥），只经查询参数 `session`

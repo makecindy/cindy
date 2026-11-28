@@ -243,6 +243,7 @@
       "panelTab": "面板「{{title}}」· 插件页内打开",
       "mainView": "可在 Cindy 侧边栏添加「{{title}}」入口",
       "mainViewDetail": "点击后将在插件沙箱中打开主视图，不会因此获得文件、网络或凭证访问权限。",
+      "localServicePage": "嵌入本机服务页面",
       "code": "可执行代码",
       "codeDetail": "在独立沙箱中运行，无法访问你的文件与网络。",
       "resident": "常驻运行（启用后即启动，不调用也保持后台进程）",

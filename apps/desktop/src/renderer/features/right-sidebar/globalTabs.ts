@@ -22,7 +22,7 @@
 
 import { useSyncExternalStore } from 'react';
 
-import { ghostPanelKind, type InstalledGhost } from '../../../shared/ghost';
+import { approvedGhostLocalServicePageUrl, ghostPanelKind, type InstalledGhost } from '../../../shared/ghost';
 import { paneEdgeRelativeToChat, type Layout } from '../../../shared/layoutTree';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
@@ -71,7 +71,7 @@ export function effectivePluginView(
 }
 
 /**
- * 页签承载目标页面时可以复用。panel 与 mainView 指向同一 HTML 时也视为同一页面。
+ * 页签承载目标页面时可以复用。包内 panel 和回退主视图可以共用同一个 HTML。
  */
 export function tabShowsPluginView(
   state: PluginViewTabState | null | undefined,
@@ -81,6 +81,7 @@ export function tabShowsPluginView(
   if (state?.resourceViewId) return false;
   const view = effectivePluginView(state, ghost);
   if (view === requestedView) return true;
+  if (approvedGhostLocalServicePageUrl(ghost)) return false;
   const panelHtml = ghost.manifest.panel?.html;
   return panelHtml !== undefined && panelHtml === ghost.manifest.mainView?.html;
 }

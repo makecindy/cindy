@@ -80,7 +80,7 @@ function PluginViewBody({ state }: TabKindBodyProps<PluginViewTabState>) {
       {panelHtml ? (
         <GhostChipPanelBody ghost={ghost} />
       ) : (
-        <GhostWebviewBody ghost={ghost} html={ghost.manifest.mainView?.html} wallpaperCanvas />
+        <GhostWebviewBody ghost={ghost} html={ghost.manifest.mainView?.html} useMainViewLocalService wallpaperCanvas />
       )}
     </div>
   );

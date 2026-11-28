@@ -2775,3 +2775,19 @@ describe('readme declarations', () => {
     ).toMatchObject({ ok: false, reason: expect.stringContaining('readme.en') });
   });
 });
+
+// Unit: a local entry needs an exact HTTP loopback port. An invalid historic
+// unknown field must remain readable to preserve old package/receipt identity.
+it('validates new local service entries without invalidating historical plugin manifests', () => {
+  const base = { ...validManifest, schemaVersion: 3, slots: undefined, minCindyVersion: '0.1.0' };
+  const valid = 'http://127.0.0.1:41237/status';
+  expect(validateGhostManifest({ ...base, mainView: { html: 'fallback.html', localServiceUrl: valid } }))
+    .toMatchObject({ ok: true, manifest: { mainView: { localServiceUrl: valid } } });
+  for (const invalid of ['http://127.0.0.1/status', 'http://127.0.0.1:80/status',
+    'http://127.0.0.1:65536/status', 'http://localhost:41237/status', 'http://127.1:41237/status',
+    'http://127.0.0.1:41237@another.test/status', 'http://127.0.0.1:41237/status?token=secret']) {
+    const mainView = { html: 'fallback.html', localServiceUrl: invalid };
+    expect(validateGhostManifest({ ...base, mainView })).toMatchObject({ ok: false });
+    expect(validateStoredGhostManifest({ ...base, mainView })).toMatchObject({ ok: true, manifest: { mainView } });
+  }
+});

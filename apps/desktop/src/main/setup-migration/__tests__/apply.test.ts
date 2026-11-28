@@ -87,6 +87,36 @@ describe('applySetupPlan', () => {
     expect(prompts).toHaveLength(1);
   });
 
+  // Unit: a batch with matching install facts cannot grant access to a
+  // service on the destination computer. It needs the actual local dialog.
+  it('requires the local install dialog for a local service entry even when the batch matches', async () => {
+    const source = snapshot({ plugins: [plugin({ ghostId: 'gmail' })] });
+    const facts = installFacts('gmail');
+    if (facts.kind !== 'install') throw new Error('expected install facts');
+    facts.permissions.push({
+      key: 'main-view:local-service', kind: 'main-view', labelKey: 'localServicePage', detail: 'http://127.0.0.1:41237/status',
+    });
+    const plan = buildSetupPlan(planInputs({
+      snapshot: source,
+      catalog: new Map([['plg_gmail', { pluginId: 'plg_gmail', releaseId: 'r', version: '1.0.0', consent: facts }]]),
+    }));
+    const windowPrompt = Object.assign(vi.fn(async () => true), { localServicePageApproval: true as const });
+    const { deps } = harness({
+      windowPrompt,
+      installPlugin: vi.fn(async (_id, _options, prompt) => {
+        expect(prompt.localServicePageApproval).toBe(true);
+        expect(await prompt({ initiator: 'user', origin: 'market', facts })).toBe(true);
+        return { instanceKey: '_root__gmail', enabled: true, approval: 'approved:1' };
+      }),
+    });
+    const key = plan.plugins[0].key;
+    const result = await applySetupPlan({
+      plan, snapshot: source, keys: new Set([key]), approvedPluginKeys: new Set([key]), emit: () => {},
+    }, deps);
+    expect(result.results).toEqual([{ key, outcome: 'done' }]);
+    expect(windowPrompt).toHaveBeenCalledExactlyOnceWith({ initiator: 'user', origin: 'market', facts });
+  });
+
   it('asks per plugin when the user did not confirm the batch', async () => {
     const source = snapshot({ plugins: [plugin({ ghostId: 'gmail' })] });
     const plan = buildSetupPlan(
