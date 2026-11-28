@@ -1980,7 +1980,7 @@
         "unlockButton": "アンロック",
         "unlockTip": "この鍵を ssh-agent にロードして、以降の SSH 接続で passphrase 入力を不要にします。",
         "unlockTitle": "{{name}} をアンロック",
-        "unlockHint": "passphrase を入力すると `ssh-add` に渡して agent にロードします。{{appName}} 側は使用後すぐに破棄します。",
+        "unlockHint": "passphrase を入力すると `ssh-add` に渡して agent にロードします。渡した後はすぐに破棄します。",
         "unlockSubmit": "アンロック",
         "generateTitle": "新しい SSH 鍵を生成",
         "nameLabel": "名前(省略可)",
