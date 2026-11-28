@@ -7,6 +7,8 @@ import { getDeviceLinkInvokeContext, type DeviceLinkInvokeContext } from '../dev
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
+  isPluginEngineProviderIdShape,
+  pluginLoginErrorKeys,
   isSubscriptionPoolProviderIdShape,
   isSubscriptionProvider,
 } from '../../shared/subscriptionAccounts.js';
@@ -37,6 +39,7 @@ const log = desktopMakerLogger.child('subscription-accounts');
 // Reasons the runtime raises on purpose. Anything else is logged by error type only: some read
 // paths parse credential files, whose parse errors may quote file contents.
 const KNOWN_FAILURE_REASONS = new Set([
+  ...pluginLoginErrorKeys.keys(),
   'login_cancelled', 'login_failed', 'login_in_progress', 'not_a_subscription',
   'codex_provider_managed_auth', 'account_mismatch', 'account_identity_unknown',
   'timeout', 'local_unavailable', 'not_signed_in', 'token_not_permitted', 'token_unsupported',
@@ -158,6 +161,9 @@ export function registerSubscriptionAccountsIpc(): void {
               : error instanceof Error ? error.name : typeof error,
         });
       if (reason === 'Account not found') throwIpcError('NOT_FOUND', 'Subscription account not found');
+      if (!context && isPluginEngineProviderIdShape(command.providerId)
+        && (command.action === 'login' || command.action === 'add') && pluginLoginErrorKeys.has(reason))
+        throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', reason);
       if (unreachable)
         throwIpcError(
           'SUBSCRIPTION_ACCOUNT_UNREACHABLE',

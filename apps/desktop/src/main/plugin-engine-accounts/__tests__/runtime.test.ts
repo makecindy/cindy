@@ -250,9 +250,17 @@ describe('plugin engine account pool', () => {
     expect(added.accounts.map(account => account.identity)).toEqual([undefined, 'a@example.com', 'b@example.com', 'c@example.com']);
     expect(added.pluginEngine?.methods.map(method => method.id)).toEqual(['api-key']);
 
-    h.login.mockResolvedValueOnce({ ok: false, error: 'invalid-secret' });
-    await expect(runPluginEngineAccountCommand({ action: 'add', providerId: PROVIDER, loginKey: 'k2', methodId: 'api-key', secret: 'bad' }))
-      .rejects.toThrow('login_failed');
+    // #13706: a failed worker reply can include private data. Only the fixed reason may escape.
+    const privateText = 'fixture-key person@example.invalid /home/fixture/private';
+    for (const [error, reason] of [
+      ['invalid-secret', 'login_invalid_secret'], ['unsupported', 'login_unsupported'],
+      ['busy', 'login_in_progress'], ['timeout', 'timeout'], ['cancelled', 'login_cancelled'],
+      ['failed', 'login_failed'], [privateText, 'login_failed'],
+    ]) {
+      h.login.mockResolvedValueOnce({ ok: false, error, message: privateText });
+      await expect(runPluginEngineAccountCommand({ action: 'add', providerId: PROVIDER, loginKey: 'k2', methodId: 'api-key', secret: 'bad' }))
+        .rejects.toMatchObject({ message: reason });
+    }
     const after = await runPluginEngineAccountCommand({ action: 'read', providerId: PROVIDER });
     expect(after.accounts).toHaveLength(4);
   });

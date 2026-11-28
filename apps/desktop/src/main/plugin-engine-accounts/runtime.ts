@@ -934,7 +934,17 @@ async function runLogin(
     if (dir) await ensurePluginEngineAccountDir(dir);
     const result = await loginPluginHarnessAccount(ref.engineKey, dir, methodId, secret);
     assertOwner(state);
-    if (!result.ok) throw new Error(result.error === 'cancelled' ? 'login_cancelled' : 'login_failed');
+    if (!result.ok) {
+      // Plugin messages may contain credentials, paths or identity. Only emit host-owned reasons.
+      switch (result.error) {
+        case 'cancelled': throw new Error('login_cancelled');
+        case 'timeout': throw new Error('timeout');
+        case 'busy': throw new Error('login_in_progress');
+        case 'unsupported': throw new Error('login_unsupported');
+        case 'invalid-secret': throw new Error('login_invalid_secret');
+        default: throw new Error('login_failed');
+      }
+    }
     const confirmed = await readStatus(state, ref, accountId, true);
     assertOwner(state);
     // The plugin could not say whether the sign-in worked: not a failed login, not a success.

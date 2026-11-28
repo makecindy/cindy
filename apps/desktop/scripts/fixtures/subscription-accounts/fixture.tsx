@@ -222,6 +222,8 @@ void mountPage({
         existingLogins: async () => ({ computer: 'Mac mini', candidates: ctx.case.startsWith('existing-login')
           ? [{ identity: 'studio@example.com', plan: 'Pro', directory: '~/.claude-person', receipt: 'fixture' }] : [] }),
         command: async (command: SubscriptionAccountCommand) => {
+          if (ctx.case === 'plugin-engine-invalid-key' && command.action === 'add')
+            throw new Error('[SUBSCRIPTION_ACCOUNT_FAILED] login_invalid_secret');
           if (ctx.case === 'error') throw new Error('Fixture read failure');
           // The first read never lands, so the placeholder stays for the capture.
           if (ctx.case === 'loading' && command.action === 'read') return new Promise<never>(() => {});

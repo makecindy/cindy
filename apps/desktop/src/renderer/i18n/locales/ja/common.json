@@ -23290,6 +23290,10 @@
     "refresh": "利用枠を更新"
   },
   "subscriptionAccounts": {
+    "pluginLoginTimeout": "ログインがタイムアウトしました。もう一度ログインしてください。",
+    "pluginLoginBusy": "ログイン中です。完了するまでお待ちください。",
+    "pluginLoginUnsupported": "プラグインはこのログイン方法に対応していません。",
+    "pluginLoginInvalidSecret": "プラグインでこのキーを使用できません。キーを確認して再試行してください。",
     "existing": {
       "menu": "アカウントの追加方法",
       "connect": "既存のログインを接続…",

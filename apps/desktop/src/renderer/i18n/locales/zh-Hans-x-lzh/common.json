@@ -23290,6 +23290,10 @@
     "refresh": "更新额度"
   },
   "subscriptionAccounts": {
+    "pluginLoginTimeout": "登录逾时，请重试。",
+    "pluginLoginBusy": "方登录，请俟其毕。",
+    "pluginLoginUnsupported": "插件不支持此登录之法。",
+    "pluginLoginInvalidSecret": "插件不能用此密钥，请核而重试。",
     "existing": {
       "menu": "更多添加方式",
       "connect": "连接已有登录…",

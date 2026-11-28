@@ -38,6 +38,7 @@ export default {
     'plugin-engine': { about: 'A plugin engine provider: identity, plan and usage the plugin reports, with the same account controls' },
     'plugin-engine-narrow': { about: 'Plugin engine accounts at 320-pixel content width', viewport: { width: 320, height: 850 } },
     'plugin-engine-sign-in': { about: 'Adding a plugin engine account: choose the sign-in method and type the key in Cindy' },
+    'plugin-engine-invalid-key': { about: 'Adding a plugin account with a rejected test key' },
   },
   async check(page, ui) {
     if (ui.case.startsWith('existing-login')) {
@@ -67,10 +68,17 @@ export default {
       await rows.nth(1).getByText('BigModel API Key ····a1b2', { exact: true }).waitFor();
       await rows.nth(0).getByText('GLM Coding Plan Pro', { exact: true }).waitFor();
       assert.equal(await page.getByRole('switch').count(), 2);
-      if (ui.case === 'plugin-engine-sign-in') {
+      if (ui.case === 'plugin-engine-sign-in' || ui.case === 'plugin-engine-invalid-key') {
         await page.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).click();
         await page.getByTestId('plugin-engine-sign-in').waitFor();
         await page.getByRole('textbox', { name: 'Z.ai Coding Plan API Key' }).waitFor();
+        if (ui.case === 'plugin-engine-invalid-key') {
+          await page.getByRole('textbox', { name: 'Z.ai Coding Plan API Key' }).fill('fixture-key');
+          await page.getByRole('button', { name: await ui.t('subscriptionAccounts.login'), exact: true }).click();
+          await page.getByText(await ui.t('subscriptionAccounts.pluginLoginInvalidSecret'), { exact: true }).waitFor();
+          await ui.capture('rejected-key');
+          return;
+        }
         await ui.capture('sign-in');
         return;
       }

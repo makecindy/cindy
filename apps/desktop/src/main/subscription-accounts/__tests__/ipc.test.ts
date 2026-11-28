@@ -559,6 +559,17 @@ describe('subscription management boundary', () => {
   });
 
   // A saved row can move or disappear between displaying it and clicking Sign in.
+  // #13706 (unit): exercise the registered add handler with a classified plugin login failure.
+  it('logs the fixed plugin reason and limits the detailed hint to local account management', async () => {
+    const command = { action: 'add', providerId: 'acp-plugin:sample:engine', loginKey: 'test' };
+    h.execute.mockRejectedValue(new Error('login_invalid_secret'));
+    await expect(invoke(command)).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_FAILED] login_invalid_secret');
+    expect(h.warn).toHaveBeenLastCalledWith('subscription account command failed',
+      { action: 'add', providerId: command.providerId, reason: 'login_invalid_secret' });
+    h.context = {};
+    await expect(invoke(command)).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_FAILED] Could not update');
+  });
+
   it('reports a missing sign-in target separately from CLI or network errors', async () => {
     h.execute.mockRejectedValue(new Error('Account not found'));
     await expect(invoke({ action: 'login', providerId: 'openai', accountId: 'default', loginKey: 'stale' }))

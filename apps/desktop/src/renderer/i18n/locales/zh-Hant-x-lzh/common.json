@@ -23290,6 +23290,10 @@
     "refresh": "更新額度"
   },
   "subscriptionAccounts": {
+    "pluginLoginTimeout": "登入逾時，請重試。",
+    "pluginLoginBusy": "方登入，請俟其畢。",
+    "pluginLoginUnsupported": "外掛不支援此登入之法。",
+    "pluginLoginInvalidSecret": "外掛不能用此金鑰，請核而重試。",
     "existing": {
       "menu": "更多新增方式",
       "connect": "連接既有登入…",
