@@ -219,7 +219,7 @@ import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
 import { hasSettledOnlineDeviceSection } from './lib/mainListModel';
-import { sidebarPriorityContext } from './lib/sidebarPriorityContext';
+import { sidebarPriorityContext, useRemoteSidebarWaitingRows } from './lib/sidebarPriorityContext';
 import {
   holdSidebarViewedPriority,
   ProjectsSection,
@@ -245,6 +245,7 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
   useRemoteScheduleIndex,
+  useRemoteUnreadScheduleRows,
 } from '@/features/device-link/remoteProjectsStore';
 import {
   getRemoteSessionActivity,
@@ -1436,6 +1437,8 @@ function ExpandedView({
     },
   );
   const remoteScheduleIndex = useRemoteScheduleIndex();
+  const remoteUnreadScheduleRows = useRemoteUnreadScheduleRows();
+  const remoteWaitingRows = useRemoteSidebarWaitingRows();
   // Lead 的 kind / 未读已并入其 Worker 的出错 / 等待确认(lib/orcaLeadWorkerAttention.ts)。
   const attentionKinds = useSessionAttentionKindsWithOrcaLeads();
   const orcaLeadWorkerAttention = useOrcaLeadWorkerAttention();
@@ -2194,6 +2197,8 @@ function ExpandedView({
       runningSessionIds: displayRunningSessionIds,
       attentionSessionIds: sidebarNotifications,
       waitingSessionIds: waiting,
+      remoteUnreadScheduleRows,
+      remoteWaitingRows,
     };
     const natural = sidebarPriorityContext(
       base,
@@ -2228,6 +2233,8 @@ function ExpandedView({
     attentionKinds,
     displayRunningSessionIds,
     remoteActivityRevision,
+    remoteUnreadScheduleRows,
+    remoteWaitingRows,
     sidebarNotifications,
     urgentSet,
     viewedSessionId,
@@ -2426,6 +2433,8 @@ function ExpandedView({
   runningSessionIdsRef.current = displayRunningSessionIds;
   const sidebarNotificationsRef = useRef(sidebarNotifications);
   sidebarNotificationsRef.current = sidebarNotifications;
+  const remoteWaitingRowsRef = useRef(remoteWaitingRows);
+  remoteWaitingRowsRef.current = remoteWaitingRows;
   // viewedSessionId 同理:handleActionClick 只在触发归档那一刻用它算重定向目标。
   const viewedSessionIdRef = useRef(viewedSessionId);
   viewedSessionIdRef.current = viewedSessionId;
@@ -2791,6 +2800,7 @@ function ExpandedView({
             runningSessionIds: runningSessionIdsRef.current,
             attentionSessionIds: sidebarNotificationsRef.current,
             waitingSessionIds: waiting,
+            remoteWaitingRows: remoteWaitingRowsRef.current,
           },
           target ? [target] : [],
           (session) => getRemoteSessionActivity(session.id, session.deviceLinkDeviceId)?.phase,

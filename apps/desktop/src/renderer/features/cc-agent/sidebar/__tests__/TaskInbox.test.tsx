@@ -7,8 +7,12 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }) }));
+vi.mock('react-i18next', async (original) => ({
+  ...await original<typeof import('react-i18next')>(),
+  useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }),
+}));
 import { applyRemoteSessionActivity, clearRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
+import { remoteProjectsStore, useRemoteUnreadScheduleRows } from '@/features/device-link/remoteProjectsStore';
 const following = vi.hoisted(() => new Set<Session>());
 vi.mock('@/features/scheduler/lib/scheduleSessionBinding', () => ({ useActiveFollowUpSessions: () => following }));
 vi.mock('../SectionCollapse', () => ({ SectionCollapse: ({ children }: { children: React.ReactNode }) => children }));
@@ -19,15 +23,28 @@ vi.mock('../SessionEntryList', () => ({ SessionEntryRows: ({ entries, onAction }
 import { markSessionStarting, clearSessionStarting } from '@/lib/sessionStartingStore';
 import { TaskInbox } from '../TaskInbox';
 import { useInboxUnread } from '../useInboxUnread';
+import type { AutomationScheduleSessionInfo } from '../../lib/automationSidebarGrouping';
+import { useSessionAttentionKindsWithOrcaLeads } from '../../lib/orcaLeadWorkerAttention';
+import { useRemoteSidebarWaitingRows } from '../../lib/sidebarPriorityContext';
 beforeEach(() => following.clear());
-afterEach(() => { cleanup(); clearRemoteSessionActivity(); });
+afterEach(() => { cleanup(); clearRemoteSessionActivity(); remoteProjectsStore.clear(); });
+
+function publishScheduleIndex(deviceId: string, index: ReadonlyMap<string, AutomationScheduleSessionInfo>) {
+  const read = remoteProjectsStore.beginDeviceScheduleIndexRead(deviceId);
+  try {
+    expect(read.commit(index)).toBe(true);
+  } finally {
+    read.release();
+  }
+}
+
 // The controller still has a running flag when the host sends the unread result.
-it('moves only the finished device’s task to Pending without a pointer or a list refresh', () => {
+it('moves only the waiting or finished device’s task to Pending without a list refresh', () => {
   const sharedId = 'same-id';
   const tasks = ['studio', 'other'].map(deviceLinkDeviceId => ({
     id: sharedId, title: deviceLinkDeviceId, status: 'active', deviceLinkDeviceId,
   } as Session));
-  const push = (device: string, phase: 'running' | 'completed', attention = false) =>
+  const push = (device: string, phase: 'running' | 'needs-interaction' | 'completed', attention = false) =>
     act(() => applyRemoteSessionActivity(device, { sessionId: sharedId, phase, attention }));
   push('studio', 'running');
   push('other', 'running');
@@ -38,6 +55,9 @@ it('moves only the finished device’s task to Pending without a pointer or a li
   const [pending, working] = view.container.querySelectorAll('section');
   const rows = (section: Element) => Array.from(section.querySelectorAll('[data-device]'), row => row.getAttribute('data-device'));
   expect(rows(working)).toEqual(['studio', 'other']);
+  push('studio', 'needs-interaction', true);
+  expect(rows(pending)).toEqual(['studio']);
+  expect(rows(working)).toEqual(['other']);
   push('studio', 'completed', true);
   expect(rows(pending)).toEqual(['studio']);
   expect(rows(working)).toEqual(['other']);
@@ -65,6 +85,78 @@ it('moves a remote task to Working immediately after sending, before its first h
   act(() => applyRemoteSessionActivity('studio', { sessionId: task.id, phase: 'completed', attention: true }));
   expect(pending.contains(screen.getByTestId('row'))).toBe(true);
   act(() => clearSessionStarting(task.id));
+});
+
+it('keeps an unread remote automation in Pending when there is no activity replay', () => {
+  const tasks = ['studio', 'other'].map(deviceLinkDeviceId => ({
+    id: 'scheduled', title: deviceLinkDeviceId, status: 'active', deviceLinkDeviceId,
+  } as Session));
+  tasks.forEach(task => following.add(task));
+  for (const device of ['studio', 'other']) {
+    remoteProjectsStore.setDeviceSessions(device, device, []);
+  }
+  const publish = (device: string, unreadRunIds: string[]) => publishScheduleIndex(device, new Map([
+    ['scheduled', { scheduleId: device, scheduleName: device, hasUnreadRun: unreadRunIds.length > 0,
+      unreadRunIds, unreadFailedRunIds: [], hasUnreadFailedRun: false }],
+  ]));
+  publish('studio', ['run']);
+  publish('other', []);
+  const runningSessionIds = new Set<string>();
+  const attentionSessionIds = new Set(['scheduled']);
+  function Inbox() {
+    const priorityContext = { runningSessionIds, attentionSessionIds, remoteUnreadScheduleRows: useRemoteUnreadScheduleRows() };
+    return <TaskInbox sessions={tasks} priorityContext={priorityContext}
+      runningSessionIds={runningSessionIds} attachedSessionIds={new Set()} notifications={attentionSessionIds}
+      onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />;
+  }
+  const view = render(<Inbox />);
+  const [pending, working] = view.container.querySelectorAll('section');
+  expect(pending.querySelector('[data-device]')?.getAttribute('data-device')).toBe('studio');
+  expect(working.querySelector('[data-device]')?.getAttribute('data-device')).toBe('other');
+  act(() => publish('studio', []));
+  expect(pending.querySelector('[data-device]')).toBeNull();
+});
+
+it.each(['worker question', 'failed automation'] as const)('keeps a remote %s Pending on the owning device only', source => {
+  const fromWorker = source === 'worker question';
+  const lead = { id: 'same-task', title: 'Task', status: 'active', orcaRole: 'lead' } as Session;
+  const worker = { id: 'same-worker', title: 'Worker', status: 'active', orcaRole: 'worker', orcaLeadSessionId: lead.id } as Session;
+  const tasks = ['studio', 'other'].map(deviceLinkDeviceId => ({ ...lead, deviceLinkDeviceId }));
+  for (const device of ['other', 'studio']) {
+    remoteProjectsStore.setDeviceSessions(device, device, [lead, worker]);
+    if (fromWorker) applyRemoteSessionActivity(device, { sessionId: lead.id, phase: 'running', attention: false });
+  }
+  const publish = (pending: boolean) => {
+    if (fromWorker) {
+      remoteProjectsStore.applyPatch('studio', worker.id, { orcaHasPendingQuestion: pending });
+    } else {
+      publishScheduleIndex('studio', new Map([[lead.id, {
+        scheduleId: 'scheduled', scheduleName: 'Scheduled', hasUnreadRun: true,
+        unreadRunIds: ['run'], unreadFailedRunIds: pending ? ['run'] : [], hasUnreadFailedRun: pending,
+      }]]));
+    }
+  };
+  publish(true);
+  function Inbox() {
+    const kinds = useSessionAttentionKindsWithOrcaLeads();
+    const remoteUnreadScheduleRows = useRemoteUnreadScheduleRows();
+    const remoteWaitingRows = useRemoteSidebarWaitingRows();
+    const empty = new Set<string>();
+    const waiting = kinds.get(lead.id) === 'awaiting' || !fromWorker ? new Set([lead.id]) : empty;
+    const priorityContext = { runningSessionIds: empty, attentionSessionIds: waiting, waitingSessionIds: waiting, remoteUnreadScheduleRows, remoteWaitingRows };
+    return <TaskInbox sessions={tasks} priorityContext={priorityContext} isTeammateTask={() => !fromWorker}
+      runningSessionIds={empty} attachedSessionIds={empty} notifications={waiting}
+      onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />;
+  }
+  const view = render(<Inbox />);
+  const [pending, working] = view.container.querySelectorAll('section');
+  const inSection = (section: Element, device: string) => section.querySelector('[data-device="' + device + '"]');
+  expect(inSection(pending, 'studio')).not.toBeNull();
+  expect(inSection(pending, 'other')).toBeNull();
+  if (fromWorker) expect(inSection(working, 'other')).not.toBeNull();
+  act(() => publish(false));
+  expect(inSection(pending, 'studio')).toBeNull();
+  if (fromWorker) expect(inSection(working, 'studio')).not.toBeNull();
 });
 
 it('commits explicit moves before another restore while hovering another task’s Done button', () => {
@@ -243,6 +335,28 @@ it('orders the archived section by archivedAt descending with activity fallback 
     onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />);
   expect(Array.from(view.container.querySelectorAll('section')[3].querySelectorAll('[data-testid="row"]'), row => row.textContent))
     .toEqual(['old-just-archived', 'legacy-no-archived-at', 'active-earlier-archived']);
+});
+
+it('keeps the entry green dot off for remote failures and on for a different device’s unread completion', () => {
+  const id = 'scheduled';
+  const sessions = ['studio', 'other'].map(deviceLinkDeviceId => ({ id, status: 'active', deviceLinkDeviceId } as Session));
+  for (const device of ['studio', 'other']) remoteProjectsStore.setDeviceSessions(device, device, []);
+  publishScheduleIndex('studio', new Map([[id, {
+    scheduleId: 'schedule', scheduleName: 'Scheduled', hasUnreadRun: true,
+    unreadRunIds: ['run'], hasUnreadFailedRun: true, unreadFailedRunIds: ['run'],
+  }]]));
+  const view = renderHook(() => useInboxUnread(sessions, {
+    runningSessionIds: new Set(), attentionSessionIds: new Set([id]),
+    remoteUnreadScheduleRows: useRemoteUnreadScheduleRows(), remoteWaitingRows: useRemoteSidebarWaitingRows(),
+  }, () => false));
+  expect(view.result.current.hasUnread).toBe(false);
+  const complete = (device: string, attention: boolean) => act(() => applyRemoteSessionActivity(device, {
+    sessionId: id, phase: 'completed', attention,
+  }));
+  complete('other', true);
+  expect(view.result.current.hasUnread).toBe(true);
+  complete('other', false);
+  expect(view.result.current.hasUnread).toBe(false);
 });
 
 // Unit: task-inbox.md. Row placement tests cannot see the closed inbox's indicator.

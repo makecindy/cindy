@@ -18,6 +18,7 @@ import { useSyncExternalStore } from 'react';
 import type { Session } from '@/lib/ccAgent.types';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { remoteProjectsStore } from '../../device-link/remoteProjectsStore';
+import { sessionRowKey } from '../sidebar/sessionRowKey';
 import {
   getRemoteSessionActivity,
   getRemoteSessionActivityRevision,
@@ -146,6 +147,7 @@ let cachedRemoteSessions: readonly Session[] | null = null;
 let listedWorkers: readonly Session[] = [];
 let cachedRemoteRevision = -1;
 let cachedQuestionTargets = new Map<string, { workerSessionId: string; chatSessionId: string }>();
+let cachedRemoteQuestionLeadRows: ReadonlySet<string> = new Set();
 
 function remoteQuestionPending(id: string, device?: string): boolean {
   const activity = getRemoteSessionActivity(id, device);
@@ -171,6 +173,7 @@ function refreshCache(): void {
   }
   const leads: LeadWorkerSessions[] = [];
   const targets = new Map<string, { workerSessionId: string; chatSessionId: string }>();
+  const remoteQuestionLeadRows = new Set<string>();
   for (const [leadId, snapshot] of listRetainedWorkerProjections()) {
     const localIds = localOrcaWorkerSessionIds(snapshot.workers, leadId);
     leads.push([leadId, localIds]);
@@ -180,10 +183,14 @@ function refreshCache(): void {
       return statuses.get(chatId)?.hasPendingAskUser ||
         (worker.executionDevice && remoteQuestionPending(chatId, worker.executionDevice.deviceId));
     });
-    if (worker) targets.set(leadId, {
+    if (!worker) continue;
+    targets.set(leadId, {
       workerSessionId: worker.sessionId,
       chatSessionId: worker.executionDevice?.remoteSessionId ?? worker.sessionId,
     });
+    if (snapshot.leadDeviceId) {
+      remoteQuestionLeadRows.add(sessionRowKey({ id: leadId, deviceLinkDeviceId: snapshot.leadDeviceId }));
+    }
   }
   if (localSessions !== cachedLocalSessions || remoteSessions !== cachedRemoteSessions) {
     const isWorker = (session: Session) => session.status === 'active' && session.orcaRole === 'worker';
@@ -191,11 +198,19 @@ function refreshCache(): void {
   }
   for (const worker of listedWorkers) {
     const leadId = worker.orcaLeadSessionId;
-    if (!leadId || targets.has(leadId)) continue;
+    if (!leadId) continue;
     const waiting = worker.orcaHasPendingQuestion ?? remoteQuestionPending(worker.id, worker.deviceLinkDeviceId);
-    if (waiting && remoteProjectsStore.getSessionDeviceId(leadId) === worker.deviceLinkDeviceId) {
+    if (!waiting) continue;
+    if (worker.deviceLinkDeviceId) {
+      remoteQuestionLeadRows.add(sessionRowKey({ id: leadId, deviceLinkDeviceId: worker.deviceLinkDeviceId }));
+    }
+    if (!targets.has(leadId) && remoteProjectsStore.getSessionDeviceId(leadId) === worker.deviceLinkDeviceId) {
       targets.set(leadId, { workerSessionId: worker.id, chatSessionId: worker.id });
     }
+  }
+  if (remoteQuestionLeadRows.size !== cachedRemoteQuestionLeadRows.size ||
+    [...remoteQuestionLeadRows].some(row => !cachedRemoteQuestionLeadRows.has(row))) {
+    cachedRemoteQuestionLeadRows = remoteQuestionLeadRows;
   }
   cachedLocalSessions = localSessions;
   cachedRemoteSessions = remoteSessions;
@@ -222,8 +237,9 @@ let unsubscribeUpstream: (() => void) | null = null;
 function onUpstreamChange(): void {
   const previousLeadAttention = cachedLeadAttention;
   const previousMergedKinds = cachedMergedKinds;
+  const previousRemoteQuestionLeadRows = cachedRemoteQuestionLeadRows;
   refreshCache();
-  if (cachedLeadAttention !== previousLeadAttention) {
+  if (cachedLeadAttention !== previousLeadAttention || cachedRemoteQuestionLeadRows !== previousRemoteQuestionLeadRows) {
     for (const listener of [...leadAttentionListeners]) listener();
   }
   if (cachedMergedKinds !== previousMergedKinds) {
@@ -334,6 +350,15 @@ export function useOrcaLeadWorkerAttention(): ReadonlyMap<string, OrcaLeadWorker
     getOrcaLeadWorkerAttention,
     getOrcaLeadWorkerAttention,
   );
+}
+
+export function getRemoteOrcaQuestionLeadRows(): ReadonlySet<string> {
+  refreshCache();
+  return cachedRemoteQuestionLeadRows;
+}
+
+export function useRemoteOrcaQuestionLeadRows(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribeOrcaLeadWorkerAttention, getRemoteOrcaQuestionLeadRows, getRemoteOrcaQuestionLeadRows);
 }
 
 /**

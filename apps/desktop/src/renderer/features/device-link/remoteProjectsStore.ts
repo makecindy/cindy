@@ -48,6 +48,7 @@ import { useSyncExternalStore } from 'react';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
+import { sessionRowKey } from '@/features/cc-agent/sidebar/sessionRowKey';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import type { AutomationScheduleSessionInfo } from '../cc-agent/lib/automationSidebarGrouping';
 import { buildBindingMap, type ScheduleBinding } from '../scheduler/lib/scheduleBindingIndex';
@@ -82,10 +83,26 @@ const shards = new Map<string, DeviceShard>();
 // A read only needs timing pushes that arrive before it settles.
 const pendingScheduleIndexTimings = new Map<string, Map<string, number>>();
 let mergedScheduleIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
+let unreadScheduleRows: ReadonlySet<string> = new Set();
+let failedScheduleRows: ReadonlySet<string> = new Set();
 function recomputeScheduleIndex(): void {
-  const next = new Map([...shards.values()].flatMap((shard) => [...(shard.scheduleIndex ?? [])]));
+  const next = new Map<string, AutomationScheduleSessionInfo>();
+  const nextUnreadRows = new Set<string>();
+  const nextFailedRows = new Set<string>();
+  for (const shard of shards.values()) {
+    for (const [id, info] of shard.scheduleIndex ?? []) {
+      next.set(id, info);
+      const row = sessionRowKey({ id, deviceLinkDeviceId: shard.deviceId });
+      if (info.hasUnreadRun) nextUnreadRows.add(row);
+      if (info.hasUnreadFailedRun) nextFailedRows.add(row);
+    }
+  }
   if (JSON.stringify([...next]) !== JSON.stringify([...mergedScheduleIndex]))
     mergedScheduleIndex = next;
+  if (nextUnreadRows.size !== unreadScheduleRows.size || [...nextUnreadRows].some(key => !unreadScheduleRows.has(key)))
+    unreadScheduleRows = nextUnreadRows;
+  if (nextFailedRows.size !== failedScheduleRows.size || [...nextFailedRows].some(key => !failedScheduleRows.has(key)))
+    failedScheduleRows = nextFailedRows;
 }
 function applyScheduleTimings(
   index: ReadonlyMap<string, AutomationScheduleSessionInfo>,
@@ -1852,6 +1869,14 @@ export function useRemoteScheduleIndex(): ReadonlyMap<string, AutomationSchedule
     () => mergedScheduleIndex,
     () => mergedScheduleIndex,
   );
+}
+
+export function useRemoteUnreadScheduleRows(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, () => unreadScheduleRows, () => unreadScheduleRows);
+}
+
+export function useRemoteFailedScheduleRows(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, () => failedScheduleRows, () => failedScheduleRows);
 }
 
 export function useRemoteSessionScheduleBindings(
