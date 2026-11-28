@@ -156,6 +156,16 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     },
   );
 
+  // 2026-11-25: 发送前的鉴权门禁会把来源自己的登录原因原样带回（no_oauth / oauth_not_bound）。
+  // 它必须变成可操作的连接文案，而不是把英文 reason 原样展示、还留着一个无效的 Retry。
+  it.each(['oauth_not_bound', 'no_oauth'])('localizes a rejected local Codex login (%s)', async reason => {
+    mocks.getState.mockResolvedValue({ authenticated: false, errorReason: reason });
+    render(<MemoryRouter><ErrorBanner error={`LAZY_CREATE_FAILED: codex not authenticated: ${reason}`}
+      agentKind="codex" providerId="openai" retryText="original input" onRetry={vi.fn()} /></MemoryRouter>);
+    await act(async () => {});
+    expect(screen.getByText('chat.errorBanner.codexAuthMissingLocal')).toBeTruthy();
+    expect(screen.queryByText((text) => text.includes(reason))).toBeNull();
+  });
   // PR #10049: ordinary OpenAI 401 recovery must unlock the original input only
   // after the existing account probe verifies it, including after remounting.
   it.each([false, true])('restores generic authentication retry after verification (remount=%s)', async remount => {

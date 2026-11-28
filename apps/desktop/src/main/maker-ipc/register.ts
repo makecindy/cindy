@@ -15,7 +15,7 @@ import {
   readSubscriptionTaskUsage,
 } from '../subscription-accounts/runtime.js';
 import { withRemoteAccountReads } from '../subscription-accounts/remotePreflight.js';
-import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
+import { hasCodexHandoffPool, prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
 import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot, schedulerFailureDetail, type SchedulerQueueBridge, type SchedulerQueuedPromptObserver, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
@@ -1592,6 +1592,7 @@ import {
   hasCodexAppliedCustomProviderCapability,
 } from '../maker-host/codex-custom-provider-route.js';
 import { runSchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import { consumeSourceSwitch, matchesSourceSwitch } from './sourceSwitchStore.js';
 import {
   acceptSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
@@ -5456,6 +5457,10 @@ async function prepareSessionAccountsAndHistory(
   const switched = pluginSwitched || await prepareSubscriptionAccountForSend(sessionId, {
     ...accountRecovery,
     resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
+    // Only a source the user picked moves a task; an ordinary resume never does.
+    matchesSourceSwitch: providerId => matchesSourceSwitch(sessionId, providerId),
+    consumeSourceSwitch: () => consumeSourceSwitch(sessionId),
+    log: subscriptionAccountRecoveryDeps.log,
     rebuild: async (id, assertCurrent) => {
       await accountRecovery.rebuild(id, assertCurrent);
       agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
@@ -24109,6 +24114,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const handleSetModel = createHandleSetModel(() => ({
     maker,
+    hasCodexHandoffPool: providerId => hasCodexHandoffPool(providerId),
     agentSwitchPending,
     broadcastSessionRuntimeProjection,
     assertReviewSettingsUnlocked,

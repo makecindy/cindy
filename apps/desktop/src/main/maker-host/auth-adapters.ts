@@ -1474,7 +1474,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       if (this.oauthRecoveryRequiredReason) return this.codexRecoveryRequiredErrorState();
       return {
         authenticated: false,
-        errorReason: localState.errorReason ?? this.codexSharedAuthLinkUnavailableReason() ?? 'no_oauth',
+        // 本机凭证在、但取不到可派发的 token(已断开或未绑定当前账号)不等于没登录:
+        // 报可自查的原因,否则界面只会说「未授权」,用户不知道要去重新连接。
+        errorReason: localState.errorReason
+          ?? this.codexSharedAuthLinkUnavailableReason()
+          ?? (localState.authenticated ? 'oauth_not_bound' : 'no_oauth'),
       };
     }
     const rawLocalState = await this.readLocalCodexAuthState();

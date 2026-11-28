@@ -141,6 +141,7 @@ export type ApplySessionRuntimeSelection = (
  */
 export interface SessionRuntimeSelectionPorts {
   maker: Maker;
+  hasCodexHandoffPool?(providerId: string | null): boolean;
   agentSwitchPending: PendingAgentSwitchRegistry;
   broadcastSessionRuntimeProjection: (sessionId: string, baselineOverride?: SessionRuntimeProfile) => Promise<void>;
   assertReviewSettingsUnlocked: (sessionId: string, sendLockHeld?: boolean) => Promise<void>;
@@ -205,6 +206,26 @@ type BuiltinSessionsMaker = {
   getSessionMeta(sessionId: string): Promise<(SessionMeta & { agentKind: AgentKind }) | null>;
 } & Maker;
 
+/**
+ * The user moved this codex task to another source that has a local account pool. Its native
+ * thread belongs to the source being left, so the next start hands the transcript over instead of
+ * forking it into the destination first — that fork would have to authorize the old account,
+ * which is exactly what the user is leaving, so a broken old login would block the switch before
+ * anything is recorded. Ordinary resumes, model-only changes, other engines, remote or
+ * other-computer tasks and destinations without a pool keep the fork path.
+ */
+export function isUserCodexSourceSwitch(input: {
+  source: string;
+  agentKind?: string | null;
+  currentProviderId?: string | null;
+  nextProviderId?: string | null;
+  local: boolean;
+  handoffPool: boolean;
+}): boolean {
+  return input.source === 'user' && input.agentKind === 'codex' && input.local && input.handoffPool
+    && (input.nextProviderId ?? null) !== (input.currentProviderId ?? null);
+}
+
 export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPorts) {
   const handleSetModel = async (
     sessionId: unknown,
@@ -216,6 +237,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
   ): ReturnType<ApplySessionRuntimeSelection> => {
     const {
       maker: makerPort,
+      hasCodexHandoffPool,
       agentSwitchPending,
       broadcastSessionRuntimeProjection,
       assertReviewSettingsUnlocked,
@@ -850,6 +872,14 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         internalOptions.configStaged === true &&
         (runtimeAgentKind === 'claude-code' || runtimeAgentKind === 'codex');
       const targetRouteProviderId = targetProviderId;
+      const userSourceSwitch = isUserCodexSourceSwitch({
+        source: internalOptions.source,
+        agentKind: runtimeAgentKind,
+        currentProviderId,
+        nextProviderId: targetRouteProviderId,
+        local: !runtimeStatus.remoteHostId && !runtimeStatus.agentDeviceId,
+        handoffPool: hasCodexHandoffPool?.(targetRouteProviderId) === true,
+      });
       let currentRuntimeModel = liveSessionBeforeRouteChange?.model ??
         internalOptions.previousPiRoute?.model ?? persistedSessionMeta?.model;
       let runtimeRouteChanged =
@@ -1354,7 +1384,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           remoteHostId: transferStatus.remoteHostId ?? undefined,
           ...(transferMeta?.reviewMode ? { reviewMode: true as const } : {}),
         };
-        const canTransferThread = routeExplicit && runtimeAgentKind === 'codex' &&
+        const canTransferThread = routeExplicit && runtimeAgentKind === 'codex' && !userSourceSwitch &&
           !transferStatus.remoteHostId && !!transferStatus.sdkSessionId;
         const assertTransferOwner = () => {
           assertRuntimeOwnerCurrent();
@@ -1453,6 +1483,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               sessionId,
               model,
               providerId: effectiveProviderId,
+              handOffCodexThread: userSourceSwitch,
               ...(piConfigurationRefresh ? { refreshPiConfiguration: true } : {}),
               ...(canTransferThread ? {
                 requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer({
@@ -1917,9 +1948,10 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               })
             : undefined;
         if (result.status !== 'deferred') {
+          const committedProviderId = getSessionProvider(sessionId);
           agentInputCoordinatorHolder?.refreshQueuedRoute(sessionId, {
             model,
-            providerId: getSessionProvider(sessionId),
+            providerId: committedProviderId,
             effort: getSessionEffort(sessionId) ?? undefined,
             fastMode: getSessionFastMode(sessionId),
           });

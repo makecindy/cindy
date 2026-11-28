@@ -9,6 +9,7 @@ import {
   normalizeSessionProviderId,
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
+import { recordSourceSwitchBestEffort } from './sourceSwitchStore.js';
 // type-only import:编译期擦除,不会把 codex-proxy-host 的运行时依赖拖进本模块/单测。
 import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.desktop.js';
 import {
@@ -143,6 +144,14 @@ export interface ApplyRuntimeSetModelChangeInput {
   requiresCodexThreadRelink?: boolean | (() => Promise<boolean>);
   /** Closes over the captured Profile DB and atomically commits thread + full target route. */
   relinkCodexThread?: () => Promise<void>;
+  /**
+   * The user moved this task to another source that has a replacement handoff (a local OpenAI
+   * subscription pool; see `isUserCodexSourceSwitch`). Its native thread belongs to the source
+   * being left, so the next start hands the transcript over instead of forking it into the
+   * destination; forking would first have to authorize the old account, which is exactly what the
+   * user left. Any other provider change keeps the fork path.
+   */
+  handOffCodexThread?: boolean;
   logger?: RuntimeSetModelLogger;
 }
 
@@ -268,8 +277,9 @@ export async function applyRuntimeSetModelChange(
     if (piPreview.modelNotOffered) throwIpcError('MODEL_SELECTION_UNAVAILABLE', piPreview.reason ?? 'Select an available model');
     throw new Error(piPreview.reason ?? 'Pi target model is unavailable; runtime selection was not changed');
   }
-  let requiresCodexThreadRelink = typeof input.requiresCodexThreadRelink === 'function'
-    ? await input.requiresCodexThreadRelink() : input.requiresCodexThreadRelink === true;
+  const handOffCodexThread = input.handOffCodexThread === true;
+  let requiresCodexThreadRelink = !handOffCodexThread && (typeof input.requiresCodexThreadRelink === 'function'
+    ? await input.requiresCodexThreadRelink() : input.requiresCodexThreadRelink === true);
   const modelSwitchRequiresRebuild =
     sess &&
     sess.agentKind !== 'pi' &&
@@ -284,7 +294,7 @@ export async function applyRuntimeSetModelChange(
     credentialModeRequiresRebuild ||
     piPreview?.action === 'rebuild'
   );
-  if (shouldCloseSession && typeof input.requiresCodexThreadRelink === 'function') {
+  if (shouldCloseSession && !handOffCodexThread && typeof input.requiresCodexThreadRelink === 'function') {
     requiresCodexThreadRelink = await input.requiresCodexThreadRelink();
   }
   if (requiresCodexThreadRelink && !input.relinkCodexThread) {
@@ -433,8 +443,8 @@ export async function applyRuntimeSetModelChange(
     }
     let relinkAfterClose = false;
     try {
-      relinkAfterClose = requiresCodexThreadRelink ||
-        (typeof input.requiresCodexThreadRelink === 'function' && await input.requiresCodexThreadRelink());
+      relinkAfterClose = !handOffCodexThread && (requiresCodexThreadRelink ||
+        (typeof input.requiresCodexThreadRelink === 'function' && await input.requiresCodexThreadRelink()));
       if (relinkAfterClose) {
         if (!input.relinkCodexThread) throw new Error(`Codex provider thread relink is required for session ${sessionId}`);
         await input.relinkCodexThread();
@@ -446,7 +456,12 @@ export async function applyRuntimeSetModelChange(
       }
       throw error;
     }
-    if (providerId !== undefined) setSessionProvider(sessionId, nextProviderId);
+    if (providerId !== undefined) {
+      setSessionProvider(sessionId, nextProviderId);
+      // The user moved this task to another source with a replacement handoff: remember it so the
+      // next start hands the transcript over (even after a restart or a deferred commit).
+      if (handOffCodexThread) await recordSourceSwitchBestEffort(sessionId, nextProviderId);
+    }
     // close + route 都落定后再唤醒队列:排队消息按新凭证形态 lazy-create 派发。
     input.wakeSessionInputQueue?.(sessionId);
     logger?.info('set-model: closed live session for route rebuild', {
@@ -473,6 +488,7 @@ export async function applyRuntimeSetModelChange(
   input.admit?.();
   if (providerId !== undefined) {
     setSessionProvider(sessionId, nextProviderId);
+    if (handOffCodexThread) await recordSourceSwitchBestEffort(sessionId, nextProviderId);
     // 显式选源且无需切换 → 取消尚未兑现的 pending(后选覆盖先选)。
     input.clearPendingCredentialSwitch?.(sessionId);
   } else if (pendingTarget !== undefined) {

@@ -1,6 +1,7 @@
 import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { readAccountBinding, readPool } from './store.js';
+import { clearAccountBindings, readAccountBinding, readPool } from './store.js';
+import { resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from './placement.js';
 import { acquireSubscriptionAccount, codexSubscriptionAccountForHistoryHome } from './runtime.js';
 import { taskPoolRouteAllowsModel, readTaskPoolAccount } from './taskAccount.js';
 import { apiKeyPoolMember } from './apiKeyMembers.js';
@@ -10,6 +11,14 @@ interface PrepareAccountSendDeps {
   isRunning(id: string): boolean;
   /** Same owner-scoped, read-only canonical history lookup used by Codex startup. */
   resolveCodexHistoryHome?(threadId: string): Promise<string | undefined>;
+  /**
+   * One-shot record of a user source switch. It matches only while this send still runs on the
+   * provider the user picked, and is consumed once the handoff commits; ordinary resumes never
+   * record one. Split so a failed attempt keeps the record for the retry.
+   */
+  matchesSourceSwitch?(providerId: string | null): boolean;
+  consumeSourceSwitch?(): void | Promise<void>;
+  log?(message: string, fields: Record<string, unknown>): void;
   /** Retires only this runtime and durably retains its context before clearing the native id. */
   rebuild(id: string, assertCurrent: () => void): Promise<void>;
   /**
@@ -19,10 +28,22 @@ interface PrepareAccountSendDeps {
   moveRoute?(id: string, providerId: string, assertCurrent: () => void, fromProviderId: string): Promise<void>;
 }
 
+/**
+ * The destinations this file hands a moved task over to: a local OpenAI subscription pool (built-in,
+ * a created pool provider, or a merged legacy connection of that pool). The set-model entry skips
+ * the native fork only for these (`isUserCodexSourceSwitch`) — keep the two predicates in step:
+ * a destination without a replacement handoff keeps its fork path.
+ */
+export function hasCodexHandoffPool(providerId: string | null): boolean {
+  return resolveSubscriptionPoolProviderRef(providerId)?.kind === 'openai' && !!readPool('openai');
+}
+
 /** Called under the ordinary send lock, before lazy bootstrap or reuse of a live handle.
  * Disabling an account is an explicit routing decision. Quota exhaustion alone is not.
  * A task on a merged legacy connection hands off like any other (2026-11-13): pausing that
  * account in the merged OpenAI list is the only way left to move such tasks by hand.
+ * A task the user moved to another source also hands off here: its native thread and account
+ * binding belong to the source it left, so the next start continues on the new source.
  */
 export async function prepareSubscriptionAccountForSend(
   sessionId: string,
@@ -34,14 +55,69 @@ export async function prepareSubscriptionAccountForSend(
       throw new Error('Subscription account owner changed');
   };
   assertOwner();
+  /** A record left behind is idempotent: the next send consumes it again. Never fail the send. */
+  const consumeRecord = async () => {
+    try {
+      await deps.consumeSourceSwitch?.();
+    } catch (error) {
+      deps.log?.('subscription account handoff: source switch record was not cleared', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  /** The destination pool still holds the account that already owns this task's thread. */
+  const taskAccountIsUsable = () => {
+    const bound = readAccountBinding(`task:${sessionId}`, 'openai');
+    const destination = readPool('openai');
+    return !!bound && !!destination && !destination.disconnected
+      && destination.accounts.some(account => account.id === bound.accountId && !account.paused);
+  };
   const read = await deps.readSession(sessionId);
   assertOwner();
   // Keep comparing against what this send saw, even if the caller reuses its row object.
   const row = read && { ...read };
+  // A user source switch ends this task's affinity with the source it left (recorded once at
+  // selection, so an ordinary resume never reaches this). Hand the transcript over and drop the
+  // old account binding; the source the user picked then chooses its own account.
+  if (row?.status !== 'deleted' && row?.providerId && row.agentKind === 'codex' && !row.remoteHostId && !row.agentDeviceId
+    && deps.matchesSourceSwitch?.(row.providerId) && hasCodexHandoffPool(row.providerId)) {
+    if (deps.isRunning(sessionId)) return false;
+    try {
+      // Prove the destination can serve this model before retiring the old context. Reserve nothing.
+      await acquireSubscriptionAccount(row.providerId, row.model ?? undefined, [], false, { dryRun: true });
+    } catch {
+      return false;
+    }
+    assertOwner();
+    // Retiring the old context is only the answer when the account that owns this task is gone
+    // from the source the user picked. If that account still serves the destination, the thread
+    // and binding remain this task's own home: consume the record and continue in place, so a
+    // switch that lands on the same account never throws a resumable thread away.
+    if (taskAccountIsUsable()) {
+      await consumeRecord();
+      return false;
+    }
+    deps.log?.('subscription account handoff: user moved the task to another source', {
+      sessionId, providerId: row.providerId, model: row.model ?? null,
+    });
+    if (row.sdkSessionId) {
+      await deps.rebuild(sessionId, () => {
+        assertOwner();
+        if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
+      });
+    }
+    await clearAccountBindings([`task:${sessionId}`], 'openai');
+    // The handoff is already committed. A record that cannot be cleared only means the next send
+    // consumes it again (idempotent); it must not turn the committed switch into a send failure.
+    await consumeRecord();
+    return true;
+  }
   let historyAccountId: string | undefined;
   // Startup can pin an unbound old thread by its canonical history home. Resolve that
   // affinity here too so a removed/paused account reaches the existing durable handoff.
-  if (row?.status !== 'deleted' && row?.providerId === 'openai' && row.agentKind === 'codex'
+  if (row?.status !== 'deleted' && row?.agentKind === 'codex'
+    && row?.providerId && resolveSubscriptionPoolProviderRef(row.providerId)?.kind === 'openai'
     && row.sdkSessionId && !row.remoteHostId && !row.agentDeviceId && readPool('openai')
     && !readAccountBinding(`task:${sessionId}`, 'openai')
     && !readAccountBinding(`native:${row.sdkSessionId}`, 'openai') && deps.resolveCodexHistoryHome) {

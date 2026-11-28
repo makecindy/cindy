@@ -70,7 +70,8 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
         const mutationDeps = {
           applyRuntimeSetModelChange, maker, internalOptions: options, sessionId: 'route-child', model,
           effectiveProviderId: providerId, assertRuntimeOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
-          piConfigurationRefresh: false, canTransferThread: false, atomicSelection: { effort: null, fastMode: false },
+          piConfigurationRefresh: false, canTransferThread: false, userSourceSwitch: false,
+          atomicSelection: { effort: null, fastMode: false },
           rebuildLiveOrcaWorker: false, runtimeAgentKind: 'pi', runtimeRouteChanged: true,
           // The adapter computes these before this slice. Pi uses neither Claude/Codex selection path.
           configuredCredentialSelection: false, deferredSelection: undefined,
