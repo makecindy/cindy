@@ -199,7 +199,7 @@ export async function buildProductionFiles(root = findRepoRoot()) {
           };
           docRegion(
             "semantic-colors",
-            "| Category | Slot | Default Light | Default Dark | Primary use |\n| --- | --- | --- | --- | --- |\n" +
+            "| Category | Slot | Classic Light | Classic Dark | Primary use |\n| --- | --- | --- | --- | --- |\n" +
               bindings.documentation.semanticColors
                 .map((row) => {
                   const modes = bindings.defaults[row.id];
