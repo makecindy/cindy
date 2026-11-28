@@ -24,6 +24,7 @@ import { isRelayJoinPath, RELAY_JOIN_ROUTE, receiveRelayJoinIntent } from '@/dev
 import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
 import { isWechatSdkCallback } from '@/auth/wechatCallback';
 import { isChatInviteLinkPath, receiveChatInviteLink } from '@/chat/chatInviteIntent';
+import { isDesktopEntryLink, receiveDesktopEntryLink } from '@/device-link/desktopEntryIntent';
 import { isGiftCardLinkPath, receiveGiftCardLink } from '@/gift-card/giftCardIntent';
 import { parseSharedTaskPeer } from '@cindy/device-link';
 import { allDeepLinkSchemes } from '@cindy/maker-shared/brand-identity';
@@ -37,6 +38,9 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
       appId: WECHAT_APP_ID,
       universalLink: WECHAT_UNIVERSAL_LINK,
     })) return '/';
+    // 桌面入口组件：目标只留在内存里，冷启动先回首页、热唤起保留当前页；
+    // 登录就绪后由根级 DesktopEntryHost 校验白名单再跳转。
+    if (receiveDesktopEntryLink(path)) return initial ? '/' : null;
     // Group invitations stay in memory across login. A warm link preserves the
     // current page; the single root Host presents the invitation after auth.
     if (receiveChatInviteLink(path)) return initial ? '/' : null;
@@ -140,6 +144,7 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     if (isGiftCardLinkPath(path)) return initial ? '/' : null;
     // 分享口令与中转加入码绝不随原始链接进路由状态。
     if (isProviderShareLinkPath(path)) return PROVIDER_SHARE_LINK_ROUTE;
+    if (isDesktopEntryLink(path)) return initial ? '/' : null;
     return isRelayJoinPath(path) ? RELAY_JOIN_ROUTE : path;
   }
 }

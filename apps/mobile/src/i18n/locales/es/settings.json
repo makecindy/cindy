@@ -580,5 +580,8 @@
     "grantCamera": "Permitir la cámara",
     "openSettings": "Abrir Ajustes",
     "wrongCode": "Este no es un código de inicio de sesión de Cindy"
+  },
+  "entryWidget": {
+    "cindyTask": "Tarea de Cindy"
   }
 }

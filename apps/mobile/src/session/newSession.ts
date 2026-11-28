@@ -288,6 +288,29 @@ export function parseNewSessionDeviceOptions(
   ]);
 }
 
+/**
+ * 新建页的候选电脑：路由带来的排在最前，其次是同一条深链里的单台兜底（设备名没随列表
+ * 传过来时用它），再是屏幕自己从设备目录读到的。全都没有时退回「记住的那台」——
+ * 从桌面入口组件这类不带参数的入口进来时，不能让设备与模型两处都空着。
+ *
+ * 候选列表决定了默认电脑能否被认出来（`pickNewSessionDefaultDevice` 只在列表里找），
+ * 也决定设备选择器列出哪些电脑，所以这里先到先得、按 deviceId 去重。
+ */
+export function resolveNewSessionDeviceOptions(input: {
+  routeOptions?: readonly NewSessionDeviceOption[];
+  routeDevice?: NewSessionDeviceOption | null;
+  discoveredOptions?: readonly NewSessionDeviceOption[];
+  rememberedDevice?: NewSessionDeviceOption | null;
+}): NewSessionDeviceOption[] {
+  const merged = normalizeNewSessionDeviceOptions([
+    ...(input.routeOptions ?? []),
+    ...(input.routeDevice ? [input.routeDevice] : []),
+    ...(input.discoveredOptions ?? []),
+  ]);
+  if (merged.length > 0) return merged;
+  return normalizeNewSessionDeviceOptions(input.rememberedDevice ? [input.rememberedDevice] : []);
+}
+
 export function normalizeNewSessionAgentKind(value: unknown): NewSessionAgentKind | null {
   return value === 'claude-code' || value === 'codex' || value === 'pi' ? value : null;
 }

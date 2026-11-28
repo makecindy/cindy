@@ -580,5 +580,8 @@
     "grantCamera": "Allow camera",
     "openSettings": "Open Settings",
     "wrongCode": "This isn't a Cindy sign-in code"
+  },
+  "entryWidget": {
+    "cindyTask": "Cindy task"
   }
 }

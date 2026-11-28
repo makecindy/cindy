@@ -580,5 +580,8 @@
     "grantCamera": "许用相机",
     "openSettings": "启系统设置",
     "wrongCode": "此非 Cindy 登门之码"
+  },
+  "entryWidget": {
+    "cindyTask": "Cindy 差事"
   }
 }

@@ -580,5 +580,8 @@
     "grantCamera": "Autoriser l'appareil photo",
     "openSettings": "Ouvrir les Réglages",
     "wrongCode": "Ce n'est pas un code de connexion Cindy"
+  },
+  "entryWidget": {
+    "cindyTask": "Tâche Cindy"
   }
 }

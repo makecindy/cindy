@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="cindy_entry_widget_label">Cindy 快捷入口</string>
+  <string name="cindy_entry_widget_description">一键打开新任务或某位伙伴</string>
+  <string name="cindy_entry_widget_pick_title">这个快捷入口打开什么？</string>
+  <string name="cindy_entry_widget_empty">打开 Cindy 完成设置</string>
+</resources>

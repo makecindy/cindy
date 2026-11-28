@@ -179,6 +179,8 @@ export interface ContextSheetRowProps {
   /** 行首图标;设置类表单行只放名称与取值,不传。 */
   icon?: ReactNode;
   label: string;
+  /** 读屏用完整名称（默认取 label）；需要把右侧取值 / 说明一起读出来时传入。 */
+  accessibilityLabel?: string;
   /** 右侧取值(16/22 400 textSecondary),在箭头之前;过长截断。 */
   value?: string;
   onPress: () => void;
@@ -204,6 +206,7 @@ export function ContextSheetRow({
   dismissBeforePress = false,
   icon,
   label,
+  accessibilityLabel,
   value,
   onPress,
   onLongPress,
@@ -223,7 +226,7 @@ export function ContextSheetRow({
   return (
     <Pressable
       accessibilityHint={accessibilityHint}
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       accessibilityRole="button"
       accessibilityState={{ disabled: disabled || busy }}
       disabled={disabled || busy}

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 1 格：不画卡片底色，按启动器给原生图标的那一套摆——头像占到格子给得起的最大尺寸
+     （layout_weight 吃掉名字以外的全部高度，启动器放大格子时头像跟着变大），下面直接是
+     白色图标名。名字放不下时由 Provider 隐藏，整个高度都给头像。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/cindy_entry_widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:gravity="center"
+  android:orientation="vertical"
+  android:padding="2dp">
+  <ImageView
+    android:id="@+id/cindy_entry_widget_icon"
+    android:layout_width="match_parent"
+    android:layout_height="0dp"
+    android:layout_weight="1"
+    android:contentDescription="@null"
+    android:scaleType="fitCenter" />
+  <TextView
+    android:id="@+id/cindy_entry_widget_title"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="4dp"
+    android:ellipsize="end"
+    android:gravity="center"
+    android:maxLines="1"
+    android:shadowColor="@color/cindy_entry_widget_icon_label_shadow"
+    android:shadowDx="0"
+    android:shadowDy="1"
+    android:shadowRadius="3"
+    android:textColor="@color/cindy_entry_widget_icon_label"
+    android:textSize="11sp" />
+</LinearLayout>

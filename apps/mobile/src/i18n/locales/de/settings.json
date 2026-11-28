@@ -580,5 +580,8 @@
     "grantCamera": "Kamera erlauben",
     "openSettings": "Einstellungen öffnen",
     "wrongCode": "Das ist kein Cindy-Anmeldecode"
+  },
+  "entryWidget": {
+    "cindyTask": "Cindy-Aufgabe"
   }
 }

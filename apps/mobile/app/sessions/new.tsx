@@ -69,6 +69,15 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 import { takeRefinementContextTail } from '@cindy/voice-input-core';
 import { Stack, useIsFocused, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { NewTaskSelectionSheet } from '@/session/NewTaskSelectionSheet';
+import { NewSessionDefaultsSheet } from '@/session/NewSessionDefaultsSheet';
+import {
+  DEFAULT_NEW_SESSION_DEFAULTS,
+  newSessionDefaultProfileForOrigin,
+  resolveNewSessionDefaultDevice,
+  type NewSessionDefaults,
+} from '@/session/newSessionDefaults';
+import { saveNewSessionDefaults } from '@/session/newSessionDefaultsStore';
+import { readNewSessionOrigin } from '@/session/newSessionOrigin';
 import { resolveWorkspacePickerFrame, type WorkspacePickerFrame } from '@/session/workspacePickerPlacement';
 import { simpleScreenSafeAreaEdges } from '@/platform/chrome/SimpleStackHeader';
 import { NativeChromeBackButton } from '@/platform/chrome/NativeChromeBackButton';
@@ -271,7 +280,7 @@ import {
   isNewSessionDraftMissingPayloadOnly,
   parseNewSessionDeviceOptions,
   pickAgentDefaultRuntime,
-  pickNewSessionDefaultDevice,
+  resolveNewSessionDeviceOptions,
   sessionFromCreateResult,
   compensatePrecreatedWorktree,
   resolveStartedDowngradeOrCommit,
@@ -295,6 +304,8 @@ import {
   subscribeMobileAuthOwner,
 } from '@/auth/authOwnerGeneration';
 import { useTranslation } from 'react-i18next';
+import { useNewSessionDeviceDirectory } from '@/session/useNewSessionDeviceDirectory';
+import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import {
   createNewSessionId,
   drainStashedNewSessionDraft,
@@ -575,9 +586,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     recoverySessionId?: string;
     editSessionId?: string;
     creationError?: string;
+    newSessionOrigin?: string;
   }>();
   const routeDeviceId = String(params.deviceId ?? '');
   const routeDeviceName = deviceDisplayName(routeDeviceId, typeof params.deviceName === 'string' ? params.deviceName : undefined);
+  const newSessionOrigin = readNewSessionOrigin(params.newSessionOrigin);
+  const defaultProfile = newSessionDefaultProfileForOrigin(newSessionOrigin);
   const initialWorkingDir = readRouteString(params.workingDir);
   const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteString(params.visualFocusComposer) === '1';
   // The home action lands in the compact pill; only a user's tap opens the card and keyboard.
@@ -603,6 +617,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     getPresenceAvailability,
     invoke,
     openLink,
+    readDeviceList,
     holdBackgroundConnection,
     subscribe,
     unsubscribe,
@@ -617,32 +632,62 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     () => routeDeviceId ? { deviceId: routeDeviceId, name: deviceDisplayName(routeDeviceId, routeDeviceName) } : null,
     [routeDeviceId, routeDeviceName],
   );
-  const deviceOptions = useMemo(
-    () => parseNewSessionDeviceOptions(params.deviceOptions, routeDeviceFallback),
-    [params.deviceOptions, routeDeviceFallback],
+  const routeDeviceOptions = useMemo(
+    () => parseNewSessionDeviceOptions(params.deviceOptions),
+    [params.deviceOptions],
   );
-  // 路由设备何时算"显式指定"(盖过上次选择的记忆):项目入口(带 workingDir)、只有一台
-  // 可选电脑,或入口明确带 deviceExplicit 标记(首页列表正筛选某台电脑时新建跟随它)。
-  const routeDeviceExplicit = !!routeDeviceId
-    && (readRouteString(params.deviceExplicit) === '1' || !!initialWorkingDir || deviceOptions.length <= 1);
-  const [selectedDeviceId, setSelectedDeviceId] = useState(routeDeviceId);
-  const [selectedDeviceName, setSelectedDeviceName] = useState(routeDeviceName);
   const [newSessionPreferences, setNewSessionPreferences] = useState<NewSessionStoredPreferences | null>(null);
   const newSessionPreferencesRef = useRef(newSessionPreferences);
   newSessionPreferencesRef.current = newSessionPreferences;
+  const [newSessionDefaults, setNewSessionDefaults] = useState<NewSessionDefaults | null>(null);
+  const [defaultsSheetOpen, setDefaultsSheetOpen] = useState(false);
+  const defaultsEditedRef = useRef(false);
+  const revokedDevices = useRevokedDevices();
+  // 从桌面入口组件这类不带 deviceOptions 的入口进来时自己补候选电脑：默认电脑只在候选列表里
+  // 找得到，缺了它设备与模型两处都会空着，设备选择器也列不出电脑。
+  const directoryDeviceOptions = useNewSessionDeviceDirectory({
+    enabled: routeDeviceOptions.length === 0,
+    connectionEpoch,
+    revokedDevices,
+    readDeviceList,
+  });
+  const deviceOptions = useMemo(
+    () => resolveNewSessionDeviceOptions({
+      routeOptions: routeDeviceOptions,
+      routeDevice: routeDeviceFallback,
+      discoveredOptions: directoryDeviceOptions,
+      rememberedDevice: newSessionPreferences?.device ?? null,
+    }),
+    [directoryDeviceOptions, newSessionPreferences?.device, routeDeviceFallback, routeDeviceOptions],
+  );
+  // 路由设备何时算"显式指定"(盖过上次选择的记忆):项目入口(带 workingDir)、只有一台
+  // 可选电脑,或入口明确带 deviceExplicit 标记(首页列表正筛选某台电脑时新建跟随它)。
+  // 只数路由带来的候选：屏幕自补的目录不能把一个单设备入口变成多设备，否则这类深链
+  // 的显式指定会被悄悄丢掉。
+  const routeDeviceCandidates = new Set([
+    ...routeDeviceOptions.map((option) => option.deviceId),
+    ...(routeDeviceId ? [routeDeviceId] : []),
+  ]);
+  const routeDeviceExplicit = !!routeDeviceId
+    && (readRouteString(params.deviceExplicit) === '1' || !!initialWorkingDir || routeDeviceCandidates.size <= 1);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(routeDeviceId);
+  const [selectedDeviceName, setSelectedDeviceName] = useState(routeDeviceName);
   const workingDirPreferenceOverridesRef = useRef<Record<string, string>>({});
   const workspaceKindPreferenceOverridesRef = useRef<Record<string, NewSessionWorkspaceKind>>({});
   const [newSessionPreferencesLoaded, setNewSessionPreferencesLoaded] = useState(false);
   const [devicePickerOpen, setDevicePickerOpen] = useState(false);
-  const preferredDefaultDevice = useMemo(
-    () => pickNewSessionDefaultDevice({
+  const defaultDeviceResolution = useMemo(
+    () => resolveNewSessionDefaultDevice({
+      defaults: newSessionDefaults ?? DEFAULT_NEW_SESSION_DEFAULTS,
+      profile: defaultProfile,
       deviceOptions,
-      preferredDeviceId: newSessionPreferences?.device?.deviceId,
+      rememberedDeviceId: newSessionPreferences?.device?.deviceId ?? null,
       routeDevice: routeDeviceFallback,
       routeDeviceExplicit,
     }),
-    [deviceOptions, newSessionPreferences?.device?.deviceId, routeDeviceExplicit, routeDeviceFallback],
+    [defaultProfile, deviceOptions, newSessionDefaults, newSessionPreferences?.device?.deviceId, routeDeviceExplicit, routeDeviceFallback],
   );
+  const preferredDefaultDevice = defaultDeviceResolution.device;
   const selectedDeviceOption = useMemo(
     () => deviceOptions.find((option) => option.deviceId === selectedDeviceId) ?? routeDeviceFallback,
     [deviceOptions, routeDeviceFallback, selectedDeviceId],
@@ -1169,6 +1214,20 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 权限记忆只在偏好加载后恢复一次(之后由用户选择 / 切 agent 驱动),防止重复覆盖。
   const appliedPermissionMemoryRef = useRef(false);
   const userTouchedWorkspaceRef = useRef(false);
+  // 默认电脑这次用不了时只提示这一行；用户手动换电脑 / 工作区后（下一次渲染）消失。
+  const defaultDeviceNotice = defaultDeviceResolution.unavailable
+    && selectedDeviceId
+    && !userTouchedDeviceRef.current
+    && !userTouchedWorkspaceRef.current
+    ? t('session.new.defaults.deviceFallbackNotice', {
+        expected: deviceDisplayName(
+          defaultDeviceResolution.unavailable.deviceId,
+          defaultDeviceResolution.unavailable.name,
+          deviceOptions,
+        ),
+        actual: selectedDeviceLabel,
+      })
+    : null;
   const firstMessageInputRef = useRef<TextInputInstance>(null);
   const composerPillOpen = useComposerPillOpen(composerDock.enabled, () => firstMessageInputRef.current?.focus());
   const voiceDraftScrollRef = useRef<ScrollViewInstance>(null);
@@ -1442,6 +1501,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setSelectedDeviceId,
     setSelectedDeviceName,
     setDevicePickerOpen,
+    newSessionDefaults,
+    setNewSessionDefaults,
+    defaultsEditedRef,
+    originProfile: defaultProfile,
   });
 
   useNewSessionDefaultSelection({
@@ -2588,6 +2651,13 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     initialWorkspaceKeyRef,
     loadBrowsePath,
   });
+
+  const handleSaveNewSessionDefaults = useCallback((next: NewSessionDefaults) => {
+    // 首次读取若还没回来，不能被旧值覆盖刚刚保存的默认。
+    defaultsEditedRef.current = true;
+    setNewSessionDefaults(next);
+    void saveNewSessionDefaults(next);
+  }, []);
 
   // 选回被控电脑自己的模型:不再在下次打开时恢复这个 agent 选过的其他电脑 / 分享来的模型。
   const forgetRemoteAgentPick = useCallback((agentKind: NewSessionAgentKind) => {
@@ -4226,12 +4296,18 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     draft,
     newSessionPreferencesLoaded,
     userTouchedDeviceRef,
+    userTouchedWorkspaceRef,
     preferredDefaultDevice,
     initialWorkingDir,
     initialWorkspaceKeyRef,
     recentWorkspaces,
     newSessionPreferences,
-    selectWorkingDir,
+    newSessionDefaults,
+    workingDirPreferenceOverridesRef,
+    workspaceKindPreferenceOverridesRef,
+    originProfile: defaultProfile,
+    patchDraft,
+    browseOpen,
     setBrowseOpen,
     loadBrowsePath,
   });
@@ -5845,12 +5921,38 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               testID="newSession.backButton"
             />
               ) : null}
+            <View style={styles.topBarTrailing}>
             {buildLabel ? (
               <Text numberOfLines={1} style={styles.buildLabel}>{buildLabel}</Text>
             ) : null}
             {creating ? (
                 <ActivityIndicator color={colors.textSecondary} />
+              ) : Platform.OS === 'android' ? (
+                <Pressable
+                  accessibilityLabel={t('session.new.defaults.open')}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: !newSessionPreferencesLoaded }}
+                  disabled={!newSessionPreferencesLoaded}
+                  hitSlop={12}
+                  onPress={() => {
+                    if (!newSessionPreferencesLoaded) return;
+                    // 不与设备 / 工作区选择器叠层：先收起它们再开默认设置。
+                    setDevicePickerOpen(false);
+                    setWorkspacePickerOpen(false);
+                    setBrowseOpen(false);
+                    setDefaultsSheetOpen(true);
+                  }}
+                  style={({ pressed }) => [
+                    styles.topBarAction,
+                    !newSessionPreferencesLoaded && styles.disabled,
+                    pressed && styles.pressed,
+                  ]}
+                  testID="newSession.defaultsButton"
+                >
+                  <Settings color={colors.textSecondary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+                </Pressable>
               ) : null}
+            </View>
           </View>
           ) : null}
 
@@ -5859,6 +5961,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             onScrollBeginDrag={() => setWorkspacePickerOpen(false)}
             keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={styles.selectorStack}>
+              {defaultDeviceNotice ? (
+                <Text style={styles.hint} testID="newSession.defaults.deviceFallbackNotice">
+                  {defaultDeviceNotice}
+                </Text>
+              ) : null}
               <View style={styles.deviceSelectorWrap}>
               <Pressable
                 accessibilityLabel={t('session.new.selectControlledDevice')}
@@ -6701,6 +6808,19 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         onShowHidden={setShowHiddenDirectories}
       />
       ) : null}
+      <NewSessionDefaultsSheet
+        currentOrigin={newSessionOrigin}
+        currentUntouched={!userTouchedDeviceRef.current && !userTouchedWorkspaceRef.current}
+        defaults={newSessionDefaults ?? DEFAULT_NEW_SESSION_DEFAULTS}
+        deviceOptions={deviceOptions}
+        onClose={() => setDefaultsSheetOpen(false)}
+        onSave={handleSaveNewSessionDefaults}
+        preferences={newSessionPreferences}
+        rememberedDeviceId={newSessionPreferences?.device?.deviceId ?? null}
+        routeDevice={routeDeviceFallback}
+        sessions={sessions}
+        visible={defaultsSheetOpen}
+      />
       <SheetModal
         backdropTestID="newSession.worktreeBranchSheet.backdrop"
         nativePresentation
@@ -7054,6 +7174,19 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: 62,
+  },
+  topBarTrailing: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'flex-end',
+  },
+  topBarAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    minWidth: 44,
   },
   // Match the embedded Home header: safe area + lg, then a 44pt button and md below.
   paneScreen: {

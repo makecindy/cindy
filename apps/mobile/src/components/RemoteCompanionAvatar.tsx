@@ -10,12 +10,7 @@ import { DEVICE_LINK_API_BASE_URL, getActiveMobileSessionRealm } from '@/config/
 import { createPeerFileCache } from '@/device-link/peerFileCache';
 import { useTheme } from '@/theme';
 import { lineHeight, radius, typeScale } from '@/theme/tokens';
-
-const presets: Record<string, number> = {
-  'cindy://avatar/preset/cindy': require('../../assets/bot-presets/cindy.png'),
-  'cindy://avatar/preset/dash': require('../../assets/bot-presets/dash.png'),
-  'cindy://avatar/preset/lizi': require('../../assets/bot-presets/lizi.png'),
-};
+import { COMPANION_AVATAR_PRESETS } from '@/components/companionAvatarPresets';
 
 /** `framed` draws its own circle for callers without an avatar container (inline rows and status lines). */
 export function RemoteCompanionAvatar({ avatar, imageUrl, deviceId, name, online, size = 40, framed = false }: { avatar?: RemoteResourceAvatar; imageUrl?: string | null; deviceId: string; name: string; online: boolean; size?: number; framed?: boolean }) {
@@ -56,7 +51,7 @@ export function RemoteCompanionAvatar({ avatar, imageUrl, deviceId, name, online
     })().catch(() => undefined);
     return () => { cancelled = true; };
   }, [auth.apiFetch, auth.user?.id, avatar?.kind, binding, deviceId, identity, imageUrl, invoke, online, owner, realm, value]);
-  const source = (!imageUrl && presets[value]) || (image?.binding === binding ? { uri: image.uri } : null);
+  const source = (!imageUrl && COMPANION_AVATAR_PRESETS[value]) || (image?.binding === binding ? { uri: image.uri } : null);
   if (source && !failed) return <Image source={source} onError={() => setFailed(true)} style={[styles.image, { width: size, height: size }]} />;
   const glyph = avatar?.kind === 'emoji' ? value : avatar?.fallbackText || Array.from(name)[0];
   if (!framed) return <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>{glyph}</Text>;

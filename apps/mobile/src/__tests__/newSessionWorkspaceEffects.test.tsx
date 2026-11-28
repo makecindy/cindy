@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { i18n } from '@/i18n';
-import { act, createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { act, createElement, useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -12,6 +12,12 @@ import {
   type NewSessionStoredPreferences,
   type NewSessionWorkspaceKind,
 } from '@/session/newSession';
+import {
+  DEFAULT_NEW_SESSION_DEFAULTS,
+  resolveNewSessionDefaultDevice,
+  type NewSessionDefaults,
+} from '@/session/newSessionDefaults';
+import { readNewSessionDefaults } from '@/session/newSessionDefaultsStore';
 
 import { createInitialNewSessionDraft, patchNewSessionDraft, restoreNewSessionDraft } from '@/session/newSessionForm';
 import { useNewSessionStashedDraft, useNewSessionWorkspacePreferences, useNewSessionWorkspaceActions, useNewSessionInitialWorkspace } from '@/session/useNewSessionWorkspace';
@@ -22,6 +28,13 @@ import type { OrcaWorkerFormValue } from '@/session/orcaTeam';
 vi.mock('@/session/newSessionPreferenceStore', () => ({
   readNewSessionPreferences: vi.fn(),
   saveNewSessionPreferences: vi.fn(async () => {}),
+}));
+vi.mock('@/session/newSessionDefaultsStore', () => ({
+  readNewSessionDefaults: vi.fn(async () => ({
+    app: { device: { kind: 'follow-last' }, workspace: { kind: 'follow-last' } },
+    widget: { device: { kind: 'follow-app' }, workspace: { kind: 'follow-app' } },
+  })),
+  saveNewSessionDefaults: vi.fn(async () => {}),
 }));
 
 // Unit: mount production hooks against pending preferences and a visible form.
@@ -37,12 +50,15 @@ interface WorkspaceState {
   openProjectBrowse(): void;
   /** 模拟页面 selectDevice 里与工作区相关的部分:标记用户动过设备、重置初始工作区决策、清空项目目录。 */
   switchDevice(deviceId: string): void;
+  /** 模拟在「新建任务默认」弹窗里保存一份新默认。 */
+  replaceDefaults(next: NewSessionDefaults): void;
 }
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 
-function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: NewSessionWorkspaceKind; collabDraft?: OrcaWorkerFormValue; suggestion?: string; routeDraft?: string | string[]; deviceExplicit?: boolean } = {}) {
+function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: NewSessionWorkspaceKind; collabDraft?: OrcaWorkerFormValue; suggestion?: string; routeDraft?: string | string[]; deviceExplicit?: boolean; originProfile?: 'app' | 'widget'; defaults?: NewSessionDefaults } = {}) {
+  vi.mocked(readNewSessionDefaults).mockResolvedValue(options.defaults ?? DEFAULT_NEW_SESSION_DEFAULTS);
   let resolveRead!: (value: NewSessionStoredPreferences) => void;
   const pendingRead = new Promise<NewSessionStoredPreferences>((resolve) => { resolveRead = resolve; });
   const deviceOptions = [{ deviceId: 'a', name: 'A' }, { deviceId: 'b', name: 'B' }];
@@ -76,7 +92,13 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
     const [selectedDeviceId, setSelectedDeviceId] = useState(bindings.routeDeviceId);
     const [, setSelectedDeviceName] = useState(bindings.routeDeviceName);
     const [newSessionPreferences, setNewSessionPreferences] = useState<NewSessionStoredPreferences | null>(null);
+    const [newSessionDefaults, setNewSessionDefaults] = useState<NewSessionDefaults | null>(null);
     const [newSessionPreferencesLoaded, setNewSessionPreferencesLoaded] = useState(false);
+    const [browseOpen, setBrowseOpenState] = useState(false);
+    const setBrowseOpenTracked = useCallback((next: SetStateAction<boolean>) => {
+      bindings.setBrowseOpen(next);
+      setBrowseOpenState(next);
+    }, []);
     const [draft, setDraft] = useState(() => createInitialNewSessionDraft({
       initialWorkingDir, visualInitialDraft: null, routeDraft: options.routeDraft,
       suggestion: options.suggestion, t: bindings.t,
@@ -103,17 +125,23 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
         attachmentsRef, prePlanPermissionModeRef, setAttachments: bindings.setAttachments,
         setPlanModeDraftOn: () => {}, setRemoteAgentChoice: () => {}, setDraft }, ...args);
     }, []);
-    const preferredDefaultDevice = useMemo(() => pickNewSessionDefaultDevice({
-      deviceOptions, preferredDeviceId: newSessionPreferences?.device?.deviceId,
-      routeDevice: bindings.routeDeviceFallback, routeDeviceExplicit: bindings.routeDeviceExplicit,
-    }), [newSessionPreferences]);
+    const preferredDefaultDevice = useMemo(() => resolveNewSessionDefaultDevice({
+      defaults: newSessionDefaults ?? DEFAULT_NEW_SESSION_DEFAULTS,
+      profile: options.originProfile ?? 'app',
+      deviceOptions,
+      rememberedDeviceId: newSessionPreferences?.device?.deviceId ?? null,
+      routeDevice: bindings.routeDeviceFallback,
+      routeDeviceExplicit: bindings.routeDeviceExplicit,
+    }).device, [newSessionDefaults, newSessionPreferences, options.originProfile]);
     const recentWorkspaces = useMemo(() => buildRecentWorkspaceOptions(
       bindings.sessions.filter(session => session.deviceLinkDeviceId === selectedDeviceId), selectedDeviceId,
     ), [selectedDeviceId]);
     const common = { ...bindings, selectedDeviceId, setSelectedDeviceId, setSelectedDeviceName,
       newSessionPreferences, setNewSessionPreferences, newSessionPreferencesLoaded, setNewSessionPreferencesLoaded,
+      newSessionDefaults, setNewSessionDefaults, originProfile: options.originProfile ?? 'app',
       workingDirPreferenceOverridesRef, workspaceKindPreferenceOverridesRef, initialWorkspaceKeyRef, appliedDefaultDeviceKeyRef,
-      userTouchedDeviceRef, userTouchedWorkspaceRef, draft, setDraft, preferredDefaultDevice };
+      userTouchedDeviceRef, userTouchedWorkspaceRef, draft, setDraft, preferredDefaultDevice,
+      setBrowseOpen: setBrowseOpenTracked };
     useNewSessionStashedDraft({ ...common, sessionId: bindings.params.editSessionId, deviceId: 'a',
       restoreCreationDraft });
     useNewSessionWorkspacePreferences(common);
@@ -121,12 +149,19 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
       ...bindings, firstMessageRef, setDraft,
     }, patch), []);
     const actions = useNewSessionWorkspaceActions({ ...common, patchDraft });
-    useNewSessionInitialWorkspace({ ...common, recentWorkspaces, selectWorkingDir: actions.selectWorkingDir });
+    useNewSessionInitialWorkspace({
+      ...common,
+      browseOpen,
+      recentWorkspaces,
+      originProfile: options.originProfile ?? 'app',
+      patchDraft,
+    });
     current = { draft, selectedDeviceId, newSessionPreferencesLoaded, firstMessageSelection, ...actions,
       switchDevice: deviceId => {
         userTouchedDeviceRef.current = true;
         if (deviceId === selectedDeviceId) return;
         initialWorkspaceKeyRef.current = null;
+        setBrowseOpenTracked(false);
         setSelectedDeviceId(deviceId);
         setDraft(value => ({
           ...value,
@@ -139,6 +174,7 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
           }),
         }));
       },
+      replaceDefaults: next => { act(() => setNewSessionDefaults(next)); },
     };
     useEffect(() => {
       commits.push({ device: current.selectedDeviceId, kind: current.draft.workspaceKind,
@@ -350,5 +386,75 @@ describe('new session workspace page effects', () => {
     await page.resolvePreferences('project', 'b', { a: '/projects/old-a', b: '/projects/b' }, { a: 'dialogue', b: 'project' });
     expect(page.current.selectedDeviceId).toBe('a');
     expect(page.current.draft).toMatchObject({ workspaceKind: 'dialogue', workingDir: '' });
+  });
+
+  // 「新建任务默认」：应用内 / 桌面小组件两份档案、保存后立即生效、手动选择不被覆盖。
+  it('opens on the in-app default computer and project even when the remembered choice differs', async () => {
+    const page = mountWorkspace({
+      defaults: {
+        app: {
+          device: { kind: 'device', deviceId: 'b', name: 'B' },
+          workspace: { kind: 'project', deviceId: 'b', workingDir: '/default/b' },
+        },
+        widget: { device: { kind: 'follow-app' }, workspace: { kind: 'follow-app' } },
+      },
+    });
+    await page.resolvePreferences('project', 'a', { a: '/old/a' });
+    expect(page.current.selectedDeviceId).toBe('b');
+    expect(page.current.draft).toMatchObject({ workspaceKind: 'project', workingDir: '/default/b' });
+  });
+
+  it('uses the widget profile only for a widget origin and ignores the in-app default', async () => {
+    const page = mountWorkspace({
+      originProfile: 'widget',
+      defaults: {
+        app: {
+          device: { kind: 'device', deviceId: 'a', name: 'A' },
+          workspace: { kind: 'project', deviceId: 'a', workingDir: '/app/a' },
+        },
+        widget: {
+          device: { kind: 'device', deviceId: 'b', name: 'B' },
+          workspace: { kind: 'dialogue' },
+        },
+      },
+    });
+    await page.resolvePreferences('project', 'a', { a: '/old/a' });
+    expect(page.current.selectedDeviceId).toBe('b');
+    expect(page.current.draft).toMatchObject({ workspaceKind: 'dialogue', workingDir: '' });
+  });
+
+  it('applies a saved default to the current untouched task, but never after a manual choice', async () => {
+    const page = mountWorkspace();
+    await page.resolvePreferences('project', 'a', { a: '/old/a' });
+    expect(page.current.draft.workingDir).toBe('/old/a');
+
+    page.current.replaceDefaults({
+      app: { device: { kind: 'follow-last' }, workspace: { kind: 'dialogue' } },
+      widget: { device: { kind: 'follow-app' }, workspace: { kind: 'follow-app' } },
+    });
+    expect(page.current.draft).toMatchObject({ workspaceKind: 'dialogue', workingDir: '' });
+
+    act(() => page.current.selectRecentProject('/manual'));
+    page.current.replaceDefaults({
+      app: {
+        device: { kind: 'follow-last' },
+        workspace: { kind: 'project', deviceId: 'a', workingDir: '/default/new' },
+      },
+      widget: { device: { kind: 'follow-app' }, workspace: { kind: 'follow-app' } },
+    });
+    expect(page.current.draft).toMatchObject({ workspaceKind: 'project', workingDir: '/manual' });
+  });
+
+  it('does not push a new default workspace after the user manually switched computers', async () => {
+    const page = mountWorkspace();
+    await page.resolvePreferences('project', 'a', { a: '/old/a' });
+    act(() => page.current.switchDevice('b'));
+    expect(page.current.draft.workingDir).toBe('/projects/b');
+
+    page.current.replaceDefaults({
+      app: { device: { kind: 'follow-last' }, workspace: { kind: 'dialogue' } },
+      widget: { device: { kind: 'follow-app' }, workspace: { kind: 'follow-app' } },
+    });
+    expect(page.current.draft).toMatchObject({ workspaceKind: 'project', workingDir: '/projects/b' });
   });
 });

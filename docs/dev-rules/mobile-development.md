@@ -928,6 +928,72 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`：OTA 热更只在**指纹一�
 指纹变化后需要随新原生包交付（新商店包 / 自建整包更新），未更新原生包的存量装机暂时停留在
 旧指纹轨道，直到装上新包。
 
+### 安卓桌面不做固定快捷方式
+
+不要再用 `ShortcutManager.requestPinShortcut` 往桌面上放图标。真机实测（2026-11-22，小米 2512BPNDAC /
+Android 17 / HyperOS）：系统按契约把 `CONFIRM_PIN_SHORTCUT` 交给桌面自己的
+`com.miui.home/.launcher.AddItemActivity`，桌面也读到了图标（`get_shortcut_icon_drawable TYPE_RESOURCE`），
+但紧接着以 `InstallShortcutReceiver add shortcut failed, <pkg> has no permission` 拒绝，并在约 20 ms 内把确认页
+`on_destroy`。这句判定的不是 `com.android.launcher.action.INSTALL_SHORTCUT`：声明它并确认 `granted=true` 后
+仍失败，桌面 native 库与 `resources.arsc` 里都没有那个权限名的字符串；把 intent 换成显式 component 也仍然失败。
+所以这类桌面拒绝不是应用加权限或改 intent 能解决的，判断成败只能读 `getPinnedShortcuts`，不能等弹窗。
+桌面入口因此改由 App Widget 提供（见下节）。
+
+排查手法（不必依赖 Metro）：`adb logcat` 过滤 `AddItemUi`、`InstallShortcutReceiver`、`CONFIRM_PIN_SHORTCUT`；
+`adb shell dumpsys shortcut` 看目标包有没有带 `Pin` 标志的快捷方式；需要模拟点击时用
+`uiautomator dump` 取 `bounds` 再 `input tap`。
+
+### Android 桌面入口组件
+
+「Cindy 任务」和每位伙伴在桌面上各是一份 App Widget，由本地模块 `cindy-entry-widget` 的 `android/`
+提供：`EntryWidgetProvider` 画卡片，`EntryConfigActivity` 在添加组件与长按编辑（`widgetFeatures="reconfigurable"`）
+时列出「Cindy 任务」与伙伴。每份组件按 `appWidgetId` 记自己的目标（SharedPreferences `cindy-entry-widget`），
+目标清单与图标由 JS 侧 `useEntryWidgetSync` 写入（合并 / 清空的队列在 `entryWidgetWriter.ts`）：图标按「目标 + 内容指纹」
+写成新文件（`noBackupFilesDir/entry-widget-icons`），成功换掉快照（`entry-widget-targets.json`）之后才回收不再被引用的
+旧图标 —— 桌面重绘时碰到的要么是旧快照 + 旧图标、要么是新快照 + 新图标，不会读到半张 PNG 或已经被删掉的文件。等头像期间
+名单再变时合并到下一轮补写，不会丢掉最后一次变化。退登（含启动时发现已退登）清空快照并刷新组件，换账号丢掉上一个账号的
+图标缓存，在途的头像结果不再写回 —— 组件自己不联网、不读登录态，账号边界只能在写入侧保证。目标暂时没有时标准卡显示
+「打开 Cindy 完成设置」，紧凑版显示应用图标。
+
+尺寸：默认放上桌面 2×2（Android 12 起由 `targetCellWidth/Height` 决定，旧系统按 `minWidth/minHeight`
+= 110dp），`minResizeWidth/Height` = 40dp，可以一直缩到 1 格，横竖都可拖。版式按启动器报告的
+实际尺寸选（`OPTION_APPWIDGET_MIN/MAX_*`，与用量组件同一读法：竖屏用 MIN_WIDTH + MAX_HEIGHT，
+横屏反过来）：一格宽用 `cindy_entry_widget_compact`——这张不画卡片底色，按启动器给原生图标的那
+一套摆：头像用 `layout_weight` 吃掉名字以外的全部高度（启动器拉大格子时头像跟着变大，能长到与
+旁边的原生图标同尺寸），下面是一行图标名。图标名固定白字 + 阴影，故意不跟 App 主题翻转 —— 旁边
+原生图标始终是白字，跟着变深字就不是一套东西了。高度 < 56dp 时只留头像，整个高度都给头像；
+高度不足宽度的 62%（1 行高，如 2×1）用 `cindy_entry_widget_row`（头像在左、名字在右）；其余用
+标准卡 `cindy_entry_widget`（头像 + 名字，2 格见方才带电脑名）。三套版式共用同一组 view id，
+Provider 只碰当前版式里存在的 id —— RemoteViews 对不存在的 id 报错会让整次更新被桌面拒绝。
+版式只有一套：日夜差异全在 `values(-night)/colors.xml`，布局与卡片 drawable 只引用颜色名，
+不再各存一份 `layout-night`；夜间只覆盖卡片底板上的颜色，1 格版式的图标名沿用白天值。
+
+深链带 `desktopEntry=1` 标记，由根级 `DesktopEntryHost` 校验白名单（只允许伙伴会话与新建任务）再跳转；
+被篡改的链接直接丢弃。
+新建任务组件不带 `deviceId/deviceOptions`（设备清单会变，写死在组件里会过期），所以从它进来时
+`/sessions/new` 自己补候选电脑：路由没带 `deviceOptions` 时按 `readDeviceList()` 的缓存目录补一份
+（非 fresh，与首页、连接建立后的名册读取共用同一次 in-flight 请求），默认电脑仍按「记住的上次那台
+→ 第一台可用电脑」解析，模型随之取该电脑的新建任务默认；目录读不到时退回记住的那台 —— 这两处
+不会同时空着。回归：`newSession.test.ts` 的 `resolveNewSessionDeviceOptions`。
+
+新建任务页的默认电脑与默认工作区由两份档案决定（应用内 / 桌面小组件），规则见
+[手机新建任务的默认电脑与工作区](../product-rules/mobile-new-task-defaults.md)。`DesktopEntryHost` 消费
+新建任务深链时向 `/sessions/new` 传 `newSessionOrigin=widget`（`newSessionOrigin.ts`），页面据此读
+组件档案；只在这个深链上算组件打开，其余入口一律应用内。两份档案与原来的「记住上次」一起在
+`useNewSessionWorkspacePreferences` 里读，工作区落定在 `useNewSessionInitialWorkspace`，纯解析在
+`newSessionDefaults.ts`。默认按账号存本机（`newSessionDefaultsStore.ts`），登出在 `clearLocalSession`
+清掉该账号这一份。设置弹窗只在 Android 渲染；不改原生配置，不触发指纹冷更。回归：
+`newSessionDefaults.test.ts`、`newSessionWorkspaceEffects.test.tsx`。
+
+Kotlin 与资源改动进入 Android runtime fingerprint，需要新原生包；旧安装包里没有这个模块，
+`requireOptionalNativeModule` 返回 null，同步整体跳过。
+
+实现：`modules/cindy-entry-widget/`（Android-only）、`src/device-link/desktopEntry{Model,Icon,Intent,Scheme}.ts`、
+`useDesktopEntry{Rows,IconResolver}.ts`、`useEntryWidgetSync.ts`、`entryWidgetWriter.ts`、`DesktopEntryHost.tsx`；回归：
+`desktopEntryModel.test.ts`（目标 ID、深链白名单、标题与图标签名）、`entryWidgetWriter.test.ts`（合并补写、退登清空、
+换账号重取图）、`mobileNativeBoundaryContracts.test.ts`
+（三套版式的 view id）。
+
 ### 原则：鼓励为更好体验做原生更新，只拦意外冷更并守住旧包兼容
 
 （2026-11-27 放宽，取代旧版「除非必要不得改动指纹」「与技术框架变动同级」口径。）
