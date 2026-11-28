@@ -185,6 +185,112 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   expect(gate.blocks('subagent')).toBe(true);
 });
 
+it('asks once per concurrent tool call and never lets an unanswered call through', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const handlerStart = source.indexOf("  pi.on('tool_call', async");
+  const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
+  const decisions: unknown[] = [];
+  const compiled = ts.transpileModule(
+    source.slice(handlerStart, handlerEnd) + '\nresult = true;',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const sandbox: Record<string, unknown> = {
+    pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
+    result: undefined,
+    guestToolGate: null,
+    JSON, Set, Promise, path,
+    process: { env: {} },
+    PERMISSION_TITLE: 'cindy:permission',
+    TURN_CHANGE_CAPTURE_TITLE: 'cindy:turn-change-capture',
+    PERMISSION_ALLOW: 'allow',
+    SUBAGENT_RUN_DIR_ENV: 'CINDY_PI_SUBAGENT_RUN_DIR',
+    CINDY_HOSTED: null,
+    CINDY_MCP_LIST_TOOLS: 'cindy_mcp_list_tools',
+    CINDY_MCP_CALL_TOOL: 'cindy_mcp_call_tool',
+    CINDY_DIRECT_BOT_TOOLS: new Set<string>(),
+    CINDY_LIST_MACHINES_TOOL: 'list_machines',
+    CINDY_ASYNC_QUESTION_TOOL: 'ask_user_question_async',
+    CINDY_MANAGE_QUESTIONS_TOOL: 'manage_user_questions',
+    CINDY_INPUT_HANDOFF_TOOL: 'request_input_handoff',
+    CINDY_BOT_MEMORY_TOOL: 'cindy_memory',
+    toolsDisabledForTurn: () => false,
+    currentPermissionState: () => ({ reviewOnly: false, mode: 'default', writableRoots: [] }),
+    normalizeReviewReadInput: () => true,
+    READONLY_BUILTINS: new Set(['read', 'grep', 'find', 'ls']),
+    FILE_WRITE_BUILTINS: new Set(['edit', 'write']),
+    bashInputReadEvidence: () => ({ targets: ['/home/u/.ssh/id_rsa'], unresolved: false }),
+    powershellInputReadEvidence: () => ({ targets: [], unresolved: false }),
+    collectReadonlyCredentialEvidence: (name: string) => (name === 'read'
+      ? { paths: ['/home/u/.ssh/id_rsa'], touchesCredential: true }
+      : { paths: [], touchesCredential: false }),
+    collectResolvedCredentialPaths: (paths: string[]) => paths,
+    commandReadsProcessEnviron: () => false,
+    touchesCredentialPath: (paths: string[]) => paths.some((entry) => entry.endsWith('id_rsa')),
+    resolvedCredentialEvidenceForHost: () => ['/home/u/.ssh/id_rsa'],
+    isInsideRoot: () => false,
+    resolveFileWriteTargetPath: () => null,
+    isCindyShellTool: (name: unknown) => name === 'bash' || name === 'powershell',
+    resolveWritableRootsForHost: () => [],
+    mcpGateway: { resolveHookedCall: () => undefined },
+    permissionDenialReason: (decision: unknown) => { decisions.push(decision); return 'blocked by Cindy'; },
+  };
+  runInNewContext(compiled, sandbox);
+  const toolCall = handlers.get('tool_call')!;
+  const makeCtx = (answer: string) => {
+    const asks: unknown[] = [];
+    return {
+      asks,
+      ctx: {
+        isIdle: () => true,
+        ui: {
+          confirm: async () => true,
+          input: async (_title: string, payload: string) => {
+            asks.push(JSON.parse(payload));
+            // 让两次并发询问真的重叠：谁把它串行化成单槽，这里就只会收到一次。
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return typeof answer === 'function' ? (answer as any)(payload) : answer;
+          },
+        },
+      },
+    };
+  };
+
+  // ① 并发两次凭据读取：各自询问一次，互不覆盖。
+  const first = makeCtx('allow');
+  const second = makeCtx('allow');
+  const events = [
+    { toolName: 'bash', toolCallId: 'call-a', input: { command: 'cat ~/.ssh/id_rsa' } },
+    { toolName: 'bash', toolCallId: 'call-b', input: { command: 'cat ~/.ssh/id_rsa' } },
+  ];
+  const results = await Promise.all([
+    toolCall(events[0], first.ctx),
+    toolCall(events[1], second.ctx),
+  ]);
+  expect(first.asks).toHaveLength(1);
+  expect(second.asks).toHaveLength(1);
+  expect(results).toEqual([undefined, undefined]);
+  expect(decisions).toEqual([]);
+
+  // ② 一个批准一个拒绝：拒绝的那次被拦下，批准的那次照常放行。
+  const allowed = makeCtx('allow');
+  const denied = makeCtx('user-deny');
+  const mixed = await Promise.all([
+    toolCall({ toolName: 'bash', toolCallId: 'call-c', input: { command: 'cat ~/.ssh/id_rsa' } }, allowed.ctx),
+    toolCall({ toolName: 'bash', toolCallId: 'call-d', input: { command: 'cat ~/.ssh/id_rsa' } }, denied.ctx),
+  ]);
+  expect(mixed[0]).toBeUndefined();
+  expect(mixed[1]).toEqual({ block: true, reason: 'blocked by Cindy' });
+  expect(decisions).toEqual(['user-deny']);
+
+  // ③ 只读工具读到凭据也不能绕过审批。
+  const readonly = makeCtx('auto-review-deny');
+  const blocked = await toolCall({ toolName: 'read', toolCallId: 'call-e', input: { path: '/home/u/.ssh/id_rsa' } }, readonly.ctx);
+  expect(readonly.asks).toHaveLength(1);
+  expect(blocked).toEqual({ block: true, reason: 'blocked by Cindy' });
+  expect(decisions).toEqual(['user-deny', 'auto-review-deny']);
+});
+
 const canLinkFile = (() => {
   const root = mkdtempSync(path.join(tmpdir(), 'cindy-bridge-file-link-probe-'));
   try {

@@ -121,6 +121,26 @@ describe('pi translator', () => {
     });
     disposePiTranslateContext(ctx);
   });
+  it('keeps codemode-internal calls out of the transcript so one step stays one step', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    // 助手消息里只声明了 codemode 这一个调用；脚本内部的 browser 调用没有声明。
+    translatePiEvent(ev({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'cm-1', name: 'codemode', arguments: {} }],
+        usage: { input: 1, output: 1 },
+      },
+    }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'cm-1', toolName: 'codemode', args: {} }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'inner-1', toolName: 'cindy_browser', args: {} }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'inner-1', result: 'page opened' }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'cm-1', result: 'script done' }), queue, ctx);
+    expect(events.filter(e => e.type === 'tool_use').map(e => (e.data as any).toolUseId)).toEqual(['cm-1']);
+    expect(events.filter(e => e.type === 'tool_result_full').map(e => (e.data as any).toolUseId)).toEqual(['cm-1']);
+    disposePiTranslateContext(ctx);
+  });
   it('marks only the Cindy subagent tool as a durable lifecycle', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
