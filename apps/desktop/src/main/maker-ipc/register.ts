@@ -271,6 +271,7 @@ import {
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import { redactEventForRenderer } from './rendererEventRedaction.js';
+import { getPluginEngineHandoffWindow } from '../maker-host/pluginEngineModelCache.js';
 import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, pluginEngineSettingsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
 import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
 import { onPluginEnginePrefsChanged, readPluginEnginePrefs, updatePluginEnginePrefs } from '../maker-host/plugin-engine-prefs-store.js';
@@ -11962,6 +11963,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readOwnerGeneration: () => getActiveAppSession().generation,
     resolveHandoffWindow: ({ sessionId, agent, model, providerId, agentDeviceId }) =>
       resolveDesktopHandoffWindow(sessionId, { agentKind: agent, model, providerId, agentDeviceId }),
+    resolveLocalPluginHandoffWindow: (providerId, modelId) => getPluginEngineHandoffWindow(providerId, modelId),
     listCompanionSessionIds: async (sessionId) => {
       const row = await readContextRecoverySession(sessionId);
       if (row?.botRole !== 'canonical') return undefined;

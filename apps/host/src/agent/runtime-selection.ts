@@ -122,6 +122,7 @@ import { createSessionControlRuntimeWriter } from '../../../desktop/src/main/mak
 import { shouldApplyExclusiveProviderRerouteLive } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.js';
 import { admitPluginEngineSwitchTarget } from '../../../desktop/src/main/maker-ipc/pluginEngineSessionAdmission.js';
 import { listPluginEngineViews } from '../../../desktop/src/main/maker-ipc/pluginEnginesIpc.js';
+import { getPluginEngineHandoffWindow } from '../../../desktop/src/main/maker-host/pluginEngineModelCache.js';
 import { pluginEngineKeyFromProviderId } from '../../../desktop/src/shared/pluginEngines.js';
 import type { GhostModelRoute } from '../../../desktop/src/shared/ghost.js';
 import type { ModelGroupSessionBindingView } from '../../../desktop/src/shared/modelGroups.js';
@@ -431,6 +432,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       const budget = await deps.readStoredSessionContextWindowBudget(sessionId);
       return deps.resolveConfiguredContextWindow(getActiveCatalog(), agent, providerId, model, budget, 'required');
     },
+    resolveLocalPluginHandoffWindow: (providerId, modelId) => getPluginEngineHandoffWindow(providerId, modelId),
     // Host does not assemble companion lanes for runtime handoffs.
     listCompanionSessionIds: undefined,
     relocateNativeHistory: undefined,

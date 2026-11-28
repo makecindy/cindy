@@ -14,6 +14,12 @@
  * - tier：unit(依赖注入，与 sessionAgentSwitchHandler.test.ts 同一套 harness 形状)。
  */
 import { describe, expect, it, vi } from 'vitest';
+import { estimateHandoffTokens } from '../agentHandoff';
+import {
+  getPluginEngineHandoffWindow,
+  observePluginEngineContextWindow,
+  resetPluginHarnessModelCacheForTests,
+} from '../../maker-host/pluginEngineModelCache';
 import { providerShareGuestPeer } from '@cindy/device-link';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
 
@@ -76,6 +82,73 @@ function makeDeps(row: AgentSwitchSessionRow, overrides: Partial<MakerSessionAge
   };
   return { deps, pendingSwitches };
 }
+
+describe('handoff budget when switching engines', () => {
+  const model = 'fixture-model';
+  // The shared builder must trim long history rather than only passing through a short fixture.
+  const history = Array.from({ length: 48 }, (_, index) => ({
+    role: 'user' as const, content: `[fixture:${index}] ${'文'.repeat(3950)}`, createdAt: index,
+  }));
+
+  async function switchWithHistory(
+    targetAgentKind: 'acp' | 'codex',
+    options: { windows?: number[]; nextInputChars?: number; observedProvider?: string;
+      observedModel?: string; agentDeviceId?: string } = {},
+  ): Promise<string> {
+    resetPluginHarnessModelCacheForTests();
+    const observe = observePluginEngineContextWindow(options.observedProvider ?? ENGINE);
+    for (const size of options.windows ?? []) observe(options.observedModel ?? model, size);
+    const row = makeRow();
+    const { deps } = makeDeps(row, {
+      listMessagesForHandoff: async () => history,
+      resolveLocalPluginHandoffWindow: getPluginEngineHandoffWindow,
+      resolveHandoffWindow: async () => 100_000,
+      admitRemotePluginEngineTarget: async (_device, target) => ({
+        model: target.model, effort: '', permissionMode: 'default', engineName: 'Fixture engine',
+      }),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: row.id,
+      targetAgentKind,
+      model,
+      providerId: targetAgentKind === 'acp' ? ENGINE : 'fixture-provider',
+      agentDeviceId: options.agentDeviceId,
+    });
+    await applyPendingAgentSwitchIfIdle(deps, row.id, { nextInputChars: options.nextInputChars });
+    const handoff = vi.mocked(deps.setPendingHandoff).mock.calls.at(-1)?.[1];
+    expect(handoff).toBeTruthy();
+    return handoff!;
+  }
+
+  it.each([
+    { name: 'reported million-token window', target: 'acp', windows: [1_000_000], min: 90_000, cap: 100_000 },
+    { name: 'latest valid report and next input reserve', target: 'acp',
+      windows: [1_000_000, 100_000, 4_000_001], nextInputChars: 40_000, min: 20_000, cap: 25_000 },
+    { name: 'unchanged built-in path', target: 'codex',
+      windows: [1_000_000], nextInputChars: 40_000, min: 26_000, cap: 30_000 },
+  ] satisfies Array<{ name: string; target: 'acp' | 'codex'; windows: number[];
+    nextInputChars?: number; min: number; cap: number }>)('uses the expected budget: $name', async (example) => {
+    const text = await switchWithHistory(example.target, example);
+    expect(estimateHandoffTokens(text)).toBeGreaterThan(example.min);
+    expect(estimateHandoffTokens(text)).toBeLessThanOrEqual(example.cap);
+  });
+
+  it.each([
+    { name: 'no report' },
+    { name: 'zero', windows: [0] },
+    { name: 'negative', windows: [-1] },
+    { name: 'non-finite', windows: [Infinity, NaN] },
+    { name: 'overlarge', windows: [4_000_001] },
+    { name: 'another model', windows: [1_000_000], observedModel: 'other-model' },
+    { name: 'another provider', windows: [1_000_000], observedProvider: 'acp-plugin:fixture:other' },
+    { name: 'remote target', windows: [1_000_000], agentDeviceId: 'fixture-remote' },
+    { name: 'shared target', windows: [1_000_000], agentDeviceId: 'share:fixture' },
+  ])('keeps the 16,000-character fallback: $name', async (example) => {
+    const text = await switchWithHistory('acp', example);
+    expect(text.length).toBeGreaterThan(12_000);
+    expect(text.length).toBeLessThanOrEqual(16_000);
+  });
+});
 
 describe('switching a task onto a plugin engine', () => {
   // #12397: a finished, separate automation task keeps its conversation and
