@@ -31,15 +31,23 @@ temp=$(mktemp --suffix=.desktop "$apps_dir/.cindy-desktop.XXXXXXXX")
 trap 'rm -f -- "$temp"' EXIT
 # Desktop Entry escaping has two layers, unlike shell quoting. Keep %U
 # outside the quoted executable. Reject literal % in PREFIX above.
+# xdg-open (xdg-utils 1.2.1) takes the first word of Exec verbatim, quotes
+# included, and looks it up with `command -v`, so a quoted path is never found
+# and every cindy:// link is dropped. Quote only when the path holds a
+# character the Desktop Entry spec reserves in Exec arguments.
 exec_path=$prefix/launch
-exec_path=${exec_path//\\/\\\\\\\\}
-exec_path=${exec_path//\"/\\\\\"}
-exec_path=${exec_path//\$/\\\\$}
-exec_path=${exec_path//\`/\\\\\`}
+reserved=$' \t\n"\'\\><~|&;$*?#()`'
+if [[ $exec_path == *["$reserved"]* ]]; then
+  exec_path=${exec_path//\\/\\\\\\\\}
+  exec_path=${exec_path//\"/\\\\\"}
+  exec_path=${exec_path//\$/\\\\$}
+  exec_path=${exec_path//\`/\\\\\`}
+  exec_path=\"$exec_path\"
+fi
 icon=$prefix/current/resources/icon.png
 icon=${icon//\\/\\\\}
 printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Cindy (User)' \
-  "Exec=\"$exec_path\" %U" "Icon=$icon" 'Terminal=false' \
+  "Exec=$exec_path %U" "Icon=$icon" 'Terminal=false' \
   'Categories=Development;' "StartupWMClass=$app_id" \
   'MimeType=x-scheme-handler/cindy;x-scheme-handler/xdt-maker;' > "$temp"
 desktop-file-validate "$temp"
