@@ -8602,7 +8602,6 @@ export function ChatInput({
             await enqueueEffortChange(effortChangeCoordinatorRef.current, sessionId, newEffort, {
               persist: (targetSessionId, effort) =>
                 window.electronAPI.maker.setEffort(targetSessionId, effort),
-              applyRuntime: async () => {}, // Main has already committed the runtime and its fields.
               onCommitted: (targetSessionId, effort) => {
                 if (activeModel)
                   syncSessionDraftModelPrefs(activeModel, { effort, fast: fastMode });
@@ -10263,6 +10262,10 @@ export function ChatInput({
                     effort={activeEffort}
                     onModelChange={handleModelChange}
                     onEffortChange={handleEffortChange}
+                    showEffortShortcut={
+                      !!sessionId && deviceLinkDeviceId === null && !catalogDeviceId && !remoteHostId &&
+                      !noConnectedSource && !agentSwitchIntent
+                    }
                     fastMode={composerSelection.display.fastMode}
                     currentSelection={sessionId && runtimeAgentKind ? composerSelection.current : undefined}
                     onFastModeChange={handleFastModeChange}
