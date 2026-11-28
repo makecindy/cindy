@@ -216,10 +216,11 @@ import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilte
 import {
   conversationSearchAllowsLocalWrites,
   conversationSearchOriginsFromDeviceModels,
+  createHomeSearchSessionFilter,
   listConversationSearchProjects,
   shouldReplaceListWithSearchResults,
 } from '@/session/conversationSearch';
-import { useConversationSearch } from '@/session/useConversationSearch';
+import { useConversationSearch, useConversationSearchStatusFilter } from '@/session/useConversationSearch';
 import { hydrateRemoteProjectAliases, useRemoteProjectAliases } from '@/session/remoteProjectAliases';
 import {
   buildMobileHomePresentation,
@@ -939,9 +940,14 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [retryingDeviceIds, setRetryingDeviceIds] = useState<ReadonlySet<string>>(new Set());
   const retryingDeviceIdsRef = useRef<Set<string>>(new Set());
   const [statusFilter, setStatusFilter] = useRetainedHomeState<HomeStatusFilter>(viewSession, 'statusFilter', 'active');
-  const requestedListFilter: RemoteListStatusFilter = active
-    ? taskListMode === 'inbox' ? 'all' : remoteListStatusFilter(statusFilter)
-    : 'active';
+  const [searchStatusFilter] = useConversationSearchStatusFilter(viewSession);
+  const displayStatus = taskListMode === 'inbox' ? 'all' : statusFilter;
+  const listStatus = searchStatusFilter === 'all' ? displayStatus : searchStatusFilter;
+  const displayListScope = remoteListStatusFilter(displayStatus);
+  // Expand the existing scope only if an explicit search status needs rows
+  // outside it. Keep both statuses available to the project filter menu.
+  const requestedListFilter: RemoteListStatusFilter = !active ? 'active'
+    : searchStatusFilter !== 'all' && searchStatusFilter !== displayListScope ? 'all' : displayListScope;
   const homeListFilterRef = useRef(requestedListFilter);
   const homeListFilterChanged = homeListFilterRef.current !== requestedListFilter;
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useRetainedHomeState<string[]>(viewSession, 'collapsedProjectKeys', [],
@@ -2432,6 +2438,20 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   });
   const searchQuery = indexedSearch.query;
   const normalizedSearchQuery = searchQuery.trim();
+  const filterWithoutQuery = !normalizedSearchQuery && indexedSearch.activeFilterCount > 0;
+  const searchFilterTick = useHomeFilterClock(
+    filterWithoutQuery && indexedSearch.lastActivityFilter !== 'all' && screenFocused && active,
+  );
+  const sharedSearchOwners = ownedSharedTasks.length ? ownedSharedTasks : undefined;
+  const homeSearchSessionFilter = useMemo(() => filterWithoutQuery
+    ? createHomeSearchSessionFilter(indexedSearch.scopedOrigins, {
+      agentKind: indexedSearch.agentFilter,
+      lastActivity: indexedSearch.lastActivityFilter,
+      status: searchStatusFilter,
+    }, searchFilterTick || Date.now(), { owned: sharedSearchOwners, projects: indexedSearch.projectSelection })
+    : undefined,
+  [filterWithoutQuery, indexedSearch.scopedOrigins, indexedSearch.agentFilter,
+    indexedSearch.lastActivityFilter, indexedSearch.projectSelection, sharedSearchOwners, searchStatusFilter, searchFilterTick]);
   const messageSearchVersion = useRemoteMessageVersion(normalizedSearchQuery.length > 0);
   const homeStatusVersion = useRemoteHomeStatusVersion();
   const searchFilterA11y = t('devices.list.search.filterAria', {
@@ -2649,23 +2669,24 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       pendingInteractionIndex,
       scheduleIndex,
       searchQuery,
+      sessionFilter: homeSearchSessionFilter,
       selectedDeviceId,
       sessions: homeSessions,
-      statusFilter,
+      statusFilter: searchStatusFilter === 'all' ? statusFilter : searchStatusFilter,
       // 未起名会话的显示文案:共享层不兜中文串,由这里给已解析的 i18n 值。
       unnamedLabel: t('session.menu.unnamedTitle'),
     }),
-    [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, selectedDeviceId, homeSessions, statusFilter, t, projectAliases],
+    [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, homeSearchSessionFilter, selectedDeviceId, homeSessions, statusFilter, searchStatusFilter, t, projectAliases],
   );
   const inboxHome = useMemo(
     () => buildMobileHomePresentation({
       inboxMode: true,
       projectAliases, devices: deviceModels, liveActivityIndex, messagePreviewIndex,
-      pendingInteractionIndex, scheduleIndex, searchQuery, selectedDeviceId,
-      sessions: homeSessions, statusFilter: 'all', unnamedLabel: t('session.menu.unnamedTitle'),
+      pendingInteractionIndex, scheduleIndex, searchQuery, sessionFilter: homeSearchSessionFilter, selectedDeviceId,
+      sessions: homeSessions, statusFilter: searchStatusFilter, unnamedLabel: t('session.menu.unnamedTitle'),
     }),
     [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex,
-      searchQuery, selectedDeviceId, homeSessions, t, projectAliases],
+      searchQuery, homeSearchSessionFilter, selectedDeviceId, homeSessions, searchStatusFilter, t, projectAliases],
   );
   // 「筛选 › 项目」的候选:设备范围内的项目全集,不受搜索与任务状态影响——否则已选中的项目
   // 会因搜索没命中或当前状态下没有任务而从菜单里消失,用户无法单独取消它。
@@ -2743,10 +2764,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const displayedProjectOrder = displayed.projectOrder;
   const displayedManualProjectOrder = displayed.manualProjectOrder;
   const displayedHome = taskListMode === 'inbox' ? inboxHome : home;
-  const displayedStatus = taskListMode === 'inbox' ? 'all' : statusFilter;
+  const displayedStatus = listStatus;
+  // Discovery carries ownership, visibility and a title but no project, engine or activity fields.
+  const includeDiscoveredShares = !filterWithoutQuery || (indexedSearch.projectSelection === 'all'
+    && indexedSearch.agentFilter === 'all' && indexedSearch.lastActivityFilter === 'all');
   const sharedGroup = useMemo(() => splitSharedHomeGroup(displayedHome, ownedSharedTasks, {
-    sessions: homeSessions, searchQuery, statusFilter: displayedStatus,
-  }), [displayedHome, ownedSharedTasks, homeSessions, searchQuery, displayedStatus]);
+    sessions: homeSessions, searchQuery, statusFilter: displayedStatus, includeDiscovered: includeDiscoveredShares,
+  }), [displayedHome, ownedSharedTasks, homeSessions, searchQuery, displayedStatus, includeDiscoveredShares]);
   const cloudTeammates = useCloudCompanionHome(false);
   const cloudTeammateIds = useMemo(() => new Set(cloudTeammates.actors.filter(actor => actor.kind === 'bot').map(actor => actor.externalId)), [cloudTeammates.actors]);
   const cindyTeammateIds = useMemo(() => new Set(cloudTeammates.cindyIds), [cloudTeammates.cindyIds]);
@@ -2818,7 +2842,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // Sorting metadata may arrive after rows. Only user actions or a new visit release
   // the displayed order; live activity, priority and host-order pushes update content.
   const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, taskListMode, groupDevice, groupByProject, groupDialogue, groupAutomation,
-    sortBy, statusFilter, projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations, searchQuery]);
+    sortBy, statusFilter, projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations, searchQuery,
+    searchStatusFilter, indexedSearch.agentFilter, indexedSearch.projectSelection, indexedSearch.lastActivityFilter]);
   displayOrderScopeRef.current = displayOrderScope;
   useEffect(() => {
     if (homeListCacheHydrated && homeCacheUserId && remoteSessionStore.getSessions().length) {
@@ -3688,14 +3713,14 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       params: {
         deviceId: project.deviceId,
         name: project.deviceName,
-        statusFilter,
+        statusFilter: listStatus,
         ...(search ? { search: '1' } : {}),
         ...(project.workingDir
           ? { workingDir: project.workingDir, projectName: project.title }
           : {}),
       },
     });
-  }, [guardedPush, statusFilter, swipeRegistry]);
+  }, [guardedPush, listStatus, swipeRegistry]);
 
   // renderItem 提取为稳定引用:打开「选项」sheet 等与列表数据无关的页面状态变更不再改变
   // renderItem 身份,SectionList 可见行不随之全量重渲染(review P2:每行 Swipeable 动画树
@@ -4182,8 +4207,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
               testID="home.remoteAccessGuide"
               title={emptyStateTitle}
             />
-          ) : contentFilterCount > 0 && !initialHomeError ? (
-            // 显示菜单里的筛选把任务全部筛掉了:说清是筛选导致,而不是「还没有任务」。
+          ) : (contentFilterCount > 0 || filterWithoutQuery) && !initialHomeError ? (
+            // 搜索或显示筛选可以把所有任务筛掉，沿用同一个筛选空态。
             <MainWindowEmptyState
               centered
               copy={t('devices.list.menu.filterEmptyCopy')}
@@ -4377,7 +4402,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         </View>
         )}
 
-        {searchOpen || !!searchQuery.trim() ? (
+        {searchOpen || normalizedSearchQuery || indexedSearch.activeFilterCount > 0 ? (
           <HomeSearchBar
             autoFocus={searchOpen && !searchQuery}
             filterA11y={searchFilterA11y}

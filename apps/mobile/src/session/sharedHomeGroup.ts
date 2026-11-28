@@ -9,31 +9,34 @@ export type SharedHomeRow =
 
 export type SharedHomeRole = 'owned' | 'joined';
 
+export function ownsSharedHomeSession(session: MobileHomeSessionLike, task: SharedTaskListItem): boolean {
+  return session.id === task.sessionId && session.deviceLinkDeviceId === task.hostDeviceId;
+}
+
 /** Group presentation only: routing IDs, store contents and grants stay untouched. */
 export function splitSharedHomeGroup(home: MobileHomePresentation, owned: readonly (SharedTaskListItem & { source?: string | null })[], options: {
   sessions: readonly MobileHomeSessionLike[];
   searchQuery: string;
   statusFilter: string;
+  includeDiscovered?: boolean;
 }): { home: MobileHomePresentation; rows: SharedHomeRow[] } {
-  const owns = (session: MobileHomeSessionLike, task: SharedTaskListItem) =>
-    session.id === task.sessionId && session.deviceLinkDeviceId === task.hostDeviceId;
   const isShared = (item: RemoteSessionListItem) => {
     const session = item.session as MobileHomeSessionLike;
-    return isSharedTaskPeer(session.deviceLinkDeviceId) || owned.some(task => owns(session, task));
+    return isSharedTaskPeer(session.deviceLinkDeviceId) || owned.some(task => ownsSharedHomeSession(session, task));
   };
   const all = mobileHomeSessionItems(home);
   const rows: SharedHomeRow[] = all.filter(isShared)
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
     .map(item => {
       const session = item.session as MobileHomeSessionLike;
-      const role: SharedHomeRole = owned.some(task => owns(session, task)) ? 'owned' : 'joined';
+      const role: SharedHomeRole = owned.some(task => ownsSharedHomeSession(session, task)) ? 'owned' : 'joined';
       return { key: `shared:${session.deviceLinkDeviceId}:${session.id}`, item, role };
     });
   // Discovery is account-level even before same-account remote control is allowed.
   // Don't recreate a row that the active search/status filter intentionally hid.
-  for (const task of owned) {
+  for (const task of options.includeDiscovered === false ? [] : owned) {
     if (!CINDY_MAKE_ENABLED && (task.source === undefined || isCindyMakeSource(task.source))) continue;
-    if (options.sessions.some(session => owns(session, task))) continue;
+    if (options.sessions.some(session => ownsSharedHomeSession(session, task))) continue;
     if (home.selectedDeviceId && home.selectedDeviceId !== task.hostDeviceId) continue;
     if (options.statusFilter !== 'active' && options.statusFilter !== 'all') continue;
     if (!task.title.toLocaleLowerCase().includes(options.searchQuery.trim().toLocaleLowerCase())) continue;

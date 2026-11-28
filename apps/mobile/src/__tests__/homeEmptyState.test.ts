@@ -49,7 +49,7 @@ it.each([
     { pinned: (taskListMode === 'inbox' ? pinned : !pinned) ? [{}] : [] },
   );
   const bindings = {
-    createElement, shouldReplaceListWithSearchResults, searchQuery, indexedSearch: { status },
+    createElement, shouldReplaceListWithSearchResults, searchQuery, indexedSearch: { status }, filterWithoutQuery: false,
     sharedRows: [], initialHomeLoading: status === 'searching', taskSuggestionsPending: false,
     filteredHome, hasDeviceSections: deviceSections === true, showRemoteGuide: false,
     contentFilterCount: 0, taskSuggestionsMode: null, initialHomeError: false,

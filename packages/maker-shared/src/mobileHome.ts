@@ -140,6 +140,7 @@ export interface MobileHomeOptions {
   pendingInteractionIndex?: ReadonlyMap<string, number>;
   scheduleIndex?: ReadonlyMap<string, RemoteSessionScheduleInfo>;
   searchQuery?: string;
+  sessionFilter?: (session: MobileHomeSessionLike) => boolean;
   selectedDeviceId?: string | null;
   sessions: readonly MobileHomeSessionLike[];
   statusFilter?: RemoteSessionStatusFilter;
@@ -161,6 +162,7 @@ export function buildMobileHomePresentation({
   pendingInteractionIndex,
   scheduleIndex,
   searchQuery = '',
+  sessionFilter,
   selectedDeviceId = null,
   sessions,
   statusFilter = 'active',
@@ -183,7 +185,7 @@ export function buildMobileHomePresentation({
   const normalizedSelectedDeviceId = normalizeSelectedDeviceId(deviceFilters, selectedDeviceId);
   const query = normalizeSearchQuery(searchQuery);
   const filteredSessions = normalizedSessions
-    .filter((session) => matchesSelectedDevice(session, normalizedSelectedDeviceId))
+    .filter((session) => matchesSelectedDevice(session, normalizedSelectedDeviceId) && (!sessionFilter || sessionFilter(session)))
     .filter((session) => matchesStatusFilter(session, statusFilter, pendingInteractionIndex, scheduleIndex))
     .filter((session) => matchesSearchQuery(
       session,

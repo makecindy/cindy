@@ -33,6 +33,10 @@ export const CONVERSATION_SEARCH_DEBOUNCE_MS = 250;
 
 export type ConversationSearchStatus = 'idle' | 'searching' | 'ready';
 
+export function useConversationSearchStatusFilter(retainedState?: HomeViewSession) {
+  return useRetainedHomeState<ConversationSearchStatusFilter>(retainedState, 'search.statusFilter', 'all');
+}
+
 export function useConversationSearch({
   origins,
   enabled,
@@ -65,6 +69,7 @@ export function useConversationSearch({
   setProjectSelection: (value: ConversationSearchProjectSelection) => void;
   lockedWorkingDirs: string[] | null;
   activeFilterCount: number;
+  scopedOrigins: readonly ConversationSearchDeviceOrigin[];
   resetFilters: () => void;
 } {
   const { invoke } = useDeviceLink();
@@ -74,7 +79,7 @@ export function useConversationSearch({
   const [results, setResults] = useState<ConversationSearchListItem[]>([]);
   const [poolCapped, setPoolCapped] = useState(false);
   const [sortBy, setSortBy] = useRetainedHomeState<ConversationSearchSortBy>(retainedState, 'search.sortBy', 'relevance');
-  const [statusFilter, setStatusFilter] = useRetainedHomeState<ConversationSearchStatusFilter>(retainedState, 'search.statusFilter', 'all');
+  const [statusFilter, setStatusFilter] = useConversationSearchStatusFilter(retainedState);
   const [agentFilter, setAgentFilter] = useRetainedHomeState<ConversationSearchAgentFilter>(retainedState, 'search.agentFilter', 'all');
   const [lastActivityFilter, setLastActivityFilter] =
     useRetainedHomeState<ConversationSearchLastActivityFilter>(retainedState, 'search.lastActivityFilter', 'all');
@@ -128,7 +133,7 @@ export function useConversationSearch({
     setAgentFilter('all');
     setLastActivityFilter('all');
     setProjectSelection('all');
-  }, []);
+  }, [setAgentFilter, setLastActivityFilter, setProjectSelection, setStatusFilter]);
 
   // Publish "searching" before paint, including the debounce interval. Otherwise
   // an empty local projection can briefly claim there are no matching tasks.
@@ -231,6 +236,7 @@ export function useConversationSearch({
     setProjectSelection,
     lockedWorkingDirs: lockedDirs,
     activeFilterCount,
+    scopedOrigins,
     resetFilters,
   };
 }

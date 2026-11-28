@@ -4,11 +4,14 @@
  *
  * 纯函数 + 注入依赖,不直接碰 React / store。
  */
+import { isSharedTaskPeer, type SharedTaskListItem } from '@cindy/device-link';
+import { ownsSharedHomeSession } from './sharedHomeGroup';
 import {
   enforceExplicitConversationSearchResponse,
   matchExplicitConversationSearchText,
   parseConversationSearchQuery,
   conversationSearchResultKey,
+  createConversationSearchSessionFilter,
   emptyConversationSearchResponse,
   filterResultsByRequestFilters,
   mergeConversationSearchFanout,
@@ -38,6 +41,7 @@ import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { deviceMirrorCleanupDisposition } from '@/device-link/presenceDevices';
+import type { MobileHomeSessionLike } from '@cindy/maker-shared/mobile-home';
 import type { RemoteSession } from '@/session/types';
 
 export const CONVERSATION_SEARCH_LIMIT = 24;
@@ -506,6 +510,29 @@ export function scopedConversationSearchOrigins(
     if (!dirs?.length) return [];
     return [{ ...origin, workingDirs: dirs }];
   });
+}
+
+export function createHomeSearchSessionFilter(
+  origins: readonly ConversationSearchDeviceOrigin[],
+  filters: Pick<NonNullable<ConversationSearchRequest['filters']>, 'agentKind' | 'lastActivity' | 'status'>,
+  now: number,
+  sharing: { owned?: readonly SharedTaskListItem[]; projects: ConversationSearchProjectSelection },
+): (session: MobileHomeSessionLike) => boolean {
+  const filtersByDevice = new Map(origins.map(({ deviceId, workingDirs }) => [
+    deviceId, createConversationSearchSessionFilter({ ...filters, workingDirs }, now),
+  ]));
+  const sharedFilter = sharing.projects === 'all'
+    ? createConversationSearchSessionFilter(filters, now)
+    : null;
+  return (session) => {
+    const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId;
+    const deviceFilter = deviceId == null ? undefined : filtersByDevice.get(deviceId);
+    if (deviceFilter) return deviceFilter(session);
+    // Home already scopes shared rows by its authoritative projection and selected computer.
+    if (sharedFilter && (isSharedTaskPeer(session.deviceLinkDeviceId)
+      || sharing.owned?.some(task => ownsSharedHomeSession(session, task)))) return sharedFilter(session);
+    return false;
+  };
 }
 
 export function listConversationSearchProjects(
