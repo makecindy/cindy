@@ -38,11 +38,11 @@
 | 展开收起 | `components/ui/collapse.tsx` 的 `Collapse` | §14.4 |
 | 聊天内容 | `chatChrome.ts`、`activityRowChrome.ts` | [聊天界面](./chat-surfaces.md) |
 | 设置页分区和行 | `components/ui/settings-rows.tsx` 的 `SettingsSection`、`SettingsCard`、`SettingsRow`、`SettingsField`、`SettingsBlock`、`SettingsPageHeader` | §4 Desktop settings rows |
-| 选颜色 | 语义 Token，不写色值 | §10 Token Selection Rules for New UI、§2 |
+| 选颜色 | 语义 Token，不写色值 | §10 Token Selection Rules for New UI、§2；例外见 [exceptions/color.md](./exceptions/color.md) |
 | 亮暗模式 | 语义 Token | §10 Light / Dark Dual-Mode Delivery Gate |
-| 圆角与点击区域 | 上述组件的默认值 | §5 Border Radius Scale、[治理合同](./design-governance.md) §13 |
-| 字号、字重、行高 | Tailwind 字号档位 | §3 |
-| 动效 | Motion Token | §14.4 |
+| 圆角与点击区域 | 上述组件的默认值 | §5 Border Radius Scale、[治理合同](./design-governance.md) §13；间距例外与已登记的内容形状见 [exceptions/layout.md](./exceptions/layout.md) |
+| 字号、字重、行高 | Tailwind 字号档位 | §3；例外见 [exceptions/typography.md](./exceptions/typography.md) |
+| 动效 | Motion Token | §14.4；循环动效与动效类别见 [exceptions/motion.md](./exceptions/motion.md) |
 | 叠放顺序（z-index） | 层级刻度 `z-<层名>`；共享浮层的默认层级 | §6 层级刻度 |
 | 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md)（规则见[工程约定](../dev-rules/engineering-conventions.md) §5.1） |
 | 文案里出现「任务／对话／消息」 | 已裁决的叫法 | [任务与对话命名](../product-rules/task-and-conversation-naming.md) |
@@ -64,6 +64,8 @@
 | 首次登录后的开始引导 | [first-run-guide.md](./first-run-guide.md) |
 | 聊天正文、群聊、频道与对话里的附件图片 | [chat-surfaces.md](./chat-surfaces.md) |
 | 远程连接 V2 | [remote-connection-v2.md](./remote-connection-v2.md) |
+| 输入框的发送与停止按钮 | [composer.md](./composer.md) |
+| 品牌图像、字标与吉祥物能出现在哪里 | [exceptions/brand-surfaces.md](./exceptions/brand-surfaces.md) |
 | 应用壁纸 | [wallpaper.md](./wallpaper.md) |
 | macOS 菜单栏额度面板 | [macos-menu-bar-quota.md](./macos-menu-bar-quota.md) |
 | 附件预览 | [attachment-preview.md](./attachment-preview.md) |
