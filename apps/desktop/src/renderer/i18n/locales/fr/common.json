@@ -10907,7 +10907,7 @@
       "settings": "Paramètres",
       "resourceUsage": "Moniteur d'activité",
       "help": "Aide",
-      "issues": "Issues",
+      "issues": "Signaler un problème",
       "checkForUpdates": "Rechercher des mises à jour"
     },
     "updateCheckToast": {
