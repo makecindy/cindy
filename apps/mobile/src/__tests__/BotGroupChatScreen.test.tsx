@@ -206,7 +206,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'CircleDot', 'GitPullRequest', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'AtSign', 'Reply', 'SlidersHorizontal', 'UserPlus', 'SmilePlus']
+    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'AtSign', 'Reply', 'SlidersHorizontal', 'UserPlus', 'SmilePlus', 'EyeOff']
     .map((name) => [name, () => null]),
 ));
 vi.mock('@/theme', async () => {
@@ -1258,6 +1258,30 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenCalledWith('continue');
     await click('botGroup.file');
     expect(h.alert).toHaveBeenCalledWith('docs/页面想法.md', 'groupChat.files.onComputer');
+  });
+
+  // bot-group-chat.md 第 9 节 (2026-11-28). Unit: the phone's own card answers group-Cindy requests held for a
+  // computer, through the same group actions the direct and computer paths implement. Continue sets the
+  // computer (which releases every held request); cancel ends each waiting request, not other work.
+  it('lets the requester choose a computer or cancel the requests waiting for one', async () => {
+    await render(group({ serverBacked: true, assistantDeviceId: null, assistantComputers: [{ id: 'mac', name: 'Mac' }, { id: 'pc', name: 'PC' }],
+      assistantDeviceWaits: [{ executionId: 'e1', sourceMessageId: 'm1', requestText: 'Weekly report' }, { executionId: 'e2', sourceMessageId: 'm2', requestText: '' }] }));
+    expect(byId('botGroup.assistantDevice')?.textContent).toContain('groupChat.assistantDevice.requests(count=2)');
+    await click('botGroup.assistantDevice.continue');
+    expect(h.chat.act).toHaveBeenLastCalledWith('assistantDevice', { deviceId: 'mac' });
+    await click('botGroup.assistantDevice.cancel');
+    expect(h.chat.act.mock.calls.slice(-2)).toEqual([['cancelAssistantDeviceWait', { executionId: 'e1' }], ['cancelAssistantDeviceWait', { executionId: 'e2' }]]);
+  });
+
+  // #13638: an empty computer list hid the only cancel action. The ordinary
+  // picker test always has computers. Unit: the live chat screen still offers cancellation.
+  it('lets the requester cancel a waiting request when there are no computers', async () => {
+    await render(group({ serverBacked: true, assistantDeviceId: null, assistantComputers: [],
+      assistantDeviceWaits: [{ executionId: 'e1', sourceMessageId: 'm1', requestText: 'Weekly report' }] }));
+    expect(byId('botGroup.assistantDevice')?.textContent).toContain('Weekly report');
+    expect(byId('botGroup.assistantDevice.computerButton')).toBeNull();
+    await click('botGroup.assistantDevice.cancel');
+    expect(h.chat.act).toHaveBeenCalledWith('cancelAssistantDeviceWait', { executionId: 'e1' });
   });
 
   it('starts, dismisses and edits a proposed plan through the group actions', async () => {
