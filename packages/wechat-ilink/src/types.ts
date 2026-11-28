@@ -127,8 +127,21 @@ export interface WechatInboundMessage {
 export interface WechatPollResult {
   cursor: string;
   messages: WechatInboundMessage[];
+  /**
+   * Present only when the poll response contained raw messages that the
+   * inbound decoder rejected. Reasons carry no message content; the host
+   * logs the counts so silent protocol-level drops stay observable.
+   */
+  droppedMessageReasons?: WechatInboundDropReason[];
   suggestedTimeoutMs?: number;
 }
+
+export type WechatInboundDropReason =
+  | "malformed-message"
+  | "not-user-message"
+  | "missing-sender"
+  | "missing-message-id"
+  | "missing-context-token";
 
 export interface WechatSendRequest {
   peerId: string;

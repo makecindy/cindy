@@ -5,6 +5,7 @@ import {
   type IlinkCdnMedia,
   type IlinkMessage,
   type IlinkMessageItem,
+  type WechatInboundDropReason,
   type WechatInboundMessage,
   type WechatMediaRef,
 } from "./types.js";
@@ -100,9 +101,23 @@ function decodeItemMedia(item: IlinkMessageItem): WechatMediaRef | null {
 export function decodeInboundMessage(
   message: IlinkMessage,
 ): WechatInboundMessage | null {
-  if (!message || typeof message !== "object") return null;
-  if (message.message_type != null && message.message_type !== MessageType.USER)
-    return null;
+  return decodeInboundMessageWithReason(message).message;
+}
+
+/**
+ * Decode with the rejection reason kept visible to the host. Silent drops
+ * here are indistinguishable from messages the server never delivered, so
+ * transport surfaces the reason for host-side drop logging (#10899).
+ */
+export function decodeInboundMessageWithReason(
+  message: IlinkMessage,
+): { message: WechatInboundMessage | null; dropReason: WechatInboundDropReason | null } {
+  if (!message || typeof message !== "object") {
+    return { message: null, dropReason: "malformed-message" };
+  }
+  if (message.message_type != null && message.message_type !== MessageType.USER) {
+    return { message: null, dropReason: "not-user-message" };
+  }
   const senderId =
     typeof message.from_user_id === "string" ? message.from_user_id.trim() : "";
   const recipientId =
@@ -112,7 +127,9 @@ export function decodeInboundMessage(
       ? message.context_token.trim()
       : "";
   const messageId = stableInboundMessageId(message);
-  if (!senderId || !contextToken || !messageId) return null;
+  if (!senderId) return { message: null, dropReason: "missing-sender" };
+  if (!messageId) return { message: null, dropReason: "missing-message-id" };
+  if (!contextToken) return { message: null, dropReason: "missing-context-token" };
 
   const textParts: string[] = [];
   const media: WechatMediaRef[] = [];
@@ -146,15 +163,18 @@ export function decodeInboundMessage(
   }
 
   return {
-    messageId,
-    senderId,
-    ...(recipientId ? { recipientId } : {}),
-    clientId: message.client_id,
-    createdAt: message.create_time_ms,
-    contextToken,
-    text: textParts.join("\n"),
-    media,
-    ...(quote ? { quote } : {}),
+    message: {
+      messageId,
+      senderId,
+      ...(recipientId ? { recipientId } : {}),
+      clientId: message.client_id,
+      createdAt: message.create_time_ms,
+      contextToken,
+      text: textParts.join("\n"),
+      media,
+      ...(quote ? { quote } : {}),
+    },
+    dropReason: null,
   };
 }
 
