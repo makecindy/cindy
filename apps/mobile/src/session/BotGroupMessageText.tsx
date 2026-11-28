@@ -9,7 +9,7 @@ import { memo, useContext, useId, useCallback, useMemo, useRef, useState, type R
 import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
-import { describeExternalLink, externalLinkLabel } from '@cindy/maker-shared/external-link';
+import { groupExternalLinkDisplay, groupExternalLinkText } from './groupExternalLinkDisplay';
 import { HighlightedCodeText } from './HighlightedCodeText';
 import { MarkdownBlockCopyButton } from './MarkdownBlockCopyButton';
 import { MermaidDiagramWebView } from './mermaidWebView';
@@ -88,33 +88,18 @@ function inlineMathSubFontSize(baseFontSize: number): number {
   return typeScale.footnote;
 }
 
-function linkIsClickable(url: string, options: BodyOptions): boolean {
-  return Boolean(options.richContent) && options.interactive !== false && /^https?:\/\//i.test(url);
-}
-
-/**
- * A tappable bare URL reads as the desktop's short form (`owner/repo#12`, site + short path).
- * `github` marks GitHub objects, which desktop draws as inline chips; native inline spans only take
- * a background (no radius or icon), so the phone uses the session-link chip fill instead.
- */
-function readableBareLink(inline: Extract<MobileMarkdownInline, { type: 'link' }>, options: BodyOptions): { text: string; github: boolean } {
-  if (!linkIsClickable(inline.url, options) || (!inline.bare && inline.text !== inline.url)) return { text: inline.text, github: false };
-  const info = describeExternalLink(inline.url);
-  return info ? { text: externalLinkLabel(info), github: info.kind === 'github' } : { text: inline.text, github: false };
-}
-
 function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext, baseFontSize: number = typeScale.bodyLarge): ReactNode[] {
   const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
   const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
   let offset = 0;
   const runs = inlines.map(inline => {
     const mathSegments = inline.type === 'math' && options.richContent ? tokenizeInlineMath(inline.text) : null;
+    const linkDisplay = inline.type === 'link' && options.richContent ? groupExternalLinkDisplay(inline) : null;
     const text = inline.type === 'image' ? inline.alt ? `[${inline.alt}]` : ''
-      : mathSegments ? mathSegments.map(segment => segment.text).join('')
-        : inline.type === 'link' ? readableBareLink(inline, options).text : inline.text;
+      : mathSegments ? mathSegments.map(segment => segment.text).join('') : linkDisplay?.text ?? inline.text;
     const start = offset;
     offset += text.length;
-    return { inline, mathSegments, text, start, end: offset, excluded: ['code', 'link', 'image', 'math'].includes(inline.type) };
+    return { inline, mathSegments, linkDisplay, text, start, end: offset, excluded: ['code', 'link', 'image', 'math'].includes(inline.type) };
   });
   offset = 0;
   // Match the whole visible word before mapping back to styled native runs:
@@ -128,7 +113,7 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
     return { ...segment, start, end: offset, label: segment.text,
       mention: segment.mention && !runs.some(run => run.excluded && run.start < offset && run.end > start) };
   }) : null;
-  return runs.map(({ inline, mathSegments, text, start, end, excluded }, index) => {
+  return runs.map(({ inline, mathSegments, linkDisplay, text, start, end, excluded }, index) => {
     const textStyle = [...(inline.marks?.map(mark => markStyles[mark]) ?? []),
       inline.type === 'strong' ? styles.strong : inline.type === 'emphasis' ? styles.emphasis
         : inline.type === 'strikethrough' ? styles.strike : inline.type === 'code' ? styles.inlineCode : undefined];
@@ -157,9 +142,8 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
       );
     }
     if (inline.type === 'link') {
-      const clickable = linkIsClickable(inline.url, options);
-      const chip = clickable && readableBareLink(inline, options).github;
-      return <Span key={index} style={[textStyle, clickable && styles.link, chip && styles.githubChip]}
+      const clickable = options.richContent && options.interactive !== false && /^https?:\/\//i.test(inline.url);
+      return <Span key={index} style={[textStyle, clickable && styles.link, linkDisplay?.github && styles.githubChip]}
         onPress={clickable ? () => { void Linking.openURL(inline.url).catch(() => undefined); } : undefined}>{text}</Span>;
     }
     // UITextView children inherit the root's style, not an enclosing span's.
@@ -194,8 +178,9 @@ function BotGroupMarkdownTable({ block, styles, options, context }: {
     return { header: measureCells(block.header), rows: block.rows.map(row => ({ ...row, cells: measureCells(row.cells) })) };
   }, [block]);
   const minWidth = buildMessageContentLayout({ screenWidth }).markdownTableCellMinWidth;
-  const widths = useMemo(() => buildMobileMarkdownTableColumnWidths({ ...measured, availableWidth, minWidth }),
-    [measured, availableWidth, minWidth]);
+  const linkText = options.richContent ? groupExternalLinkText : undefined;
+  const widths = useMemo(() => buildMobileMarkdownTableColumnWidths({ ...measured, availableWidth, minWidth, linkText }),
+    [measured, availableWidth, minWidth, linkText]);
   const renderRow = (cells: readonly MobileMarkdownInline[][], key: string, header = false) => (
     <View key={key} style={[styles.tableRow, header && styles.tableHeaderRow]}>
       {widths.map((width, index) => (
@@ -306,6 +291,7 @@ export function BotGroupMarkdownText({ content, authorKind, mentionContext, rich
       <MessageHeavyContentVisibilityContext.Provider value={active && (!visibility || visible)}>
         <ChatFilePathContext.Provider value={null}>
           <MarkdownBody renderRichAnswers publicMediaOnly richStateKey={messageKey ?? instanceKey}
+            groupExternalLinks={richContent ? (interactive ? 'interactive' : 'static') : undefined}
             codeCopyEnabled={interactive}
             markdownImageCacheKey={messageKey ?? instanceKey} layout={layout} text={content} selectable
             onOpenPayload={next => {

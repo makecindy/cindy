@@ -16,6 +16,13 @@ export function groupLinkVisualFixture(channel: string, raw: unknown): unknown |
     ].join('\n') },
     { id: 'web', authorKind: 'user', isSelf: false, authorName: '王悦',
       content: '可以参考 https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/about-pull-request-reviews?tool=webui#about-pull-request-reviews ，以及[设计规范](https://example.com/design) 和 https://www.example.com/' },
+    { id: 'table', authorKind: 'user', isSelf: false, authorName: '王悦',
+      content: '| PR | 文件 |\n| --- | --- |\n| https://github.com/a/b/pull/42 | https://github.com/a/b/blob/main/packages/session/examples/markdown/fixtures/readme.md |' },
+    { id: 'rich', authorKind: 'bot', isSelf: false, authorName: 'Cindy',
+      content: '看 https://github.com/makecindy/cindy/pull/13638\n\n```cindy-ui\n' +
+        JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'notes', kind: 'markdown',
+          props: { text: '关联 https://github.com/makecindy/cindy/issues/12001' } }) +
+        '\n```\n\n还可以看 https://github.com/makecindy/cindy/pull/7671' },
   ].map((message, index) => ({ sequence: index + 1, kind: 'message', authorBotId: null,
     mentions: { all: false, botIds: [] }, createdAt: now + index * 60_000, ...message }));
   return {

@@ -155,10 +155,13 @@ it('keeps group image selection free of link, code-copy and diagram actions', as
   const openDiagram = vi.fn();
   await act(async () => root.render(createElement(BotGroupMarkdownText, {
     richContent: true, interactive: false, onOpenDiagram: openDiagram,
-    content: '[网页](https://example.com)\n\n```js\nconst a = 1;\n```\n\n```mermaid\ngraph LR\nA --> B\n```',
+    content: '[网页](https://example.com) https://github.com/makecindy/cindy/pull/13638\n\n```js\nconst a = 1;\n```\n\n```mermaid\ngraph LR\nA --> B\n```',
   })));
   await act(async () => [...node.querySelectorAll('span')].filter(el => el.textContent === '网页').at(-1)!.click());
+  await act(async () => [...node.querySelectorAll('span')].filter(el => el.textContent === 'makecindy/cindy#13638').at(-1)!.click());
   expect(actions.open).not.toHaveBeenCalled();
+  expect(styleOf('makecindy/cindy#13638').backgroundColor).toBe(palettes.light.surfaceChip);
+  expect(styleOf('makecindy/cindy#13638').textDecorationLine).toBeUndefined();
   expect(node.querySelector('[data-testid="message.markdownCodeCopyButton"]')).toBeNull();
   expect(node.querySelector('[data-testid="botGroup.openDiagram"]')).toBeNull();
   expect(styleOf('const').color).toBe(palettes.light.syntaxKeyword);
@@ -206,6 +209,22 @@ it('expands a short table to the measured message width without changing code bl
   const widths = [...row.children].map(cell => JSON.parse(cell.getAttribute('data-style')!).width);
   expect(widths.reduce((a, b) => a + b, 0)).toBe(280);
   expect(styleOf('a | b').fontFamily).toBe('Menlo');
+});
+
+// Full group table: two long URL tokens would overflow the viewport if width
+// were measured from the source instead of the rendered GitHub references.
+it('fits a group table to the visible link labels, including in image selection', async () => {
+  const repo = 'https://github.com/a/b';
+  const url = `${repo}/blob/main/${'folder/'.repeat(12)}`;
+  const content = `| PR | 文件 |\n| --- | --- |\n| ${repo}/pull/42 | ${url}a.md |`;
+  const props = { content, richContent: true };
+  for (const interactive of [true, false]) {
+    await act(async () => root.render(createElement(BotGroupMarkdownText, { ...props, interactive })));
+    const table = node.querySelector('section')!.firstElementChild!;
+    const cells = [...table.lastElementChild!.children];
+    expect(cells.map(cell => cell.textContent)).toEqual(['a/b#42', 'a/b/a.md']);
+    expect(cells.reduce((sum, cell) => sum + JSON.parse(cell.getAttribute('data-style')!).width, 0)).toBe(280);
+  }
 });
 afterEach(() => {
   act(() => root.unmount());
