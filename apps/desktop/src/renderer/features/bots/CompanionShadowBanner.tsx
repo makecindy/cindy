@@ -28,6 +28,9 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
     setError(null);
   }, [botId]);
   const actor = cloud.actors.find((candidate) => candidate.externalId === botId);
+  useEffect(() => {
+    if (actor?.needsModelSetup) setError(null);
+  }, [actor?.needsModelSetup]);
   const home = actor?.homeDeviceId && actor.homeDeviceId !== cloud.selfDeviceId ? actor.homeDeviceId : null;
   const device = actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
 
