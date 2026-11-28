@@ -57,7 +57,7 @@ import {
   recoverOversizedMessage,
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
-  missingReasoningItemRecoveryRule,
+  createMissingReasoningItemRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
   createResponsesToolAudioRecoveryRule,
   stripResponsesToolAudioFromBody,
@@ -658,8 +658,9 @@ let dumpSeq = 0;
 
 const CODEX_RESPONSE_OBSERVER_MAX_BYTES = 2 * 1024 * 1024;
 
+const isSilentEncryptedRetryEnabled = () => readSilentEncryptedRetrySettings().enabled;
 const encryptedContentRecoveryRule = createEncryptedContentRecoveryRule({
-  enabled: () => readSilentEncryptedRetrySettings().enabled,
+  enabled: isSilentEncryptedRetryEnabled,
   onRetry: (threadId, model) => encryptedStripController.markActive(threadId, model),
 });
 const imageGenerationIdRecoveryRule = createImageGenerationIdRecoveryRule({
@@ -696,7 +697,7 @@ const xaiModelInputRecoveryRule = createXaiModelInputRecoveryRule({
 const vllmResponsesCompatibilityRule = createVllmResponsesCompatibilityRule();
 const CODEX_BODY_RECOVERY_RULES = [
   encryptedContentRecoveryRule,
-  missingReasoningItemRecoveryRule,
+  createMissingReasoningItemRecoveryRule(isSilentEncryptedRetryEnabled),
   imageGenerationIdRecoveryRule,
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
@@ -3822,7 +3823,7 @@ function createTransformRequestChain(
     createArmedHttpRecoveryStripTransform(),
     createActiveStripTransform({
       controller: encryptedStripController,
-      enabled: () => readSilentEncryptedRetrySettings().enabled,
+      enabled: isSilentEncryptedRetryEnabled,
       strip: stripEncryptedContentFromBody,
     }),
     createActiveStripTransform({

@@ -18,6 +18,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 
 const proxyUpstream = vi.hoisted(() => ({ url: '' }));
+const silentEncryptedRetry = vi.hoisted(() => ({ enabled: true }));
+
+vi.mock('../silent-encrypted-retry-store.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../silent-encrypted-retry-store.js')>(),
+  readSilentEncryptedRetrySettings: () => ({ enabled: silentEncryptedRetry.enabled }),
+}));
 
 // Proxy routing does not perform standby-share cloud mutations. Keep this
 // external writer outside the test process rather than booting the whole app.
@@ -383,9 +389,9 @@ describe('Codex Responses search dialect (Issue 8170)', () => {
   });
 });
 
-// #9928 / integration: real host and loopback proxy. The encrypted-error cases
-// above don't cover a WS 400 without an ID followed by an HTTP missing-ID 404.
-it('recovers a DeepSeek reasoning replay after the OpenAI WebSocket rejects input item IDs', async () => {
+// #9928: real host and loopback proxy. A WS rejection followed by a missing-ID
+// HTTP 404 must preserve the user's choice when the next error names ciphertext.
+it.each([true, false])('handles DeepSeek reasoning replay with silent encrypted retry enabled=%s', async (enabled) => {
   const error = {
     type: 'error', status: 400,
     error: {
@@ -396,6 +402,12 @@ it('recovers a DeepSeek reasoning replay after the OpenAI WebSocket rejects inpu
   const stale = { type: 'reasoning', id: 'rs_deepseek', encrypted_content: null, summary: [] };
   const sealed = { type: 'reasoning', id: 'rs_deepseek_sealed', encrypted_content: 'opaque-foreign', summary: [] };
   const message = { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] };
+  const invalidEncrypted = {
+    error: {
+      code: 'invalid_encrypted_content',
+      message: 'The encrypted content for item rs_deepseek_sealed could not be verified. Reason: Encrypted content could not be decrypted or parsed.',
+    },
+  };
   const replay = { model: 'gpt-6.2-sol', store: false, input: [stale, sealed, message] };
   const forwarded: unknown[] = [];
   const upstream = createServer(async (req, res) => {
@@ -406,12 +418,7 @@ it('recovers a DeepSeek reasoning replay after the OpenAI WebSocket rejects inpu
     res.writeHead(hasStale ? 404 : hasSealed ? 400 : 200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(hasStale ? {
       error: { message: "Item with id 'rs_deepseek' not found. Items are not persisted when `store` is set to false." },
-    } : hasSealed ? {
-      error: {
-        code: 'invalid_encrypted_content',
-        message: 'The encrypted content for item rs_deepseek_sealed could not be verified. Reason: Encrypted content could not be decrypted or parsed.',
-      },
-    } : { output: [] }));
+    } : hasSealed ? invalidEncrypted : { output: [] }));
   });
   const wsUpstream = new WebSocketServer({ noServer: true });
   upstream.on('upgrade', (req, socket, head) => wsUpstream.handleUpgrade(req, socket, head, (ws) => {
@@ -421,6 +428,7 @@ it('recovers a DeepSeek reasoning replay after the OpenAI WebSocket rejects inpu
   proxyUpstream.url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
   const clients: WebSocket[] = [];
   try {
+    silentEncryptedRetry.enabled = enabled;
     setCodexProxyAuthInjection('oauth-bearer');
     await ensureCodexProxyReady();
     registerComposed('session-resume', 'thread-resume', 'PRODUCT_PROMPT');
@@ -449,9 +457,15 @@ it('recovers a DeepSeek reasoning replay after the OpenAI WebSocket rejects inpu
       retry.once('error', reject);
     });
     expect(status).toBe(426);
-    expect((await postReplay(replay, 'thread-resume')).status).toBe(200);
-    expect(forwarded).toEqual([[stale, sealed, message], [sealed, message], [message]]);
+    const result = await postReplay(replay, 'thread-resume');
+    expect(result).toEqual(enabled
+      ? { status: 200, body: JSON.stringify({ output: [] }) }
+      : { status: 400, body: JSON.stringify(invalidEncrypted) });
+    expect(forwarded).toEqual(enabled
+      ? [[stale, sealed, message], [sealed, message], [message]]
+      : [[stale, sealed, message], [sealed, message]]);
   } finally {
+    silentEncryptedRetry.enabled = true;
     for (const client of clients) client.terminate();
     unregister('session-resume');
     await disposeCodexProxy();

@@ -44,30 +44,32 @@ const hasCiphertext = (item: Record<string, unknown>): boolean =>
   typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0;
 
 // #9928: only remove the items the Responses upstream confirmed cannot be replayed.
-export const missingReasoningItemRecoveryRule: RecoveryRule = {
-  id: 'missing_reasoning_item',
-  statusCodes: [404],
-  enabled: () => true,
-  matches: (text) => missingReasoningItem.test(text),
-  allowExtraRules: false,
-  applyOnUnmatchedRetry: false,
-  strip: (body, errorText) => withoutReasoningItem(
-    body, errorText?.match(missingReasoningItem)?.[1],
-    (item) => (item.type === 'reasoning' || item.type === 'item_reference') && !hasCiphertext(item),
-  ),
-  // Real DeepSeek history can contain both an unsaved item and foreign ciphertext.
-  // The second upstream response must point to the sealed item before we remove it.
-  followUpRule: {
-    id: 'unverifiable_reasoning_after_missing',
-    statusCodes: [400],
-    boundedErrorBody: true,
+export function createMissingReasoningItemRecoveryRule(isEncryptedRetryEnabled: () => boolean): RecoveryRule {
+  return {
+    id: 'missing_reasoning_item',
+    statusCodes: [404],
     enabled: () => true,
-    matches: (text) => unverifiableReasoningId(text) !== undefined,
+    matches: (text) => missingReasoningItem.test(text),
     allowExtraRules: false,
     applyOnUnmatchedRetry: false,
     strip: (body, errorText) => withoutReasoningItem(
-      body, unverifiableReasoningId(errorText),
-      (item) => item.type === 'reasoning' && hasCiphertext(item),
+      body, errorText?.match(missingReasoningItem)?.[1],
+      (item) => (item.type === 'reasoning' || item.type === 'item_reference') && !hasCiphertext(item),
     ),
-  },
-};
+    // Real DeepSeek history can contain both an unsaved item and foreign ciphertext.
+    // The second upstream response must point to the sealed item before we remove it.
+    followUpRule: {
+      id: 'unverifiable_reasoning_after_missing',
+      statusCodes: [400],
+      boundedErrorBody: true,
+      enabled: isEncryptedRetryEnabled,
+      matches: (text) => unverifiableReasoningId(text) !== undefined,
+      allowExtraRules: false,
+      applyOnUnmatchedRetry: false,
+      strip: (body, errorText) => withoutReasoningItem(
+        body, unverifiableReasoningId(errorText),
+        (item) => item.type === 'reasoning' && hasCiphertext(item),
+      ),
+    },
+  };
+}

@@ -32,7 +32,7 @@ import {
   stripEncryptedContentFromBody,
 } from './transform.js';
 import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
-import { missingReasoningItemRecoveryRule } from './missing-reasoning-recovery.js';
+import { createMissingReasoningItemRecoveryRule } from './missing-reasoning-recovery.js';
 import { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
 import { closeTestConnections, fetchOverTestConnections as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
@@ -126,6 +126,7 @@ async function post(url: string, body: unknown): Promise<{ status: number; text:
 // #9928 / integration: an upstream 404 names one unsaved reasoning item in a
 // stateless replay. Legacy 400/422 rule tests do not cover this status or its buffer limit.
 describe('stateless Responses reasoning recovery', () => {
+  const missingReasoningItemRecoveryRule = createMissingReasoningItemRecoveryRule(() => true);
   const stale = { type: 'reasoning', id: 'rs_deepseek', encrypted_content: null };
   const retained = [
     { type: 'reasoning', id: 'rs_other', encrypted_content: null },
