@@ -4302,6 +4302,7 @@
           "supported": "Unterstützt",
           "unsupported": "Nicht unterstützt",
           "undeclared": "Nicht angegeben",
+          "ultrafastDeclaredUnavailable": "Vom Anbieter angegeben · Für diese Codex-Verbindung nicht verfügbar",
           "pricing": "Preise",
           "pricingLabel": "Preise",
           "noPricing": "Keine Preisdaten für diese Route",
@@ -12280,6 +12281,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Freundes kann die Anfrage in dieser Gruppe erneut stellen.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
           "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+          "ATTACHMENTS_LIMIT_REACHED": "Einige Anhänge wurden {{name}} wegen der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers und der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, verbinde dein Cindy, damit Cindy für dich arbeiten kann (gerade ist kein Cindy von dir online).",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, wähle einen Computer für diese Gruppe, um die Anfrage fortzusetzen.",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "Der von {{name}} für diese Gruppe gewählte Computer ist offline."
@@ -12322,6 +12326,7 @@
         "projectDirClear": "Ordner entfernen",
         "projectDirNote": "Wähle ein vorhandenes Projekt auf diesem Computer. Ohne Auswahl wird das passende Repository-Projekt oder das Projekt des ausführenden Begleiters verwendet. Für die Arbeitsteilung mit Git wird ein eigener Worktree angelegt.",
         "autoContinueSaveFailed": "Die Schrittübergabe konnte nicht gespeichert werden. Versuch es erneut.",
+        "projectDirNotRegistered": "Füge diesen Ordner in Cindy als Projekt hinzu und wähle ihn erneut aus.",
         "projectDirSaveFailed": "Der Projektordner konnte nicht gespeichert werden. Prüfe, ob der Ordner noch vorhanden ist, und versuch es erneut.",
         "allowMemberInvites": "Alle Mitglieder dürfen Freunde einladen",
         "allowMemberInvitesHint": "Wenn aktiviert, dürfen alle beigetretenen Mitglieder Freunde einladen. Nur Gruppeninhaber und Admins können dies ändern.",
@@ -15300,6 +15305,7 @@
       },
       "credentialSwitchDeferred": "Modellanbieter gewechselt — wird nach Abschluss der aktuellen Aufgabe wirksam.",
       "effortRuntimeDirty": "Die Denkintensität wird noch aktualisiert. Warte kurz und sende dann erneut.",
+      "tooManyTaskReferences": "Pro Nachricht sind bis zu {{max}} Aufgabenverweise möglich. Entferne die überzähligen Links.",
       "steerNotSent": "Nachricht nicht gesendet. Das Einbringen ist vorübergehend nicht verfügbar; dein Entwurf wurde beibehalten.",
       "credentialSwitchApplied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
       "credentialSwitchFailed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut.",
@@ -18334,6 +18340,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "Guthaben oder Abonnement noch nicht wieder verfügbar. Sende nach der Wiederherstellung über diese Verbindung eine Nachricht, damit geplante Aufgaben fortgesetzt werden.",
     "prTrigger": {
       "fallback": "Ohne GitHub-App-Benachrichtigungen wird weiterhin regelmäßig geprüft.",
       "label": "PR / MR",
@@ -18537,7 +18544,11 @@
       "openWorkdirFailed": "Ordner konnte nicht geöffnet werden"
     },
     "runs": {
-      "boundPluginEngineRecovery": "Die Automatisierung wurde nicht ausgeführt. Eine Automatisierung, die mit einer Aufgabe auf einer Plug-in-Engine verknüpft ist, nutzt das Modell der Aufgabe und läuft auf diesem Computer. Wenn in der Automatisierung ein Modell gewählt ist, entferne es und führe sie erneut aus.",
+      "boundPluginEngineRecovery": "Die Automatisierung konnte nicht mit der Plug-in-Engine ausgeführt werden. Öffne die Fehlerdetails, um den Grund zu prüfen.",
+      "boundPluginEngineSshRecovery": "SSH-Aufgaben müssen ihre aktuelle Engine beibehalten. Verknüpfe die Automatisierung mit einer kompatiblen Aufgabe ohne SSH, um eine Plug-in-Engine zu verwenden.",
+      "boundPluginEngineSelectionLocationRecovery": "Die Automatisierung kann am gewählten Standort der Plug-in-Engine nicht ausgeführt werden. Wähle in den Modelleinstellungen der Automatisierung eine Engine auf einem unterstützten Computer.",
+      "boundPluginEngineTaskLocationRecovery": "Die Automatisierung kann am Standort der Plug-in-Engine der verknüpften Aufgabe nicht ausgeführt werden. Verschiebe die Engine der Aufgabe auf einen unterstützten Computer oder verknüpfe eine kompatible Aufgabe.",
+      "boundPluginEngineModelRecovery": "Die Modelleinstellungen der Automatisierung passen nicht zur Plug-in-Engine der verknüpften Aufgabe. Stelle die Automatisierung so ein, dass sie das Modell der Aufgabe verwendet.",
       "queueWaitTimeoutRecovery": "Die Wartezeit ist abgelaufen, bevor die Eingabe gesendet wurde. Sobald die Zielsitzung frei ist, wähle {{action}}, um sie auszuführen.",
       "status": {
         "running": "Wird ausgeführt",
@@ -22650,6 +22661,9 @@
     "send": "Nachricht senden",
     "sending": "Wird gesendet…",
     "sent": "Eingereicht",
+    "sendTooManyArguments": "Diese Nachricht verarbeitet mehr als {{limit}} Einträge in einem Schritt. Bitte den Assistenten, sie in kleinere Gruppen aufzuteilen.",
+    "sendValueUnavailable": "Ein Wert für diese Nachricht ist nicht verfügbar. Bitte den Assistenten, die Formularfelder zu prüfen.",
+    "sendTextUnavailable": "Die Nachricht konnte nicht zum Senden vorbereitet werden.",
     "sendFailed": "Die Nachricht wurde nicht gesendet. Deine Eingaben sind noch da.",
     "playVideo": "Video abspielen",
     "openVideoSource": "Originalvideo öffnen",

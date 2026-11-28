@@ -4356,6 +4356,7 @@
           "supported": "Suportado",
           "unsupported": "Não suportado",
           "undeclared": "Não declarado",
+          "ultrafastDeclaredUnavailable": "Declarado pelo fornecedor · Indisponível nesta ligação do Codex",
           "pricing": "Preços",
           "pricingLabel": "Preços",
           "noPricing": "Sem dados de preços para esta via",
@@ -12372,6 +12373,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
           "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência. Reenvie os anexos necessários para este pedido.",
+          "ATTACHMENTS_LIMIT_REACHED": "Alguns anexos não foram entregues a {{name}} devido ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência e ao limite de anexos. Reenvie os anexos necessários para este pedido.",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, ligue o seu Cindy para que o Cindy possa trabalhar por si (nenhum Cindy seu está online neste momento).",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, escolha um computador para este grupo para continuar o pedido.",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "O computador que {{name}} escolheu para este grupo está offline."
@@ -12414,6 +12418,7 @@
         "projectDirClear": "Limpar pasta",
         "projectDirNote": "Escolha um projeto existente neste computador. Sem seleção, será usado o projeto do repositório ou o do companheiro que executar a tarefa. A divisão de trabalho em Git usa uma árvore de trabalho própria.",
         "autoContinueSaveFailed": "Não foi possível guardar as transições entre passos. Tente novamente.",
+        "projectDirNotRegistered": "Adicione esta pasta como projeto no Cindy e volte a selecioná-la.",
         "projectDirSaveFailed": "Não foi possível guardar a pasta do projeto. Certifique-se de que a pasta ainda existe e tente novamente.",
         "allowMemberInvites": "Permitir que todos convidem amigos",
         "allowMemberInvitesHint": "Quando ativado, todos os membros do grupo podem convidar amigos. Só o proprietário e os administradores podem alterar esta opção.",
@@ -15419,6 +15424,7 @@
       },
       "credentialSwitchDeferred": "Fornecedor de modelos alterado — a alteração entra em vigor quando a tarefa atual terminar.",
       "effortRuntimeDirty": "O esforço de raciocínio ainda está a ser atualizado. Aguarde um momento e volte a enviar.",
+      "tooManyTaskReferences": "Uma mensagem pode incluir até {{max}} referências a tarefas. Remova as ligações que excedem o limite.",
       "steerNotSent": "Mensagem não enviada. O encaminhamento está temporariamente indisponível; o rascunho foi mantido.",
       "credentialSwitchApplied": "A mudança de fornecedor de modelos já está em vigor.",
       "credentialSwitchFailed": "A mudança de fornecedor de modelos falhou. Escolha novamente o modelo.",
@@ -18512,6 +18518,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "A aguardar a reposição dos créditos ou da subscrição. Quando o acesso for reposto, envie uma mensagem através desta ligação para retomar as tarefas agendadas.",
     "prTrigger": {
       "fallback": "As verificações agendadas continuam sem notificações da GitHub App.",
       "label": "PR / MR",
@@ -18715,7 +18722,11 @@
       "openWorkdirFailed": "Falha ao abrir a pasta"
     },
     "runs": {
-      "boundPluginEngineRecovery": "A automatização não foi executada. Uma automatização associada a uma tarefa com motor de plugin usa o modelo da própria tarefa e é executada neste computador. Se a automatização escolher um modelo, remove-o e executa-a novamente.",
+      "boundPluginEngineRecovery": "A automatização não pôde ser executada com o motor de plugin. Abra os detalhes do erro para verificar o motivo.",
+      "boundPluginEngineSshRecovery": "As tarefas SSH têm de manter o motor atual. Para usar um motor de plugin, associe a automatização a uma tarefa compatível fora do SSH.",
+      "boundPluginEngineSelectionLocationRecovery": "A automatização não pode ser executada na localização do motor de plugin selecionado. Nas definições de modelo da automatização, escolha um motor num computador compatível.",
+      "boundPluginEngineTaskLocationRecovery": "A automatização não pode ser executada na localização do motor de plugin da tarefa associada. Mova o motor da tarefa para um computador compatível ou associe uma tarefa compatível.",
+      "boundPluginEngineModelRecovery": "As definições de modelo da automatização não são compatíveis com o motor de plugin da tarefa associada. Configure a automatização para usar o modelo da tarefa.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes de a mensagem ser enviada. Quando a sessão de destino estiver livre, escolhe {{action}} para a executar.",
       "status": {
         "running": "Em execução",
@@ -22860,6 +22871,9 @@
     "send": "Enviar mensagem",
     "sending": "A enviar…",
     "sent": "Enviado",
+    "sendTooManyArguments": "Esta mensagem usa mais de {{limit}} itens num só passo. Pede ao assistente para os dividir em grupos mais pequenos.",
+    "sendValueUnavailable": "Um valor usado nesta mensagem não está disponível. Pede ao assistente para verificar os campos do formulário.",
+    "sendTextUnavailable": "Não foi possível preparar a mensagem para envio.",
     "sendFailed": "A mensagem não foi enviada. O que introduziu continua aqui.",
     "playVideo": "Reproduzir vídeo",
     "openVideoSource": "Abrir vídeo original",

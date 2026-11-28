@@ -59,7 +59,7 @@ import {
   type DbAgentKind,
   type HandoffSourceMessage,
 } from './agentHandoff.js';
-import { unbindModelGroupSession } from '../model-groups/sessionBindings.js';
+import { modelGroupBindingMatchesTarget, unbindModelGroupSession, type PendingModelGroupTarget } from '../model-groups/sessionBindings.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { redactLocalPathText } from './coldPiRehydrationFailure.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-catalog.js';
@@ -67,6 +67,7 @@ import {
   dbToMakerAgentKind,
   isPluginEngineKind,
   makerToDbAgentKind,
+  makerToDbEngineKind,
   normalizeDbAgentKind,
   type DbEngineKind,
 } from '../../shared/agentKindConversion.js';
@@ -272,6 +273,11 @@ export interface MakerSessionAgentSwitchHandlerDeps {
      */
     commitBinding?: () => Promise<void>;
   } | null>;
+  /**
+   * 切到不归内置供应商组管理的引擎(如插件引擎 `acp`)提交成功后清除旧的供应商组绑定，
+   * 避免残留绑定继续给远程打开打上 `groupAssigned` 或污染组状态。缺省 = 跳过。
+   */
+  clearProviderGroupBinding?(sessionId: string): Promise<void>;
   /** Same-engine choices use SET_MODEL validation; only the send boundary applies them. Caller owns the session lock. */
   selectSameAgentModel?(
     sessionId: string,
@@ -359,6 +365,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     sessionId: string; agent: 'claude-code' | 'codex' | 'pi'; model: string;
     providerId: string | null; agentDeviceId: string | null;
   }): Promise<number | null>;
+  resolveLocalPluginHandoffWindow?(providerId: string, modelId: string): number | null;
   listCompanionSessionIds?(sessionId: string): Promise<{ sessionIds: string[]; chatsTruncated: boolean } | undefined>;
   relocateNativeHistory?(input: {
     sessionId: string; kind: 'claude-code' | 'codex' | 'pi'; nativeId: string; workingDir: string;
@@ -523,6 +530,10 @@ export interface PendingAgentSwitchIntent {
   localAutomationSwitch?: true;
   /** Set by the host at selection time. Never projected or accepted from IPC. */
   deviceLinkModelSelectionOrigin?: 'owner' | 'scoped';
+  /** Internal only: preserve the task's smart-routing binding when landing this pending intent. */
+  preserveModelGroupBinding?: boolean;
+  /** Candidate confirmed by the model-group bind handler for this exact pending choice. */
+  modelGroupPickedKey?: string;
   /** 'acp' = 插件引擎，providerId 必为 acp-plugin:<插件>:<引擎>。 */
   targetAgentKind: EngineKind;
   model: string;
@@ -611,7 +622,21 @@ export function projectPendingAgentSwitchIntent(
   };
 }
 
-export function createPendingAgentSwitchRegistry(): PendingAgentSwitchRegistry {
+/** Main-process view for model-group matching. Omitted position inherits the current task location. */
+export function projectPendingModelGroupTarget(intent?: PendingAgentSwitchIntent): PendingModelGroupTarget | null {
+  if (!intent) return null;
+  return {
+    agentKind: makerToDbEngineKind(intent.targetAgentKind),
+    providerId: intent.providerId ?? null,
+    model: intent.model,
+    agentDeviceId: intent.targetAgentDeviceId,
+    pickedKey: intent.modelGroupPickedKey ?? (intent.configStaged ? undefined : null),
+  };
+}
+
+export function createPendingAgentSwitchRegistry(): PendingAgentSwitchRegistry & {
+  markModelGroupPick(sessionId: string, pickedKey: string): void;
+} {
   const pending = new Map<string, PendingAgentSwitchIntent>();
   const revisions = new Map<string, number>();
   const bump = (sessionId: string): number => {
@@ -625,6 +650,10 @@ export function createPendingAgentSwitchRegistry(): PendingAgentSwitchRegistry {
       bump(sessionId);
     },
     get: (sessionId) => pending.get(sessionId),
+    markModelGroupPick: (sessionId, pickedKey) => {
+      const intent = pending.get(sessionId);
+      if (intent) intent.modelGroupPickedKey = pickedKey;
+    },
     clear: (sessionId) => {
       pending.delete(sessionId);
       bump(sessionId);
@@ -931,6 +960,8 @@ export async function performSessionAgentSwitch(
      */
     forceRelocation?: boolean;
     retryClientId?: string;
+    /** Length of the next input, known only to the internal send path. */
+    nextInputChars?: number;
     /**
      * 仅限 main 内部(不接受 IPC 传入)：供应商组为这个任务换电脑——引擎与模型不变、只换 Agent 所在位置
      * (docs/product-rules/provider-groups.md §6.1)。只在 applyNow 时生效。
@@ -1083,6 +1114,16 @@ export async function performSessionAgentSwitch(
       });
     }
   }
+  async function clearBindingAfterSwitch(): Promise<void> {
+    try {
+      await deps.clearProviderGroupBinding?.(sessionId);
+    } catch (error) {
+      deps.log.warn('agent-switch: provider group binding clear failed after switch committed', {
+        sessionId,
+        err: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   if (
     builtinTarget &&
     params.applyNow === true &&
@@ -1174,6 +1215,7 @@ export async function performSessionAgentSwitch(
         ...(confirmedContextWindow !== undefined ? { confirmedContextWindow } : {}),
         ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
         ...(params.configStaged === true ? { configStaged: true } : {}),
+        ...(params.preserveModelGroupBinding === true ? { preserveModelGroupBinding: true } : {}),
       }, params.applyNow === true, params.assertSelectionCurrent, params.beforeMutation);
       // 组选回当前位置并且模型应用真正成功(非 deferred/superseded)时才持久化新绑定；
       // 没落地的调用不应该殊到已纳入组(chatgpt-codex-connector P2, PR #5792 review)。
@@ -1259,6 +1301,9 @@ export async function performSessionAgentSwitch(
       ...((agentDeviceChanges || (!builtinTarget && targetAgentDeviceId !== null)) ? { targetAgentDeviceId } : {}),
     };
     deps.pendingSwitches.set(sessionId, intent);
+    if (!params.configStaged && !params.providerGroupRelocation && !params.scheduledModelSwitch && !params.preserveModelGroupBinding) {
+      unbindModelGroupSession(sessionId);
+    }
     deps.onPendingSwitchChanged?.(sessionId, projectPendingAgentSwitchIntent(intent));
     deps.log.info('agent-switch: intent registered (applies on next send)', {
       sessionId,
@@ -1306,9 +1351,11 @@ export async function performSessionAgentSwitch(
     // 附带早期原文检索指引(get_chat_history / search_chat_history 定向到本会话)。
     sessionId,
     reason: 'agent-switch' as const,
-    // 插件引擎不报上下文窗口，交接按默认上限截取。
+    // Only the local ACP endpoint's reports are available here; remote and shared targets keep the fallback.
     targetContextWindow: !builtinTarget
-      ? null
+      ? (!targetAgentDeviceId && pluginTarget && typeof normalizedProviderId === 'string'
+        ? deps.resolveLocalPluginHandoffWindow?.(normalizedProviderId, pluginTarget.model) ?? null
+        : null)
       : targetAgentDeviceId
         ? remoteHandoffWindow ?? null
         : await readBeforeAgentSwitch(deps.resolveHandoffWindow?.({
@@ -1316,6 +1363,7 @@ export async function performSessionAgentSwitch(
             providerId: normalizedProviderId === undefined ? row.providerId : normalizedProviderId,
             agentDeviceId: null,
           }), signal),
+    ...(!builtinTarget ? { nextInputChars: params.nextInputChars } : {}),
     ...(await readBeforeAgentSwitch(switchCompanionRecall(deps, sessionId), signal)),
   };
   let full: ReturnType<typeof buildHandoff> | undefined;
@@ -1557,6 +1605,8 @@ export async function performSessionAgentSwitch(
     // (chatgpt-codex-connector P2, PR #5792 review)。
     if (commitProviderGroupBinding) {
       await commitBindingAfterSwitch();
+    } else if (toDbKind === 'acp') {
+      await clearBindingAfterSwitch();
     }
     if (!params.configStaged && !params.providerGroupRelocation && !params.scheduledModelSwitch && !params.preserveModelGroupBinding) {
       unbindModelGroupSession(sessionId);
@@ -1876,6 +1926,17 @@ export function applyPendingAgentSwitchIfIdle(
     };
     try {
       publishPreparation('preparing');
+      // A matching model alone is insufficient: a direct pick of that model opts out.
+      let preserveModelGroupBinding = intent.preserveModelGroupBinding === true;
+      if (intent.modelGroupPickedKey) {
+        const current = intent.targetAgentDeviceId === undefined ? await deps.getSessionRow(sessionId) : undefined;
+        assertSelectionCurrent();
+        throwIfAgentSwitchAborted(signal);
+        preserveModelGroupBinding = current !== null && modelGroupBindingMatchesTarget(sessionId, {
+          ...projectPendingModelGroupTarget(intent),
+          agentDeviceId: intent.targetAgentDeviceId === undefined ? current?.agentDeviceId : intent.targetAgentDeviceId,
+        }, intent.modelGroupPickedKey);
+      }
       if (intent.sameAgentSelection) {
         if (!deps.selectSameAgentModel) throw new Error('model selection apply is unavailable');
         const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
@@ -1888,8 +1949,9 @@ export function applyPendingAgentSwitchIfIdle(
         // host registry. Apply only that choice under host authority; retain the
         // captured send fence through preflight and admit before mutation. Keep
         // this admission separate from the guest invoke's settings transaction.
+        const applyIntent = { ...intent, preserveModelGroupBinding };
         const applySelection = () => deps.selectSameAgentModel!(
-          sessionId, intent, true, assertSelectionCurrent, undefined, access, opts?.nextInputChars,
+          sessionId, applyIntent, true, assertSelectionCurrent, undefined, access, opts?.nextInputChars,
         );
         const result = await (sharedTask ? runOutsideDeviceLinkInvokeContext(applySelection) : applySelection());
         if (result.deferred && deps.projectDeferredCredentialSwitchIntent?.(sessionId)) {
@@ -1948,10 +2010,12 @@ export function applyPendingAgentSwitchIfIdle(
         fastMode: intent.fastMode,
         thinking: intent.thinking,
         agentDeviceId: intent.targetAgentDeviceId,
+        nextInputChars: opts?.nextInputChars,
         // 普通 maker send 随后会按 DB 真源 lazy-create,无需在 apply 内多 spawn 一次;
         // Goal / IM / scheduler 三条直发路径没有该 lazy-create 事务,必须先把新引擎
         // bootstrap 好再拿 live session 发送,否则会继续持有已关闭的旧 session。
         skipBootstrap: opts?.bootstrapAfterSwitch !== true,
+        ...(preserveModelGroupBinding ? { preserveModelGroupBinding: true } : {}),
         applyNow: true,
         signal,
         assertSelectionCurrent,

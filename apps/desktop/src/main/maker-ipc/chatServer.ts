@@ -3059,13 +3059,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     return { lines, included, omitted: messages.length > newest.length };
   }
+  function attachmentNotice(downloadFailed: boolean, limitReached: boolean): BotGroupCapabilityNoticeCode | undefined {
+    if (downloadFailed && limitReached) return 'ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED';
+    if (downloadFailed) return 'ATTACHMENTS_DOWNLOAD_FAILED';
+    if (limitReached) return 'ATTACHMENTS_LIMIT_REACHED';
+    return undefined;
+  }
   async function downloadTaskAttachments(roomId: string, messages: Pick<Message, 'content'>[]) {
     const mediaIds = [...new Set(messages.flatMap(message => message.content.flatMap(block =>
       block.type === 'media' && block.mediaId ? [block.mediaId] : [])))];
     const downloads = await settleBounded(mediaIds.slice(0, BOT_GROUP_ATTACHMENTS_MAX), TURN_DOWNLOAD_CONCURRENCY,
       mediaId => media.download(roomId, id.parse(mediaId)));
     const attachments = downloads.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
-    return { attachments, incomplete: attachments.length < mediaIds.length };
+    return { attachments, downloadFailed: attachments.length < downloads.length, limitReached: downloads.length < mediaIds.length };
   }
   /**
    * The requester's own words in the Thread under a task card go into the card's task as one
@@ -3100,13 +3106,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       && m.author.kind === 'human' && m.authorId !== selfId && (card.threadSeenSeq === undefined || BigInt(m.seq) > BigInt(card.threadSeenSeq))));
     const quote = readBotGroupQuote(source.content);
     const original = quote ? await readQuotedOriginal(s.room.id, quote.messageId, source) : undefined;
-    const { attachments, incomplete } = await downloadTaskAttachments(s.room.id, [
+    const { attachments, downloadFailed, limitReached } = await downloadTaskAttachments(s.room.id, [
       source, ...(original ? [original] : []), ...others.included.reverse().filter(message => message.id !== quote?.messageId),
     ]);
     if (!current() || running.get(execution.id) !== run || run.settlement) throw new Error('STALE_EXECUTOR');
-    if (incomplete || (quote && quote.attachmentCount > 0 && !original)) {
-      void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', rootId);
-      others.lines.push(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', () => bot?.displayName ?? BOT_GROUP_ASSISTANT_NAME));
+    const notice = attachmentNotice(downloadFailed || (!!quote && quote.attachmentCount > 0 && !original), limitReached);
+    if (notice) {
+      void postCapabilityNotice(run, notice, rootId);
+      others.lines.push(t(`bots.groupChat.notice.capability.${notice}`).replaceAll('{{name}}', () => bot?.displayName ?? BOT_GROUP_ASSISTANT_NAME));
     }
     const message = formatGroupRequest({ words, heading: t('bots.groupChat.task.othersSaid'), background: others.lines });
     const speaker = s.members.find(m => m.id === source.authorId);
@@ -3374,7 +3381,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           else textProgress.delete(run.sessionId);
         }
         if (!pending.cancelled && pending.terminal.outcome !== 'error' && run.attachmentAfter !== undefined) {
-          // Remember only successful, fully delivered input. This is local progress,
+          // Remember the attachment window examined by this settled lane. This is local progress,
           // not server authority, and cannot cross an authorization or Thread lane.
           try {
             const settings = workspaces().read(run.execution.conversation_id) ?? { projectDir: null, plans: {} };
@@ -3592,12 +3599,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!live() || run.settlement) throw new Error('STALE_EXECUTOR');
       selectReplyQuote(run, s.members, source, quotedMessage, []);
       // Files on the request and its direct quote take priority over its displayed background.
-      const { attachments, incomplete } = await downloadTaskAttachments(roomId,
+      const { attachments, downloadFailed, limitReached } = await downloadTaskAttachments(roomId,
         [source, ...(quotedMessage ? [quotedMessage] : []), ...attachmentSources]);
-      if (incomplete || (quote && quote.attachmentCount > 0 && !quotedMessage)) {
-        void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId);
+      const notice = attachmentNotice(downloadFailed || (!!quote && quote.attachmentCount > 0 && !quotedMessage), limitReached);
+      if (notice) {
+        void postCapabilityNotice(run, notice, threadRootId);
         // The model also needs to know that a referenced file was not delivered.
-        background.push(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', () => BOT_GROUP_ASSISTANT_NAME));
+        background.push(t(`bots.groupChat.notice.capability.${notice}`).replaceAll('{{name}}', () => BOT_GROUP_ASSISTANT_NAME));
       }
       if (!live()) throw new Error('STALE_EXECUTOR');
       run.sessionId = sessionId;
@@ -3835,8 +3843,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         }
         // Explicit quotes can point outside the recent text window or behind progress.
         // Read through the same authorized room endpoint; never trust a card's media/path.
+        const lane = await laneSetup;
+        const localAfter = workspaces().read(s.room.id)?.attachmentAfter?.[lane.sessionId];
+        const ordinary = !execution.plan_id && !execution.mask_owner_id && !digest;
+        const root = thread?.root;
+        const unseenRoot = root && !root.deleted && (!ordinary || !localAfter || BigInt(root.seq) > BigInt(localAfter));
         const quote = (source && !source.deleted ? readBotGroupQuote(source.content) : null)
-          ?? (thread?.root && !thread.root.deleted ? readBotGroupQuote(thread.root.content) : null);
+          ?? (unseenRoot ? readBotGroupQuote(root.content) : null);
         const quoted = quote ? await readMessage(s.room.id, quote.messageId).catch(() => undefined) : undefined;
         const quotedMessage = quoted && quoted.threadRootId === null
           && BigInt(quoted.seq) <= BigInt(execution.context_seq) ? quoted : undefined;
@@ -3853,8 +3866,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...(quotedMessage ? [quotedMessage.id] : [])]) : null;
         const known = [...history, ...focusMessages.filter(message => !history.some(other => other.id === message.id))];
         const attachmentHistory = thread ? [...focusMessages] : talkIds ? known.filter(message => talkIds.has(message.id)) : known;
-        const lane = await laneSetup;
-        const localAfter = workspaces().read(s.room.id)?.attachmentAfter?.[lane.sessionId];
         const after = [execution.attachment_after_seq, localAfter].reduce<bigint>((value, next) =>
           next !== undefined && BigInt(next) > value ? BigInt(next) : value, 0n);
         while (!thread && !talkIds && (execution.attachment_after_seq !== undefined || localAfter !== undefined) && page.length === 100) {
@@ -3863,16 +3874,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           page = await api<Message[]>(`/conversations/${s.room.id}/messages?all=true&limit=100&before=${before}`);
           attachmentHistory.push(...page);
         }
-        // Downloads share the media cache with other consumers. Start them only after the
-        // lane is ready, rather than cancelling a shared download on setup failure.
-        await laneSetup;
         const attachments: BotGroupAttachment[] = [];
         const missingQuotedMedia = !!quote && quote.attachmentCount > 0 && (!quotedMessage || quotedMessage.deleted);
         const missingAttachments: string[] = missingQuotedMedia ? [quote.attachmentName ?? '附件'] : [];
         // Attach a bounded newest set, and retain the names of older files in context.
         // The request and its Thread come first so the cap cannot drop the files under discussion.
-        // A Thread request never carries other Threads' files, and its own Thread's files are
-        // offered again regardless of the watermark, which only records a successful turn.
+        // Server progress is shared across Threads. Only this lane's local progress
+        // can retire its background files; a current request or explicit quote always wins.
+        const historyAfter = thread && ordinary ? BigInt(localAfter ?? '0') : after;
         const mediaDelivery = new Map<string, 'included' | 'not-included'>();
         const order = (message: Message) => {
           if (message.id === source?.id) return 4;
@@ -3886,7 +3895,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           if (message.id === quote?.messageId && (!quotedMessage || quotedMessage.deleted)) continue;
           if (message.threadRootId && !focus.has(message.id)) continue;
           if (message.deleted || block.type !== 'media' || !block.mediaId || mediaDelivery.has(block.mediaId)) continue;
-          if (BigInt(message.seq) <= after && !focus.has(message.id)) continue;
+          const retry = ordinary ? message.id === source?.id || message.id === quotedMessage?.id : focus.has(message.id);
+          if (!retry && BigInt(message.seq) <= historyAfter) continue;
           mediaDelivery.set(block.mediaId, 'not-included');
           candidates.push({ mediaId: block.mediaId, name: block.caption ?? block.mediaId });
         }
@@ -3904,17 +3914,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             else missingAttachments.push(batch[index]!.name);
           });
         }
+        const notice = attachmentNotice(missingAttachments.length > 0, next < candidates.length);
         for (const candidate of candidates.slice(next)) missingAttachments.push(candidate.name);
-        // Do not consume failed/capped files: they remain eligible on the next request.
-        if (!missingAttachments.length) run.attachmentAfter = execution.context_seq;
-        return { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, mediaDelivery };
+        // Ordinary lanes retire attempted history after successful settlement. Plans keep retry semantics.
+        if (ordinary || !notice) run.attachmentAfter = execution.context_seq;
+        return { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, notice, mediaDelivery };
       })();
       // Observed here so a read that fails after a failed setup is not an unhandled rejection.
       contextRead.catch(() => undefined);
       const lane = await laneSetup;
-      const { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, mediaDelivery } = await contextRead;
+      const { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, notice, mediaDelivery } = await contextRead;
       if (!current()) throw new Error('OWNER_CHANGED');
-      if (missingAttachments.length) void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId ?? undefined);
+      if (notice) void postCapabilityNotice(run, notice, threadRootId ?? undefined);
       if (source) selectReplyQuote(run, s.members, source, quotedMessage, history);
       const runtime = laneContext(lane.sessionId);
       const contextScope = JSON.stringify([s.room.id, threadRootId, run.plan?.id, execution.access_mode, execution.access_revision, execution.mask_owner_id]);
@@ -4135,8 +4146,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     await deliverDirectRoomMessage({ api, roomId, executionId: execution.id, sourceMessageId: id.parse(execution.source_message_id),
       humanActorId: selfId, botId, deliver: deps.companionCloud.deliverToCanonical,
       prepareAttachments: async content => {
-        const { attachments, incomplete } = await downloadTaskAttachments(roomId, [{ content }]);
-        return { attachments, ...(incomplete || content.some(block => !block.mediaId)
+        const { attachments, downloadFailed, limitReached } = await downloadTaskAttachments(roomId, [{ content }]);
+        return { attachments, ...(downloadFailed || limitReached || content.some(block => !block.mediaId)
           ? { notice: t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', () => localBot(execution.bot_id)?.displayName ?? BOT_GROUP_ASSISTANT_NAME) } : {}) };
       },
       beforeDeliver: async () => {
@@ -5197,7 +5208,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (i.organizerBotId) await register('foreground');
       const s = await groupSnapshot(i.groupId);
       let projectDir = i.projectDir;
-      if (projectDir) { const checked = await deps.validateProjectDir?.(projectDir); if (!checked?.ok) throw new Error('INVALID_DIRECTORY'); projectDir = checked.dir; }
+      if (projectDir) {
+        const checked = await deps.validateProjectDir?.(projectDir);
+        if (!checked?.ok) {
+          if (checked?.errorCode === 'PROJECT_NOT_REGISTERED')
+            return { ok: false as const, errorCode: 'PROJECT_NOT_REGISTERED' as const, message: checked.message };
+          throw new Error('INVALID_DIRECTORY');
+        }
+        projectDir = checked.dir;
+      }
       const organizerId = i.organizerBotId ? actors.find(a => a.externalId === i.organizerBotId)?.id ?? id.parse(i.organizerBotId) : i.organizerBotId;
       if (i.allowMemberInvites !== undefined && !supportsMemberInvites) throw new Error('CHAT_UNAVAILABLE');
       if (i.allowMemberMentionAll !== undefined && !supportsMemberMentionAll) throw new Error('CHAT_UNAVAILABLE');

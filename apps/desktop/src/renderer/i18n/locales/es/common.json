@@ -4356,6 +4356,7 @@
           "supported": "Compatible",
           "unsupported": "No compatible",
           "undeclared": "No declarado",
+          "ultrafastDeclaredUnavailable": "Declarado por el proveedor · No disponible en esta conexión de Codex",
           "pricing": "Precios",
           "pricingLabel": "Precios",
           "noPricing": "No hay datos de precios para esta ruta",
@@ -12372,6 +12373,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del amigo puede volver a solicitarla en este grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
           "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga. Vuelve a enviar los archivos necesarios para esta solicitud.",
+          "ATTACHMENTS_LIMIT_REACHED": "Algunos adjuntos no llegaron a {{name}} por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga y por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado).",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, elige un equipo para este grupo para continuar con la solicitud.",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "El equipo que {{name}} eligió para este grupo está desconectado."
@@ -12414,6 +12418,7 @@
         "projectDirClear": "Quitar carpeta",
         "projectDirNote": "Elige un proyecto existente en este equipo. Si lo dejas vacío, se usará el proyecto del repositorio o el del amigo que ejecute la tarea. La división del trabajo en Git usa un árbol de trabajo independiente.",
         "autoContinueSaveFailed": "No se pudieron guardar las transiciones entre pasos. Inténtalo de nuevo.",
+        "projectDirNotRegistered": "Añade esta carpeta como proyecto en Cindy y vuelve a seleccionarla.",
         "projectDirSaveFailed": "No se pudo guardar la carpeta del proyecto. Asegúrate de que la carpeta aún exista e inténtalo de nuevo.",
         "allowMemberInvites": "Permitir que todos inviten amigos",
         "allowMemberInvitesHint": "Al activarlo, todos los miembros del grupo pueden invitar amigos. Solo el dueño del grupo y los administradores pueden cambiarlo.",
@@ -15419,6 +15424,7 @@
       },
       "credentialSwitchDeferred": "Se cambió el proveedor de modelos; el cambio se aplicará cuando termine la tarea actual.",
       "effortRuntimeDirty": "La intensidad de razonamiento aún se está actualizando. Espera un momento y vuelve a enviar.",
+      "tooManyTaskReferences": "Un mensaje puede incluir hasta {{max}} referencias a tareas. Quita los enlaces que sobran.",
       "steerNotSent": "Mensaje no enviado. La incorporación a la tarea no está disponible temporalmente; se conservó tu borrador.",
       "credentialSwitchApplied": "El cambio de proveedor de modelo ya está en vigor.",
       "credentialSwitchFailed": "No se pudo cambiar el proveedor de modelos. Vuelve a elegir el modelo.",
@@ -18512,6 +18518,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "En espera de que se restablezca el saldo o la suscripción. Cuando recuperes el acceso, envía un mensaje con esta conexión para reanudar las tareas programadas.",
     "prTrigger": {
       "fallback": "Las comprobaciones programadas continúan sin notificaciones de GitHub App.",
       "label": "PR / MR",
@@ -18715,7 +18722,11 @@
       "openWorkdirFailed": "No se pudo abrir la carpeta"
     },
     "runs": {
-      "boundPluginEngineRecovery": "La automatización no se ejecutó. Una automatización vinculada a una tarea con motor de complemento usa el modelo de la propia tarea y se ejecuta en este equipo. Si la automatización elige un modelo, quítalo y vuelve a ejecutarla.",
+      "boundPluginEngineRecovery": "La automatización no pudo ejecutarse con el motor de complemento. Abre los detalles del error para consultar el motivo.",
+      "boundPluginEngineSshRecovery": "Las tareas SSH deben mantener su motor actual. Para usar un motor de complemento, vincula la automatización a una tarea compatible que no use SSH.",
+      "boundPluginEngineSelectionLocationRecovery": "La automatización no puede ejecutarse en la ubicación del motor de complemento seleccionado. En los ajustes del modelo de la automatización, elige un motor en un equipo compatible.",
+      "boundPluginEngineTaskLocationRecovery": "La automatización no puede ejecutarse en la ubicación del motor de complemento de la tarea vinculada. Cambia el motor de la tarea a un equipo compatible o vincula una tarea compatible.",
+      "boundPluginEngineModelRecovery": "La configuración del modelo de la automatización no es compatible con el motor de complemento de la tarea vinculada. Configura la automatización para que use el modelo de la tarea.",
       "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
       "status": {
         "running": "En ejecución",
@@ -22860,6 +22871,9 @@
     "send": "Enviar mensaje",
     "sending": "Enviando…",
     "sent": "Enviado",
+    "sendTooManyArguments": "Este mensaje usa más de {{limit}} elementos en un solo paso. Pide al asistente que los divida en grupos más pequeños.",
+    "sendValueUnavailable": "Un valor que usa este mensaje no está disponible. Pide al asistente que revise los campos del formulario.",
+    "sendTextUnavailable": "No se pudo preparar el mensaje para enviarlo.",
     "sendFailed": "El mensaje no fue enviado. Tus entradas todavía están aquí.",
     "playVideo": "Reproducir vídeo",
     "openVideoSource": "Abrir vídeo original",

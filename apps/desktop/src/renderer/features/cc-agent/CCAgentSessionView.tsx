@@ -256,6 +256,8 @@ import { resolveSessionInterruptCandidate } from './sessionInterruptBannerModel'
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
+import { useAvailableAgents } from '@/hooks/useAvailableAgents';
+import { chatEligibleSourcesForModel, getModel } from '@cindy/model-providers';
 import { useAuth } from '@/contexts/AuthContext';
 import { notifySharedTaskEnded } from '@/features/device-link/SharedTaskEndedNotice';
 import {
@@ -2731,6 +2733,21 @@ function CCAgentSessionContent({
   );
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
+  const { availableVendors: localRuntimeVendors } = useAvailableAgents();
+  const savedRuntimeRoute = session?.runtimeEffective;
+  // The saved engine can disappear from the catalog between launches. The main
+  // process still validates and applies the offered recovery under the send lock.
+  const allowGatewaySilentSwitch = !catalogDeviceId && !remoteDeviceId && !localProvidersLoading &&
+    session?.status === 'active' && !session.agentDeviceId && !session.remoteHostId &&
+    !session.orcaRole && !session.orcaRemoteLead && !session.runtimePending && !agentSwitchIntent &&
+    (!session.source || session.source === 'desktop') &&
+    !agentStatus.isRunning && savedRuntimeRoute?.providerId === 'xd' &&
+    localProviders.some(provider => provider.id === 'xd' && !provider.removed &&
+      !getModel(provider, savedRuntimeRoute.model, savedRuntimeRoute.agentKind) &&
+      provider.agents.some(agent => agent !== savedRuntimeRoute.agentKind &&
+        localRuntimeVendors.has(normalizeDbAgentKind(agent)) &&
+        getModel(provider, savedRuntimeRoute.model, agent)?.silentSwitch &&
+        chatEligibleSourcesForModel([provider], savedRuntimeRoute.model, agent).length > 0));
   const taskAccountCatalog = useDeviceProviders(taskAccountDeviceId ?? undefined);
   const taskAccountProviderId = usageAccount.kind === 'unreadable' ? null
     : sessionSubscriptionPoolProvider(normalizeDbAgentKind(displayAgentKind), usageChipProviderId,
@@ -3055,11 +3072,11 @@ function CCAgentSessionContent({
     selection: ModelGroupSelection,
     /** 在合并条目下点的那一行：用户在那里选的思考深度与 Fast(成员支持时带上)。 */
     context?: { effort?: string; fastMode?: true | 'ultrafast' },
-  ) => {
-    if (!sessionId) return;
+  ): Promise<boolean> => {
+    if (!sessionId) return false;
     // 和在选择器里点一行同一个顺序保证：已经点了发送就不再换；选路期间占住这个任务的切换门，
     // 这时点发送会等换完，而不是先用旧模型发出去。
-    if (hasPendingAgentSendDispatch(sessionId)) return;
+    if (hasPendingAgentSendDispatch(sessionId)) return false;
     const finishSwitch = beginAgentSwitchOperation(sessionId);
     try {
       // 选路期间切到了别的任务：换模型的入口已属于那个任务，这次作废，不动任何一个。
@@ -3069,15 +3086,15 @@ function CCAgentSessionContent({
       const result = modelGroupsTaskDeviceId
         ? await resolveDeviceModelGroup(modelGroupsTaskDeviceId, selection, context, undefined, sshHostId ? { sshHostId } : undefined)
         : await resolveModelGroup(selection, context, undefined, sshHostId ? { sshHostId } : undefined);
-      if (sessionNavigationVersionRef.current !== navigationVersion) return;
+      if (sessionNavigationVersionRef.current !== navigationVersion) return false;
       if (!result || result.outcome !== 'routed') {
         if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
-        return;
+        return false;
       }
       let applied: boolean;
       if (result.route.agentKind === 'acp') {
         const switchPlugin = pluginEngineSwitchSelectRef.current;
-        if (!switchPlugin) return;
+        if (!switchPlugin) return false;
         applied = await switchPlugin({
           providerId: result.route.providerId,
           modelId: result.route.model,
@@ -3086,7 +3103,7 @@ function CCAgentSessionContent({
         }, { alreadyLocked: true });
       } else {
         const pick = sessionModelPickRef.current;
-        if (!pick) return;
+        if (!pick) return false;
         applied = await pick({
           agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model,
           // 模式指定了推理强度 / Fast 且选中的模型支持时一起换(选路时已按目录核对过)。
@@ -3095,12 +3112,13 @@ function CCAgentSessionContent({
           ...(!sshHostId ? { agentDeviceId: result.route.agentDeviceId ?? null } : {}),
         });
       }
-      if (!applied) return;
+      if (!applied) return false;
       setDetachedBindingKey(null);
       // 记下是经哪个智能路由切入的：之后每轮按该路由持续托管(预检、图片切视觉、缓存过期重评、故障接替)。
       if (modelGroupsTaskDeviceId) await bindDeviceModelGroupSession(modelGroupsTaskDeviceId, sessionId, selection, result);
       else await bindModelGroupSession(sessionId, selection, result);
       toast.success(t('modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
+      return true;
     } finally {
       finishSwitch();
     }
@@ -3114,9 +3132,8 @@ function CCAgentSessionContent({
         onSelect: (selection: ModelGroupSelection) => { void switchTaskByModelGroup(selection); },
         // 合并整个供应商的路由也像一个供应商列出来(SSH 除外)：点其中一个模型 = 按这条路由挑成员换过去并纳入持续托管。
         ...(session?.remoteHostId ? {} : {
-          onPickMerged: (selection: ModelGroupSelection, context: { effort?: string; fastMode?: true | 'ultrafast' }) => {
-            void switchTaskByModelGroup(selection, context);
-          },
+          onPickMerged: (selection: ModelGroupSelection, context: { effort?: string; fastMode?: true | 'ultrafast' }) =>
+            switchTaskByModelGroup(selection, context),
         }),
         // 管理入口只在本机：另一台电脑的模式在那台上改。
         ...(modelGroupsTaskDeviceId ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
@@ -5091,12 +5108,12 @@ function CCAgentSessionContent({
       // 的认证弹窗/导航闭包塞进 outbox：弱网时先建立稳定 clientId 的本地乐观消息，
       // 重连后由被控端 enqueue / steer 路径做权威校验。这样离开任务后旧 outbox 也不会
       // 再弹出旧页面的认证对话框或导航回旧路由。
-      // The old Harness may no longer be authenticated. Only the unchanged
-      // host-offered route may defer this UI precheck to main's recovery.
-      const recoveringBaseline = opts?.baselineRecovery === true && session?.source === 'bot' &&
-        session.runtimeBaselineRecoveryPending === true && !session.runtimePending && !agentSwitchIntent &&
-        model === session.runtimeEffective?.model && displayAgentKind === session.runtimeEffective.agentKind &&
-        (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null);
+      const recoveringBaseline = opts?.baselineRecovery === true && session?.runtimeEffective &&
+        !session.runtimePending && !agentSwitchIntent &&
+        model === session.runtimeEffective.model && displayAgentKind === session.runtimeEffective.agentKind &&
+        (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null) &&
+        ((session.source === 'bot' && session.runtimeBaselineRecoveryPending === true) ||
+          (allowGatewaySilentSwitch && deliveryMode !== 'steer' && !isRunningRef.current));
       const authAgentKind = deliveryMode === 'steer' ? dbToMakerAgentKind(session?.agentKind) : displayAgentKind;
       const authVendor = authAgentKind === 'pi' ? 'pi' : authAgentKind === 'codex' ? 'codex' : 'cc';
       // Steer joins the current turn; only the next send applies a location switch.
@@ -5340,6 +5357,7 @@ function CCAgentSessionContent({
       remoteDeviceId,
       catalogDeviceId,
       controlledModelRoute.catalogHostDeviceId,
+      allowGatewaySilentSwitch,
       sessionHandoffPreparing,
       cindyMakeInputLocked,
       botChatIdentity,
@@ -7268,7 +7286,8 @@ function CCAgentSessionContent({
                   {...(pluginEngineSessionPicker ? { pluginEngineSession: pluginEngineSessionPicker } : {})}
                   {...(pluginEngineSwitchPicker ? { pluginEngines: pluginEngineSwitchPicker } : {})}
                   runtimeEffective={session?.runtimeEffective}
-                  allowBaselineRecovery={session?.source === 'bot' && session.runtimeBaselineRecoveryPending === true}
+                  allowBaselineRecovery={allowGatewaySilentSwitch ||
+                    (session?.source === 'bot' && session.runtimeBaselineRecoveryPending === true)}
                   baselineEffort={session?.runtimeBaseline?.effort ?? null}
                   runtimePending={session?.runtimePending}
                   // session 未加载时保留 undefined 未知态；Orca 原地切换与换电脑分别门控。

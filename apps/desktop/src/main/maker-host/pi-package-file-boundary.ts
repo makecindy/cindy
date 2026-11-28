@@ -51,6 +51,27 @@ export async function resolveStablePackagePath(
 }
 
 /**
+ * Checks that a directory observed earlier in a traversal has not been
+ * replaced by a symlink or another directory before its children are opened.
+ * The final file identity proof cannot catch this: a swapped parent can point
+ * every child path at a different, internally consistent tree.
+ */
+export async function assertStableTreeParent(
+  confinementRoot: string,
+  parentCanonicalPath: string,
+  expectedStat: Stats,
+  changedMessage: string,
+): Promise<void> {
+  if (!isWithinConfinement(confinementRoot, parentCanonicalPath)) {
+    throw new Error('Pi extension tree parent escaped its confinement root');
+  }
+  const current = await fs.lstat(parentCanonicalPath);
+  if (!current.isDirectory() || !sameStableFileIdentity(expectedStat, current)) {
+    throw new Error(changedMessage);
+  }
+}
+
+/**
  * Resolves one child of an already canonical directory. Ordinary entries keep
  * their parent's canonical path, so large package trees do not pay three
  * realpath syscalls per entry; symlinks still get the full stability proof.

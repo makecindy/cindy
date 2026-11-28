@@ -11,6 +11,7 @@
  * 用户在运行设备上直接发的消息(插话)不会触发回报：只有本机派出、仍在等待回报的消息才会。
  */
 import {
+  type InputDeliveryProjection,
   DL_HISTORY_MESSAGES_CHANNEL,
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
 } from '@cindy/device-link';
@@ -363,6 +364,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
 
   async function readDelivery(ref: RemoteWorkerRef, clientIds: string[]): Promise<{
     states: string[];
+    dispatchedInput?: InputDeliveryProjection['dispatchedInput'];
     waitingForTurn: boolean;
   }> {
     const projection = (await deps.invoke(ref.deviceId, 'maker:input:get-projection', [
@@ -370,7 +372,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       { deliveryClientIds: clientIds },
     ])) as Partial<Pick<AgentInputProjection,
       'turnInProgress' | 'autoResumePending' | 'usageLimitWait' | 'pendingQueue' | 'recovery'
-    >> & { deliveryReceipts?: Array<{ clientId?: unknown; state?: unknown }> };
+    >> & InputDeliveryProjection;
     const receipts = Array.isArray(projection?.deliveryReceipts) ? projection.deliveryReceipts : [];
     const states = clientIds.map((id) => {
       const receipt = receipts.find((entry) => entry.clientId === id);
@@ -393,6 +395,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     const pendingResume = pendingQueue.some(item => item?.autoResume === true && ownsInput(item));
     return {
       states,
+      dispatchedInput: projection?.dispatchedInput,
       // autoResumePending covers backoff and preparation; it is absent while the
       // hidden continuation is queued. turnInProgress also fences a stale idle
       // snapshot while the vendor/dispatch/terminal-persistence boundary is busy.
@@ -883,6 +886,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       proxySessionId: string;
       rawContent: string;
       clientId: string;
+      initialTask?: boolean;
       /** Lead 的 accepted 权限／状态复核必须先于运行设备持久入队。 */
       beforeEnqueue?: () => void | Promise<void>;
     }): Promise<RemoteWorkerDispatchResult> {
@@ -937,9 +941,22 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         }
         if (!current(state) || state.awaiting !== prepared)
           throw new Error('remote worker owner or dispatch changed');
-        const accept = async (): Promise<RemoteWorkerDispatchResult> => {
+        const accept = async (delivery?: Awaited<ReturnType<typeof readDelivery>> | null): Promise<RemoteWorkerDispatchResult> => {
           setReachable(ref.deviceId, true);
           schedule();
+          if (params.initialTask) {
+            // User history is durable before the execution host calls the engine.
+            // An older host or a different active input cannot confirm this task.
+            const snapshot = delivery === undefined
+              ? await readDelivery(ref, [params.clientId]).catch(() => null)
+              : delivery;
+            const started = snapshot?.dispatchedInput;
+            const kind = started?.agentKind;
+            if (started?.clientId === params.clientId && (kind === 'claude-code' || kind === 'codex' || kind === 'pi')) {
+              return { ok: true, mode: 'dispatched', agentKind: kind };
+            }
+            return { ok: true, mode: 'queued', agentKind: createOpts.agentKind };
+          }
           // Enqueue only acknowledges durable delivery. The send boundary can
           // still be applying a harness switch; neither the earlier session row
           // nor the last running-state poll identifies the accepting runtime.
@@ -974,9 +991,9 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           ) {
             const delivery = await readDelivery(ref, [params.clientId]).catch(() => null);
             const delivered = delivery?.states[0] ?? 'unknown';
-            if (delivered === 'pending' || delivered === 'accepted') return accept();
+            if (delivered === 'pending' || delivered === 'accepted') return accept(delivery);
             // 已发出但无法确认的请求保留身份，后续轮询核对，不让调用方重派同一工作。
-            if (delivered === 'unknown') return accept();
+            if (delivered === 'unknown') return accept(delivery);
           }
           throw err;
         }

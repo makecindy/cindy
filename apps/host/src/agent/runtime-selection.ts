@@ -6,6 +6,7 @@ import {
   createPendingAgentSwitchRegistry,
   performSessionAgentSwitch,
   projectPendingAgentSwitchIntent,
+  projectPendingModelGroupTarget,
   type MakerSessionAgentSwitchHandlerDeps,
 } from '../../../desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts';
 import {
@@ -121,9 +122,9 @@ import { createSessionControlRuntimeWriter } from '../../../desktop/src/main/mak
 import { shouldApplyExclusiveProviderRerouteLive } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.js';
 import { admitPluginEngineSwitchTarget } from '../../../desktop/src/main/maker-ipc/pluginEngineSessionAdmission.js';
 import { listPluginEngineViews } from '../../../desktop/src/main/maker-ipc/pluginEnginesIpc.js';
+import { getPluginEngineHandoffWindow } from '../../../desktop/src/main/maker-host/pluginEngineModelCache.js';
 import { pluginEngineKeyFromProviderId } from '../../../desktop/src/shared/pluginEngines.js';
 import type { GhostModelRoute } from '../../../desktop/src/shared/ghost.js';
-import { makerToDbAgentKind } from '../../../desktop/src/shared/agentKindConversion.js';
 import type { ModelGroupSessionBindingView } from '../../../desktop/src/shared/modelGroups.js';
 import { runOutsideDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.js';
 import {
@@ -131,7 +132,7 @@ import {
   type RunModelGroupBeforeSendPorts,
   type RunModelGroupBeforeSendSessionRow,
 } from '../../../desktop/src/main/model-groups/applyTurnRouting.js';
-import type { ModelGroupHandlersSessionTarget } from '../../../desktop/src/main/model-groups/handlersCore.js';
+import { peekModelGroupSessionBinding } from '../../../desktop/src/main/model-groups/sessionBindings.js';
 import { explicitPorts } from './explicit-ports.ts';
 
 interface HostPendingSwitchOptions {
@@ -414,6 +415,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     // switch with a non-empty agentDeviceId at its entry and refuses tasks running elsewhere at send,
     // so these are never reached; written out so a new one is a decision (explicit-ports.ts).
     resolveProviderGroupTarget: undefined,
+    clearProviderGroupBinding: undefined,
     assertAgentDeviceRouteUsable: undefined,
     describeAgentDevice: undefined,
     cancelPendingRemoteStart: undefined,
@@ -431,6 +433,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       const budget = await deps.readStoredSessionContextWindowBudget(sessionId);
       return deps.resolveConfiguredContextWindow(getActiveCatalog(), agent, providerId, model, budget, 'required');
     },
+    resolveLocalPluginHandoffWindow: (providerId, modelId) => getPluginEngineHandoffWindow(providerId, modelId),
     // Host does not assemble companion lanes for runtime handoffs.
     listCompanionSessionIds: undefined,
     relocateNativeHistory: undefined,
@@ -501,6 +504,9 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     onPendingSwitchChanged: (sessionId, intent) => {
       if (intent && !intent.preparation) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
+      if (peekModelGroupSessionBinding(sessionId)) {
+        void broadcastSessionRuntimeProjection(sessionId).catch(() => {});
+      }
     },
     // The desktop also marks an IM task as detached from its channel default; the Host has no IM.
     onUserRouteSelectionLanded: async sessionId => { await updateScheduledPreference(sessionId, null); },
@@ -1077,16 +1083,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
         );
       }
     },
-    readPendingTarget(sessionId: string): ModelGroupHandlersSessionTarget | null {
-      const intent = pendingSwitches.get(sessionId);
-      if (!intent || intent.targetAgentKind === 'acp') return null;
-      return {
-        agentKind: makerToDbAgentKind(intent.targetAgentKind),
-        providerId: intent.providerId ?? null,
-        model: intent.model,
-        agentDeviceId: intent.targetAgentDeviceId ?? null,
-      };
-    },
+    readPendingTarget: (sessionId: string) => projectPendingModelGroupTarget(pendingSwitches.get(sessionId)),
+    markPendingModelGroupPick: (sessionId: string, pickedKey: string) => pendingSwitches.markModelGroupPick(sessionId, pickedKey),
     broadcastBindingProjection(sessionId: string): void {
       void broadcastSessionRuntimeProjection(sessionId).catch(() => undefined);
     },

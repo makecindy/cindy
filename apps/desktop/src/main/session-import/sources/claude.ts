@@ -273,10 +273,10 @@ async function headSummary(file: string): Promise<{ title: string; cwd: string; 
     if (type === 'user' && !firstText && isRecord(obj.message) && obj.isCompactSummary !== true) {
       const text = claudeUserText(obj.message.content).trim();
       if (text && isInternalReviewText(text)) return { title: '', cwd, internal: true, ok: true, cindy };
-      if (text) firstText = text;
+      firstText = makeTitle(text, '');
     }
   }
-  const title = makeTitle(firstNonEmpty(stripCindyInjection(customTitle), aiTitle, firstText), '');
+  const title = makeTitle(customTitle, '') || makeTitle(aiTitle, '') || firstText;
   return { title, cwd, internal: false, ok: saw, cindy };
 }
 

@@ -156,6 +156,8 @@ import {
   readWindowFullscreenState,
   showMainWindowAndRestoreFullscreen,
 } from './mainWindowFullscreenStartup';
+import { installMacFullscreenDesyncRecovery } from './macFullscreenRecovery';
+import { readPluginUiRegions } from './mcp-apps/visibility';
 import {
   installMainWindowMaximizeRecovery,
   installMainWindowNativeRestoreIntent,
@@ -1288,6 +1290,7 @@ import { applyDockIcon } from './app-icon.js';
 import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
+  noteModelAccessAgentBinariesReady,
   noteManualXdKeySaved,
   noteManualXdKeyRemoved,
   refreshXdGatewayModels,
@@ -4970,6 +4973,15 @@ const createWindow = () => {
     // animation start so traffic-light padding returns before the end event.
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
   });
+  installMacFullscreenDesyncRecovery(mainWindow, {
+    windowLabel: 'main',
+    trafficLightPosition: { x: 12, y: 16 },
+    minSize: { width: 800, height: 600 },
+    shouldShowWindowButtons: () => {
+      const regions = readPluginUiRegions(mainWindow);
+      return regions.workspace && regions.windowControls;
+    },
+  });
 
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
@@ -7793,6 +7805,7 @@ const registerIpcHandlers = () => {
     startBinaryBackgroundUpdates();
 
     instanceBinariesReady = true;
+    noteModelAccessAgentBinariesReady();
 
     return {
       claudeCode: { status: claudeRes.ready ? 'passed' as const : 'failed' as const, path: claudeRes.path },
@@ -10730,7 +10743,8 @@ app.on('ready', async () => {
           throwIpcError('PRECONDITION_FAILED', 'The task already has a worktree');
         }
         return WorktreeManager.createWorktree(request, {
-          awaitFullCheckout: true,
+          trackBackgroundCheckout: true,
+          strictSelectiveCheckout: true,
           refreshDefaultSource: true,
           assertCurrent,
         });
