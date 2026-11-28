@@ -100,6 +100,7 @@ export type DispatchWorkerMessageResult =
   | {
       ok: true;
       mode: 'dispatched' | 'queued' | 'steered';
+      acceptedWithoutAgent?: true;
       /** Accepting runtime locally; remote delivery reports the execution device's Agent at enqueue. */
       agentKind?: EngineKind;
       /** 底层 dispatcher 为该消息生成的 clientId;queued 模式下即队列内寻址句柄。 */
@@ -127,7 +128,7 @@ export interface DispatchWorkerTaskParams {
 }
 
 /** worker 派活的 domain 结果，保留 queued 与 dispatchOutcome 供不同 adapter 自行翻译。 */
-export type DispatchWorkerTaskResult =
+type WorkerDispatchWithRuntime =
   | {
       dispatched: true;
       queued?: false;
@@ -154,6 +155,13 @@ export type DispatchWorkerTaskResult =
       queued?: false;
       dispatchOutcome: CollabDispatchFailureOutcome;
     };
+
+// Creation only needs the input receipt. A peer may confirm acceptance without identifying the Agent.
+export type DispatchWorkerTaskResult = WorkerDispatchWithRuntime | {
+  dispatched: true;
+  queued?: false;
+  dispatchOutcome: CollabDispatchSuccessOutcome;
+};
 
 /** 简单生命周期操作的 domain result，供 IPC 与 MCP adapter 各自翻译。 */
 export type OrcaOkResult =
@@ -1224,6 +1232,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       // Creation can queue its first task too; acceptance then lands after this call.
       assertDeliveryCurrent: await deps.captureDeliveryAuthority?.(link.leadSessionId),
     });
+    const { result } = execution;
+    if (result.ok && result.acceptedWithoutAgent) {
+      return {
+        dispatched: true,
+        dispatchOutcome: { kind: 'session-dispatch', dispatched: true, source: params.dispatchMeta.source },
+      };
+    }
     return mapNormalDispatchResult(target, execution);
   }
 
@@ -1244,7 +1259,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   function mapNormalDispatchResult(
     target: OrcaWorkerRecordSnapshot,
     execution: ResolvedWorkerDispatchExecution,
-  ): DispatchWorkerTaskResult {
+  ): WorkerDispatchWithRuntime {
     const { result } = execution;
     if (!result.ok) {
       return { dispatched: false, dispatchOutcome: result.dispatchOutcome };

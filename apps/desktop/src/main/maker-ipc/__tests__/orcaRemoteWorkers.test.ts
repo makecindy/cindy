@@ -681,6 +681,26 @@ describe('wrapTeamDeps', () => {
     return { ...ctx, service, deps, getWorker: () => worker };
   }
 
+  // #13619, unit: the creation dispatch must keep the accepted receipt when the Agent lookup fails.
+  it('returns an accepted first task without inferring its Agent from the session', async () => {
+    const h = await trackedTeam({ handle: (_device, channel, args) => {
+      if (channel === 'maker:input:enqueue') return fail('INVOKE_TIMEOUT', 'lost ACK');
+      if (channel === 'maker:input:get-projection') {
+        const { deliveryClientIds } = args[1] as { deliveryClientIds: string[] };
+        return ok({ deliveryReceipts: deliveryClientIds.map(clientId => ({ clientId, state: 'accepted' })) });
+      }
+      if (channel === 'local-db:messages:around-client-id') return fail('INVOKE_TIMEOUT', 'history unavailable');
+    } });
+    try {
+      const result = await h.service.dispatchWorkerTask({ targetSessionId: 'proxy-1', message: 'work',
+        dispatchMeta: { source: 'orca', context: 'create_worker/proxy-1/initial_task' } });
+      expect(result).toEqual({ dispatched: true, dispatchOutcome: {
+        kind: 'session-dispatch', dispatched: true, source: 'orca',
+      } });
+      expect(h.remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:input:enqueue')).toHaveLength(1);
+    } finally { h.workers.stop(); }
+  });
+
   // #11042 / PR #11060: unit, real TeamService + remote adapter. Existing report
   // tests never acknowledged done. A foreground-idle remote has no background
   // signal, so automatic acknowledgement must preserve done. Explicit idle and

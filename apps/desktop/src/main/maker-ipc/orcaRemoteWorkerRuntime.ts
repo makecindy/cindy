@@ -56,6 +56,8 @@ export type RemoteWorkerDispatchResult =
   | {
       ok: true;
       mode: 'dispatched' | 'queued' | 'unknown';
+      /** Exact input was accepted but this peer did not identify its runtime. */
+      acceptedWithoutAgent?: true;
       /** Accepted input's Agent; queued deliveries retain the pre-enqueue Agent. */
       agentKind: AgentInputCreateOpts['agentKind'];
     }
@@ -937,7 +939,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         }
         if (!current(state) || state.awaiting !== prepared)
           throw new Error('remote worker owner or dispatch changed');
-        const resolveReceipt = async (fallback: 'queued' | 'unknown'): Promise<RemoteWorkerDispatchResult> => {
+        const resolveReceipt = async (fallback: 'queued' | 'unknown' | 'accepted'): Promise<RemoteWorkerDispatchResult> => {
           setReachable(ref.deviceId, true);
           schedule();
           // Enqueue only acknowledges durable delivery. The send boundary can
@@ -953,6 +955,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
             const accepted = Array.isArray(rows)
               ? rows.find((entry) => entry.clientId === params.clientId && entry.role === 'user')
               : undefined;
+            if (accepted) fallback = 'accepted';
             const kind = accepted?.agentKind;
             if (kind === 'cc' || kind === 'claude-code' || kind === 'codex' || kind === 'pi') {
               return { ok: true, mode: 'dispatched', agentKind: agentKindOf(kind === 'cc' ? 'claude-code' : kind) };
@@ -960,6 +963,9 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           } catch {
             // The input may still be queued, or this read may be unavailable.
             // Existing polling owns recovery; do not re-enqueue or tear down the link.
+          }
+          if (fallback === 'accepted') {
+            return { ok: true, mode: 'queued', acceptedWithoutAgent: true, agentKind: createOpts.agentKind };
           }
           return { ok: true, mode: fallback, agentKind: createOpts.agentKind };
         };
@@ -974,7 +980,8 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           ) {
             const delivery = await readDelivery(ref, [params.clientId]).catch(() => null);
             const delivered = delivery?.states[0] ?? 'unknown';
-            if (delivered === 'pending' || delivered === 'accepted') return resolveReceipt('queued');
+            if (delivered === 'accepted') return resolveReceipt('accepted');
+            if (delivered === 'pending') return resolveReceipt('queued');
             // 已发出但无法确认的请求保留身份，后续轮询核对，不让调用方重派同一工作。
             if (delivered !== 'removed') return resolveReceipt('unknown');
           }
