@@ -149,6 +149,8 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
   （同一台电脑的另一个目录）／`other_computer`（运行设备），后三类附一句 `handoff_hint`。按创建参数与
   实际落点判定，不读 Lead 目录。
 
+跨电脑创建时，Lead 按首条任务的 clientId 查询运行设备的投递回执。运行设备仅在引擎已接手该输入时返回 `dispatchedInput`；消息已落库、查询失败或旧运行设备缺少回执字段时，创建结果保守显示 `queued`，由现有回报通道继续核对。
+
 实现见 `create_worker.ts` 的 `initialTaskState` / `workerHandoffPayload`，回归见
 `createWorkersTool.test.ts`。任务正文要自包含写在这两个工具与 `send_to_worker` 的工具说明里，不进系统提示词。
 
@@ -956,7 +958,9 @@ Desktop 和 Mobile 均隐藏协同入口，保留 `releasedAt` 的历史来源�
 Mobile 的入口读取和残留表单提交都检查该身份，元数据补齐标记后返回主面板；
 回归见 `apps/mobile/src/__tests__/orcaTeam.test.ts` 与 `useOrcaWorkerForm.test.tsx`。
 
-当前停止补偿的已知限制：`maker:abort-session` 只接受任务 ID，没有目标轮次与持久请求
+显式归档单个跨设备 Worker 使用同账号专用通道 `maker:orca:remote-worker:archive`。运行设备在发送锁内核对来源、关闭会话并在原任务来源标记中保存关闭回执。重复请求只读回执；工作目录和任务记录保留。Lead 收到明确回执才归档代理，设备离线或旧端拒绝新通道时可在恢复连接或更新后重试。旧 Lead 继续使用原有通道。若 Worker 的 Agent 又运行在另一台电脑，通用 Remote Agent 关闭暂不能证明进程已停，运行设备在关闭前返回原因并保留协同归属。已有可信回执仍可重放。
+
+团队结束和创建回滚的旧停止补偿仍有已知限制：`maker:abort-session` 只接受任务 ID，没有目标轮次与持久请求
 身份；若运行设备已停止但回执丢失，后续补偿可能停止用户新发起的轮次。现有传输去重
 不能覆盖新的请求或运行设备重启。不能把超时当成功、取消所有补偿，或用先查空闲再停止
 代替解决；后续应在 Orca 专用边界设计持久幂等停止、目标轮次条件与旧端能力协商，覆盖

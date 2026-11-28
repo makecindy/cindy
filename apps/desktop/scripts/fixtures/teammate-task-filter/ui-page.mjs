@@ -13,9 +13,23 @@ export default {
     default: { about: 'Legacy choice migration → one Cindy across computers → unrestricted → single/multiple/reset; archived creator avatar' },
     'task-info': { about: 'Hide the three row identifiers independently in the task information menu' },
     layout: { about: 'Every submenu of the display settings menu: grouping, sorting, the harness list with a plugin harness, hiding and task information' },
+    'inbox-hidden': { about: 'Inbox display settings have no reminder dot while automation tasks are hidden; hidden choices remain checked' },
     'task-status': { about: 'Task status is chosen in place; viewing archived tasks no longer marks the menu or its button' },
   },
   async check(page, ui) {
+    if (ui.case === 'inbox-hidden') {
+      await page.evaluate(() => localStorage.setItem('featureIntro.taskInbox.seen', '1'));
+      await page.getByRole('radio', { name: await ui.t('ccAgent.sidebar.taskListMode.inbox'), exact: true }).click();
+      await page.getByRole('menuitem', { name: new RegExp(`^${await ui.t('ccAgent.sidebar.hideHeading')}`) }).press('ArrowRight');
+      const hide = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.hideOptions.automations'), exact: true });
+      await hide.click();
+      // The menu rebuilds after the persisted hide preference changes; reopen its submenu.
+      await page.getByRole('menuitem', { name: new RegExp(`^${await ui.t('ccAgent.sidebar.hideHeading')}`) }).press('ArrowRight');
+      assert.equal(await hide.getAttribute('aria-checked'), 'true');
+      assert.equal(await page.locator('[data-filter-reminder]').count(), 0);
+      await ui.capture('inbox-hidden-no-reminder');
+      return;
+    }
     if (ui.case === 'task-info') {
       const info = page.getByRole('menuitem').filter({ hasText: await ui.t('ccAgent.sidebar.taskInfoHeading') }).first();
       await info.press('ArrowRight');
