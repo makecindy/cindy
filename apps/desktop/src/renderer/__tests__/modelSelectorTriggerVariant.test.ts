@@ -44,6 +44,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.loading': '正在读取模型…',
+        'newChat.modelSelector.preparation.preparing': '准备中…',
+        'newChat.modelSelector.preparation.failed': '切换失败',
         'newChat.modelSelector.trigger.unresolved': '模型信息暂不可用',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
@@ -1424,6 +1426,12 @@ describe('ModelSelector trigger variants', () => {
       expect(trigger.querySelector('[data-model-selection-pending]')).not.toBeNull();
       expect(Boolean(trigger.querySelector('[data-composer-engine-mark="codex"]'))).toBe(!ultra);
       expect(trigger.querySelector('.lucide-zap')).toBeNull();
+      // The real selector must distinguish failed/preparing targets from an
+      // applied route; current/next context remains available in both states.
+      view.rerender(React.createElement(ModelSelector, { ...props, selectionPreparation: 'preparing' }));
+      expect(screen.getByRole('status').textContent).toBe('准备中…');
+      view.rerender(React.createElement(ModelSelector, { ...props, selectionPreparation: 'failed' }));
+      expect(screen.getByRole('status').textContent).toBe('切换失败');
       view.rerender(React.createElement(ModelSelector, { ...props, agentIdentity: resolveModelSelectorAgentIdentity('codex', null) }));
       expect(screen.getByRole('button').title).not.toContain('Next message:');
       expect(screen.getByRole('button').querySelector('[data-model-selection-pending]')).toBeNull();

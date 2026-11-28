@@ -177,7 +177,7 @@ import { t } from '../i18n.desktop.js';
 import { MACHINE_STATUS_CHANNEL } from '@cindy/device-link';
 import { invokeDeviceValue } from '../maker-ipc/orcaRemoteWorkers.js';
 import { createHistoryRemoteDeps } from '../mcp-integrations/historyDevices.js';
-import { WorktreePool } from '../worktree/index.js';
+import { WorktreeManager, WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
 import {
   ownerScopedUserDataPath,
@@ -2587,6 +2587,8 @@ export function getMaker(): Maker {
         readImageDeliveryEpoch: readGeneratedImageEpoch,
         attachmentPreservation: sessionId => attachmentPreservation(sessionId),
         attachmentStorageRoots: sessionId => attachmentStorageRoots(sessionId),
+        ensureWorktreeReady: (sessionId, signal) =>
+          WorktreeManager.ensureBackgroundCheckoutReady(sessionId, signal),
         remoteInvoke: remoteBackgroundInvoke,
         renewSharedProviderLink: (peer) => isCrossRegionProviderShareTarget(peer)
           ? renewCrossRegionProviderShareLink(peer) : openRemoteLink(peer),
@@ -2627,7 +2629,15 @@ export function getMaker(): Maker {
       // Desktop-specific session 生命周期副作用钩子。maker-core 不知道文件系统细节，
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
-        beforeTurn: applyProjectDirectoriesForTurn,
+        beforeTurn: async (session, signal) => {
+          // 所有入口（桌面、IM turnRunner、自动化、Orca 等）的本机 ACP 发送共用此边界，
+          // 确保受管 worktree 后台 full checkout 完成后再派发 session/prompt；
+          // 远程/共享 ACP（agentDeviceId 非空）延后到 RemoteExecutor 首个工作树工具前等待。
+          if (session.agentKind === 'acp' && !session.agentDeviceId && !session.remoteHostId) {
+            await WorktreeManager.ensureBackgroundCheckoutReady(session.id, signal);
+          }
+          await applyProjectDirectoriesForTurn(session);
+        },
         prepareStartOptions: async (sessionId, opts) => {
           pendingBotRuntimeSnapshots.delete(sessionId);
           // Agent 在另一台电脑上运行的任务：所有入口(界面、定时任务、IM、协同等)恢复时都以任务

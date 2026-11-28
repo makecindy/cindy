@@ -103,6 +103,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
       setProjectsAll: vi.fn(),
       gc: vi.fn(),
       setVendor: vi.fn(),
+      toggleVendor: vi.fn(),
       setLastActivity: vi.fn(),
       setGroupBy: vi.fn(),
       setGroupDialogue: vi.fn(),

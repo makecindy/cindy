@@ -38,6 +38,7 @@ function harness(result: unknown, reject = false, sharedTaskId: string | undefin
     sessionsById: new Map([['task', session]]), sessionsByIdRef: { current: new Map([['task', session]]) },
     runningSessionIds: new Set(), attachedSessionIdsRef: { current: new Set() },
     loadActiveBoundScheduleNames: async () => new Map(),
+    loadActiveBoundSchedules: async () => new Map(),
     isRemoteSessionWriteBlocked: () => false, resolveWorktreeRemovalPreflight: preflight,
     archiveBlockedByRunning, confirmTaskArchive: confirmDialog,
     viewedSessionIdRef: { current: 'other' }, viewedSessionId: 'other',
@@ -301,7 +302,11 @@ describe('archive preserves the current task until preflight and confirmation fi
     const resolvePreflight = vi.fn(() => preflight.promise);
     const attachment = vi.fn(async () => ({ attached: false }));
     const schedules = vi.fn(async () =>
-      new Map(scheduleNames.length > 0 ? [['task', scheduleNames]] : []));
+      new Map(
+        scheduleNames.length > 0
+          ? [['task', scheduleNames.map((name) => ({ id: name, name, deviceId: 'device-1', deletable: true }))]]
+          : [],
+      ));
     const bindings = {
       window: { electronAPI: { binding: { resolveSession: attachment } } },
       toast: { error: vi.fn(), warning: vi.fn() }, t: (key: string) => key,
@@ -309,7 +314,8 @@ describe('archive preserves the current task until preflight and confirmation fi
       runningSessionIds: new Set(), attachedSessionIdsRef: { current: new Set() },
       isRemoteSessionWriteBlocked: () => false, remoteWritesBlocked: false,
       resolveWorktreeRemovalPreflight: resolvePreflight,
-      loadActiveBoundScheduleNames: schedules,
+      loadActiveBoundScheduleNames: async () => new Map(scheduleNames.length > 0 ? [['task', scheduleNames]] : []),
+      loadActiveBoundSchedules: schedules,
       confirmTaskArchive: confirmDialog,
       viewedSessionIdRef: { current: 'task' }, viewedSessionId: 'task',
       resolveSessionRemovalRedirect: vi.fn(), unarchiveSession: vi.fn(),
@@ -326,7 +332,7 @@ describe('archive preserves the current task until preflight and confirmation fi
       closeOwnedSharedTask: async () => true,
       archiveBlockedByRunning: () => false,
       confirm: { sessionId: 'task', action: 'archive' },
-      session, sessionId: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId,
+      session, sessionId: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId, orcaRole: undefined,
       confirmDialog,
     };
     return {
@@ -344,7 +350,7 @@ describe('archive preserves the current task until preflight and confirmation fi
   it('sidebar samples the worktree after attachment and schedule lookup settle', async () => {
     const h = archiveHarness(entrypoints[0]!);
     const attachment = deferred<{ attached: boolean }>();
-    const schedules = deferred<Map<string, string[]>>();
+    const schedules = deferred<Map<string, { id: string; name: string; deviceId: string; deletable: boolean }[]>>();
     h.attachment.mockReturnValueOnce(attachment.promise);
     h.schedules.mockReturnValueOnce(schedules.promise);
     const pending = h.archive();
@@ -421,7 +427,9 @@ describe('archive preserves the current task until preflight and confirmation fi
       await vi.waitFor(() => {
         expect(h.confirmDialog).toHaveBeenCalled();
       });
-      expect(h.confirmDialog).toHaveBeenCalledWith('clean', ['Daily report']);
+      expect(h.confirmDialog).toHaveBeenCalledWith('clean', [
+        { id: 'Daily report', name: 'Daily report', deviceId: 'device-1', deletable: true },
+      ]);
       expect(h.visible()).toBe(false);
       expect(h.runSessionAction).not.toHaveBeenCalled();
       await h.finish(false);

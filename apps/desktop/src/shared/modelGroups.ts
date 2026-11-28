@@ -454,7 +454,7 @@ export interface ModelGroupResolveRequest {
    * effort / fastMode = 用户在选择器里给这个模型选的思考深度与 Fast：只对供应商路由展开出来的路由生效
    * (它们在选择器里就是普通模型行，这两项用户照常能调)，选中的来源不支持时不带。
    */
-  context?: { hasImages?: boolean; effort?: string; fastMode?: true | 'ultrafast' };
+  context?: { scheduled?: boolean; hasImages?: boolean; effort?: string; fastMode?: true | 'ultrafast' };
   /**
    * 只在这个运行位置的来源里选(agentDeviceId null = 本机)。省略 = 不限(含跨本地、分享与远程位置)。
    */
