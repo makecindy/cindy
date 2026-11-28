@@ -690,6 +690,16 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       expect(bodies[2].max_tokens).not.toBe(1234);
       expect(selections).toBe(2);
       expect(JSON.stringify(bodies)).not.toContain('CINDY_MODEL_REQUEST');
+      // Real Pi, integration: the live clock follows the user turn through
+      // a tool continuation and stays out of history on the next request.
+      const turnTime = /Current local time at the start of this turn: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}/g;
+      const userMessages = (body: { messages: { role: string }[] }) =>
+        body.messages.filter(message => message.role === 'user');
+      const firstTurnTime = JSON.stringify(userMessages(bodies[0])[0]).match(turnTime);
+      expect(firstTurnTime).toHaveLength(1);
+      expect(JSON.stringify(userMessages(bodies[1])[0]).match(turnTime)).toEqual(firstTurnTime);
+      expect(JSON.stringify(userMessages(bodies[2])[0]).match(turnTime)).toBeNull();
+      expect(JSON.stringify(userMessages(bodies[2]).at(-1)).match(turnTime)).toHaveLength(1);
     } finally {
       await handle?.close();
       scriptedResponses.length = 0;
