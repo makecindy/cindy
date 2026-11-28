@@ -8,6 +8,19 @@
       "selected": "已選取"
     }
   },
+  "voiceCall": {
+    "title": "語音通話",
+    "saved": "記錄已儲存",
+    "you": "你",
+    "companion": "夥伴",
+    "sendFailed": "傳送失敗，原話已保留。",
+    "handoff": {
+      "sending": "正在交接…",
+      "accepted": "已交給夥伴處理",
+      "failed": "交接失敗，原話已保留",
+      "completed": "結果已返回"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "由本機應用程式「{{name}}」傳送",
     "sourceLocalAppId": "應用程式 ID：{{id}}",
@@ -265,6 +278,8 @@
     "delete": "刪除",
     "retry": "重試",
     "notSent": "未傳送",
+    "deliveryUnconfirmed": "傳送結果未確認",
+    "recheckDelivery": "重新確認",
     "imagesNotUploaded_one": "{{count}} 張圖片沒傳上去",
     "imagesNotUploaded_other": "{{count}} 張圖片沒傳上去",
     "waitingForNamedComputer": "連上{{name}}後自動傳送",
@@ -444,6 +459,9 @@
     "send": "傳送訊息",
     "sending": "正在傳送…",
     "sent": "已提交",
+    "sendTooManyArguments": "這則訊息一次處理的內容超過 {{limit}} 項。請讓助理分組處理後重新產生。",
+    "sendValueUnavailable": "這則訊息需要的值無法讀取。請讓助理檢查表單欄位。",
+    "sendTextUnavailable": "無法產生要傳送的訊息。",
     "sendFailed": "訊息未提交，已保留填寫內容",
     "playVideo": "播放影片",
     "downloadVideo": "下載影片",

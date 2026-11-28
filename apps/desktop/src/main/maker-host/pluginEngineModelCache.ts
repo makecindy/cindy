@@ -29,6 +29,8 @@ export interface CachedPluginEngineModel {
 const MODELS_FILE = 'plugin-engine-models.json';
 const MAX_HARNESSES = 32;
 const MAX_TEXT = 200;
+// The built-in model catalogue reaches 3.5M tokens. Allow that scale, not arbitrary sizes.
+const MAX_REPORTED_CONTEXT_WINDOW = 4_000_000;
 
 const harnessModels = new Map<string, CachedPluginEngineModel[]>();
 /** The account file the in-memory list was read from; another account reads its own file. */
@@ -36,15 +38,39 @@ let harnessModelsFile: string | null = null;
 const listeners = new Set<() => void>();
 const detailsListeners = new Set<() => void>();
 const liveDetails = new Map<string, Map<symbol, PluginEngineReportedModelDetails>>();
-let liveDetailsOwner = -1;
+const handoffWindows = new Map<string, Map<string, number>>();
+let reportedModelsOwner = -1;
 
-function currentLiveDetails(): typeof liveDetails {
-  const owner = getDataOwnerLifetime();
-  if (owner !== liveDetailsOwner) {
+function ensureReportedModelsOwner(owner = getDataOwnerLifetime()): void {
+  if (owner !== reportedModelsOwner) {
     liveDetails.clear();
-    liveDetailsOwner = owner;
+    handoffWindows.clear();
+    reportedModelsOwner = owner;
   }
-  return liveDetails;
+}
+
+/** Keep the last valid window even after the endpoint closes; never publish it to a catalogue. */
+export function observePluginEngineContextWindow(providerId: string) {
+  const owner = getDataOwnerLifetime();
+  return (modelId: string, size: number): void => {
+    if (getDataOwnerLifetime() !== owner || !modelId || modelId.length > GHOST_HARNESS_MODEL_ID_MAX
+      || !Number.isSafeInteger(size) || size <= 0 || size > MAX_REPORTED_CONTEXT_WINDOW) return;
+    ensureReportedModelsOwner(owner);
+    const models = handoffWindows.get(providerId) ?? new Map<string, number>();
+    if (models.get(modelId) === size) return;
+    // Bound this cache to the same scale as the model list, retaining recent updates.
+    models.delete(modelId);
+    models.set(modelId, size);
+    if (models.size > GHOST_HARNESS_MODELS_MAX) models.delete(models.keys().next().value!);
+    handoffWindows.delete(providerId);
+    handoffWindows.set(providerId, models);
+    if (handoffWindows.size > MAX_HARNESSES) handoffWindows.delete(handoffWindows.keys().next().value!);
+  };
+}
+
+export function getPluginEngineHandoffWindow(providerId: string, modelId: string): number | null {
+  ensureReportedModelsOwner();
+  return handoffWindows.get(providerId)?.get(modelId) ?? null;
 }
 
 /** One observer per running endpoint. No credentials, disk cache or remote reads. */
@@ -54,17 +80,17 @@ export function observePluginEngineModelDetails(providerId: string) {
   return (details: PluginEngineReportedModelDetails | undefined): void => {
     if (getDataOwnerLifetime() !== owner) return;
     if (details && details.modelId.length > GHOST_HARNESS_MODEL_ID_MAX) details = undefined;
-    const providers = currentLiveDetails();
-    const reports = providers.get(providerId);
+    ensureReportedModelsOwner(owner);
+    const reports = liveDetails.get(providerId);
     if (details) {
       const next = reports ?? new Map();
       // The most recent report for each model wins, with older live sessions as fallback.
       next.delete(session);
       next.set(session, details);
-      providers.set(providerId, next);
+      liveDetails.set(providerId, next);
     } else {
       if (!reports?.delete(session)) return;
-      if (!reports.size) providers.delete(providerId);
+      if (!reports.size) liveDetails.delete(providerId);
     }
     for (const listener of [...detailsListeners]) listener();
   };
@@ -76,7 +102,8 @@ export function onReportedPluginEngineModelDetailsChanged(listener: () => void):
 }
 
 export function getReportedPluginEngineModelDetails(providerId: string): PluginEngineReportedModelDetails[] {
-  const reports = currentLiveDetails().get(providerId);
+  ensureReportedModelsOwner();
+  const reports = liveDetails.get(providerId);
   if (!reports) return [];
   const byModel = new Map<string, PluginEngineReportedModelDetails>();
   for (const report of reports.values()) byModel.set(report.modelId, report);
@@ -149,7 +176,8 @@ export function resetPluginHarnessModelCacheForTests(): void {
   harnessModels.clear();
   harnessModelsFile = null;
   liveDetails.clear();
-  liveDetailsOwner = -1;
+  handoffWindows.clear();
+  reportedModelsOwner = -1;
   detailsListeners.clear();
   listeners.clear();
 }

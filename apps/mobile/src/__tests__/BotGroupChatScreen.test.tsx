@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { act, createContext, createElement as el, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
+import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData, type ChatMaskState } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatPage } from '@/chat/chatServerClient';
 import { clearChatServerMediaCache } from '@/chat/chatServerMediaCache';
 import { shareSelectionStore } from '@/session/shareSelectionStore';
@@ -35,8 +36,15 @@ const h = vi.hoisted(() => ({
   nativeMenus: true,
   appState: 'active',
   appStateListeners: new Set<(state: string) => void>(),
+  screenReader: false,
+  screenReaderListeners: new Set<(enabled: boolean) => void>(),
   closeSettings: null as null | (() => void),
   row: null as any,
+  accessibility: new Map<string, {
+    actions?: readonly { name: string; label?: string }[];
+    tap?: () => void;
+    action?: (event: { nativeEvent: { actionName: string } }) => void;
+  }>(),
   inputFocus: vi.fn(),
   inputBlur: vi.fn(),
   inputFocused: false,
@@ -69,6 +77,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // Keep production message components; adapt native surfaces for jsdom.
+import { resetOptimisticReactionsForTest } from '@/chat/optimisticReactions';
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 vi.mock('@/session/ConversationShareSvg', () => ({ ConversationShareSvg: ({ ref, messages }: any) => {
   h.exported.push(messages); useImperativeHandle(ref, () => ({ exportPng: h.pngExport })); return null;
@@ -78,9 +87,9 @@ vi.mock('@/session/ConversationShareWebView', () => ({ cleanupConversationShareP
 vi.mock('expo-sharing', () => ({ shareAsync: h.sharedImage }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
 vi.mock('react-native-uitextview', () => ({
-  UITextView: ({ children, testID, onPress, onTouchStart, style }: any) => {
+  UITextView: ({ children, testID, onPress, onTouchStart, style, accessibilityRole }: any) => {
     h.textRender();
-    return el('span', { 'data-testid': testID, onClick: onPress, onTouchStart,
+    return el('span', { 'data-testid': testID, onClick: onPress, onTouchStart, role: accessibilityRole,
       'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))) }, children);
   },
 }));
@@ -130,8 +139,14 @@ vi.mock('react-native', () => {
       h.keyboardAvoidingView = props;
       return el('div', null, children);
     },
-    Pressable: ({ children, onPress, disabled, testID, accessibilityLabel }: any) => el('button',
-      { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress },
+    Pressable: ({ children, onPress, onLongPress, disabled, testID, accessibilityLabel, accessibilityRole, accessibilityHint,
+      accessibilityActions, onAccessibilityAction, onAccessibilityTap }: any) => el('button',
+      { 'data-testid': testID, 'aria-label': accessibilityLabel, 'aria-description': accessibilityHint, role: accessibilityRole,
+        disabled, onClick: onPress, onContextMenu: onLongPress,
+        ref: testID && (onAccessibilityAction || onAccessibilityTap) ? (element: HTMLButtonElement | null) => {
+          if (element) h.accessibility.set(testID, { actions: accessibilityActions, tap: onAccessibilityTap, action: onAccessibilityAction });
+          else h.accessibility.delete(testID);
+        } : undefined },
       typeof children === 'function' ? children({ pressed: false }) : children),
     ActivityIndicator: ({ testID }: any) => el('i', { 'data-testid': testID ?? 'spinner' }),
     StyleSheet: { create: (value: unknown) => value, flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)), hairlineWidth: 1 },
@@ -144,6 +159,13 @@ vi.mock('react-native', () => {
     } },
     BackHandler: { addEventListener: (_event: string, fn: () => boolean) => { h.hardwareBack = fn; return { remove() {} }; } },
     Keyboard: { dismiss: () => {}, isVisible: () => h.keyboardVisible },
+    AccessibilityInfo: {
+      isScreenReaderEnabled: () => Promise.resolve(h.screenReader),
+      addEventListener: (_event: string, listener: (enabled: boolean) => void) => {
+        h.screenReaderListeners.add(listener);
+        return { remove: () => h.screenReaderListeners.delete(listener) };
+      },
+    },
     Animated: { createAnimatedComponent: (component: any) => component, View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
       loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
     Easing: { inOut: () => undefined, ease: undefined, bezier: () => undefined },
@@ -184,7 +206,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'CircleDot', 'GitPullRequest', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
+    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'AtSign', 'Reply', 'SlidersHorizontal', 'UserPlus', 'SmilePlus']
     .map((name) => [name, () => null]),
 ));
 vi.mock('@/theme', async () => {
@@ -263,9 +285,9 @@ vi.mock('@/session/BotGroupAvatars', () => {
 }; });
 vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, title, children) }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
-  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending, footer }: any) => {
+  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending, footer, avatar }: any) => {
     const inspect = useContext(ProcessDisclosureViewport);
-    return el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name, footer,
+    return el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, avatar, identity.name, footer,
       h.speakerDisclosure ? el('button', { 'data-testid': 'fixture.processCollapse', onClick: () => inspect?.(300) }, 'Collapse process') : null,
       onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null);
   },
@@ -392,9 +414,11 @@ vi.mock('@/session/useBotGroupRemoteMedia', () => {
 });
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: (_host: unknown, _enabled: boolean, query = '') => { h.teammateQuery = query; return h.teammates; } }));
 vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: (...args: unknown[]) => { h.hookCalls(...args); return h.chat; } }));
-vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: () => h.management ?? ({
-  group: undefined, editable: false, loading: false, reason: 'unavailable', act: vi.fn(), refresh: vi.fn(),
-}), useCloudGroupCandidates: () => ({ ...h.teammates, rows: h.cloudRows ?? h.teammates.rows.map(row => ({ id: row.item.ref.id, name: row.item.display.title, avatar: null })) }) }));
+vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: (source: unknown) => {
+  // `shown` is the group the sheet displays: the settings read, or the chat page's group without one.
+  const management = h.management ?? { group: undefined, editable: false, loading: false, reason: 'unavailable', act: vi.fn(), refresh: vi.fn() };
+  return { shown: management.group ?? source, ...management };
+}, useCloudGroupCandidates: () => ({ ...h.teammates, rows: h.cloudRows ?? h.teammates.rows.map(row => ({ id: row.item.ref.id, name: row.item.display.title, avatar: null })) }) }));
 
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/session/listDisclosureTransition', () => ({ DisclosureItem: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children) }));
@@ -467,6 +491,12 @@ async function click(id: string) {
   if (!target) throw new Error(`missing ${id}`);
   await act(async () => { target.click(); });
 }
+
+function holdAvatar(botId: string) {
+  const target = byId(`botGroup.avatarMention.${botId}`);
+  if (!target) throw new Error(`Missing mention avatar for ${botId}`);
+  target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+}
 async function openTopicMenu(messageId: string) {
   const menu = byId(`botGroup.thread.context.${messageId}`);
   expect(menu).not.toBeNull();
@@ -494,6 +524,7 @@ beforeEach(() => {
   h.exported = []; h.pngExport.mockResolvedValue('encoded');
   h.uuid = 0; h.inputs = {}; h.teammateQuery = ''; h.teammates = { rows: [], loading: false, failed: false };
   h.appState = 'active'; h.appStateListeners.clear();
+  h.screenReader = false; h.screenReaderListeners.forEach(listener => listener(false));
   h.platform.OS = 'ios'; h.focused = true; h.inputFocused = false; h.keyboardVisible = false; h.keyboardAvoidingView = null; h.headerBlur = []; h.headerFade = []; h.screenOptions = [];
   h.insets = { top: 59, bottom: 34, left: 0, right: 0 };
   h.chat = { pending: [], reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
@@ -657,7 +688,7 @@ describe('group timeline', () => {
 
   // PR #8818 / component: Chinese-only broadcast coverage missed localized
   // labels colliding with a member name. Use the real send parser and Timeline:
-  // a sender-locale broadcast must stay inert in English, while its qualified @ can open.
+  // a sender-locale broadcast must stay inert even when a qualified member shares its prefix.
   it.each([['es', 'es'], ...SUPPORTED_LOCALES.map(lng => [lng, 'en'])])('keeps %s teammate broadcasts out of personal identity when read in %s', async (senderLocale, readerLocale) => {
     h.translate = (key, options) => i18n.t(key, { ...options, lng: readerLocale });
     const name = i18n.t('groupChat.mention.allBots', { lng: senderLocale });
@@ -673,14 +704,12 @@ describe('group timeline', () => {
     })] });
     data.members[0] = { ...data.members[0]!, name, nickname: name, ownerName: 'Ana', isOwned: false, actorKind: 'bot' };
     await render(data);
-    const spans = [...node.querySelectorAll('span')];
-    const broadcast = spans.find(span => span.textContent === `@${name}`)!;
-    expect(broadcast).toBeDefined();
-    await act(async () => broadcast.click());
+    // With both intents present, the reserved alias also matches the start of
+    // the qualified spelling. The receipt cannot prove the personal range.
+    const bubble = byId('botGroup.message.user')!;
+    expect(bubble.querySelectorAll('span[role="link"]')).toHaveLength(0);
+    expect(bubble.textContent).toContain(content);
     expect(byId('botGroup.mention.identity')).toBeNull();
-    await act(async () => spans.find(span => span.textContent === `@${qualified}`)!.click());
-    expect(byId('botGroup.mention.identity')?.textContent).toContain(qualified);
-    await click('botGroup.mention.identity.close');
     // A legacy projection without targets still must not turn a broadcast into
     // the uniquely named member via the server's name fallback.
     data.messages[0]!.mentions = { all: false, botIds: [] };
@@ -1620,6 +1649,33 @@ describe('group composer', () => {
     });
   }
 
+  // Unit regression: multi-line text left in the composer folded into the one-line pill scrolled to its
+  // end, the line above cut in half. The composer must hand the row its text to show from the start,
+  // only while folded and overflowing.
+  it.each(['ios', 'android'] as const)('hands multi-line text to the folded pill to show from its start until the composer opens (%s)', async os => {
+    h.platform.OS = os;
+    const long = 'please check this text keeps the mention and wraps over several lines';
+    await render(group({ openPlan: null }));
+    await type(long);
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 84 } } }));
+    expect(h.row.cardActive).toBe(true);
+    expect(h.row.collapsedOverflowText).toBeUndefined();
+    await act(async () => h.row.onBlur());
+    expect(h.row.cardActive).toBe(false);
+    expect(h.row.collapsedOverflowText).toBe(long);
+    // The folded input stays editable, so a tap can still focus it.
+    expect(h.row.editable).toBe(true);
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 28 } } }));
+    expect(h.row.collapsedOverflowText).toBeUndefined();
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 84 } } }));
+    await act(async () => h.row.onFocus());
+    expect(h.row.collapsedOverflowText).toBeUndefined();
+    // Text that starts with a blank line shows its first words, not an empty pill.
+    await act(async () => h.row.onChangeText(`\n${long}`));
+    await act(async () => h.row.onBlur());
+    expect(h.row.collapsedOverflowText).toBe(long);
+  });
+
   // Both Chat Server entry paths must carry the selected original through the real composer.
   it.each([true, false])('sends a quote and retains it after failure (direct server %s)', async server => {
     h.chat.server = server;
@@ -1648,13 +1704,16 @@ describe('group composer', () => {
 
   // Every reply tap must bring the keyboard back. The quote id alone does not change when the same
   // message is replied to again, and RN's focus() is a no-op on an input that is still focused —
-  // Android keeps focus after Back hides the keyboard. With the keyboard up, the input is not blurred
-  // so an IME composition survives.
+  // Android keeps focus after Back hides the keyboard. On iOS, blurring an already-focused input
+  // commits active IME composition and drops the pending controlled value update, so only Android
+  // blurs when the keyboard is hidden.
   it.each([
-    { state: 'unfocused', focused: false, keyboard: false, blurs: 0 },
-    { state: 'focused with the keyboard hidden', focused: true, keyboard: false, blurs: 1 },
-    { state: 'focused with the keyboard up', focused: true, keyboard: true, blurs: 0 },
-  ])('re-focuses the input when replying to the same message again ($state)', async ({ focused, keyboard, blurs }) => {
+    { state: 'unfocused', platform: 'android', focused: false, keyboard: false, blurs: 0 },
+    { state: 'Android focused with the keyboard hidden', platform: 'android', focused: true, keyboard: false, blurs: 1 },
+    { state: 'iOS focused with the keyboard hidden', platform: 'ios', focused: true, keyboard: false, blurs: 0 },
+    { state: 'focused with the keyboard up', platform: 'android', focused: true, keyboard: true, blurs: 0 },
+  ])('re-focuses the input when replying to the same message again ($state)', async ({ platform, focused, keyboard, blurs }) => {
+    h.platform.OS = platform;
     const originalId = '22222222-2222-4222-8222-222222222222';
     await render(group({ serverBacked: true, openPlan: null, messages: [
       message(originalId, 1, { authorName: '咪咪', authorBotId: 'mimi', content: '请回复这条' }),
@@ -1695,6 +1754,214 @@ describe('group composer', () => {
       text: '请 @阿布 写代码', mentions: { all: false, botIds: ['abu'] }, clientId: 'uuid-1',
     });
     expect(h.row.value).toBe('');
+  });
+
+  it('adds the exact BOT from a message or a running row to the draft on avatar long press', async () => {
+    const data = group();
+    await render(group({
+      openPlan: null,
+      members: data.members.slice(0, 2).map(member => ({ ...member, name: 'Ann' })),
+      messages: [message('m1', 1, { authorBotId: 'mimi', authorName: 'Ann', content: 'Earlier reply' })],
+      round: { status: 'running', speakers: [{ botId: 'abu', activity: 'reply', sessionId: null }], canContinue: false },
+    }));
+    await type('A draft');
+    await act(async () => h.row.onSelectionChange({ nativeEvent: { selection: { start: 0, end: 7 } } }));
+    await click('botGroup.avatarMention.mimi');
+    expect(h.row.value).toBe('A draft');
+
+    // iOS with hardware/IME typing active keeps focus without blurring (which would commit and overwrite the draft).
+    h.inputFocused = true; h.keyboardVisible = false;
+    h.inputBlur.mockClear(); h.inputFocus.mockClear();
+    await act(async () => holdAvatar('abu'));
+    expect(h.inputBlur).not.toHaveBeenCalled();
+    expect(h.inputFocus).toHaveBeenCalledTimes(1);
+    expect(h.row.value).toBe('A draft @Ann ');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: 'A draft @Ann', mentions: { all: false, botIds: ['abu'] },
+    }));
+
+    await act(async () => { holdAvatar('mimi'); holdAvatar('abu'); });
+    expect(h.row.value).toBe('@Ann @Ann ');
+    expect(h.chat.act).toHaveBeenCalledTimes(1);
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: '@Ann @Ann', mentions: { all: false, botIds: ['mimi', 'abu'] },
+    }));
+  });
+
+  it.each(['ios', 'android'])('adds bot mentions from the %s screen-reader actions while a touch tap leaves the draft unchanged', async platform => {
+    h.platform.OS = platform;
+    const data = group();
+    await render(group({
+      openPlan: null,
+      members: [...data.members.slice(0, 2).map(member => ({ ...member, name: 'Ann' })),
+        { botId: 'person', actorKind: 'human', name: 'Person', avatar: '', avatarColor: '', status: 'active' }],
+      messages: [
+        message('m1', 1, { authorBotId: 'mimi', authorName: 'Ann', content: 'Earlier reply' }),
+        message('m2', 2, { authorBotId: 'person', authorName: 'Person', authorKind: 'user', isSelf: false, content: 'Human reply' }),
+      ],
+      round: { status: 'running', speakers: [{ botId: 'abu', activity: 'reply', sessionId: null }], canContinue: false },
+    }));
+    const messageAvatar = 'botGroup.avatarMention.mimi';
+    const runningAvatar = 'botGroup.avatarMention.abu';
+    expect(byId('botGroup.row.m2')?.textContent).toContain('Human reply');
+    expect(byId('botGroup.avatarMention.person')).toBeNull();
+    await type('A draft');
+    await click(messageAvatar);
+    await click(runningAvatar);
+    expect(h.row.value).toBe('A draft');
+
+    for (const id of [messageAvatar, runningAvatar]) {
+      const node = h.accessibility.get(id);
+      await act(async () => {
+        if (platform === 'ios') node?.tap?.();
+        else if (node?.actions?.some(action => action.name === 'activate')) node.action?.({ nativeEvent: { actionName: 'activate' } });
+      });
+      const expected = id === messageAvatar ? 'A draft @Ann ' : 'A draft @Ann @Ann ';
+      expect(h.row.value).toBe(expected);
+      expect(byId(id)?.getAttribute('role')).toBe('button');
+      expect(byId(id)?.getAttribute('aria-description')).toBe('groupChat.mention.avatarHint');
+      expect(node?.actions).toContainEqual({ name: 'longpress', label: 'groupChat.mention.label' });
+    }
+
+    await act(async () => h.accessibility.get(messageAvatar)?.action?.({ nativeEvent: { actionName: 'longpress' } }));
+    expect(h.row.value).toBe('A draft @Ann @Ann @Ann ');
+
+    // Real iOS VoiceOver double-tap on a button Pressable synthesizes a press event instead of onAccessibilityTap;
+    // enable onPress only while a screen reader is active, then turn it back off when the screen reader stops.
+    await act(async () => { h.screenReader = true; h.screenReaderListeners.forEach(listener => listener(true)); });
+    await click(messageAvatar);
+    await click(runningAvatar);
+    expect(h.row.value).toBe('A draft @Ann @Ann @Ann @Ann @Ann ');
+    await act(async () => { h.screenReader = false; h.screenReaderListeners.forEach(listener => listener(false)); });
+    await click(messageAvatar);
+    expect(h.row.value).toBe('A draft @Ann @Ann @Ann @Ann @Ann ');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: 'A draft @Ann @Ann @Ann @Ann @Ann', mentions: { all: false, botIds: ['mimi', 'abu'] },
+    }));
+  });
+
+  it.each([
+    { draft: '', names: ['Ann', 'Ann Lee'], typedAfter: 'Lee, can you check?', recipients: ['mimi'], labels: ['@Ann'] },
+    { draft: '@Team', names: ['Ann', 'Team @Ann', 'Team'], typedAfter: '', recipients: ['xiaoman', 'mimi'], labels: ['@Team', '@Ann'] },
+    { draft: '@Team', names: ['Ann', 'Team @Ann'], typedAfter: '', recipients: ['mimi'], labels: ['@Ann'] },
+    { draft: '@Team', names: ['Ann', 'Team @Ann'], typedAfter: '', recipients: ['mimi', 'abu'], labels: [], twoPicks: true },
+  ])('sends and renders the avatar pick with members $names ($recipients)', async ({ draft, names, typedAfter, recipients, labels, twoPicks }) => {
+    const data = group();
+    const chat = group({
+      openPlan: null,
+      members: data.members.slice(0, names.length).map((member, index) => ({ ...member, name: names[index]! })),
+      messages: [
+        message('m1', 1, { authorBotId: 'mimi', authorName: 'Ann', content: 'Earlier reply' }),
+        message('m2', 2, { authorBotId: 'abu', authorName: names[1], content: 'Another reply' }),
+      ],
+    });
+    await render(chat);
+    if (draft) await type(draft);
+    await act(async () => holdAvatar('mimi'));
+    if (twoPicks) await act(async () => holdAvatar('abu'));
+    if (typedAfter) await type(h.row.value + typedAfter);
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      mentions: { all: false, botIds: recipients },
+    }));
+    const { text: content, mentions } = h.chat.act.mock.lastCall[1];
+    await render({ ...chat, messages: [...chat.messages, message('sent', 3, { authorKind: 'user', content, mentions })] });
+    const bubble = byId('botGroup.message.user')!;
+    const links = [...bubble.querySelectorAll('span[role="link"]')];
+    expect(links.map(link => link.textContent)).toEqual(labels);
+    if (twoPicks) {
+      const plain = [...bubble.querySelectorAll('span[data-style]')].find(span => !span.children.length && span.textContent === '@Team @Ann @Team @Ann');
+      expect(plain).toBeDefined();
+      expect(JSON.parse(plain!.getAttribute('data-style')!).color).toBeUndefined();
+      await act(async () => (plain as HTMLElement).click());
+      expect(byId('botGroup.mention.identity')).toBeNull();
+    }
+    if (draft && labels.length === 1) {
+      const unaddressed = [...bubble.querySelectorAll('span[data-style]')].find(span => span.textContent === '@Team ');
+      expect(unaddressed).toBeDefined();
+      expect(JSON.parse(unaddressed!.getAttribute('data-style')!).color).toBeUndefined();
+    }
+    for (const [index, link] of links.entries()) {
+      expect(JSON.parse(link.getAttribute('data-style')!).color).toBeTruthy();
+      await act(async () => (link as HTMLElement).click());
+      expect(byId('botGroup.mention.identity')?.textContent).toContain(labels[index]!.slice(1));
+      await click('botGroup.mention.identity.close');
+    }
+  });
+
+  // PR #13318 review: cross-org human full display name (`Alice · Acme`) shares the same `@`
+  // start as her undecorated short name (`Alice`). Exercise candidate pick -> send -> mobile
+  // echo -> member card (both single and repeated mentions) while keeping cross-recipient
+  // ambiguity cases above plain text.
+  it('keeps the full member card link when picking a cross-org human mention', async () => {
+    const alice = {
+      botId: 'alice-acme', actorKind: 'human' as const, name: 'Alice', orgName: 'Acme', showOrgName: true,
+      avatar: '', avatarColor: '', status: 'active' as const,
+    };
+    const chat = group({
+      openPlan: null,
+      serverBacked: true,
+      members: [...group().members, alice],
+      messages: [],
+    });
+    await render(chat);
+    await type('@Ali');
+    await click('botGroup.mention.alice-acme');
+    expect(h.row.value).toBe('@Alice · Acme ');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: '@Alice · Acme', mentions: { all: false, botIds: ['alice-acme'] },
+    }));
+    const { text: content, mentions } = h.chat.act.mock.lastCall[1];
+    await render({ ...chat, messages: [...chat.messages, message('sent', 3, { authorKind: 'user', content, mentions })] });
+    const bubble = byId('botGroup.message.user')!;
+    const links = [...bubble.querySelectorAll('span[role="link"]')];
+    expect(links.map(link => link.textContent)).toEqual(['@Alice · Acme']);
+    expect(JSON.parse(links[0]!.getAttribute('data-style')!).color).toBeTruthy();
+    await act(async () => (links[0] as HTMLElement).click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Alice · Acme');
+    await click('botGroup.mention.identity.close');
+
+    // Repeated full mentions for the same cross-org recipient also keep both links.
+    await render({
+      ...chat,
+      messages: [...chat.messages, message('sent-twice', 4, {
+        authorKind: 'user', content: '@Alice · Acme 请看，再次确认 @Alice · Acme', mentions,
+      })],
+    });
+    const repeatedBubble = [...node.querySelectorAll('[data-testid="botGroup.message.user"]')].at(-1)!;
+    expect([...repeatedBubble.querySelectorAll('span[role="link"]')].map(link => link.textContent)).toEqual([
+      '@Alice · Acme', '@Alice · Acme',
+    ]);
+  });
+
+  it.each(['scheduled', 'manual', 'always'] as const)('honors %s delegation when a long press starts an empty draft', async trigger => {
+    const repliesEnabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+    onTestFinished(() => repliesEnabled.mockRestore());
+    let state: ChatMaskState = {
+      revision: 1, status: 'enabled', manualRunning: trigger === 'manual',
+      self: { id: 'owner', name: 'Me', avatarUrl: null }, companions: [{ id: 'mask-bot', name: 'Proxy', avatarUrl: null }],
+      settings: { companionId: 'mask-bot', enabled: true, trigger, start: '09:00', end: '18:00', timeZone: 'UTC',
+        resumeMinutes: 15, collectTodos: false, digest: 'manual' },
+    };
+    h.chat.act.mockImplementation(async (action: string, input?: { action?: { type: string } }) => {
+      if (action === 'mask-mentions') return { result: { mentions: [], hasMore: false } };
+      if (input?.action?.type === 'participate') state = { ...state, status: 'paused', manualRunning: false };
+      return { result: { state } };
+    });
+    await render(group({ openPlan: null, serverBacked: true, supportsPersonalMask: true }));
+    expect(h.row.value).toBe('');
+    await act(async () => holdAvatar('mimi'));
+    expect(h.row.value).toBe('@咪咪 ');
+    const mutations = h.chat.act.mock.calls.filter(([action, input]: [string, { action?: unknown } | undefined]) => action !== 'mask-mentions' && (action !== 'mask' || input?.action));
+    expect(mutations).toEqual(trigger === 'always' ? [] : [
+      ['mask', { action: { type: 'participate' }, operationId: expect.any(String) }],
+    ]);
   });
 
   // Group chat §4.1, unit: the composer must find a roster member by pinyin
@@ -2127,6 +2394,29 @@ describe('group settings', () => {
     expect(byId('botGroup.settings')).not.toBeNull();
   }
 
+  // Unit regression: the unread shortcut disappears after acknowledgement. A member with
+  // zero unread messages can still reopen the original from the group settings on a linked phone.
+  it('reads the original of an old acknowledged mention by ID from group settings', async () => {
+    const data = group({ hasMoreBefore: true, serverBacked: true, supportsPersonalMask: true, supportsPersonalMentionHistory: true });
+    h.chat.loadOlder = vi.fn(async () => {});
+    data.members[0] = { ...data.members[0], actorId: 'reader', actorKind: 'human', isSelf: true };
+    h.chat.act.mockImplementation(async (_action: string, input?: { history?: boolean; originalId?: string }) => ({
+      result: input?.originalId === 'seen'
+        ? { original: { messageId: 'seen', authorName: 'Nana', text: 'Original was edited', deleted: false } }
+        : { hasMore: false, mentions: input?.history ? [
+        { messageId: 'seen', sequence: '5', authorName: 'Nana', text: 'Previously acknowledged' },
+      ] : [] },
+    }));
+    await openSettings(data);
+    expect(byId('botGroup.mentions')).toBeNull();
+    await click('botGroup.settings.mentions');
+    expect(node.textContent).toContain('Previously acknowledged');
+    await click('botGroup.mention.seen');
+    expect(h.chat.act).toHaveBeenCalledWith('mask-mentions', { originalId: 'seen' });
+    expect(h.chat.loadOlder).not.toHaveBeenCalled();
+    expect(byId('botGroup.mention.original')?.textContent).toContain('Original was edited');
+  });
+
   // Unit regression: the settings sheet used to search only literal text. Find the
   // current member by a middle syllable or initials and restore everyone after clearing.
   it('searches member names by pinyin in the mobile members tab', async () => {
@@ -2202,6 +2492,24 @@ describe('group settings', () => {
     expect(byId('botGroup.settings.myTeammates')).toBeNull();
     await click('botGroup.settings.tab.members');
     expect(byId('botGroup.settings.memberMenu.abu.action.remove')).toBeNull();
+  });
+
+  // Owner report 2026-11-27 (unit): among same-name companions the group's own Cindy read
+  // 「伙伴 · 仅主人可用」, which is untrue of it. Desktop shows the switch's hint instead.
+  it.each([true, false])('describes the group Cindy in the member list rather than as a teammate (direct=%s)', async direct => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'member' };
+    data.members[1] = { ...data.members[1], botId: 'cindy', name: 'Cindy', actorId: 'cindy', actorKind: 'bot', assistant: true, isOwned: false, role: 'member', guestAccess: 'none' };
+    data.members[2] = { ...data.members[2], botId: 'quinn-cindy', name: 'Cindy (Quinn Example)', actorId: 'quinn-cindy', actorKind: 'bot', isOwned: false, role: 'member', guestAccess: 'none' };
+    h.chat.server = direct;
+    if (direct) h.management = { group: data, editable: false, ready: true, loading: false, reason: 'permission', act: vi.fn(), refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.tab.members');
+    const cindy = byId('botGroup.settings.member.cindy')!;
+    expect(cindy.textContent).toContain('groupChat.groupSettings.assistantHint');
+    expect(cindy.getAttribute('aria-label')).toBe('Cindy, groupChat.groupSettings.assistantHint');
+    expect(byId('botGroup.settings.member.quinn-cindy')?.getAttribute('aria-label'))
+      .toBe('Cindy (Quinn Example), groupChat.groupSettings.teammateTag · groupChat.groupSettings.accessNone');
   });
 
   // Unit regression from iOS acceptance: timeline activity is topic-scoped and direct settings
@@ -2541,6 +2849,28 @@ describe('group settings', () => {
     await click('botGroup.settings.assistant');
     if (supported) expect(h.chat.act).toHaveBeenCalledWith('set-assistant', { assistant: false, expectedRevision: 5 });
     else expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
+  // #13127 (unit): a phone talking to the chat service itself had no 「群里的 Cindy」 row at all.
+  // Review on #13593: the write carries the revision on screen, so a newer unseen one goes through conflict
+  // handling; when the settings cannot be read (`failed`), the chat page's known value stays, read-only.
+  it.each(['writable', 'read-only', 'failed'] as const)('switches the group Cindy directly only while the settings are writable (%s)', async mode => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, supportsGroupAssistant: true, assistantEnabled: true });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'admin' };
+    h.chat.server = true;
+    const manage = vi.fn(async () => ({ effects: [] }));
+    const editable = mode === 'writable';
+    h.management = mode === 'failed' ? { editable: false, ready: false, loading: false, reason: 'unavailable', act: manage, refresh: vi.fn() }
+      : { group: data, editable, ready: true, loading: false, reason: editable ? null : 'permission', act: manage, refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    const toggle = byId('botGroup.settings.assistant');
+    expect(toggle?.getAttribute('aria-checked')).toBe('true');
+    expect(toggle?.disabled).toBe(!editable);
+    await click('botGroup.settings.assistant');
+    if (editable) expect(manage).toHaveBeenCalledWith('set-assistant', { assistant: false, expectedRevision: 5 });
+    else expect(manage).not.toHaveBeenCalled();
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   // The computer ignores topic and description; renaming there must not send an empty 群简介 over the real one.
@@ -3415,6 +3745,52 @@ describe('mobile group threads', () => {
     h.chat.threadMeta.following = true;
     await render(threadGroup(), 'ready', rootId, '');
     await act(async () => follow().click()); expect(h.chat.followThread).toHaveBeenLastCalledWith(false);
+  });
+
+  // Unit (bot-group-chat.md「表情回应是乐观的」): a phone reaction shows before its save answers,
+  // a tap on its chip takes it back at once, and a failed save restores the server copy and says why.
+  it('shows a picked reaction at once, toggles it from its chip and takes back a failed save', async () => {
+    resetOptimisticReactionsForTest();
+    const saves: Array<{ args: unknown[]; settle(error?: Error): void }> = [];
+    h.chat.server = true; h.chat.reload = vi.fn();
+    h.chat.react = vi.fn((...args: unknown[]) => new Promise<void>((resolve, reject) => {
+      saves.push({ args, settle: error => (error ? reject(error) : resolve()) });
+    }));
+    await render(threadGroup({ messages: [message(rootId, 1, { authorKind: 'user', isSelf: false, content: 'Nice work', reactions: [] })] }), 'ready', undefined, '');
+    // The selector engine cannot match emoji inside an attribute selector; compare the test IDs directly.
+    const byTestId = (id: string) => [...node.querySelectorAll<HTMLButtonElement>('[data-testid]')].find(e => e.getAttribute('data-testid') === id) ?? null;
+    const tap = async (id: string) => { const target = byTestId(id); expect(target).not.toBeNull(); await act(async () => { target!.click(); }); };
+    const chip = () => byTestId(`botGroup.reaction.${rootId}.🎉`);
+    expect(chip()).toBeNull();
+    await tap(`botGroup.reactionPicker.${rootId}.action.🎉`);
+    expect(chip()?.textContent).toContain('1');
+    expect(saves.map(save => save.args)).toEqual([[rootId, '🎉', true]]);
+    // A tap on the chip while the first save runs removes it at once and is sent after the first.
+    await tap(`botGroup.reaction.${rootId}.🎉`);
+    expect(chip()).toBeNull();
+    await act(async () => saves[0]!.settle());
+    expect(saves.map(save => save.args)).toEqual([[rootId, '🎉', true], [rootId, '🎉', false]]);
+    // Picking it again before that answers; then the last save fails.
+    await tap(`botGroup.reactionPicker.${rootId}.action.🎉`);
+    await act(async () => saves[1]!.settle());
+    expect(chip()?.textContent).toContain('1');
+    await act(async () => saves[2]!.settle(new Error('NETWORK_ERROR')));
+    expect(chip()).toBeNull();
+    expect(h.alert).toHaveBeenCalledWith('groupChat.reaction.failed');
+    expect(h.chat.reload).toHaveBeenCalled();
+  });
+
+  // Unit: following a Thread flips the button before the save answers; a failed save flips it back.
+  it('shows a Thread follow at once and returns to the saved state when the save fails', async () => {
+    let fail!: (error: Error) => void;
+    h.chat.server = true; h.chat.followThread = vi.fn(() => new Promise<boolean>((_resolve, reject) => { fail = reject; }));
+    h.chat.threadMeta = { threads: [], shares: {}, following: false, readSeq: '1' };
+    await render(threadGroup(), 'ready', rootId, '');
+    const follow = () => node.querySelector<HTMLButtonElement>('button[aria-label="groupChat.thread.follow"], button[aria-label="groupChat.thread.following"]')!;
+    await act(async () => follow().click());
+    expect(follow().getAttribute('aria-label')).toBe('groupChat.thread.following');
+    await act(async () => fail(new Error('NETWORK_ERROR')));
+    expect(follow().getAttribute('aria-label')).toBe('groupChat.thread.follow');
   });
 
   it('uses a real self receipt for the posted footer and leaves someone else’s post independently shareable', async () => {

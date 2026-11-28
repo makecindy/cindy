@@ -142,8 +142,9 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
     else void navigation.openTeammate(row);
   };
   const openGroup = (row: HostedRemoteCollectionItem) => { Keyboard.dismiss(); push(botGroupRoute(row.host, row.item.ref.id)); };
+  const activities = useRosterActivities(items);
   const renderRow = useTeammateRowRenderer({
-    items, isOnline: roster.isOnline, connectionState: roster.connectionState, quietPresence, onSelect: openTeammate,
+    items, isOnline: roster.isOnline, connectionState: roster.connectionState, quietPresence, onSelect: openTeammate, activities,
     groups: showGroups ? { items: groups.items, isOnline: groups.isOnline, onSelect: openGroup } : undefined,
   });
   // The store answer is the account's choice; the local copy flips inside the disclosure window
@@ -163,8 +164,16 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
     : buddySetsFailed
       ? { label: t('devices.resources.loadFailed'), retry: retryBuddySets }
       : null;
-  const { unread, attention } = useHeaderAttention(entries, headerOnly, roster.isOnline);
   const [showAll, setShowAll] = useRetainedHomeState(getHomeViewSession(), 'teammatesShowAll', false);
+  const preview = search ? entries : entries.slice(0, HOME_TEAMMATE_PREVIEW_LIMIT);
+  const extra = useMemo(() => search ? [] : entries.slice(HOME_TEAMMATE_PREVIEW_LIMIT), [entries, search]);
+  // Any avatar can be outside the horizontal viewport. In the row layout only
+  // the entries behind “Show all” need the summary.
+  const hiddenEntries = collapsed ? entries : showAll ? null : extra;
+  const { unread, waiting, errorLabel } = useHiddenAttention(visible ? hiddenEntries : null, activities, roster.isOnline, groups.isOnline);
+  const attentionLabel = [unread ? t('devices.companions.unread') : '', waiting ? t('devices.companions.awaiting') : errorLabel]
+    .filter(Boolean).join(', ');
+  const attentionStyle = [styles.unreadDot, waiting ? styles.attentionDot : errorLabel ? styles.errorDot : null];
   const setTeammatesCollapsed = navigation.setTeammatesCollapsed;
   const toggleCollapsed = useCallback(() => {
     if (swipeRegistry?.closeOpenRow()) return;
@@ -331,8 +340,6 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const title = t('devices.companions.title');
   const create = (trigger: (press: () => void, label: string) => ReactElement) => showCreate
     ? creator.renderTrigger(trigger(creator.press, creator.label)) : null;
-  const preview = search ? entries : entries.slice(0, HOME_TEAMMATE_PREVIEW_LIMIT);
-  const extra = search ? [] : entries.slice(HOME_TEAMMATE_PREVIEW_LIMIT);
   const hasMore = extra.length > 0;
   const body = shown ? <DisclosureItem clip testID="home.teammates">
     <SwipeableSectionHeader
@@ -350,7 +357,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
             if (event.nativeEvent.actionName === 'options') openOptions();
           } : undefined}
           accessibilityLabel={[t(collapsed ? 'devices.list.a11y.expand' : 'devices.list.a11y.collapse', { title }),
-            unread ? t('devices.companions.unread') : '', attention, buddySetsFailure?.label].filter(Boolean).join(', ')}
+            collapsed ? attentionLabel : '', buddySetsFailure?.label].filter(Boolean).join(', ')}
           delayLongPress={SESSION_ROW_LONG_PRESS_MS}
           onLongPress={hasOptions ? openOptions : undefined}
           onPress={toggleCollapsed} onPressIn={prepareDisclosure}
@@ -360,7 +367,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
             : <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />}
           <Text style={list.projectTitle} numberOfLines={1}>{title}</Text>
           {(collapsed && !headerOnly) || !entries.length ? null : <Text style={list.projectCount} numberOfLines={1}>{entries.length}</Text>}
-          {headerOnly && (unread || attention) ? <View style={[styles.unreadDot, !!attention && styles.attentionDot]} testID="home.teammatesAttention" /> : null}
+          {collapsed && attentionLabel ? <View style={attentionStyle} testID="home.teammatesAttention" /> : null}
         </Pressable>
         {headerOnly && buddySetsFailure ? <Pressable accessibilityRole="button"
           accessibilityLabel={`${buddySetsFailure.label} ${t('devices.resources.retry')}`}
@@ -430,11 +437,14 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
           prepareDisclosure={prepareDisclosure}
         />
         {hasMore ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: showAll }}
-          accessibilityLabel={showAll ? t('devices.companions.section.showLess') : t('devices.companions.section.showAllA11y', { count: entries.length })}
+          accessibilityLabel={showAll ? t('devices.companions.section.showLess') : [
+            t('devices.companions.section.showAllA11y', { count: entries.length }), attentionLabel,
+          ].filter(Boolean).join(', ')}
           onPress={() => runDisclosure(() => setShowAll(value => !value))} onPressIn={prepareDisclosure}
           style={({ pressed }) => [styles.moreRow, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesShowAll">
           <Text style={styles.moreText} numberOfLines={1}>{t(showAll ? 'devices.companions.section.showLess' : 'devices.companions.section.showAll')}</Text>
           {showAll ? null : <Text style={styles.moreCount} numberOfLines={1}>{entries.length}</Text>}
+          {!showAll && attentionLabel ? <View style={attentionStyle} testID="home.teammatesMoreAttention" /> : null}
           {showAll
             ? <ChevronUp color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.medium} />
             : <ChevronDown color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.medium} />}
@@ -466,25 +476,32 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   );
 }
 
-/** Hidden content keeps its existing read/attention semantics without opening the section. */
-function useHeaderAttention(entries: readonly TeammateListEntry[], enabled: boolean, isOnline: (host: RemoteResourceHostTarget) => boolean) {
+/** Summarize unfinished attention and unread without changing read receipts. */
+function useHiddenAttention(
+  entries: readonly TeammateListEntry[] | null,
+  activities: ReadonlyMap<string, string>,
+  isOnline: (host: RemoteResourceHostTarget) => boolean,
+  isGroupOnline: (host: RemoteResourceHostTarget) => boolean,
+) {
   const { user } = useAuth();
   const { t, i18n } = useTranslation();
-  const bots = useMemo(() => enabled ? entries.filter(entry => entry.kind === 'bot').map(entry => entry.row) : [], [enabled, entries]);
-  const activities = useRosterActivities(bots);
-  const readUnread = useCallback(() => enabled && entries.some(entry => {
+  const readUnread = useCallback(() => entries?.some(entry => {
     const { row } = entry;
     const mainUnread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id,
       row.item.display.lastReplyAt, entry.kind === 'group' ? row.lastReplySequence : undefined);
     return entry.kind === 'group' && row.chatUnread
       ? (mainUnread ? row.chatUnread.count : row.chatUnread.threadCount) > 0 : mainUnread;
-  }), [enabled, entries, user?.id]);
+  }) ?? false, [entries, user?.id]);
   const unread = useSyncExternalStore(subscribeRemoteResourceCache, readUnread);
-  const attention = bots.map(row => {
-    const state = teammateAttention(row, isOnline(row.host), activities, i18n.language);
-    return state.waiting ? t('devices.companions.awaiting') : state.attention;
-  }).find(Boolean) ?? '';
-  return { unread, attention };
+  let errorLabel = '';
+  for (const { kind, row } of entries ?? []) {
+    const online = (kind === 'group' ? isGroupOnline : isOnline)(row.host);
+    const { waiting, attention } = teammateAttention(row, online, activities, i18n.language);
+    if (waiting) return { unread, waiting, errorLabel: '' };
+    const hasError = online && (row.item.display.teammateActivity?.phase === 'error' || activities.get(row.key) === 'error');
+    errorLabel ||= attention || (hasError ? t('devices.companions.avatarStatus.error') : '');
+  }
+  return { unread, waiting: false, errorLabel };
 }
 
 interface StripCellProps {
@@ -600,6 +617,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   cellNameSpace: { height: lineHeight.caption },
   unreadDot: { width: TEAMMATE_AVATAR.dot, height: TEAMMATE_AVATAR.dot, borderRadius: radius.pill, backgroundColor: colors.botUnread },
   attentionDot: { backgroundColor: colors.statusAwaiting },
+  errorDot: { backgroundColor: colors.statusError },
   addCircle: { borderRadius: radius.pill, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.borderStrong, alignItems: 'center', justifyContent: 'center' },
   addCircleStrip: { width: STRIP_AVATAR_SIZE, height: STRIP_AVATAR_SIZE },
   addCircleRow: { width: COMPANION_ROW_AVATAR_SIZE, height: COMPANION_ROW_AVATAR_SIZE },

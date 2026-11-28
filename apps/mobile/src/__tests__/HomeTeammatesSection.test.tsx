@@ -467,3 +467,33 @@ it('keeps buddy-set read and save retries visible when only the header is shown'
   await act(async () => saveRetry!.click());
   expect(h.retrySaveBuddySets).toHaveBeenCalledOnce();
 });
+
+// PR #13613, unit: the real home section must surface a pending decision outside the
+// three-row preview or the visible part of the avatar strip. The header-only test
+// cannot catch this because its summary was already enabled before the fix.
+it.each([
+  { collapsed: false, disclosure: 'home.teammatesShowAll', dot: 'home.teammatesMoreAttention' },
+  { collapsed: true, disclosure: 'home.teammatesHeader', dot: 'home.teammatesAttention' },
+])('surfaces the fourth teammate’s pending decision on $disclosure', async ({ collapsed, disclosure, dot }) => {
+  h.collapsed = collapsed;
+  const items = ['one', 'two', 'three', 'four'].map((id) => ({
+    ...item,
+    key: `host:${id}`,
+    item: {
+      ...item.item,
+      ref: { ...item.item.ref, id },
+      display: { title: id, ...(id === 'four' ? { teammateActivity: { phase: 'needs-interaction' } } : {}) },
+    },
+  }));
+  await render(0, { context: { navigation: null, route: null, shared: {
+    roster: { ...roster, items }, groups,
+  } } } as any);
+  expect(byId(dot)).not.toBeNull();
+  expect(byId(disclosure)?.getAttribute('aria-label')).toContain('devices.companions.awaiting');
+  if (collapsed) return;
+  expect(node.textContent).not.toContain('four');
+  await act(async () => byId(disclosure)!.click());
+  expect(node.textContent).toContain('four');
+  expect(byId(dot)).toBeNull();
+  expect(byId(disclosure)?.getAttribute('aria-label')).not.toContain('devices.companions.awaiting');
+});

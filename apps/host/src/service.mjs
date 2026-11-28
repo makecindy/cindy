@@ -18,10 +18,11 @@ export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
     '/api/me', '/api/auth/state', '/api/profile', '/api/runtime/sessions', '/api/conversations/search',
     '/api/sessions/list', '/api/sessions/get', '/api/sessions/messages', '/api/sessions/agent-switch-intent',
     '/api/sessions/interrupted-pending', '/api/sessions/error-tail-pending', '/api/sessions/interrupted-candidates',
-    '/api/messages/list', '/api/messages/history-view', '/api/messages/work-details', '/api/messages/estimated-value',
+    '/api/messages/list', '/api/messages/around-client-id', '/api/messages/history-view', '/api/messages/work-details', '/api/messages/estimated-value',
     '/api/turn-change-sets/list', '/api/project-info/get', '/api/project-info/image', '/api/project-aliases/list',
     '/api/recent-workdirs/list', '/api/ghosts', '/api/ghosts/runtime-states', '/api/ghosts/card', '/api/ghosts/cards',
     '/api/plugins/list', '/api/providers', '/api/agents', '/api/agents/auth-state', '/api/agents/status',
+    '/api/plugin-engines/list', '/api/plugin-engines/refresh', '/api/plugin-engines/usage',
     '/api/agents/codex-runtime-route', '/api/model-access', '/api/usage/model-pricing', '/api/usage/reference-model-pricing',
     '/api/interactions/pending', '/api/input/projection', '/api/agent-commands', '/api/agent-skills', '/api/capabilities',
     '/api/right-sidebar-tabs/list', '/api/browser-backend/get-state', '/api/notifications/clear-session-attention',
@@ -221,6 +222,9 @@ export function createHostService(deps) {
     if (url.pathname === '/api/messages/list') {
         return { status: 200, body: await (deps.messagesList ? deps.messagesList(String(body.sessionId ?? ''), Number(body.limit ?? 200), body.before ?? null) : deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200))) };
     }
+    if (url.pathname === '/api/messages/around-client-id') {
+        return { status: 200, body: await deps.messagesAroundClientId(body.sessionId, body.clientId, body.opts) };
+    }
     if (url.pathname === '/api/turn-change-sets/list') {
         return { status: 200, body: await deps.turnChangeSets(String(body.sessionId ?? '')) };
     }
@@ -326,6 +330,24 @@ export function createHostService(deps) {
     }
     if (url.pathname === '/api/agents') {
         return { status: 200, body: await deps.agents() };
+    }
+    if (url.pathname === '/api/plugin-engines/list') {
+        return { status: 200, body: await deps.pluginEngines.list() };
+    }
+    if (url.pathname === '/api/plugin-engines/refresh') {
+        await deps.pluginEngines.refresh(body.targetGhostId);
+        return { status: 200, body: null };
+    }
+    if (url.pathname === '/api/plugin-engines/usage') {
+        return { status: 200, body: await deps.pluginEngines.usage(body.key, body.task) };
+    }
+    if (url.pathname === '/api/plugin-engines/set-remote-use') {
+        if (!context.trustedNativeClient) throwIpcError('PERMISSION_DENIED', 'A trusted desktop renderer is required');
+        return { status: 200, body: await deps.pluginEngines.setRemoteUse(body.input) };
+    }
+    if (url.pathname === '/api/plugin-engines/set-prefs') {
+        if (!context.trustedNativeClient) throwIpcError('PERMISSION_DENIED', 'A trusted desktop renderer is required');
+        return { status: 200, body: await deps.pluginEngines.setPrefs(body.input) };
     }
     if (url.pathname === '/api/interactions/pending') {
         return { status: 200, body: await deps.interactions.pending(String(body.sessionId ?? '')) };

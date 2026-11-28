@@ -313,7 +313,7 @@ export function favoriteMatchesSelection(args: {
   const { entry, item, selected, agent } = args;
   if (
     !agent ||
-    item.providerId !== selected.providerId ||
+    entry.providerId !== selected.providerId ||
     !entryMatchesModelId(entry, selected.modelId) ||
     agentKindOfEngine(item.agent) !== agent ||
     !entry.candidates.includes(agent)
@@ -370,7 +370,7 @@ export type UnifiedRailItem =
 
 export type UnifiedRailFilter = UnifiedRailItem;
 
-/** 左侧栏一个插件引擎格的展示：引擎名、插件图标与用量读取元数据(没有图标时画通用拼图)。 */
+/** 左侧栏一个插件引擎格的展示：引擎名与提供它的插件的图标(没有图标时画通用拼图)。 */
 export interface PluginEngineRailTab {
   providerId: string;
   /** 引擎所在的另一台电脑；缺省 = 任务所在电脑。 */
@@ -378,12 +378,10 @@ export interface PluginEngineRailTab {
   /** 悬停显示的名字；另一台电脑上的引擎已带上电脑名。 */
   name: string;
   iconDataUrl?: string;
-  /** `ghostId:harnessId`，读取账号用量时传给 `readPluginEngineUsage`。 */
+  /** 引擎 key（用于读用量）；缺省时不读用量。 */
   key?: string;
-  /** 插件已声明上报账号额度时才读取，避免无意义的 IPC。 */
-  reportsUsage?: true;
-  /** 不可用引擎不读用量。 */
-  selectable?: boolean;
+  /** 引擎声明了 reportsUsage 且可选，左侧栏与内置订阅供应商一样显示周配额条。 */
+  reportsUsage?: boolean;
 }
 
 /** 这一格所属的另一台电脑(远程供应商格，或另一台电脑上的插件引擎格)；其余格为 null。 */
@@ -726,6 +724,14 @@ export function buildUnifiedListSections(args: {
    * 存过的收藏和最近必须还在。调用方传入「常规清单 ∪ 被隐藏的模型」。
    */
   resolveEntries?: readonly UnifiedModelEntry[];
+  /**
+   * 已存收藏 / 最近记录的来源别名解析(如本机成员被并入供应商路由 `sroute:` 后，
+   * 把旧记录里的真实成员映射到合并条目，避免已存收藏与最近消失)。
+   */
+  resolveStoredProviderAlias?: (
+    providerId: string,
+    modelId: string,
+  ) => { providerId: string; modelId: string } | null;
 }): UnifiedListSection[] {
   const { entries, favorites, effectiveEngineOf } = args;
   const q = args.query.trim().toLowerCase();
@@ -740,8 +746,13 @@ export function buildUnifiedListSections(args: {
    * 解析不到 = 该模型当前不可路由(来源断开 / 目录下架)→ 调用方跳过,**不删条目**:
    * 连回来就该回来,静默删掉用户存过的东西是不可逆的。
    */
-  const resolveStoredEntry = (providerId: string, modelId: string) =>
-    resolveStoredModelEntry(args.resolveEntries ?? entries, providerId, modelId);
+  const resolvePool = args.resolveEntries ?? entries;
+  const resolveStoredEntry = (providerId: string, modelId: string) => {
+    const direct = resolveStoredModelEntry(resolvePool, providerId, modelId);
+    if (direct) return direct;
+    const alias = args.resolveStoredProviderAlias?.(providerId, modelId);
+    return alias ? resolveStoredModelEntry(resolvePool, alias.providerId, alias.modelId) : null;
+  };
 
   const sections: UnifiedListSection[] = [];
 
@@ -826,8 +837,8 @@ export function buildUnifiedListSections(args: {
       anchor: {
         kind: 'fav',
         uid: item.uid,
-        providerId: item.providerId,
-        modelId: entry.enginePreferenceId ? entry.modelId : item.modelId,
+        providerId: entry.providerId,
+        modelId: entry.enginePreferenceId || entry.providerId !== item.providerId ? entry.modelId : item.modelId,
       },
       entry,
       favorite: item,

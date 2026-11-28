@@ -65,7 +65,7 @@ import {
 import { SAME_SOURCE_ROUTE_STRATEGIES, type RouteStrategy } from '../../../shared/routeStrategy';
 import { routeStrategySelectGroups } from '@/features/model-groups/routeStrategyOptions';
 import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
-import { RouteNameRow, RowIconButton, WeightInput } from './ModelGroupRowControls';
+import { RouteNameRow, RouteTypeSection, RowIconButton, WeightInput } from './ModelGroupRowControls';
 
 type Provider = ReturnType<typeof useProviders>['providers'][number];
 
@@ -441,7 +441,10 @@ export function useSourceOptions(): SourceOption[] {
 export function ProviderAllocationRows({ config }: { config: ModelGroupsConfig }) {
   const { providers } = useProviders();
   const groups = useLocalProviderGroups();
-  const members = new Set((config.sourceRoutes ?? []).flatMap((route) => route.sources.filter((source) => !source.agentDeviceId).map((source) => source.providerId)));
+  // 已隐藏的供应商路由或被取消参与(source.off)的成员恢复独立显示，其账号/电脑分配行一并恢复。
+  const members = new Set((config.sourceRoutes ?? [])
+    .filter((route) => !route.hidden)
+    .flatMap((route) => route.sources.filter((source) => !source.off && !source.agentDeviceId).map((source) => source.providerId)));
   return (
     <>
       {providers.filter(usableProvider).flatMap((provider) => {
@@ -462,7 +465,10 @@ export function SourceRouteRow({ route, config, options, onOpen }: {
   route: ModelGroupSourceRoute; config: ModelGroupsConfig; options: readonly SourceOption[]; onOpen(): void;
 }) {
   const { t } = useTranslation();
-  const first = route.sources.map((source) => options.find((option) => option.key === optionKey(source))).find(Boolean);
+  const activeSources = route.sources.filter((source) => !source.off);
+  const first = (activeSources.length > 0 ? activeSources : route.sources)
+    .map((source) => options.find((option) => option.key === optionKey(source)))
+    .find(Boolean);
   const models = config.routes.filter((item) => item.parent?.id === route.id).length;
   return (
     <SettingsRow
@@ -472,7 +478,7 @@ export function SourceRouteRow({ route, config, options, onOpen }: {
       title={route.name}
       tag={route.hidden ? t('modelGroups.auto.hiddenTag') : route.auto ? t('modelGroups.sources.autoTag') : undefined}
       hint={[
-        t('modelGroups.sources.providers', { count: route.sources.length }),
+        t('modelGroups.sources.providers', { count: activeSources.length }),
         t('modelGroups.sources.models', { count: models }),
         t(`modelGroups.strategy.${route.strategy}.title`),
       ].join(' · ')}
@@ -485,7 +491,7 @@ export function SourceRouteRow({ route, config, options, onOpen }: {
 
 const ADD_NONE = '__none__';
 
-/** 「添加整个供应商」：本机的、其他电脑上的、分享来的都在这一个下拉里。 */
+/** 「添加供应商路由」：本机的、其他电脑上的、分享来的都在这一个下拉里。 */
 export function WholeProviderAddRow({ options, taken, onAdd }: {
   options: readonly SourceOption[]; taken: readonly ModelGroupSource[]; onAdd(source: ModelGroupSource): void;
 }) {
@@ -495,7 +501,6 @@ export function WholeProviderAddRow({ options, taken, onAdd }: {
   return (
     <SettingsRow
       title={t('modelGroups.sources.addWhole')}
-      hint={t('modelGroups.sources.addWholeHint')}
       wrap
       trailing={
         <Select data-settings-search-action="Adds a whole provider as a source of this route" label={t('modelGroups.sources.addWhole')} value={ADD_NONE} width="sm"
@@ -510,12 +515,15 @@ export function WholeProviderAddRow({ options, taken, onAdd }: {
 }
 
 /** 一条合并了整个供应商的路由的编辑页。自动合成的成员不能改，其余与用户自己建的一样。 */
-export function SourceRouteDetail({ route, config, options, save, onBack }: {
+export function SourceRouteDetail({ route, config, options, save, onBack, onSwitchToModel, switchingKind = false, focusType = false }: {
   route: ModelGroupSourceRoute;
   config: ModelGroupsConfig;
   options: readonly SourceOption[];
   save(change: (latest: ModelGroupsConfig) => ModelGroupsConfig): Promise<boolean>;
   onBack(): void;
+  onSwitchToModel?: (fromKeyboard: boolean) => void;
+  switchingKind?: boolean;
+  focusType?: boolean;
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -586,11 +594,19 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
       <div data-testid="model-groups-source-route" data-source-route={route.id} className="flex min-w-0 flex-col">
         <SettingsPageHeader
           title={route.name}
-          description={t(route.auto ? 'modelGroups.sources.note' : 'modelGroups.sources.detailHint')}
+          description={route.auto ? t('modelGroups.sources.note') : undefined}
           onBack={onBack}
           backLabel={t('modelGroups.settings.back')}
         />
         <div className="mt-6 flex min-w-0 flex-col gap-9">
+          {!route.auto && onSwitchToModel && (
+            <RouteTypeSection
+              value="provider"
+              disabled={switchingKind}
+              focusSelected={focusType}
+              onSelect={(next, fromKeyboard) => { if (next === 'model') onSwitchToModel(fromKeyboard); }}
+            />
+          )}
           <SettingsSection>
             <SettingsCard>
               {!route.auto && (

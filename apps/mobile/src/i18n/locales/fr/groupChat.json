@@ -47,6 +47,7 @@
     "all": "Tout le monde",
     "allHint": "Personnes uniquement",
     "label": "Mentionner un ami",
+    "avatarHint": "Mentionne cet ami à la fin du brouillon.",
     "allBots": "Tous les amis",
     "allBotsHint": "Amis uniquement"
   },
@@ -181,6 +182,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire de l’ami peut renouveler la demande dans ce groupe.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
       "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
+      "ATTACHMENTS_DOWNLOAD_FAILED": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement. Renvoyez celles nécessaires à cette demande.",
+      "ATTACHMENTS_LIMIT_REACHED": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
+      "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement et de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
       "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connectez votre Cindy pour que Cindy puisse travailler pour vous (aucun de vos Cindy n'est en ligne pour le moment).",
       "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, choisissez un ordinateur pour ce groupe afin de poursuivre cette demande.",
       "GROUP_ASSISTANT_DEVICE_OFFLINE": "L’ordinateur choisi par {{name}} pour ce groupe est hors ligne."
@@ -699,5 +703,10 @@
   },
   "memberCount_many": "{{count}} membres",
   "waitingForOwner": "En attente de confirmation",
-  "externalBadge": "Externe"
+  "externalBadge": "Externe",
+  "reaction": {
+    "add": "Ajouter une réaction",
+    "count": "{{emoji}} · {{count}} réactions",
+    "failed": "Impossible de mettre à jour la réaction. Réessayez."
+  }
 }

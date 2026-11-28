@@ -131,6 +131,7 @@ import {
 } from '../shared/windowBackdrop.js';
 import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import { isAllowedBillingMailtoRequest } from '../shared/billing.js';
+import { parseDesktopQrHandoffId } from '../shared/authIpc';
 import path from 'node:path';
 import fs from 'node:fs';
 import { textFilePreviewResult, TEXT_PREVIEW_LIMIT_MB } from './text-file-preview';
@@ -155,6 +156,8 @@ import {
   readWindowFullscreenState,
   showMainWindowAndRestoreFullscreen,
 } from './mainWindowFullscreenStartup';
+import { installMacFullscreenDesyncRecovery } from './macFullscreenRecovery';
+import { readPluginUiRegions } from './mcp-apps/visibility';
 import {
   installMainWindowMaximizeRecovery,
   installMainWindowNativeRestoreIntent,
@@ -697,7 +700,7 @@ import { copyFileToClipboardWindows, copyFileToClipboardMacOS } from './fileClip
 import { COPY_TEXT_TO_CLIPBOARD_CHANNEL } from '../shared/textClipboard.js';
 import {
   readLinuxClipboardSnapshot,
-  supportsLinuxClipboard,
+  supportsHyprlandClipboard,
   writeLinuxClipboard,
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
@@ -1268,6 +1271,7 @@ import {
   type SubagentModelSettingsPatch,
 } from '../shared/subagentModelSettings.js';
 import { isBrowserOpenablePath } from '../shared/browserOpenableExts.js';
+import { resolveConsoleExternalUrlForDesktop } from './consoleHandoff.js';
 import {
   getClientEndpoint,
   getClientEndpointForRealm,
@@ -1286,6 +1290,7 @@ import { applyDockIcon } from './app-icon.js';
 import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
+  noteModelAccessAgentBinariesReady,
   noteManualXdKeySaved,
   noteManualXdKeyRemoved,
   refreshXdGatewayModels,
@@ -4964,6 +4969,15 @@ const createWindow = () => {
     // animation start so traffic-light padding returns before the end event.
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
   });
+  installMacFullscreenDesyncRecovery(mainWindow, {
+    windowLabel: 'main',
+    trafficLightPosition: { x: 12, y: 16 },
+    minSize: { width: 800, height: 600 },
+    shouldShowWindowButtons: () => {
+      const regions = readPluginUiRegions(mainWindow);
+      return regions.workspace && regions.windowControls;
+    },
+  });
 
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
@@ -7190,6 +7204,25 @@ const registerIpcHandlers = () => {
     return authManager.getLoginCaptchaChallengeUrl();
   });
 
+  // 扫码登录：本机已登录，在「远程控制 Cindy」弹窗为另一台设备出码并允许/拒绝。
+  // 仅本机界面使用（手机端直连 auth-server），不进入设备互联白名单。
+  ipcMain.handle('auth:qr-handoff:create', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return authManager.createQrLoginHandoff();
+  });
+  ipcMain.handle('auth:qr-handoff:state', async (event, handoffId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = parseDesktopQrHandoffId(handoffId);
+    if (!id) return { success: false, code: 'INVALID_PARAMS' };
+    return authManager.getQrLoginHandoffState(id);
+  });
+  ipcMain.handle('auth:qr-handoff:decide', async (event, handoffId: unknown, approve: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = parseDesktopQrHandoffId(handoffId);
+    if (!id || typeof approve !== 'boolean') return { success: false, code: 'INVALID_PARAMS' };
+    return authManager.decideQrLoginHandoff(id, approve);
+  });
+
   ipcMain.handle('auth:logout', async () => {
     await authManager.logout();
   });
@@ -7768,6 +7801,7 @@ const registerIpcHandlers = () => {
     startBinaryBackgroundUpdates();
 
     instanceBinariesReady = true;
+    noteModelAccessAgentBinariesReady();
 
     return {
       claudeCode: { status: claudeRes.ready ? 'passed' as const : 'failed' as const, path: claudeRes.path },
@@ -7796,19 +7830,23 @@ const registerIpcHandlers = () => {
       try {
         const parsed = new URL(url);
         const isWebUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+        const trustedAppRenderer = isTrustedAppRendererEvent(event);
         // Mail links are restricted to the fixed billing inbox. Renderer content may
         // provide the localized subject/body, but it must not choose a recipient or
         // use mailto as a general-purpose external scheme.
         const isBillingMailto = isAllowedBillingMailtoRequest(
           url,
-          isTrustedAppRendererEvent(event),
+          trustedAppRenderer,
         );
         const isAllowedSystemSettingsUrl =
           process.platform === 'darwin' && allowedSystemSettingsUrls.has(url);
         if (!isWebUrl && !isBillingMailto && !isAllowedSystemSettingsUrl) {
           return { success: false };
         }
-        await shell.openExternal(url);
+        const targetUrl = isWebUrl
+          ? await resolveConsoleExternalUrlForDesktop(url, trustedAppRenderer)
+          : url;
+        await shell.openExternal(targetUrl);
         return { success: true };
       } catch {
         return { success: false };
@@ -9328,11 +9366,11 @@ const registerIpcHandlers = () => {
         }
       },
       write: (text) =>
-        supportsLinuxClipboard()
+        supportsHyprlandClipboard()
           ? writeLinuxClipboard({ text }, () => true, { checkLock: false })
           : clipboard.writeText(text),
       read: async () =>
-        supportsLinuxClipboard()
+        supportsHyprlandClipboard()
           ? (await readLinuxClipboardSnapshot(false, { checkLock: false })).content.text
           : clipboard.readText(),
     }),
@@ -10701,7 +10739,8 @@ app.on('ready', async () => {
           throwIpcError('PRECONDITION_FAILED', 'The task already has a worktree');
         }
         return WorktreeManager.createWorktree(request, {
-          awaitFullCheckout: true,
+          trackBackgroundCheckout: true,
+          strictSelectiveCheckout: true,
           refreshDefaultSource: true,
           assertCurrent,
         });

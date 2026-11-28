@@ -46,6 +46,7 @@
     "all": "Alle",
     "allHint": "Nur Personen",
     "label": "Freund erwähnen",
+    "avatarHint": "Erwähnt diesen Freund am Ende des Entwurfs.",
     "allBots": "Alle Freunde",
     "allBotsHint": "Nur Freunde"
   },
@@ -178,6 +179,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Freundes kann die Anfrage in dieser Gruppe erneut stellen.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
       "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+      "ATTACHMENTS_DOWNLOAD_FAILED": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+      "ATTACHMENTS_LIMIT_REACHED": "Einige Anhänge wurden {{name}} wegen der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+      "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers und der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
       "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, verbinde dein Cindy, damit Cindy für dich arbeiten kann (gerade ist kein Cindy von dir online).",
       "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, wähle einen Computer für diese Gruppe, um die Anfrage fortzusetzen.",
       "GROUP_ASSISTANT_DEVICE_OFFLINE": "Der von {{name}} für diese Gruppe gewählte Computer ist offline."
@@ -689,5 +693,10 @@
     "externalFormatError": "Öffne den vollständigen Link aus der ursprünglichen Nachricht erneut."
   },
   "waitingForOwner": "Wartet auf Bestätigung",
-  "externalBadge": "Extern"
+  "externalBadge": "Extern",
+  "reaction": {
+    "add": "Reaktion hinzufügen",
+    "count": "{{emoji}} · {{count}} Reaktionen",
+    "failed": "Die Reaktion konnte nicht aktualisiert werden. Versuche es erneut."
+  }
 }

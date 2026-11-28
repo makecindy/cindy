@@ -47,6 +47,7 @@
     "all": "Todos",
     "allHint": "Apenas pessoas",
     "label": "Mencionar um amigo",
+    "avatarHint": "Menciona este amigo no fim do rascunho.",
     "allBots": "Todos os amigos",
     "allBotsHint": "Apenas amigos"
   },
@@ -181,6 +182,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
       "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+      "ATTACHMENTS_DOWNLOAD_FAILED": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência. Reenvie os anexos necessários para este pedido.",
+      "ATTACHMENTS_LIMIT_REACHED": "Alguns anexos não foram entregues a {{name}} devido ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+      "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência e ao limite de anexos. Reenvie os anexos necessários para este pedido.",
       "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, ligue o seu Cindy para que o Cindy possa trabalhar por si (nenhum Cindy seu está online neste momento).",
       "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, escolha um computador para este grupo para continuar o pedido.",
       "GROUP_ASSISTANT_DEVICE_OFFLINE": "O computador que {{name}} escolheu para este grupo está offline."
@@ -699,5 +703,10 @@
   },
   "memberCount_many": "{{count}} membros",
   "waitingForOwner": "A aguardar confirmação",
-  "externalBadge": "Externo"
+  "externalBadge": "Externo",
+  "reaction": {
+    "add": "Adicionar reação",
+    "count": "{{emoji}} · {{count}} reações",
+    "failed": "Não foi possível atualizar a reação. Tente novamente."
+  }
 }

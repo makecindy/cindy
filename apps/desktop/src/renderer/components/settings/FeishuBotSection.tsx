@@ -424,8 +424,7 @@ function ManualConfig(props: {
             label: t(`settings.feishuBot.services.${service}`),
           }))}
           fullWidth
-          height={44}
-          optionHeight={34}
+          density="lg"
         />
       </fieldset>
 

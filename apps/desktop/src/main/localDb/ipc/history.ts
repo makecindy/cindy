@@ -20,7 +20,7 @@ import { readLatestSessionTerminal, type SessionTerminalHint } from '../sessionT
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate';
 import { redactSensitiveTextDeep } from '@cindy/maker-shared/error-redaction';
 
-const VALID_AGENT_KINDS: readonly HistoryAgentKind[] = ['cc', 'codex', 'pi'];
+const VALID_AGENT_KINDS: readonly HistoryAgentKind[] = ['cc', 'codex', 'pi', 'acp'];
 const VALID_ORDERS: readonly HistoryOrder[] = ['asc', 'desc'];
 const VALID_ROLES: readonly HistoryRole[] = [
   'user',
@@ -211,6 +211,23 @@ function contentHasOmittedData(value: unknown): boolean {
     return true;
   }
   return false;
+}
+
+export function clampAroundRadius(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 60;
+  return Math.min(Math.max(Math.floor(n), 0), 200);
+}
+
+export function requireReferenceContentCharLimit(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 8_000) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      'contentCharLimit must be an integer between 1 and 8000 or null',
+    );
+  }
+  return raw;
 }
 
 /** Cap per-row reference text before it crosses device-link and mark lossy rows. */

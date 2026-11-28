@@ -189,6 +189,7 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
   id: string;
   /** v5 entitlement projection; missing only on persisted/legacy snapshots. */
   availability?: 'available' | 'requires_payment';
+  silentSwitch?: boolean;
   /**
    * Gateway 原生 mode(issue #882:权威分类字段,字段值不改名)。原样透传,可能
    * 缺省(旧缓存 / 服务端尚未覆盖到的模型)——**不代表**本条目已被服务端判定

@@ -64,6 +64,23 @@ describe('remote companion scheduled quota wait', () => {
   });
 });
 
+// Unit: an execution-device Worker stores its Lead in orcaRemoteLead, not
+// orcaRole. A genuine quota terminal still cannot hold a Lead assignment until reset.
+it.each(['local', 'execution-device'] as const)('does not schedule a quota reset wait for a %s Orca Worker', async kind => {
+  const eligibility = createAutomaticContinueEligibility({
+    ownerEpoch: () => 'owner', isPaused: () => false,
+    readSession: async () => kind === 'local' ? { orcaRole: 'worker' } : {
+      orcaRemoteLead: JSON.stringify({ leadSessionId: 'lead', leadDeviceId: 'device', workerLabel: 'worker' }),
+    },
+    isShared: () => false, goalOwnsRecovery: async () => false, readCompanion: async () => null,
+    ownsCompanionInput: () => false,
+  });
+  const h = harness({ isEligible: eligibility.usageLimit });
+  expect(await h.guard.onTurnError('worker', LIMIT)).toBe(false);
+  expect(h.timers).toHaveLength(0);
+  expect(await eligibility.providerGroup('worker', { kind: 'failure', token: 1 })).toBe(true);
+});
+
 function harness(overrides: Partial<UsageLimitAutoResumeDeps> = {}) {
   const timers: Array<{ fn: () => void; delayMs: number; cleared: boolean }> = [];
   let tokenSeq = 0;

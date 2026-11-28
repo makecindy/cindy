@@ -24,11 +24,11 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
     removeItem: vi.fn(async (key: string) => { asyncStore.delete(key); }),
   },
 }));
-const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:{} as any, syncError:null as unknown, prefs: {favorites:[],engines:{}} as any, save: vi.fn(), entries: [] as any[],
+const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:{} as any, pluginEngineQuotas:{} as any, now: 0, syncError:null as unknown, prefs: {favorites:[],engines:{}} as any, save: vi.fn(), entries: [] as any[],
   // 按传入的目录派生(供应商组用例:每台电脑的供应商各有自己的行与正在用的来源);缺省用上面的固定值。
   entriesFor: null as null | ((providers: any[]) => any[]), activeSource: null as null | ((input: any) => string | null) }));
 vi.mock('@/session/UnifiedModelPickerView', () => ({ UnifiedModelPickerView: (p:any) => {test.view=p;return null;} }));
-vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0,quotaOf:(device:string,id:string)=>test.quotas[JSON.stringify([device,id])]})}));
+vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,pluginEngineQuotas:test.pluginEngineQuotas,now:test.now,quotaOf:(device:string,id:string)=>test.quotas[JSON.stringify([device,id])]})}));
 vi.mock('@/session/mobileModelPreferences', async () => {
   const {useReducer} = await import('react');
   return {useMobileModelPreferences:()=>{
@@ -50,7 +50,7 @@ beforeEach(async ()=>{
   await flushRemoteAgentModelMemory();
   asyncStore.clear();
   resetRemoteAgentModelMemory();
-  test.favoritesReady=true;test.syncError=null;test.quotas={};test.entriesFor=null;test.activeSource=null;test.save.mockReset().mockImplementation(async value => {test.prefs=value;});test.prefs={favorites:[],engines:{}};test.entries=[{
+  test.favoritesReady=true;test.syncError=null;test.quotas={};test.pluginEngineQuotas={};test.now=0;test.entriesFor=null;test.activeSource=null;test.save.mockReset().mockImplementation(async value => {test.prefs=value;});test.prefs={favorites:[],engines:{}};test.entries=[{
   providerId:'account',modelId:'model',displayName:'Model',candidates:['codex','claude-code'],recommended:'codex',nativeAgent:'codex',
   capabilities:{codex:{wireModelId:'codex/model',efforts:['medium','high'],defaultEffort:'medium',supportsFastMode:true,contextWindow:200000},
   'claude-code':{wireModelId:'model',efforts:['medium','high'],defaultEffort:'medium',supportsFastMode:false,contextWindow:200000}},
@@ -1502,4 +1502,84 @@ it('calls pluginEngines.onOpen once per open even when re-rendered with a fresh 
   });
   expect(firstOpen).toHaveBeenCalledTimes(1);
   expect(secondOpen).not.toHaveBeenCalled();
+});
+
+// 生产入口与可观察结果：真实 UnifiedModelPickerSheet + formatPluginEnginePickerQuota +
+// formatPluginEngineModelQuota + resolveMobilePluginEngineFavorite；验证移动端插件引擎的
+// 分组标题、来源页进度条与文案、各模型行及收藏行均按内置订阅模型口径展示周配额。
+// 规则依据：model-selector-unified 与 mobile-development 跨端展示一致性。
+// 覆盖缺口：此前无端到端验证多模型分组插件（如 Antigravity 无 models[]）在 UnifiedModelPickerSheet
+// 中向组头、来源页和收藏行输出对齐配额的测试。
+// 最小失败输入与 tier：unit(jsdom)；来源页把 5h 紧缩百分比拼成 "8% · 2h"、或 Gemini 行/收藏行无配额。
+it('aligns plugin engine group header, Sources quota bar/label, model rows, and favorite rows with built-in providers', async () => {
+  const now = 1_700_000_000_000;
+  test.now = now;
+  const agy = {
+    key: 'antigravity:agy',
+    providerId: 'acp-plugin:antigravity:agy',
+    name: 'Antigravity',
+    reportsUsage: true,
+    availability: { state: 'available' as const },
+    models: [
+      { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high' as const, 'max' as const], defaultEffort: 'high' as const },
+      { id: 'claude-opus-4-7', displayName: 'Claude Opus 4.7', efforts: ['high' as const], defaultEffort: 'high' as const },
+    ],
+    permissionModes: [{ id: 'default', displayName: 'Default' }],
+    defaultPermissionMode: 'default',
+  };
+  test.pluginEngineQuotas = {
+    [agy.providerId]: {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 95, resetsAt: now + 7 * 24 * 3_600_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 80, resetsAt: now + 4 * 3_600_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 8, resetsAt: now + 2 * 3_600_000 },
+      ],
+    },
+  };
+  test.prefs = {
+    favorites: [
+      { uid: 'fav-agy', providerId: agy.providerId, modelId: 'gemini-4-neon', agent: 'claude-code', effort: 'max', fast: false },
+    ],
+    engines: {},
+  };
+
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [agy], active: null, onSelect: vi.fn(async () => true) },
+    },
+  });
+
+  // Group header keeps the two pools apart, each on its weekly remaining (not 5h 8%).
+  const agyGroup = test.view.pluginEngines.groups[0];
+  expect(agyGroup.quota).toMatchObject({
+    summary: 'Gemini 95% · Claude & GPT 60%',
+    remaining: 60,
+    isMultiGroup: true,
+  });
+  expect(agyGroup.quota.groups.map((group: any) => [group.label, group.remaining, group.level]))
+    .toEqual([['Gemini', 95, 'normal'], ['Claude & GPT', 60, 'warn']]);
+
+  // Sources filter uses weekly remaining + built-in `[countdown, remaining]` label format.
+  const agyFilter = test.view.filters.find((item: any) => item.pluginEngineMark?.name === 'Antigravity');
+  expect(agyFilter?.quota).toEqual({
+    remaining: 60,
+    label: expect.stringContaining('session.menu.usage.remaining'),
+  });
+  expect(agyFilter?.quota?.label).not.toMatch(/^8%/);
+
+  // Per-model rows receive their own model group's weekly quota.
+  const geminiRow = agyGroup.rows.find((row: any) => row.modelId === 'gemini-4-neon');
+  const claudeRow = agyGroup.rows.find((row: any) => row.modelId === 'claude-opus-4-7');
+  expect(geminiRow?.quotaLabel).toContain('95%');
+  expect(claudeRow?.quotaLabel).toContain('60%');
+
+  // Plugin engine favorite row also receives Gemini's weekly quota.
+  const favGroup = test.view.groups.find((group: any) => group.key === 'favorites');
+  expect(favGroup?.items?.[0]?.row?.quotaLabel).toContain('95%');
 });

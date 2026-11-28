@@ -46,6 +46,7 @@
     "all": "全員",
     "allHint": "人のみ",
     "label": "仲間をメンション",
+    "avatarHint": "この仲間を下書きの末尾にメンションします。",
     "allBots": "すべての仲間",
     "allBotsHint": "仲間のみ"
   },
@@ -178,6 +179,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
       "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+      "ATTACHMENTS_DOWNLOAD_FAILED": "ダウンロードの失敗により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+      "ATTACHMENTS_LIMIT_REACHED": "添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+      "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "ダウンロードの失敗と添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
       "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。",
       "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}さん、このグループで使うコンピュータを選ぶと、この依頼を続行できます。",
       "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}}さんがこのグループで選んだコンピュータはオフラインです。"
@@ -689,5 +693,10 @@
     "externalFormatError": "元のメッセージから完全なリンクを開き直してください。"
   },
   "waitingForOwner": "所有者の確認待ち",
-  "externalBadge": "外部"
+  "externalBadge": "外部",
+  "reaction": {
+    "add": "リアクションを追加",
+    "count": "{{emoji}} · {{count}} 件のリアクション",
+    "failed": "リアクションを更新できませんでした。再試行してください。"
+  }
 }

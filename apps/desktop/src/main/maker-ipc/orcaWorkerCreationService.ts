@@ -27,7 +27,7 @@ export interface OrcaTeamSnapshot {
 /** 解析 worker 默认 model/effort/fastMode 所需的 lead session 字段。 */
 export interface OrcaLeadSessionSnapshot {
   id: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workspaceKind: 'project' | 'dialogue';
   workingDir: string | null;
   model: string;
@@ -53,6 +53,49 @@ export interface OrcaLeadSessionSnapshot {
    * 而不是 Lead 这次落到的那台。缺省 = Lead 不归组。
    */
   providerGroupEntry?: { agentDeviceId: string | null; providerId: string } | null;
+}
+
+export interface OrcaLeadSessionRowInput {
+  id: string;
+  agentKind: EngineKind;
+  workspaceKind: 'project' | 'dialogue';
+  workingDir: string | null;
+  model: string;
+  effort: string | null;
+  permissionMode: string;
+  fastMode?: boolean | 'ultrafast' | null;
+  providerId?: string | null;
+  remoteHostId?: string | null;
+  agentDeviceId?: string | null;
+}
+
+/**
+ * 将持久化的 Lead session 行转换为 `createWorker` 使用的快照。
+ *
+ * 插件引擎 (`acp`) Lead 必须保留 `model` 与 `providerId`，这样它省略 `provider_id` 或 `model`
+ * 创建 `acp` Worker 时才能正确继承所属引擎与模型；内置 Worker 路径各自按 `lead.agentKind !== 'acp'`
+ * 隔离，不会误继承插件引擎的 `model`/`providerId`/`effort`/`fastMode`。`effort` 与 `fastMode`
+ * 对 `acp` Lead 清空（插件引擎档位按模型独立声明，且无 Fast 模式）。
+ */
+export function buildOrcaLeadSessionSnapshot(
+  leadRow: OrcaLeadSessionRowInput,
+  providerGroupEntry?: Pick<OrcaLeadSessionSnapshot, 'providerGroupEntry'>,
+): OrcaLeadSessionSnapshot {
+  const isAcpLead = leadRow.agentKind === 'acp';
+  return {
+    ...(isAcpLead ? {} : providerGroupEntry),
+    id: leadRow.id,
+    agentKind: leadRow.agentKind,
+    workspaceKind: leadRow.workspaceKind,
+    workingDir: leadRow.workingDir,
+    model: leadRow.model,
+    effort: isAcpLead ? '' : leadRow.effort,
+    permissionMode: leadRow.permissionMode,
+    fastMode: isAcpLead ? false : (leadRow.fastMode ?? false),
+    providerId: leadRow.providerId ?? null,
+    remoteHostId: leadRow.remoteHostId ?? null,
+    ...(leadRow.agentDeviceId && !leadRow.remoteHostId ? { agentDeviceId: leadRow.agentDeviceId } : {}),
+  };
 }
 
 /** worker limit 与 duplicate label 校验只需要 worker 的身份、label 与占槽状态。 */
@@ -665,9 +708,11 @@ function resolveWorkerConfig(params: {
       message: `model "${model}" not available for ${input.agent}. valid: ${availableModels.map((candidate) => candidate.id).join(', ')}`,
     };
   }
+  const leadFallbackEffort = lead.agentKind === 'acp' ? undefined : lead.effort;
+  const leadFallbackFast = lead.agentKind === 'acp' ? false : (lead.fastMode ?? false);
   const normalizedEffort = normalizeResolvedEffort({
     model: modelCapabilities,
-    effort: input.effort ?? (params.useModelDefaultEffort ? undefined : defaults.effort ?? lead.effort),
+    effort: input.effort ?? (params.useModelDefaultEffort ? undefined : defaults.effort ?? leadFallbackEffort),
     explicit: input.effort !== undefined,
   });
   return {
@@ -682,7 +727,7 @@ function resolveWorkerConfig(params: {
       ? false
       : ((agentConsumesExplicitFast(input.agent) && input.fast !== undefined)
           ? input.fast
-          : (defaults.fastMode ?? (lead.fastMode ?? false))),
+          : (defaults.fastMode ?? leadFallbackFast)),
   };
 }
 
@@ -1155,7 +1200,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Model groups are unavailable for this Worker location' };
     }
     const modelGroup = params.modelGroup && params.executionDeviceId === undefined ? await deps.modelGroupStart!.prepare(params.modelGroup, {
-      keptModelName: params.model || lead.model,
+      keptModelName: params.model || (lead.agentKind === 'acp' ? '' : lead.model),
       ...(lead.remoteHostId ? { sshHostId: lead.remoteHostId } : {}),
     }) : null;
     const groupRoute = modelGroup?.route;
@@ -1200,11 +1245,24 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       if (!deps.admitPluginEngineWorker) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'plugin engine Workers are not available here' };
       }
+      const pluginProviderId =
+        (typeof params.providerId === 'string' && params.providerId.trim())
+        || (lead.agentKind === 'acp' && typeof lead.providerId === 'string' && lead.providerId.trim()
+          ? lead.providerId.trim()
+          : null);
+      const pluginModel =
+        params.model?.trim()
+        || (lead.agentKind === 'acp'
+          && pluginProviderId
+          && pluginProviderId === lead.providerId?.trim()
+          && lead.model?.trim()
+          ? lead.model.trim()
+          : 'default');
       let admitted: Awaited<ReturnType<NonNullable<typeof deps.admitPluginEngineWorker>>>;
       try {
         admitted = await deps.admitPluginEngineWorker({
-          providerId: typeof params.providerId === 'string' ? params.providerId.trim() : null,
-          model: params.model?.trim() || 'default',
+          providerId: pluginProviderId,
+          model: pluginModel,
           effort: params.effort,
           permissionMode: resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
           ...(workerLocation.agentDeviceId ? { agentDeviceId: workerLocation.agentDeviceId } : {}),
@@ -1243,7 +1301,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         workerAgentDeviceId: workerLocation.agentDeviceId,
         resolved: {
           model: admitted.model,
-          providerId: typeof params.providerId === 'string' ? params.providerId.trim() : null,
+          providerId: pluginProviderId,
           effort: admitted.effort || null,
           fastMode: false,
         },
@@ -1514,9 +1572,10 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     // 只有该来源确实带了 Fast 元数据才覆盖;无元数据(旧组装方)保留拍平解析。
     if (routeProvider?.fastModels) {
       const providerSupportsFast = routeProvider.fastModels.includes(resolved.model);
+      const leadFallbackFast = lead.agentKind === 'acp' ? false : (lead.fastMode ?? false);
       const requestedFast = agentConsumesExplicitFast(params.agent) && params.fast !== undefined
         ? params.fast
-        : (defaults.fastMode ?? (lead.fastMode ?? false));
+        : (defaults.fastMode ?? leadFallbackFast);
       resolved.fastMode = providerSupportsFast && requestedFast;
     }
     if ((resolved.fastMode === 'ultrafast' || params.fast === 'ultrafast') &&
@@ -1537,6 +1596,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     // 按拍平结果落地 —— 含暂存的拒绝。
     const routeEffortMeta = routeProvider?.effortMetaByModel?.[resolved.model];
     if (routeEffortMeta) {
+      const leadFallbackEffort = lead.agentKind === 'acp' ? undefined : lead.effort;
       const renormalized = normalizeResolvedEffort({
         model: {
           id: resolved.model,
@@ -1544,7 +1604,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           defaultEffort: routeEffortMeta.defaultEffort,
           effortsUnknown: routeEffortMeta.effortsUnknown,
         },
-        effort: params.effort ?? (groupRoute ? undefined : defaults.effort ?? lead.effort),
+        effort: params.effort ?? (groupRoute ? undefined : defaults.effort ?? leadFallbackEffort),
         explicit: params.effort !== undefined,
       });
       if (!renormalized.ok) {

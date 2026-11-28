@@ -1128,6 +1128,9 @@ export async function handleInvoke(
   if (result.error.code === 'IPC_ERROR') {
     throw new Error(result.error.message);
   }
+  if (channel === 'local-db:messages:around-client-id' && result.error.code === 'NOT_FOUND') {
+    throwIpcError('NOT_FOUND', result.error.message.replace(/^\[NOT_FOUND\]\s*/, ''));
+  }
   throwIpcError(DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL', result.error.message);
 }
 
