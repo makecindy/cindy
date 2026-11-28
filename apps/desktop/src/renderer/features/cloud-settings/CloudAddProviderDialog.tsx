@@ -10,6 +10,7 @@ import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLo
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from '@/components/settings/OAuthDeviceCodeCard';
 import { SettingsTextInput } from '@/components/settings/SettingsTextInput';
+import { SearchInput } from '@/components/ui/search-input';
 import type { ManagementItem, ManagementResult } from '../../../shared/settingsManagement';
 import type { useCloudAuthorization } from './useCloudAuthorization';
 import { CloudAuthProgress } from './CloudAuthProgress';
@@ -250,7 +251,7 @@ export function CloudAddProviderDialog({
               <p className="pb-2 text-12" style={{ color: 'var(--text-tertiary)' }}>
                 {t('settings.providers.wizard.stepPick')}
               </p>
-              <SettingsTextInput
+              <SearchInput
                 aria-label={t('settings.providers.wizard.searchPlaceholder')}
                 placeholder={t('settings.providers.wizard.searchPlaceholder')}
                 value={query}

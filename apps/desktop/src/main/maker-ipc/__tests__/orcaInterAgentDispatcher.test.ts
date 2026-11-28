@@ -30,7 +30,7 @@ vi.mock('../../logger.js', () => ({
 }));
 
 interface TestSessionMeta {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
   workDir: string;
   model: string;
 }
@@ -410,13 +410,14 @@ describe('sender-chosen steering into an active turn', () => {
     expect(JSON.parse(result.content[0]!.text)).toMatchObject(mode === 'complete'
       ? { status: 'done', result: 'Lead reply after restart' } : { status: 'idle', result: '' });
   });
-  function setup(outcome: 'steered' | 'queued' | 'not-attempted' | 'rejected' = 'steered') {
+  function setup(outcome: 'steered' | 'queued' | 'not-attempted' | 'rejected' = 'steered',
+    needsRefresh?: () => boolean) {
     const live = { ...createLiveSession(async () => ({ accepted: true })),
       isTurnRunning: vi.fn(() => true), getTurnGeneration: vi.fn(() => 7),
       capabilities: { sameTurnSteer: { supported: true } }, remoteHostId: null as string | null };
     const steer = vi.fn<NonNullable<OrcaInterAgentDispatcherDeps<TestSessionMeta>['steerControlInput']>>(async () => outcome);
     const lock = vi.fn(async (_id: string, task: () => Promise<unknown>) => task());
-    const h = createHarness({ getLiveSession: () => live, steerControlInput: steer,
+    const h = createHarness({ getLiveSession: () => live, steerControlInput: steer, needsOrcaRuntimeRefresh: needsRefresh,
       withSendToSessionLock: lock as OrcaInterAgentDispatcherDeps<TestSessionMeta>['withSendToSessionLock'],
       shouldQueueNewTurn: () => true,
       resolveWorkerSenderLabel: async () => 'reviewer',
@@ -424,6 +425,21 @@ describe('sender-chosen steering into an active turn', () => {
     });
     return { ...h, live, steer, lock };
   }
+
+  // Unit: a worker requesting same-turn delivery must not cross an unhydrated
+  // Lead boundary, including when promotion races asynchronous preparation.
+  it.each(['already promoted', 'promoted during preparation'])(
+    'durably queues a report without steering when the Lead is %s', async (when) => {
+      let first = when === 'promoted during preparation';
+      const h = setup('steered', () => { if (first) { first = false; return false; } return true; });
+      await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(steerReport))
+        .resolves.toMatchObject({ ok: true, mode: 'queued', clientId: 'client-1' });
+      expect(h.steer).not.toHaveBeenCalled();
+      expect(h.deps.enqueueQueuedMessage).toHaveBeenCalledExactlyOnceWith('target-session', expect.objectContaining({
+        clientId: 'client-1', durableDelivery: true, orcaReportDelivery: { workerId: 'worker-1' },
+      }), expect.any(Function));
+    },
+  );
   // Unit regression: no-live reports used to bootstrap before retaining the
   // message, and a queued ACK could precede persistence. Exercise the dispatcher.
   it('retains a cold Lead report and waits for its queue receipt before acknowledging', async () => {
@@ -861,6 +877,22 @@ describe('Orca lead/worker dispatcher', () => {
 
     expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
     expect(h.liveSession.send).toHaveBeenCalledTimes(1);
+  });
+
+  // ACP harness §4, unit: a report reaching a live but unhydrated ACP Lead
+  // must be explicitly rejected before delivery if the bridge startup fails.
+  it('does not deliver a Worker report to a stale ACP runtime after hydration fails', async () => {
+    const stale = createLiveSession(async () => ({ accepted: true }), 'acp');
+    const h = createHarness({
+      getLiveSession: () => stale,
+      hydrateOrcaSessionIfNeeded: async () => { throw new Error('Cindy collaboration tools unavailable'); },
+    });
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: stale.id, rawContent: 'Review finished', source: 'worker',
+      senderLabel: 'Worker', workerId: 'worker-1', meta: { source: 'orca', context: 'hydrate-failure-test' },
+    });
+    expect(result).toMatchObject({ ok: false, dispatchOutcome: { code: 'SEND_FAILED', message: 'Cindy collaboration tools unavailable' } });
+    expect(stale.send).not.toHaveBeenCalled();
   });
 
   it('serializes concurrent live prepare/send on the per-session lock', async () => {

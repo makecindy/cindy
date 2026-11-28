@@ -18,6 +18,7 @@ import {
 import { Trans, useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -1278,9 +1279,9 @@ export function BillingSettingsSection({
                 description={t('billing.giftCardPurchase.list.description')}
                 badge={
                   giftCards.state.nextCursor === null ? (
-                    <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+                    <Badge size="xs">
                       {t('billing.giftCardPurchase.list.count', { count: giftCards.state.cards.length })}
-                    </span>
+                    </Badge>
                   ) : undefined
                 }
               >
@@ -1328,9 +1329,9 @@ export function BillingSettingsSection({
             title={t('billing.orders.title')}
             description={t('billing.orders.description')}
             badge={
-              <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+              <Badge size="xs">
                 {t('billing.orders.count', { count: orderHistory.records.length })}
-              </span>
+              </Badge>
             }
           >
             <OrderHistoryCard
@@ -1584,9 +1585,9 @@ function SubscriptionOverviewCard({
             <>
               <div className="flex flex-wrap items-center gap-2">
                 <h4 className="text-14 font-medium text-[var(--text-primary)]">{facts.name}</h4>
-                <span className="select-none rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+                <Badge size="xs">
                   {t(`billing.subscriptionStatus.${facts.status}`)}
-                </span>
+                </Badge>
               </div>
               {(facts.price || facts.includedCredits) && facts.interval && (
                 <p className="mt-1.5 text-12 text-[var(--text-secondary)]">
@@ -2040,9 +2041,9 @@ function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
       title={t('billing.usage.promotionalDetails.title')}
       badge={
         <div className="flex flex-wrap items-center gap-2">
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+          <Badge size="xs">
             {t('billing.usage.promotionalDetails.count', { count: usage.promotionalGrants.length })}
-          </span>
+          </Badge>
           {pageCount > 1 && (
             <div className="flex items-center gap-2">
               <Button
@@ -2140,9 +2141,9 @@ function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
 function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantState }) {
   const { t } = useTranslation();
   return (
-    <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+    <Badge size="xs">
       {t(`billing.usage.promotionalDetails.states.${state}`)}
-    </span>
+    </Badge>
   );
 }
 
@@ -2863,16 +2864,16 @@ function BillingOfferDialog({
                                 {(currentPlan || unavailableReason) && (
                                   <div className="min-w-0">
                                     {currentPlan && (
-                                      <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                      <Badge size="xs" className="bg-[var(--surface)]">
                                         {t('billing.catalog.currentPlan')}
-                                      </span>
+                                      </Badge>
                                     )}
                                     {unavailableReason && (
-                                      <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                      <Badge size="xs">
                                         {t(
                                           `billing.catalog.unavailableReasons.${unavailableReason}`,
                                         )}
-                                      </span>
+                                      </Badge>
                                     )}
                                   </div>
                                 )}

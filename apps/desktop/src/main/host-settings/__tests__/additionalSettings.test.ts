@@ -17,7 +17,7 @@ vi.mock('electron-store', async () => {
   } };
 });
 vi.mock('../../logger.js', () => ({ createLogger: () => context.log }));
-vi.mock('../../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: { child: () => context.log } }));
+vi.mock('../../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: { child: () => context.log }, createMakerLogger: () => context.log }));
 vi.mock('../../appSessionState.js', () => ({
   peekCommittedAppSession: () => ({ mode: 'cloud', dataOwnerId: context.owner, generation: context.generation }),
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: context.owner, generation: context.generation }),
@@ -39,7 +39,35 @@ vi.mock('../../ownerContext.js', () => ({
 vi.mock('../../im/ownerScopedStorage.js', () => ({
   ownerScopedImUserDataPath: (...segments: string[]) => path.join(context.root, 'owners', `test-${context.owner}`, ...segments),
 }));
+const browserCommit = vi.hoisted(() => ({
+  commitHostBrowserBackendKind: vi.fn(async (_kind: string, persist: () => Promise<void>) => {
+    await persist();
+    return true;
+  }),
+}));
+vi.mock('../additionalProjectTools.js', () => ({ nativeProjectToolSettings: {} }));
+vi.mock('../additionalWorkspaceProviders.js', () => ({ nativeWorkspaceProviderSettings: {} }));
+vi.mock('../additionalShortcuts.js', () => ({ nativeShortcutSettings: {} }));
+vi.mock('../additionalPlugins.js', () => ({ nativePluginSettings: {} }));
+vi.mock('../additionalTelegram.js', () => ({ nativeTelegramGroupSettings: {} }));
+vi.mock('../additionalHooks.js', () => ({ nativeHookSettings: {} }));
+vi.mock('../additionalWorkspaces.js', () => ({ nativeWorkspaceSettings: {} }));
+vi.mock('../../mcp-integrations/browser.desktop.js', () => ({
+  commitHostBrowserBackendKind: browserCommit.commitHostBrowserBackendKind,
+}));
+vi.mock('../../wecomGroupNotification.js', () => ({
+  wecomGroupNotificationService: {
+    inspectEnabledPreference: vi.fn(),
+    commitEnabledPreference: vi.fn(),
+  },
+}));
+vi.mock('../../local-themes/loader.js', () => ({
+  loadLocalThemesSync: () => ({ success: true, themes: [] }),
+}));
 import { getHostSettings, updateHostSettings } from '../index.js';
+import { additionalNativeOperations, configureAdditionalNativeOperations } from '../additionalRuntime.js';
+import { nativeSettingsOperations } from '../additionalNative.js';
+import { readBrowserBackendSettings } from '../../browser-backend-settings-store.desktop.js';
 import { normalizeHostSettingsChange, type HostSettingsDomain } from '../../../shared/hostSettings.js';
 import { readGitSafetySettings, writeGitSafetyMode } from '../../maker-host/git-safety-settings-store.js';
 import { readMemorySettings } from '../../maker-host/memory-settings-store.js';
@@ -144,4 +172,38 @@ it('keeps the legacy cloud Git switch compatible with all native modes and stale
   expect(await updateHostSettings(caller, await request('gitSafety', { clear: ['autoSnapshotEnabled'] }))).toMatchObject({ saved: true });
   expect(readGitSafetySettings().mode).toBe('existing-git');
   expect(await getHostSettings(caller, 'gitSafety')).toMatchObject({ customizedKeys: [] });
+});
+
+// Regression: browserBackend schema and native commit rejected 'user-browser' even though
+// browser-backend-settings-store and the desktop Settings UI already support it.
+it('reads, commits, and resets browserBackend including user-browser through host settings', async () => {
+  const previous = additionalNativeOperations();
+  configureAdditionalNativeOperations(nativeSettingsOperations);
+  try {
+    expect(normalizeHostSettingsChange({ domain: 'browserBackend', set: { kind: 'user-browser' } })).toMatchObject({
+      domain: 'browserBackend',
+      set: { kind: 'user-browser' },
+    });
+    expect(() => normalizeHostSettingsChange({ domain: 'browserBackend', set: { kind: 'invalid' } })).toThrow();
+
+    const initial = await getHostSettings(caller, 'browserBackend');
+    expect(initial).toMatchObject({ status: 'ready', value: { kind: 'external' }, customizedKeys: [] });
+
+    const saved = await updateHostSettings(caller, await request('browserBackend', { set: { kind: 'user-browser' } }));
+    expect(saved).toMatchObject({ saved: true });
+    expect(browserCommit.commitHostBrowserBackendKind).toHaveBeenCalledWith('user-browser', expect.any(Function));
+    expect(readBrowserBackendSettings().kind).toBe('user-browser');
+    expect(await getHostSettings(caller, 'browserBackend')).toMatchObject({
+      status: 'ready',
+      value: { kind: 'user-browser' },
+      customizedKeys: ['kind'],
+    });
+
+    const reset = await updateHostSettings(caller, await request('browserBackend', { clear: ['kind'] }));
+    expect(reset).toMatchObject({ saved: true });
+    expect(browserCommit.commitHostBrowserBackendKind).toHaveBeenLastCalledWith('external', expect.any(Function));
+    expect(readBrowserBackendSettings().kind).toBe('external');
+  } finally {
+    configureAdditionalNativeOperations(previous as Parameters<typeof configureAdditionalNativeOperations>[0]);
+  }
 });

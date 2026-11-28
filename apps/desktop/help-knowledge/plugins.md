@@ -4,7 +4,7 @@ title: Plugins (extending what the agents can do)
 summary: Where the Plugins page is, the built-in plugins, installing (marketplace, .cindy file, custom marketplaces), enabling / disabling globally or per project, updates, uninstalling, account / key setup, $commands, panels, and the permission model.
 tab: ghosts
 ---
-Plugins extend what the agents can do — they add tools the agent can call, panels that live as tabs in the right sidebar, full-page app views, and integrations with outside services. Each plugin is a self-contained `.cindy` package that runs in its own isolated sandbox.
+Plugins extend what the agents can do — they add tools the agent can call, panels that live as tabs in the right sidebar, full-page app views, integrations with outside services, task execution engines (ACP), and routing models for the model picker. Each plugin is a self-contained `.cindy` package that runs in its own isolated sandbox.
 
 **The Plugins page:**
 

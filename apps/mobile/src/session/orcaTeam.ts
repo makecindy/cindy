@@ -40,6 +40,7 @@ import type { MobileAgentCapabilities } from '@/session/agentCapabilities';
 import type { OrcaWorkerCreationPrefs } from '@/session/orcaWorkerPrefs';
 
 export type { OrcaTeamWorker, OrcaCollaborationSettings, OrcaWorkerAgentKind, OrcaWorkerPermissionMode };
+export type OrcaWorkerFormAgentKind = OrcaWorkerAgentKind | 'acp';
 
 /** 创建 Worker 表单(开启协同与追加 Worker 共用)。 */
 export interface OrcaWorkerFormValue {
@@ -47,7 +48,7 @@ export interface OrcaWorkerFormValue {
   /** 手动选择或恢复的完整路线；仅供控制端表单使用，不进入创建协议。 */
   modelSelectionExplicit?: boolean;
   modelGroup?: { id: string; name: string };
-  agent: OrcaWorkerAgentKind;
+  agent: OrcaWorkerFormAgentKind;
   /** null = 跟随被控端默认(该 Agent 上次新建任务的选择,回落 Lead 模型)。 */
   model: { id: string; providerId: string | null; effort: string | null; fast: boolean | 'ultrafast' } | null;
   permissionMode: OrcaWorkerPermissionMode;
@@ -149,8 +150,8 @@ export function narrowOrcaWorkerProvider(
   providers: readonly ProviderView[] | null,
 ): OrcaWorkerFormValue {
   const model = form.model;
-  // 另一台电脑(远程供应商)的选择来自那台的目录，已在选择器里按那份收窄过。
-  if (!model || !providers || orcaWorkerAgentElsewhere(form)) return form;
+  // 插件引擎 Worker 不走内置供应商目录收窄；另一台电脑(远程供应商)的选择来自那台的目录，已在选择器里收窄过。
+  if (!model || !providers || form.agent === 'acp' || orcaWorkerAgentElsewhere(form)) return form;
   const views = [...providers];
   const providerId = model.providerId
     && chatEligibleSourcesForModel(views, model.id, form.agent).some((candidate) => candidate.id === model.providerId)
@@ -243,6 +244,7 @@ export function buildOrcaEnableOptions(
 // ─── 错误文案 ────────────────────────────────────────────────────────────────
 
 const ORCA_ERROR_CODES = [
+  'PLUGIN_ENGINE_CANNOT_LEAD',
   'WORKER_LIMIT_HARD_EXCEEDED',
   'NO_PROVIDER_FOR_AGENT',
   'PROVIDER_ROUTE_UNAVAILABLE',
@@ -316,12 +318,15 @@ export function isOrcaCollabEligible(
 export async function readOrcaCollabEntryStatus(
   maker: MobileMakerTransport,
   session: Pick<RemoteSession, 'orcaRole' | 'orcaRemoteLead' | 'workspaceKind' | 'workingDir' | 'remoteHostId'>,
-  agent: OrcaWorkerAgentKind,
+  agent: OrcaWorkerFormAgentKind,
 ): Promise<Exclude<OrcaCollabEntryStatus, 'loading'>> {
   if (!isOrcaCollabEligible(session)) return 'ineligible';
   let capabilities;
   try {
-    capabilities = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent));
+    const probeAgent = agent === 'acp'
+      ? (await maker.listAvailableAgents().catch(() => []))[0] ?? 'claude-code'
+      : agent;
+    capabilities = normalizeMobileAgentCapabilities(await maker.getCapabilities(probeAgent));
   } catch (error) {
     return isOrcaUnsupportedError(error) ? 'unsupported' : 'unavailable';
   }
@@ -371,12 +376,12 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  */
 async function assertWorkerPermissionSupported(
   maker: MobileMakerTransport,
-  agent: OrcaWorkerAgentKind,
+  agent: OrcaWorkerFormAgentKind,
   placement: { executionDeviceId?: string; agentDeviceId?: string | null; modelGroup?: OrcaWorkerFormValue['modelGroup'] | string },
 ): Promise<void> {
-  // 权限协议位属于 Lead 宿主。远端 Worker / 远程供应商 Worker 的 Agent 可以只安装在另一台电脑上，
+  // 权限协议位属于 Lead 宿主。插件引擎 / 远端 Worker / 远程供应商 Worker 的 Agent 可以不在本机内置列表，
   // 因此用 Lead 已注册的 Agent 查询宿主能力，不要求 Lead 也安装该 Worker Agent。
-  const probeAgent = placement.modelGroup || placement.executionDeviceId || typeof placement.agentDeviceId === 'string'
+  const probeAgent = agent === 'acp' || placement.modelGroup || placement.executionDeviceId || typeof placement.agentDeviceId === 'string'
     ? (await maker.listAvailableAgents())[0]
     : agent;
   const capabilities = probeAgent
@@ -548,6 +553,12 @@ export function orcaWorkerDisplayName(worker: Pick<OrcaTeamWorker, 'role' | 'lab
   return worker.label && worker.label !== worker.role ? `${worker.role} #${worker.label}` : worker.role;
 }
 
-export function orcaAgentLabel(agent: OrcaWorkerAgentKind): string {
-  return agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code';
+export function orcaAgentLabel(agent: OrcaWorkerFormAgentKind): string {
+  return agent === 'acp'
+    ? i18n.t('models.pluginEngines.genericName')
+    : agent === 'codex'
+      ? 'Codex'
+      : agent === 'pi'
+        ? 'Pi'
+        : 'Claude Code';
 }

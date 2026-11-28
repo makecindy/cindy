@@ -30,6 +30,7 @@ const helper = (key: string, domain: string, title: string, summary: string, too
   ({ key, domain, title, summary, tools, aliases, notes, server: 'cindy_helper' });
 const nativeSearchPhrases: Record<string, readonly string[] | undefined> = {
   'native.send_to_session': [
+    '给共享任务发消息', '向共享任务发送消息', '发给别人共享的任务', 'message a shared task', 'send to shared task',
     '发消息给另一个任务会话', '发消息给另一个任务', '发消息给另一个会话',
     '给另一个任务发消息', '给已有任务发消息', '向另一个任务发送消息', '向另一个会话发送消息',
     '任务发消息', '会话发消息', '跨任务发送', '跨会话发送',

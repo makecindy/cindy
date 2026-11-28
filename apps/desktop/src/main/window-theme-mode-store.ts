@@ -17,7 +17,7 @@ export interface WindowThemeSnapshot {
   systemIsDark?: boolean;
   familyId?: string;
   systemModeFollowsSystem?: boolean;
-  /** Windows: the main window last had to be see-through without a system material. */
+  /** Windows & macOS: the main window last needed `transparent: true` (clear/custom desktop blur). */
   needsTransparentWindow?: boolean;
 }
 
@@ -164,8 +164,8 @@ export function writeWindowThemeSnapshot(
 }
 
 /**
- * Windows fixes `transparent` when a window is created, so remember whether the main window
- * needed it; the next launch then creates the matching kind of window.
+ * Electron fixes `transparent` when a window is created (Windows DWM & macOS AppKit), so remember
+ * whether the main window needed it; the next launch then creates the matching kind of window.
  */
 export function writeWindowTransparencyHint(needsTransparentWindow: boolean): void {
   try {

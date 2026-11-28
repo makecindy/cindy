@@ -39,6 +39,7 @@ import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/win
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { estimateMinutes, useFormatSize } from '@/components/settings/SessionImportSection';
 import { useProviderSubscriptionCard } from '@/components/settings/useProviderSubscriptionCard';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -875,9 +876,9 @@ function OptionCard({ icon, title, badge, body, action, children }: {
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-15 font-medium text-[var(--confirm-title)]">{title}</span>
-            <span className="shrink-0 rounded-full border border-[var(--border-default)] px-2 py-px text-11 font-medium text-[var(--text-secondary)]">
+            <Badge tone="outline">
               {badge}
-            </span>
+            </Badge>
             {action ? <span className="ml-auto shrink-0">{action}</span> : null}
           </div>
           <p className="text-13 leading-relaxed text-[var(--confirm-desc)]">{body}</p>
@@ -929,9 +930,9 @@ function OptionRow({ icon, label, sub, badge, onClick }: {
         <span className="flex items-center gap-2">
           <span className="truncate text-14 font-medium text-[var(--text-primary)]">{label}</span>
           {badge ? (
-            <span className="shrink-0 rounded-full border border-[var(--border-default)] px-2 py-px text-10 font-medium text-[var(--text-tertiary)]">
+            <Badge size="xs" tone="outline">
               {badge}
-            </span>
+            </Badge>
           ) : null}
         </span>
         {sub ? <span className="truncate text-12 text-[var(--text-tertiary)]">{sub}</span> : null}

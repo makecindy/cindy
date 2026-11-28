@@ -4,6 +4,11 @@ export interface AutoUpdateSettingsState {
   autoRelaunchOnIdle: boolean;
   isCustomized: boolean;
   defaultAutoRelaunchOnIdle: boolean;
+  /**
+   * Whether the idle switch can take effect on this installation. False for a
+   * Linux system `.deb`, which needs a password to install; null until read.
+   */
+  unattendedInstallSupported: boolean | null;
   loading: boolean;
 }
 
@@ -11,6 +16,7 @@ const INITIAL: AutoUpdateSettingsState = {
   autoRelaunchOnIdle: false,
   isCustomized: false,
   defaultAutoRelaunchOnIdle: false,
+  unattendedInstallSupported: null,
   loading: true,
 };
 
@@ -19,6 +25,7 @@ function normalize(payload: AutoUpdateSettingsPayload): AutoUpdateSettingsState 
     autoRelaunchOnIdle: payload.autoRelaunchOnIdle === true,
     isCustomized: payload.isCustomized === true,
     defaultAutoRelaunchOnIdle: payload.defaultAutoRelaunchOnIdle === true,
+    unattendedInstallSupported: payload.unattendedInstallSupported !== false,
     loading: false,
   };
 }

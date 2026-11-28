@@ -97,7 +97,7 @@ vi.mock('../../sidebarSettingsStoreCore.js', () => ({
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../../projects-root-settings.js', () => ({ readProjectsRootDirectory: () => h.projectsRoot }));
 
-import { projectForNewTask } from '../projectManagementCore.js';
+import { projectForNewTask, validateGroupProjectDir } from '../projectManagementCore.js';
 import { createProject } from '../createProject.js';
 import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from '../projectManagement.js';
 
@@ -131,6 +131,18 @@ describe('createProject', () => {
     await rm(directory, { recursive: true, force: true });
   });
   const run = (workingDir: string) => createProject({ callerSessionId: 'caller', workingDir });
+
+  // #13603: the group picker must distinguish a missing catalog entry from a missing directory.
+  it('only asks to add a project when the selected folder is unregistered', async () => {
+    const folder = path.join(directory, 'selected');
+    await mkdir(folder);
+    expect(await validateGroupProjectDir(folder)).toMatchObject({ ok: false, errorCode: 'PROJECT_NOT_REGISTERED' });
+    expect(h.upsert).not.toHaveBeenCalled();
+    h.registered.push({ path: folder });
+    expect(await validateGroupProjectDir(folder)).toEqual({ ok: true, dir: folder });
+    await rm(folder, { recursive: true });
+    expect(await validateGroupProjectDir(folder)).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+  });
 
   it('creates by name or repository through the form entry and preserves existing settings when naming a selected folder', async () => {
     h.updateInfo.mockResolvedValue({ createdProjectKey: 'local:/Projects/Demo-2' });

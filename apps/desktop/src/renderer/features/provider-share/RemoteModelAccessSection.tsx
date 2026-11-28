@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { unifiedModelKeyId } from '@cindy/model-providers';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
@@ -146,7 +146,7 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
         <Checkbox checked={models === null} disabled={!view || saving} onChange={(event) => setModels(event.target.checked ? null : [])} />
         {t(key + (memberId ? 'inherit' : 'allFuture'))}
       </label>
-      <div className="mt-3"><Input inputRef={searchRef} value={search} onChange={setSearch} placeholder={t(key + 'search')} aria-label={t(key + 'search')} disabled={!view || saving} /></div>
+      <div className="mt-3"><SearchInput inputRef={searchRef} value={search} onChange={setSearch} placeholder={t(key + 'search')} aria-label={t(key + 'search')} disabled={!view || saving} /></div>
       <div className="mt-2 max-h-72 shrink-0 overflow-y-auto overscroll-contain rounded-lg border border-[var(--border-default)] p-2" aria-busy={!view}>
         {rows.map((model) => {
           const allowedIds = model.ids.filter(id => availableIds.has(id) && providerAllows(id));

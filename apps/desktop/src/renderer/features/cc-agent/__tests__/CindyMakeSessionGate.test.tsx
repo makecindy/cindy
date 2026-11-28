@@ -16,6 +16,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 
 const state = vi.hoisted(() => ({
   remote: [] as Array<{ id: string; source: string; model?: string; workingDir?: string }>,
+  localPreviewId: null as string | null,
   localSource: undefined as string | null | undefined,
   getSession: vi.fn(),
   previewId: null as string | null,
@@ -40,6 +41,7 @@ vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: {
     state.localListeners.add(listener);
     return () => { state.localListeners.delete(listener); };
   },
+  getCreationPreview: (id: string) => id === state.localPreviewId ? {} : undefined,
   findById: () => state.localSource !== undefined ? { source: state.localSource } : null,
 } }));
 vi.mock('@/lib/makerTransport', () => ({ getSessionFor: state.getSession, getSessionOnDevice: state.getSession }));
@@ -47,6 +49,7 @@ afterEach(cleanup);
 beforeEach(() => {
   state.remote = [];
   state.previewId = null;
+  state.localPreviewId = null;
   state.localSource = undefined;
   state.getSession.mockReset().mockResolvedValue(null);
   state.origins.clear();
@@ -97,8 +100,9 @@ describe('remote task route origin', () => {
 
   // Unit: the pending task's host row doesn't exist yet. Rendering the real
   // route must show its composer without an existence lookup or an error.
-  it('opens an optimistic new task before its host row arrives', async () => {
-    state.previewId = 'child';
+  it.each(['local', 'remote'])('opens a %s new task before its host row arrives', async origin => {
+    if (origin === 'local') state.localPreviewId = 'child';
+    else state.previewId = 'child';
     await act(async () => { mountRoute('/cc-agent/child'); });
     expect(screen.getByText('Remote composer')).toBeTruthy();
     expect(state.getSession).not.toHaveBeenCalled();

@@ -48,6 +48,7 @@ import {
   markRemotePluginEnginesStale,
   prefetchRemotePluginEngines,
   resetPluginEnginesStoreForTests,
+  usePluginEngines,
 } from '@/hooks/usePluginEngines';
 import type { Session } from '@/lib/ccAgent.types';
 import { CONTROLLED_MODEL_CATALOG_CHANNEL } from '../../shared/controlledModelCatalog';
@@ -65,6 +66,33 @@ afterEach(() => {
 const pixels = (alpha: number[]) => alpha.flatMap((value) => [77, 107, 254, value]);
 
 describe('plugin engine identity icon', () => {
+  it('does not expose a previous owner’s delayed local engine details', async () => {
+    const initial = getDataOwnerGeneration();
+    const modelId = 'gemini-4-neon';
+    const engine = remoteEngine('agy-acp:agy', 'Antigravity');
+    let resolveOld!: (list: PluginEngineView[]) => void;
+    const list = vi.fn()
+      .mockReturnValueOnce(new Promise<PluginEngineView[]>(resolve => { resolveOld = resolve; }))
+      .mockResolvedValueOnce([engine]);
+    vi.stubGlobal('electronAPI', { maker: {
+      listPluginEngines: list, onPluginEnginesChanged: () => () => {},
+    } });
+    function Detail() {
+      const value = usePluginEngines()[0];
+      return <span>{value?.reportedModelDetails?.[0]?.contextWindow ?? value?.name ?? '-'}</span>;
+    }
+    try {
+      setDataOwnerGeneration('owner-old');
+      const { container } = render(<Detail />);
+      await act(async () => setDataOwnerGeneration('owner-new'));
+      await act(async () => resolveOld([{ ...engine, reportedModelDetails: [{ modelId, contextWindow: 524_288 }] }]));
+      expect(container.textContent).toBe('Antigravity');
+    } finally {
+      cleanup();
+      setDataOwnerGeneration(initial.dataOwnerId, initial.generation);
+    }
+  });
+
   it('uses a shape on a clear background as a silhouette, never an opaque or rounded-square icon', () => {
     // The DeepSeek whale measures 68 % clear / 31 % solid.
     expect(isSilhouetteIcon(pixels([0, 0, 0, 0, 0, 255, 255, 0, 0, 255, 255, 255, 0, 0, 0, 0]))).toBe(true);

@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "답변 제출",
     "next": "다음",
     "answerRequired": "답변을 선택하거나 입력해야 계속할 수 있습니다.",
-    "submit": "제출",
+    "submit": "답변 보내기",
     "sendAndContinue": "보내고 계속",
     "closeAnswer": "닫기",
     "planReviewTitle": "Claude의 플랜 검토",
@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "컴퓨터에서 설정 입력"
   },
   "inputHandoff": {
+    "refreshVerification": "QR 코드 새로고침",
     "originWarning": {
       "insecure": "이 페이지는 보안 연결을 사용하지 않습니다. 입력한 내용이 다른 사람에게 노출될 수 있습니다.",
       "ip-address": "이 페이지는 도메인 대신 IP 주소를 사용합니다. 예상한 사이트인지 확인하세요.",

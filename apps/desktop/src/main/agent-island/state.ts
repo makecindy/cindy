@@ -17,7 +17,7 @@ import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shar
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
+import { dbToMakerEngineKind } from '../../shared/agentKindConversion';
 import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../shared/liveTaskPriority';
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 
@@ -1320,7 +1320,7 @@ function applyDeviceSessionMeta(
     ? companion.groupName ?? null
     : projectNameForSession(input);
   const projectName = [project, input.deviceName].filter(Boolean).join(' · ') || null;
-  const agentKind = dbToMakerAgentKind(input.agentKind);
+  const agentKind = dbToMakerEngineKind(input.agentKind);
   const changed = session.title !== input.title
     || session.sourceCompletionToken !== input.completionToken
     || session.companion !== companion

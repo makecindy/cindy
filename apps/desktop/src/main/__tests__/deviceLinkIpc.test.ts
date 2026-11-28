@@ -858,7 +858,7 @@ describe('device-link IPC handlers', () => {
       isMobilePlatform: platform => platform === 'ios' || platform === 'android',
       now: () => 0,
     });
-    const config = { strategy: 'least' as const, autoSwitch: true,
+    const config = { strategy: 'expiring' as const, autoSwitch: true,
       members: [{ key: 'device:member:provider', kind: 'device' as const,
         agentDeviceId: 'member', providerId: 'provider', limit: 1, weight: 1, paused: false }] };
     const resolved = await directory.resolveMembers('provider', config);
@@ -1090,7 +1090,7 @@ describe('device-link IPC handlers', () => {
       isMobilePlatform: platform => platform === 'ios' || platform === 'android',
       now: () => 0,
     });
-    const resolved = await directory.resolveMembers('anthropic', { strategy: 'least', autoSwitch: true,
+    const resolved = await directory.resolveMembers('anthropic', { strategy: 'expiring', autoSwitch: true,
       members: [{ key: 'member', kind: 'device', agentDeviceId: 'executor', providerId: 'anthropic',
         limit: 1, weight: 1, paused: false }] });
     expect(resolved[0].state).toBe('ok');

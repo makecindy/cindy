@@ -6,6 +6,7 @@ import { followedGithubPrs, GITHUB_WATCH_SCHEDULE, matchingGithubPrs, type Githu
  */
 import { connectionBackoffDelayMs } from '@cindy/im/connection-retry';
 import {
+  isManagedWebhookSource,
   parseWebhookFormat,
   resolveScheduleWebhookFormat,
   type Schedule,
@@ -24,6 +25,8 @@ const CLOSE_REPLACED = 4409;
 const RECONCILE_RETRY_MS = 60_000;
 // The existing server pings every 30s. A quiet repository is healthy; a silent socket is not.
 const SOCKET_HEALTH_MS = 70_000;
+/** Coalesce repeated webhook-server overflow batches into at most one full PR sweep per window. */
+const GITHUB_OVERFLOW_COOLDOWN_MS = 5 * 60_000;
 
 export interface RemoteEndpointView {
   id: string;
@@ -183,6 +186,8 @@ export class ScheduleWebhookRemote {
   private githubError: unknown = null;
   private readonly githubVerified = new Set<string>();
   private githubBatchFailed = false;
+  private lastGithubOverflowAt = 0;
+  private githubOverflowTimer: ReturnType<typeof setTimeout> | null = null;
   private githubAutomations = new Map<string, Schedule>();
   private closeGithubConnect: (() => void) | undefined;
   private githubConnectAttempt = 0;
@@ -233,7 +238,8 @@ export class ScheduleWebhookRemote {
     const wanted = new Map<string, WantedEndpoint>();
     for (const schedule of schedules) {
       const trigger = schedule.webhookTrigger;
-      if (trigger?.source?.preset === 'github-app') continue;
+      // Managed sources (GitHub App, plugin events) have no per-task server address.
+      if (isManagedWebhookSource(trigger?.source)) continue;
       if (trigger) wanted.set(schedule.id, {
         identity: trigger.endpointId,
         events: trigger.events ?? [], format: resolveScheduleWebhookFormat(trigger.source),
@@ -420,6 +426,7 @@ export class ScheduleWebhookRemote {
     this.localSyncKey = '';
     this.githubInstallPending = false;
     this.githubVerified.clear();
+    this.clearGithubOverflowState();
     this.updateConnection();
   }
 
@@ -440,7 +447,10 @@ export class ScheduleWebhookRemote {
       if (error instanceof RemoteRequestError && error.status === 404) return { available: false } as GithubAppStatus;
       throw error;
     });
-    if (state.login !== this.github.login || state.endpointId !== this.github.endpointId) this.githubVerified.clear();
+    if (state.login !== this.github.login || state.endpointId !== this.github.endpointId) {
+      this.githubVerified.clear();
+      this.clearGithubOverflowState();
+    }
     if (this.github.login && (state.login !== this.github.login || state.endpointId !== this.github.endpointId)) {
       for (const id of githubAutomationsSnapshot.keys()) await this.deps.onInvalidated?.(id);
     }
@@ -825,6 +835,7 @@ export class ScheduleWebhookRemote {
     this.socket = socket;
     this.githubVerified.clear();
     this.githubBatchFailed = false;
+    this.clearGithubOverflowState();
     this.lastSocketActivity = 0;
     let rejected = false;
     socket.on('unexpected-response', (_request, response) => {
@@ -929,26 +940,64 @@ export class ScheduleWebhookRemote {
     }).then(async (isCurrent) => {
       if (!isCurrent?.()) return;
       const covered = this.coveredGithubPrs();
-      const recover = delivery.omitted > 0 || this.githubBatchFailed;
-      if (recover) this.githubBatchFailed = true;
       const heads = await this.deps.githubPrHeads?.(covered) ?? {};
       if (!isCurrent()) return;
       // Unknown/evicted heads are re-read once, never every PR in the repository.
       const unknown = covered.filter(url => !heads[url] && delivery.events.some(event => ['check_run', 'check_suite', 'status', 'workflow_run'].includes(event.event) && event.number === undefined
         && event.repository?.toLowerCase() === url.split('/').slice(3, 5).join('/').toLowerCase()));
-      const urls = recover ? covered : [...new Set([...matchingGithubPrs(covered, delivery.events, heads), ...unknown])];
-      const notify = recover ? covered : matchingGithubPrs(covered,
+      const eventUrls = [...new Set([...matchingGithubPrs(covered, delivery.events, heads), ...unknown])];
+      const eventNotify = matchingGithubPrs(covered,
         delivery.events.filter(event => !['check_run', 'check_suite', 'status'].includes(event.event)), heads);
+      const elapsedSinceOverflow = this.lastGithubOverflowAt > 0
+        ? Date.now() - this.lastGithubOverflowAt
+        : Number.POSITIVE_INFINITY;
+      const deferOverflow = delivery.omitted > 0 && !this.githubBatchFailed
+        && elapsedSinceOverflow >= 0 && elapsedSinceOverflow < GITHUB_OVERFLOW_COOLDOWN_MS;
+      const recover = (delivery.omitted > 0 && !deferOverflow) || this.githubBatchFailed;
+      if (recover && covered.length) this.githubBatchFailed = true;
+      if (deferOverflow && covered.length && !this.deps.onGithubPrs) {
+        throw new Error('GITHUB_RECEIVER_UNAVAILABLE');
+      }
+      const urls = recover ? covered : eventUrls;
       if (urls.length) {
         if (!this.deps.onGithubPrs) throw new Error('GITHUB_RECEIVER_UNAVAILABLE');
         await this.enqueueGithub(async () => {
           if (!isCurrent()) return;
+          const now = Date.now();
+          const queuedElapsed = this.lastGithubOverflowAt > 0 ? now - this.lastGithubOverflowAt : Number.POSITIVE_INFINITY;
+          // If another queued overflow sweep just completed while this batch waited in the
+          // GitHub lane, coalesce into one trailing sweep and only refresh explicit event targets now.
+          const coalesceQueuedOverflow = recover && delivery.omitted > 0 && !this.githubBatchFailed
+            && queuedElapsed >= 0 && queuedElapsed < GITHUB_OVERFLOW_COOLDOWN_MS;
+          const runRecover = recover && !coalesceQueuedOverflow;
+          const runUrls = runRecover ? covered : eventUrls;
+          if (!runUrls.length) {
+            if (coalesceQueuedOverflow && covered.length) {
+              this.scheduleGithubOverflowSweep(socket, GITHUB_OVERFLOW_COOLDOWN_MS - queuedElapsed);
+            }
+            return;
+          }
+          const runNotify = runRecover ? covered : eventNotify;
           const reviews = matchingGithubPrs(covered, delivery.events.filter(event => ['pull_request_review', 'pull_request_review_comment', 'pull_request_review_thread'].includes(event.event)));
           const closed = matchingGithubPrs(covered, delivery.events.filter(event => event.event === 'pull_request' && event.action === 'closed'));
-          await this.deps.onGithubPrs!(urls, isCurrent, { reason: recover ? 'overflow' : 'event', notify,
+          await this.deps.onGithubPrs!(runUrls, isCurrent, { reason: runRecover ? 'overflow' : 'event', notify: runNotify,
             ...(reviews.length ? { reviews } : {}), ...(closed.length ? { closed } : {}) });
-          if (isCurrent()) this.githubBatchFailed = false;
+          if (isCurrent()) {
+            this.githubBatchFailed = false;
+            if (runRecover) {
+              this.lastGithubOverflowAt = Date.now();
+              if (this.githubOverflowTimer) {
+                clearTimeout(this.githubOverflowTimer);
+                this.githubOverflowTimer = null;
+              }
+            } else if (coalesceQueuedOverflow && covered.length) {
+              this.scheduleGithubOverflowSweep(socket, GITHUB_OVERFLOW_COOLDOWN_MS - queuedElapsed);
+            }
+          }
         });
+      }
+      if (deferOverflow && covered.length && isCurrent()) {
+        this.scheduleGithubOverflowSweep(socket, GITHUB_OVERFLOW_COOLDOWN_MS - elapsedSinceOverflow);
       }
     });
     receive.then(
@@ -973,11 +1022,62 @@ export class ScheduleWebhookRemote {
     if (this.wanted.size || !this.github.dailyQuotaExempt) this.deps.onQuotaExhausted?.(this.exhausted);
   }
 
+  private clearGithubOverflowState(): void {
+    this.lastGithubOverflowAt = 0;
+    if (this.githubOverflowTimer) {
+      clearTimeout(this.githubOverflowTimer);
+      this.githubOverflowTimer = null;
+    }
+  }
+
+  private scheduleGithubOverflowSweep(socket: WebSocket, delayMs: number): void {
+    if (this.githubOverflowTimer || !this.running || this.socket !== socket) return;
+    const generation = this.generation;
+    const login = this.github.login;
+    const endpointId = this.github.endpointId;
+    if (!login || !endpointId) return;
+    // Bind only to the account/connection boundary here, not to the earlier `githubSynced` snapshot:
+    // adding or removing a followed PR before the cooldown expires must not drop an already-ACKed
+    // overflow sweep for the remaining PRs.
+    const sameConnection = () => this.running && this.socket === socket && generation === this.generation
+      && this.github.login === login && this.github.endpointId === endpointId;
+    this.githubOverflowTimer = setTimeout(() => {
+      this.githubOverflowTimer = null;
+      if (!sameConnection()) return;
+      if (!this.deps.onGithubPrs) {
+        if (this.coveredGithubPrs().length) this.githubBatchFailed = true;
+        return;
+      }
+      void this.enqueueGithub(async () => {
+        if (!sameConnection()) return;
+        const currentCovered = this.coveredGithubPrs();
+        if (!currentCovered.length) return;
+        const isCurrent = this.githubGuard(socket);
+        await this.deps.onGithubPrs!(currentCovered, isCurrent, { reason: 'overflow', notify: currentCovered });
+        if (isCurrent()) {
+          this.githubBatchFailed = false;
+          this.lastGithubOverflowAt = Date.now();
+        } else if (sameConnection()) {
+          // Subscription changed while this sweep was in flight on the same account/connection;
+          // re-run once under the updated subscription instead of dropping the owed sweep.
+          this.scheduleGithubOverflowSweep(socket, 0);
+        }
+      }).catch((error) => {
+        if (!sameConnection()) return;
+        this.githubBatchFailed = true;
+        this.deps.logger.warn?.('[schedule-webhook] GitHub overflow recovery failed', { error: String(error) });
+        this.scheduleGithubOverflowSweep(socket, RECONCILE_RETRY_MS);
+      });
+    }, Math.max(0, delayMs));
+    this.githubOverflowTimer.unref?.();
+  }
+
   private clearTimers(): void {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.reconnectTimer = null;
     this.retryTimer = null;
+    this.clearGithubOverflowState();
     this.attempt = 0;
     this.refreshedAfterRejection = false;
   }
@@ -988,6 +1088,7 @@ export class ScheduleWebhookRemote {
     this.connected = false;
     this.githubVerified.clear();
     this.githubBatchFailed = false;
+    this.clearGithubOverflowState();
     this.lastSocketActivity = 0;
     if (!socket) return;
     socket.removeAllListeners('close');
