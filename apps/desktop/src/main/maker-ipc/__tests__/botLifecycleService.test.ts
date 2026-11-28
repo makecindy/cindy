@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,6 +43,9 @@ import * as appSessionState from '../../appSessionState.js';
 import { ownerScopedUserDataPath } from '../../appSessionState.js';
 import { normalizeRecentWorkdirPath } from '../../localDb/ipc/recentWorkdirsCore.js';
 import { tx as runWorkerTx } from '../../localDb/worker/opHandlers/tx.js';
+import { companionHomes, companionSnapshot } from '../../companion-cloud/homes.js';
+import { startCompanionCloud } from '../../companion-cloud/runtime.js';
+import { fakeApi, memoryState } from '../../companion-cloud/__tests__/fakes.js';
 
 function createDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -250,6 +255,65 @@ describe('Bot lifecycle coordinator', () => {
     const result = await service({ onDeleted }).run({ botId: 'bot-1', action: 'delete', confirmName: 'Helper' });
     expect(row(sqlite, 'bot_profiles', 'bot-1')).toBeUndefined();
     expect(result).toMatchObject({ status: 'deleted', warnings: ['IMPORTED_ENVIRONMENT_CLEANUP_PENDING'] });
+  });
+
+  // #12488: the retirement tests cover actor mutations, but not the deletion receipt.
+  // Unit: exercise the real lifecycle coordinator and SQLite deletion transaction.
+  it.each([
+    { name: 'local-only teammate', home: null, demoted: false, warnings: undefined },
+    { name: 'demoted teammate homed here', home: 'desk', demoted: true, warnings: ['COMPANION_LOCAL_COPY_DELETED'] },
+    { name: 'copy homed elsewhere', home: 'laptop', demoted: false, warnings: ['COMPANION_LOCAL_COPY_DELETED'] },
+  ])('reports the committed deletion scope for a $name', async ({ home, demoted, warnings }) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-lifecycle-'));
+    vi.spyOn(appSessionState, 'ownerScopedUserDataPath').mockReturnValue(root);
+    const actors = home ? [{ id: 'fixture-actor', externalId: 'bot-1', kind: 'bot',
+      homeDeviceId: home, name: 'Helper', disabled: false }] : [];
+    const { state } = memoryState();
+    if (demoted) state.update('bot-1', 'fixture-actor', entry => { entry.demoted = true; });
+    const { api, calls } = fakeApi(() => { throw new Error('Unexpected registry request'); });
+    const runtime = startCompanionCloud({
+      api, endpoint: 'https://fixture.invalid', humanActorId: 'fixture-owner', selfDeviceId: 'desk',
+      current: () => true, bots: () => [], actors: () => actors, initialKick: false,
+      host: {
+        homes: companionHomes, openState: () => state, readValues: async () => [],
+        canonicalSession: async () => null, rowsAfter: async () => [], latestRows: async () => [],
+        deliverToCanonical: async () => ({ ok: true }),
+      },
+    });
+    try {
+      companionHomes.update(companionSnapshot({
+        enabled: true, selfDeviceId: 'desk', humanActorId: 'fixture-owner',
+        actors, demotedBotIds: runtime.shadowIds(),
+      }));
+      sqlite.prepare('INSERT INTO messages (id, session_id, content) VALUES (?, ?, ?)')
+        .run('history', 'canonical', 'Keep this message');
+      const lifecycle = service({
+        deleteProfileAndDetachSessions: async (botId, sessionIds, keepTaskHistory, projectSessionIds) => {
+          await runWorkerTx(sqlite, { name: 'bots.deleteProfile', args: {
+            botId, sessionIds, keepTaskHistory, projectSessionIds, at: 10,
+          } });
+        },
+        onDeleted: (botId, assertOwnerCurrent) => {
+          assertOwnerCurrent();
+          return runtime.retire(botId);
+        },
+      });
+      const result = await lifecycle.run({
+        botId: 'bot-1', action: 'delete', confirmName: 'Helper', keepTaskHistory: true, worktreeDisposition: 'retain',
+      });
+      expect(row(sqlite, 'bot_profiles', 'bot-1')).toBeUndefined();
+      expect(row(sqlite, 'sessions', 'canonical').status).toBe('archived');
+      expect(row(sqlite, 'messages', 'history').content).toBe('Keep this message');
+      expect(calls).toEqual([]);
+      expect(actors.every(actor => !actor.disabled)).toBe(true);
+      expect(state.bot('bot-1')?.retirePending).toBeUndefined();
+      expect(result.status).toBe('deleted');
+      expect(result.warnings).toEqual(warnings);
+    } finally {
+      runtime.dispose();
+      companionHomes.reset();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('uses the canonical registry even when the compatibility mirror disagrees', async () => {
