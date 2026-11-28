@@ -35,6 +35,7 @@ export interface PluginUsageHandle {
   historyGeneration: number;
   identity: PluginUsageIdentity;
   reportTarget?: PluginUsageReportTarget | null;
+  recorded?: boolean;
 }
 
 export interface PluginUsageReportTarget {

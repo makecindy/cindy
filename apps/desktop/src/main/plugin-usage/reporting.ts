@@ -1,9 +1,16 @@
 import { app } from 'electron';
-import { getAccessToken, getCurrentUserId, isLocalMode } from '../authManager.js';
+import { getAccessToken, getActiveAuthRealm, getCurrentUserId, isLocalMode } from '../authManager.js';
 import { isAnalyticsAllowed } from '../analytics-settings-store.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { PluginMarketApi } from '../plugin-market/api.js';
-import type { PluginUsageReporting } from './reporter.js';
+import type { PluginUsageIdentity, PluginUsageReportTarget } from '../../shared/pluginUsage.js';
+import type { PluginUsageBuckets } from './buckets.js';
+
+export interface PluginUsageReporting {
+  scope(): string | null;
+  target(identity: PluginUsageIdentity): PluginUsageReportTarget | null;
+  send: ConstructorParameters<typeof PluginUsageBuckets>[0]['send'];
+}
 
 /** The installed release's verified origin is frozen into each event, never inferred on retry. */
 export function createPluginUsageReporting(ownerId: string): PluginUsageReporting {
@@ -16,7 +23,7 @@ export function createPluginUsageReporting(ownerId: string): PluginUsageReportin
     }
   };
   const allowed = () => !isLocalMode() && getCurrentUserId() === ownerId && isAnalyticsAllowed();
-  const canSend: PluginUsageReporting['canSend'] = (target) =>
+  const canSend = (target: PluginUsageReportTarget) =>
     Boolean(
       target &&
       allowed() &&
@@ -31,8 +38,11 @@ export function createPluginUsageReporting(ownerId: string): PluginUsageReportin
           target.organizationId.length > 0)),
     );
   return {
-    allowed,
-    canSend,
+    scope() {
+      if (!allowed()) return null;
+      const serverRoot = root();
+      return serverRoot ? JSON.stringify([getActiveAuthRealm(), serverRoot]) : null;
+    },
     target(identity) {
       if (
         !allowed() ||
@@ -53,7 +63,7 @@ export function createPluginUsageReporting(ownerId: string): PluginUsageReportin
       };
       return canSend(target) ? target : null;
     },
-    async send(target, events, assertCurrent) {
+    async send(target, buckets, signal, assertCurrent) {
       const guard = () => {
         assertCurrent();
         if (!canSend(target)) throw new Error('Plugin usage reporting source changed');
@@ -61,7 +71,9 @@ export function createPluginUsageReporting(ownerId: string): PluginUsageReportin
       guard();
       const token = getAccessToken();
       if (!token) throw new Error('Plugin usage reporting authentication unavailable');
-      return api.reportUsage(target.pluginId, events, { token, assertCurrent: guard });
+      return api.reportUsageBuckets(target.pluginId, buckets, {
+        token, signal, serverRoot: target.serverRoot, assertCurrent: guard,
+      });
     },
   };
 }

@@ -55,3 +55,49 @@ export function parsePluginUsageAck(
   });
   return { accepted, duplicate, rejected };
 }
+
+export const PLUGIN_USAGE_BUCKET_FORMAT = "usage-buckets-v1";
+export const PLUGIN_USAGE_BUCKET_MS = 600_000;
+export const PLUGIN_USAGE_BUCKET_MAX_COUNT = 2_147_483_647;
+export const PLUGIN_USAGE_BATCH_MAX_ITEMS = 100;
+export const PLUGIN_USAGE_BATCH_MAX_BYTES = 65_536;
+
+export interface PluginUsageBucket {
+  eventId: string;
+  releaseId: string;
+  bucketStart: string;
+  count: number;
+}
+
+export interface PluginUsageBucketAck {
+  accepted: { eventId: string; count: number }[];
+  duplicate: { eventId: string; count: number }[];
+  rejected: PluginUsageAck["rejected"];
+}
+
+export function parsePluginUsageBucketAck(
+  value: unknown,
+  buckets: readonly PluginUsageBucket[],
+): PluginUsageBucketAck {
+  const fail = (): never => { throw new PluginProtocolError("Invalid plugin usage bucket acknowledgement"); };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fail();
+  const raw = value as Record<string, unknown>;
+  if (raw.format !== PLUGIN_USAGE_BUCKET_FORMAT) return fail();
+  const expected = new Map(buckets.map(bucket => [bucket.eventId, bucket.count]));
+  const readCounts = (value: unknown): { eventId: string; count: number }[] => {
+    if (!Array.isArray(value) || value.length > expected.size) return fail();
+    return value.map(item => {
+      if (!item || typeof item.eventId !== "string" || !expected.has(item.eventId) ||
+          !Number.isSafeInteger(item.count) || item.count !== expected.get(item.eventId)) return fail();
+      return { eventId: item.eventId, count: item.count };
+    });
+  };
+  const accepted = readCounts(raw.accepted);
+  const duplicate = readCounts(raw.duplicate);
+  const { rejected } = parsePluginUsageAck({
+    accepted: accepted.map(item => item.eventId),
+    duplicate: duplicate.map(item => item.eventId),
+    rejected: raw.rejected,
+  }, [...expected.keys()]);
+  return { accepted, duplicate, rejected };
+}

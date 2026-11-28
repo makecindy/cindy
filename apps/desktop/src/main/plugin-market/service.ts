@@ -7,6 +7,7 @@ import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import {
   compareCindyVersions,
+  isPluginRecommendationSource,
   pluginCatalogPublisherGroup,
   pluginHasToolUi,
   isValidPluginResourceId,
@@ -17,6 +18,7 @@ import {
   type GhostReadmeContent,
   type PluginReadmeDelivery,
   type PluginRemovalNotice,
+  type PluginRecommendationPublishers,
   type VisiblePluginDetail,
   type VisiblePluginSummary,
   type PluginResolveTarget,
@@ -1532,7 +1534,7 @@ export class PluginMarketService {
       customSourceNames, unavailableCustomSourceNames: discovery.unavailableSourceNames, organizationAccessError };
   }
 
-  async recommendations(pluginIds?: unknown): Promise<PluginMarketItem[]> {
+  async recommendations(pluginIds?: unknown, publishers: PluginRecommendationPublishers = 'official'): Promise<PluginMarketItem[]> {
     const renewalIds = Array.isArray(pluginIds) ? pluginIds : null;
     if (pluginIds !== undefined && (!renewalIds || renewalIds.length > 3 || !renewalIds.every(isValidPluginResourceId))) {
       throwIpcError('INVALID_PARAMS', 'Invalid recommendation Plugin IDs');
@@ -1544,8 +1546,8 @@ export class PluginMarketService {
     try {
       const plugins = renewalIds
         ? (await this.api.resolve([...new Set<string>(renewalIds)].map((pluginId, index) => ({ key: String(index), pluginId })))).results
-          .flatMap(row => row.status === 'available' && row.plugin.scope === 'public' && row.plugin.publisherKind === 'official' ? [row.plugin] : [])
-        : (await this.api.recommendations()).plugins;
+          .flatMap(row => row.status === 'available' && isPluginRecommendationSource(row.plugin.scope, row.plugin.publisherKind, publishers) ? [row.plugin] : [])
+        : (await this.api.recommendations(publishers)).plugins;
       if (owner) requireSameMarketOwner(owner);
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
@@ -1994,12 +1996,13 @@ export class PluginMarketService {
     pluginId: string,
     includeReadme: boolean,
     includeUpdates: boolean,
+    usage: 'none' | 'week',
   ): Promise<PluginMarketDetail> {
     const catalog = await this.resolveSummary(pluginId);
     const requested = catalog.plugins.find(
       (plugin) => plugin.id === pluginId && plugin.scope === 'public',
     );
-    const plugin = await this.api.detail(pluginId, ...detailRequestArgs(includeReadme, includeUpdates));
+    const plugin = await this.api.detail(pluginId, ...detailRequestArgs(includeReadme, includeUpdates, usage));
     // Plugin Server resolves canonical/historical IDs into the active regional view.
     const summary = requested ?? catalog.plugins.find(
       (item) => item.id === plugin.id && item.scope === 'public',
@@ -2047,10 +2050,11 @@ export class PluginMarketService {
    */
   async detail(
     pluginId: string,
-    options?: { includeReadme?: boolean; includeUpdates?: boolean },
+    options?: { includeReadme?: boolean; includeUpdates?: boolean; usage?: 'none' | 'week' },
   ): Promise<PluginMarketDetail> {
     const includeReadme = options?.includeReadme === true;
     const includeUpdates = options?.includeUpdates === true;
+    const usage = options?.usage ?? 'week';
     // 自定义市场插件走本地发现，不要求服务端可用，也不受 CUID 形状约束。
     const customRef = parseCustomMarketPluginId(pluginId);
     if (customRef) {
@@ -2065,7 +2069,7 @@ export class PluginMarketService {
       if (isAppSessionBoundaryPending()) {
         throwIpcError('PRECONDITION_FAILED', 'Plugin market requires a stable app session');
       }
-      return this.detailPublicCatalogWithoutOwner(pluginId, includeReadme, includeUpdates);
+      return this.detailPublicCatalogWithoutOwner(pluginId, includeReadme, includeUpdates, usage);
     }
     return this.runForOwner(async (owner) => {
       // 本地(免账号)模式只对 public 插件暴露详情;目录 summary 也是 detail 身份
@@ -2078,7 +2082,7 @@ export class PluginMarketService {
       if (!requested && listed.organizationAccessError) {
         throwListedPluginUnavailable(listed.organizationAccessError);
       }
-      const plugin = await this.api.detail(pluginId, ...detailRequestArgs(includeReadme, includeUpdates));
+      const plugin = await this.api.detail(pluginId, ...detailRequestArgs(includeReadme, includeUpdates, usage));
       requireSameMarketOwner(owner);
       const summary = requested ?? catalog.find((candidate) => candidate.id === plugin.id);
       if (!summary) throwListedPluginUnavailable(listed.organizationAccessError);
@@ -4823,9 +4827,9 @@ export class PluginMarketService {
 }
 
 /** 详情页才请求介绍；服务端据此按界面语言选介绍文件。 */
-function detailRequestArgs(includeReadme: boolean, includeUpdates: boolean): [] | [NonNullable<Parameters<PluginMarketApi['detail']>[1]>] {
-  if (!includeReadme && !includeUpdates) return [];
+function detailRequestArgs(includeReadme: boolean, includeUpdates: boolean, usage: 'none' | 'week'): [NonNullable<Parameters<PluginMarketApi['detail']>[1]>] {
   return [{
+    usage,
     ...(includeReadme ? { readmeLocale: ghostReadmeLocale(getResolvedMainLocale()) } : {}),
     ...(includeUpdates ? { includeUpdates: true } : {}),
   }];

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createGhostBackgroundRefresh } from '../../cindy-brain/ghostBackgroundRefresh.js';
 import { GhostManager } from '../../cindy-brain/GhostManager.js';
+import { RemotePluginManagement } from '../../cindy-brain/remotePluginManagement.js';
 import { createGhostInstallReceipt } from '../../cindy-brain/ghostInstallReceipt.js';
 import { runGhostSnapshotWorkerRequest } from '../../cindy-brain/ghostSnapshotWorkerProcess.js';
 import { writeTestCindyPackage } from '../../cindy-brain/__tests__/cindyPackageFixture.js';
@@ -282,6 +283,8 @@ import { createOrganizationPrefixStore } from '../organizationPrefixStore';
 import { createPluginMarketAgentTools } from '../agentTools';
 import { extractIpcError } from '../../../shared/ipcError';
 import { pluginMarketErrorKey } from '../../../renderer/features/plugin/lib/pluginMarketErrorKey';
+import type { PluginManagementReceipt } from '../../../shared/pluginManagement';
+import type { PluginMarketDetail, PluginMarketItem } from '../../../shared/pluginMarket';
 
 const roots: string[] = [];
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
@@ -2176,7 +2179,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       await expect(h.service.detail(canonicalId)).resolves.toMatchObject({
         pluginId: item.id, scope: 'public',
       });
-      expect(h.api.detail).toHaveBeenCalledWith(canonicalId);
+      expect(h.api.detail).toHaveBeenCalledWith(canonicalId, { usage: 'week' });
       expect(h.api.download).not.toHaveBeenCalled();
       expect(runtime.install).not.toHaveBeenCalled();
     },
@@ -6903,7 +6906,7 @@ describe('market detail 响应身份绑定', () => {
 
     expect(result.updates).toEqual(updates);
     expect(h.api.resolve).toHaveBeenCalledTimes(1);
-    expect(h.api.detail).toHaveBeenCalledExactlyOnceWith(item.id, { includeUpdates: true });
+    expect(h.api.detail).toHaveBeenCalledExactlyOnceWith(item.id, { includeUpdates: true, usage: 'week' });
     expect(runtime.listScans).toBe(0);
   });
 
@@ -7620,6 +7623,68 @@ describe('server default UI approval receipts', () => {
     await h.service.snapshot();
     expect(h.read()).toMatchObject({ enabled: true, uiCapabilityApproved: true });
     expect(runtime.install.mock.calls[0]?.[1].consent.mode).toBe('exempt');
+  });
+
+  // Unit with a temporary package: old install cases did not start with a community
+  // recommendation. Exercise the real API adapter, Host dispatch and market consent
+  // through to an approved package receipt. Only HTTP and process adapters are faked.
+  it('installs a public community recommendation through the existing Host approval and package receipt', async () => {
+    const h = await setup({ defaultInstall: false });
+    h.item.publisherKind = 'personal';
+    const { id, ghostId, currentRelease } = h.item;
+    const legacyId = `c${'z'.repeat(24)}`;
+    const fetcher = vi.fn().mockImplementation(async (url, options) => {
+      if (url === '/api/plugins/recommendations?publishers=public&usage=none') return {
+        schemaVersion: 2, windowStart: '2026-11-25T00:00:00.000Z', windowEnd: '2026-11-26T00:00:00.000Z', plugins: [h.item],
+      };
+      if (url === '/api/plugins/resolve?usage=none') {
+        const { targets } = parsePluginResolveRequest(options.body);
+        return h.api.resolve(targets.map(target => target.pluginId === legacyId ? { ...target, pluginId: id } : target));
+      }
+      if ([id, legacyId].some(candidate => ['none', 'week'].some(usage =>
+        url === `/api/plugins/${candidate}?usage=${usage}`)))
+        return { schemaVersion: 2, plugin: await h.api.detail(id) };
+      if (url === `/api/plugins/${id}/releases/${currentRelease.id}/download`) return h.api.download(id, currentRelease.id);
+      throw new Error(`Unexpected test market request: ${url}`);
+    });
+    const service = new PluginMarketService(new PluginMarketApi(fetcher), h.ledger);
+    const local = await service.recommendations(undefined, 'public');
+    expect(local).toMatchObject([{ pluginId: id, publisherKind: 'personal', sourceType: 'server', installState: 'not-installed' }]);
+    const current = () => () => true;
+    const host = new RemotePluginManagement({
+      list: () => h.manager.list(), capture: current, captureReceipt: current,
+      setEnabled: async () => {}, uninstall: async () => {},
+      market: {
+        snapshot: () => service.snapshot({ discoveryOnly: true }),
+        recommendations: publishers => service.recommendations(undefined, publishers),
+        detail: pluginId => service.detail(pluginId),
+        install: async (pluginId, options, prompt, assertCurrent, assertScope) => {
+          await service.install(pluginId, options, { consent: { prompt, initiator: 'user' }, assertCurrent, assertScope });
+        },
+      },
+    });
+    const invoke = async <T>(action: string, input: Record<string, unknown>): Promise<T> => (await host.invoke('fixture-controller', {
+      collectionId: 'plugins', actionId: `management:${action}`, client: { protocolVersion: 1, primitives: ['action'] }, input,
+    })).result as T;
+    const [card] = await invoke<PluginMarketItem[]>('snapshot', { read: 'recommendations', query: { publishers: 'public' } });
+    expect(card).toEqual(local[0]);
+    const selected = await invoke<PluginMarketDetail>('market-detail', { pluginId: card!.pluginId });
+    expect(selected).toMatchObject({ pluginId: id, releaseId: currentRelease.id, scope: 'public' });
+    const historical = await invoke<PluginMarketDetail>('market-detail', { pluginId: legacyId });
+    expect(historical).toEqual(selected);
+    const operationId = 'install-recommended-community';
+    await invoke('begin', { operationId, kind: 'install', pluginId: selected.pluginId,
+      expectedReleaseId: selected.releaseId, expectedManifest: selected.manifest, uiConsentVersion: 1 });
+    const receipt = await vi.waitFor(async () => {
+      const result = await invoke<PluginManagementReceipt>('operation', { operationId });
+      expect(result).toMatchObject({ phase: 'confirmation', consent: { origin: 'market', communityMarket: true } });
+      return result;
+    });
+    expect(h.manager.list()).toEqual([]);
+    await invoke('answer', { operationId, requestId: receipt.consent!.requestId, confirmed: true });
+    await vi.waitFor(async () => expect(await invoke('operation', { operationId })).toMatchObject({ phase: 'succeeded' }));
+    expect(h.read()).toMatchObject({ manifest: { id: ghostId, version: currentRelease.version }, enabled: true });
+    expect(h.ledger.installationForPlugin(h.item)).toMatchObject({ pluginId: id, releaseId: currentRelease.id, installed: true, source: 'market' });
   });
 
   it.each([false, true])('grants organization takeover with old page approval=%s, not by inheriting the old source', async oldApproved => {

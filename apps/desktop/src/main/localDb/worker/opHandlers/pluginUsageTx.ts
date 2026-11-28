@@ -52,7 +52,7 @@ export function runPluginUsageTransaction(
       }
       case 'accept': {
         const { handle, callId, toolName, sessionId, occurredAt, entryKind = 'tool' } = body;
-        db.prepare(
+        const { changes } = db.prepare(
           `INSERT OR IGNORE INTO plugin_usage_events
           (call_id,subject_id,history_generation,occurred_at,tool_name,entry_kind,session_id,version,release_id,report_target,report_state)
           SELECT ?,id,history_generation,?,?,?,?,?,?,?,? FROM plugin_usage_subjects WHERE id=? AND history_generation=?`,
@@ -74,7 +74,7 @@ export function runPluginUsageTransaction(
             'SELECT history_generation AS historyGeneration FROM plugin_usage_subjects WHERE id=?',
           )
           .get(handle.subjectId) as { historyGeneration: number } | undefined;
-        return row ? { ...handle, historyGeneration: row.historyGeneration } : null;
+        return row ? { ...handle, historyGeneration: row.historyGeneration, recorded: changes === 1 } : null;
       }
       case 'settle':
         db.prepare(

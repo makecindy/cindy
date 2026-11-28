@@ -7,10 +7,10 @@ import type {
   PluginUsageOutcome,
   PluginUsageSummary,
   PluginUsageTransaction,
-  PluginUsageReportRow,
   PluginUsageEntryKind,
 } from '../../shared/pluginUsage.js';
-import { PluginUsageReporter, type PluginUsageReporting } from './reporter.js';
+import { PluginUsageBuckets } from './buckets.js';
+import type { PluginUsageReporting } from './reporting.js';
 
 export interface PluginUsageServiceDeps {
   client: DbClient;
@@ -29,70 +29,18 @@ export class PluginUsageService {
   private readonly handles = new Map<string, PluginUsageHandle>();
   private readonly bindingFlights = new Map<string, Promise<PluginUsageHandle | null>>();
   private readonly paused = new Set<string>();
+  private readonly pendingClears = new Map<string | null, number>();
   private readonly now: () => number;
-  private readonly reporter?: PluginUsageReporter;
+  private readonly reporter?: PluginUsageBuckets;
 
   constructor(private readonly deps: PluginUsageServiceDeps) {
     this.now = deps.now ?? Date.now;
     if (deps.reporting) {
-      this.reporter = new PluginUsageReporter({
-        reporting: deps.reporting,
-        isCurrent: () => !this.stopped && deps.isCurrent(),
-        now: this.now,
-        select: () =>
-          this.enqueue(() =>
-            runAsBackgroundDbRpc(async () => {
-              const first = await deps.client.queryOne<{ target: string; nextAttemptAt: number }>(
-                `SELECT e.report_target AS target,COALESCE(e.next_attempt_at,0) AS nextAttemptAt
-             FROM plugin_usage_events e JOIN plugin_usage_subjects s ON s.id=e.subject_id AND s.history_generation=e.history_generation
-             WHERE e.report_state='pending' ORDER BY e.next_attempt_at,e.occurred_at LIMIT 1`,
-              );
-              this.assertCurrent();
-              if (!first) return null;
-              const rows = await deps.client.query<PluginUsageReportRow>(
-                `SELECT e.call_id AS callId,e.subject_id AS subjectId,e.history_generation AS historyGeneration,
-              e.release_id AS releaseId,e.occurred_at AS occurredAt,e.report_target AS reportTarget,e.attempt_count AS attemptCount
-             FROM plugin_usage_events e JOIN plugin_usage_subjects s ON s.id=e.subject_id AND s.history_generation=e.history_generation
-             WHERE e.report_state='pending' AND e.report_target=? AND COALESCE(e.next_attempt_at,0)<=?
-             ORDER BY e.occurred_at,e.call_id LIMIT 100`,
-                [first.target, this.now()],
-              );
-              return { rows, nextAttemptAt: first.nextAttemptAt };
-            }),
-          ),
-        revalidate: (rows) =>
-          this.enqueue(() =>
-            runAsBackgroundDbRpc(async () => {
-              if (!rows.length) return [];
-              const live = await deps.client.query<{
-                callId: string;
-                subjectId: string;
-                historyGeneration: number;
-                reportTarget: string;
-              }>(
-                `SELECT e.call_id AS callId,e.subject_id AS subjectId,e.history_generation AS historyGeneration,e.report_target AS reportTarget
-             FROM plugin_usage_events e JOIN plugin_usage_subjects s ON s.id=e.subject_id AND s.history_generation=e.history_generation
-             WHERE e.report_state='pending' AND e.call_id IN (${rows.map(() => '?').join(',')})`,
-                rows.map((row) => row.callId),
-              );
-              return rows.filter((row) =>
-                live.some(
-                  (found) =>
-                    found.callId === row.callId &&
-                    found.subjectId === row.subjectId &&
-                    found.historyGeneration === row.historyGeneration &&
-                    found.reportTarget === row.reportTarget,
-                ),
-              );
-            }),
-          ),
-        update: (updates, valid) =>
-          this.enqueue(async () => {
-            if (valid()) await this.tx({ action: 'report', updates });
-          }),
-        warn: deps.warn,
+      const reporting = deps.reporting;
+      this.reporter = new PluginUsageBuckets({
+        scope: () => !this.stopped && deps.isCurrent() ? reporting.scope() : null,
+        send: reporting.send,
       });
-      this.reporter.wake();
     }
   }
 
@@ -185,12 +133,15 @@ export class PluginUsageService {
   }
 
   private freeze(handle: PluginUsageHandle, identity: PluginUsageIdentity): PluginUsageHandle {
-    const reporting = this.deps.reporting;
-    return {
-      ...handle,
-      identity: { ...identity },
-      reportTarget: reporting?.allowed() ? reporting.target(identity) : null,
-    };
+    return { ...handle, identity: { ...identity }, reportTarget: null };
+  }
+
+  captureReporting(): number | null {
+    return this.reporter?.admit() ?? null;
+  }
+
+  invalidateReporting(): void {
+    this.reporter?.invalidate();
   }
 
   accept(
@@ -200,13 +151,15 @@ export class PluginUsageService {
     sessionId: string | null,
     occurredAt: number,
     entryKind: PluginUsageEntryKind = 'tool',
+    admission = this.captureReporting(),
   ): void {
+    const target = admission === null ? null : this.deps.reporting?.target(handle.identity);
     void this.enqueue(async () => {
       const refreshed = await this.tx({
         action: 'accept',
         handle: {
           ...handle,
-          reportTarget: this.deps.reporting?.allowed() ? handle.reportTarget : null,
+          reportTarget: null,
         },
         callId,
         toolName,
@@ -216,7 +169,12 @@ export class PluginUsageService {
       });
       // Refresh only future captures after a cross-instance clear. Never replay this call.
       this.assertCurrent();
-      this.reporter?.wake();
+      if (
+        refreshed?.recorded && target && handle.identity.releaseId &&
+        !this.pendingClears.has(null) && !this.pendingClears.has(handle.subjectId)
+      ) {
+        this.reporter?.add(admission, handle.subjectId, target, handle.identity.releaseId, occurredAt);
+      }
       const current = this.handles.get(handle.identity.ghostId);
       if (
         refreshed &&
@@ -241,7 +199,10 @@ export class PluginUsageService {
   }
 
   async clear(subjectId: string | null): Promise<void> {
-    this.reporter?.invalidate();
+    // A detached installation can still have an accepted call awaiting its SQLite receipt.
+    this.pendingClears.set(subjectId, (this.pendingClears.get(subjectId) ?? 0) + 1);
+    if (subjectId === null) this.reporter?.invalidate();
+    else this.reporter?.clearSubject(subjectId);
     const affected = [...this.handles.values()].filter(
       (h) => subjectId === null || h.subjectId === subjectId,
     );
@@ -266,6 +227,9 @@ export class PluginUsageService {
         }
       });
     } finally {
+      const remaining = this.pendingClears.get(subjectId)! - 1;
+      if (remaining === 0) this.pendingClears.delete(subjectId);
+      else this.pendingClears.set(subjectId, remaining);
       for (const h of affected) this.paused.delete(h.identity.ghostId);
     }
   }

@@ -17,6 +17,8 @@ vi.mock('../../appSessionState', () => ({
   isAppSessionBoundaryPending: () => state.boundary,
 }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../authManager', () => ({ onAuthStateChange: vi.fn() }));
+vi.mock('../../analytics-settings-store', () => ({ onAnalyticsDisabled: vi.fn() }));
 vi.mock('../reporting', () => ({ createPluginUsageReporting: () => undefined }));
 const identity: PluginUsageIdentity = {
   ghostId: 'plugin',

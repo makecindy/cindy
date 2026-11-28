@@ -594,9 +594,9 @@ it('shows the full catalog publish label while announcing unread review updates'
   expect(markReviewRead).not.toHaveBeenCalled();
 });
 
-it('fills installed recommendation slots from the original pool and hides the incomplete remainder', async () => {
+it('installs a community recommendation and fills its slot from the original pool', async () => {
   const pool = Array.from({ length: 5 }, (_, index): PluginMarketDetail => ({ ...detail, pluginId: `pool-${index}`,
-    ghostId: `pool-${index}`, name: `Pool ${index}`, publisherKind: 'official', namespace: null,
+    ghostId: `pool-${index}`, name: `Pool ${index}`, publisherKind: index === 0 ? 'personal' : 'official', namespace: null,
     manifest: { ...detail.manifest, id: `pool-${index}`, name: `Pool ${index}` } }));
   let installed: InstalledGhost[] = [];
   const changed = new Set<Parameters<typeof window.electronAPI.ghosts.onChanged>[0]>();

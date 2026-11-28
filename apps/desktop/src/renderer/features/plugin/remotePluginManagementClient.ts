@@ -10,6 +10,7 @@ import {
   type RemoteText,
   type RemoteActionInvokeResponse,
 } from '@cindy/device-link';
+import { isPluginRecommendationSource } from '@cindy/plugin-protocol';
 import { validateNormalizedGhostManifest } from '../../../shared/ghost';
 import { createIpcError, isIpcErrorCode } from '../../../shared/ipc-errors';
 import { contributionPreflight } from '../../../shared/pluginContributionContract';
@@ -116,7 +117,8 @@ export function parsePluginManagementRecommendations(value: unknown): PluginMark
   const snapshot = parsePluginManagementSnapshot({ version: 1, ghosts: [], market: {
     items: value, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
   } });
-  if (snapshot.market.items.length > 12 || snapshot.market.items.some(item => item.scope !== 'public' || item.publisherKind !== 'official')
+  if (snapshot.market.items.length > 12 || snapshot.market.items.some(item =>
+    item.sourceType !== 'server' || !isPluginRecommendationSource(item.scope, item.publisherKind, 'public'))
     || new Set(snapshot.market.items.map(item => item.pluginId)).size !== snapshot.market.items.length)
     throw new Error('INVALID_RESPONSE');
   return snapshot.market.items;

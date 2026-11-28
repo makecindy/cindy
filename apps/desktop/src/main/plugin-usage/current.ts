@@ -8,10 +8,13 @@ import {
 import { createLogger } from '../logger.js';
 import { PluginUsageService } from './service.js';
 import { createPluginUsageReporting } from './reporting.js';
+import { onAuthStateChange } from '../authManager.js';
+import { onAnalyticsDisabled } from '../analytics-settings-store.js';
 
 const log = createLogger('plugin-usage');
 let current: { epoch: number; ownerKey: string; service: PluginUsageService } | null = null;
 let closedEpoch: number | null = null;
+let reportingListenersRegistered = false;
 
 /** A retained DbClient may use global rawDB; epoch checks cannot be replaced by reference capture. */
 export function currentPluginUsageService(): PluginUsageService | null {
@@ -27,6 +30,12 @@ export function currentPluginUsageService(): PluginUsageService | null {
   if (current?.epoch === snapshot.clientEpoch && current.ownerKey === ownerKey)
     return current.service;
   if (current) void current.service.close();
+  // Owner service creation runs after auth and settings modules initialize.
+  if (!reportingListenersRegistered) {
+    onAnalyticsDisabled(() => current?.service.invalidateReporting());
+    onAuthStateChange(() => { current?.service.captureReporting(); });
+    reportingListenersRegistered = true;
+  }
   const service = new PluginUsageService({
     client: snapshot.client,
     deviceName: os.hostname(),

@@ -1,4 +1,5 @@
 import { sharedTaskGuestPeer, providerShareGuestPeer } from '@cindy/device-link';
+import type { PluginRecommendationPublishers } from '@cindy/plugin-protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemotePluginManagement, type RemotePluginManagementDeps } from '../remotePluginManagement';
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost';
@@ -108,7 +109,7 @@ it('keeps the published package size in peer snapshots, pages, recommendations, 
   const f = fixture();
   const item: PluginMarketItem = {
     pluginId: 'weather-market', ghostId: 'weather', name: 'Weather', description: null, author: null,
-    scope: 'public', organizationId: null, defaultInstall: false, releaseId: 'release-2',
+    scope: 'public', publisherKind: 'official', organizationId: null, defaultInstall: false, releaseId: 'release-2',
     version: '2.0.0', publishedAt: '2026-11-25T00:00:00Z', icon: null, installState: 'update-available',
     sourceType: 'server', sourceMarketName: null, enabled: true, sizeBytes: 1_200,
   };
@@ -116,13 +117,19 @@ it('keeps the published package size in peer snapshots, pages, recommendations, 
   const page = { ...snapshot, nextCursor: null, counts: null };
   f.deps.market.snapshot = async () => snapshot;
   f.deps.market.query = async () => page;
-  f.deps.market.recommendations = async () => [item];
+  const community = { ...item, pluginId: 'notes-market', ghostId: 'notes', publisherKind: 'personal' } as const;
+  f.deps.market.recommendations = async (publishers: PluginRecommendationPublishers) =>
+    publishers === 'public' ? [item, community] : [item];
   f.deps.market.detail = async () => ({ ...item, manifest: f.ghosts[0].manifest });
 
   const full = await f.invoke('snapshot', {});
   expect(full).toHaveProperty('market.items', [item]);
   expect(await f.invoke('snapshot', { read: 'catalog' })).toEqual({ ...page, items: [item] });
+  // Unit: older controllers reject an entire pool with a community row. Only
+  // the exact opt-in on the existing snapshot request can include one.
   expect(await f.invoke('snapshot', { read: 'recommendations' })).toEqual([item]);
+  expect(await f.invoke('snapshot', { read: 'recommendations', query: { publishers: ['public'] } })).toEqual([item]);
+  expect(await f.invoke('snapshot', { read: 'recommendations', query: { publishers: 'public' } })).toEqual([item, community]);
   expect(await f.invoke('market-detail', { pluginId: item.pluginId })).toEqual({ ...item, manifest: f.ghosts[0].manifest });
 });
 

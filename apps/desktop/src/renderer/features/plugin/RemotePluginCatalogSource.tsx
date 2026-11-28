@@ -210,7 +210,7 @@ export function RemotePluginCatalogSource({
     if (!active || !online || !writable() || !catalogPaging) return;
     let alive = true;
     if (catalogMemory.todayLoaded && Date.now() - catalogMemory.recommendationsAt < PLUGIN_CATALOG_REFRESH_MS) return;
-    void invoke('snapshot', { read: 'recommendations' }).then(value => {
+    void invoke('snapshot', { read: 'recommendations', query: { publishers: 'public' } }).then(value => {
       if (alive && writable()) {
         const items = parsePluginManagementRecommendations(value);
         setTodayPool(previous => samePluginValue(previous, items) ? previous : items);

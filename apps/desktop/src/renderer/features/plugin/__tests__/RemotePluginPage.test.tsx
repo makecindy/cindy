@@ -58,6 +58,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm }),
 }));
+vi.mock('../PluginShareButton', () => ({ PluginShareButton: () => null }));
 vi.mock('../GhostPluginPage', () => ({
   GhostPluginCard: ({ item, onManage, updateVersion, onUpdate }: {
     item: { name: string };
@@ -70,7 +71,7 @@ vi.mock('../GhostPluginPage', () => ({
       {updateVersion && onUpdate ? <button onClick={onUpdate}>Update to {updateVersion}</button> : null}
     </>
   ),
-  MarketPluginCard: ({ item }: { item: { name: string } }) => <output>{item.name}</output>,
+  MarketPluginCard: ({ item, onSelect }: { item: { name: string }; onSelect(): void }) => <button onClick={onSelect}>{item.name}</button>,
 }));
 vi.mock('../GhostPluginDetailView', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../GhostPluginDetailView')>()),
@@ -356,7 +357,7 @@ describe('selected plugin host', () => {
     const section = screen.getByText('settings.ghosts.page.todayRecommendations').closest('section')!;
     expect(section.querySelectorAll('[data-recommendation-placeholder][aria-hidden="true"]')).toHaveLength(3);
     const items = Array.from({ length: 3 }, (_, index) => ({ pluginId: `rec-${index}`, ghostId: `rec-${index}`, name: `Recommendation ${index}`,
-      scope: 'public', publisherKind: 'official', releaseId: `release-${index}`, installState: 'not-installed' }));
+      scope: 'public', publisherKind: 'official', sourceType: 'server', releaseId: `release-${index}`, installState: 'not-installed' }));
     await act(async () => {
       if (outcome === 'success') finish(items);
       else fail(new Error('recommendations unavailable'));
@@ -365,6 +366,50 @@ describe('selected plugin host', () => {
       expect(screen.getByText('Recommendation 0')).toBeTruthy();
       expect(section.querySelectorAll('[data-recommendation-placeholder]')).toHaveLength(0);
     } else expect(screen.queryByText('settings.ghosts.page.todayRecommendations')).toBeNull();
+    expect(invoke.mock.calls.filter(call => call[2]?.[0]?.input?.read === 'recommendations').map(call => call[2][0].input))
+      .toEqual([{ read: 'recommendations', query: { publishers: 'public' } }]);
+  });
+
+  // Unit: the remote page's real detail action must use the candidate's target
+  // release and Host only. A fixture with three eligible cards plus one installed
+  // catches both official-only filtering and a bypass of the existing install RPC.
+  it('opens and installs a community recommendation on the selected Host', async () => {
+    const normal = invoke.getMockImplementation()!;
+    const community: PluginMarketItem = {
+      pluginId: 'community-market', ghostId: 'community-notes', namespace: null, name: 'Community Notes',
+      description: null, author: 'Community', publisherKind: 'personal', scope: 'public', organizationId: null,
+      defaultInstall: false, releaseId: 'community-release', version: '1.0.0', publishedAt: '2026-11-26T00:00:00.000Z',
+      icon: null, installState: 'not-installed', enabled: null, sourceType: 'server', sourceMarketName: null,
+    };
+    const pool: PluginMarketItem[] = [community,
+      { ...community, pluginId: 'official-market', name: 'Official Notes', publisherKind: 'official' },
+      { ...community, pluginId: 'legacy-market', name: 'Legacy Notes', publisherKind: null },
+      { ...community, pluginId: 'installed-market', name: 'Installed Notes', installState: 'installed' },
+    ];
+    const manifest = { schemaVersion: 3, minCindyVersion: '0.1.61', id: community.ghostId,
+      name: community.name, version: community.version, kind: 'chip', entry: 'main.js' };
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args[0]?.input?.read === 'capabilities') return { effects: [], result: { catalogPaging: true } };
+      if (args[0]?.input?.read === 'recommendations') return { effects: [], result: pool };
+      if (args[0]?.actionId === 'management:market-detail') return { effects: [], result: { ...community, manifest } };
+      return normal(device, channel, args);
+    });
+    render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
+    const card = await screen.findByRole('button', { name: community.name });
+    expect(screen.queryByText('Installed Notes')).toBeNull();
+    fireEvent.click(card);
+    const install = await screen.findByRole('button', { name: 'settings.ghosts.market.install' });
+    fireEvent.click(install);
+    await waitFor(() => expect(notices.success).toHaveBeenCalledWith('settings.ghosts.remote.success'));
+    expect(invoke).toHaveBeenCalledWith('computer-a', 'maker:remote-resources:invoke', [expect.objectContaining({
+      actionId: 'management:begin', input: expect.objectContaining({
+        kind: 'install', pluginId: community.pluginId, expectedReleaseId: community.releaseId,
+        expectedManifest: expect.objectContaining({ id: community.ghostId }),
+      }),
+    })]);
+    expect(invoke.mock.calls.filter(call => call[2]?.[0]?.input?.read === 'recommendations')).toHaveLength(1);
+    expect(localGhosts).not.toHaveBeenCalled();
   });
 
   // Unit / Codex 4583060230: cached paging capability made a hidden/offline
@@ -374,7 +419,7 @@ describe('selected plugin host', () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000);
     const normal = invoke.getMockImplementation()!;
     const items = Array.from({ length: 3 }, (_, index) => ({ pluginId: `rec-${index}`, ghostId: `rec-${index}`, name: `Recommendation ${index}`,
-      scope: 'public', publisherKind: 'official', releaseId: `release-${index}`, installState: 'not-installed' }));
+      scope: 'public', publisherKind: 'official', sourceType: 'server', releaseId: `release-${index}`, installState: 'not-installed' }));
     let fail = false;
     const recommendations = vi.fn(async () => {
       if (fail) throw new Error('Host unavailable');
