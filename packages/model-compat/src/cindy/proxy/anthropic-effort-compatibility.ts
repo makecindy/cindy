@@ -25,7 +25,8 @@ export function omitUnsupportedAnthropicEffort(body: unknown): object | null {
   if (!isRecord(body) || !Array.isArray(body.messages)) return null;
   const outputConfig = body.output_config;
   if (!isRecord(outputConfig) || typeof outputConfig.effort !== 'string') return null;
-  const { effort: _rejected, ...rest } = outputConfig;
+  const rest: Record<string, unknown> = { ...outputConfig };
+  delete rest.effort;
   const next: Record<string, unknown> = { ...body };
   if (Object.keys(rest).length > 0) next.output_config = rest;
   else delete next.output_config;
