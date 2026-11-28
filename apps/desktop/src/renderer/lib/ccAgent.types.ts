@@ -412,6 +412,14 @@ export interface Session {
   runtimeBaseline?: SessionRuntimeProfileProjection;
   runtimeEffective?: SessionRuntimeProfileProjection;
   runtimePending?: SessionRuntimePendingProjection | null;
+  /** Host projection of the most recent committed route change; absent on older hosts or unchanged tasks. */
+  runtimeLastRouteChange?: {
+    at: string;
+    by: 'user' | 'agent' | 'fallback' | 'model-group' | 'provider-group' | 'config-sync' | 'scheduler' | 'unknown';
+    reason: string | null;
+    from: { agentKind: string; model: string | null; providerId: string | null; agentDeviceId: string | null };
+    to: { agentKind: string; model: string | null; providerId: string | null; agentDeviceId: string | null };
+  } | null;
   /** Allows a companion input to reach host baseline recovery; does not assert model availability. */
   runtimeBaselineRecoveryPending?: boolean;
   /** Host projection of existing task plugin choices, including uninstalled providers. */

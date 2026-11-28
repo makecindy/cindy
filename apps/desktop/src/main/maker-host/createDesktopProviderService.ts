@@ -32,7 +32,7 @@ import path from 'node:path';
 
 import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, isSubscriptionPoolReadUnreachable, lastConfirmedSubscriptionModelsAt, refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels,
-  refreshSubscriptionPoolClaudeModels,
+  refreshSubscriptionPoolClaudeModels, isStandaloneApiKeyPoolConnection,
   resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
 import { readPool } from '../subscription-accounts/store.js';
 import {
@@ -969,8 +969,10 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
           ...(ref ? { subscriptionPoolTarget: accountProviderId(ref.kind, mergedAccount) } : {}) };
       }
       // Clients manage this provider's accounts through the account pool (2026-11-13).
+      // A Key split out of a pool retains its historical member identity, but not the group UI.
       const pool = resolveSubscriptionPoolProvider(provider.id);
-      return pool && readPool(pool.kind) ? { ...projected, subscriptionAccountPool: pool.kind } : projected;
+      return pool && readPool(pool.kind) && (!pool.apiKey || !isStandaloneApiKeyPoolConnection(provider.id))
+        ? { ...projected, subscriptionAccountPool: pool.kind } : projected;
     },
     getProviderConnectionIcons: readProviderConnectionIcons,
     getOrganizationProviderLogoKind: (provider) => {

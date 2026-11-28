@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import type { ReactNode } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -167,4 +167,55 @@ describe('VoiceInputSection restore defaults', () => {
     expect(screen.queryByRole('switch', { name: 'settings.voiceInput.composerLongPress.ariaLabel' })).toBeNull();
     expect(settings.composerLongPressEnabledOverride).toBe(false);
   });
+});
+
+// #11316: ElevenLabs reads an environment variable. The provider button sends
+// users to a page that cannot supply that key. Gateway keys still use it.
+describe('VoiceInputSection credential recovery', () => {
+  async function renderRecovery(provider: string) {
+    serviceModel.current = {
+      ready: true,
+      asrProfiles: [],
+      selection: { serviceMode: 'byok', asrProvider: provider },
+      readiness: { ok: false, provider, auth: 'api-key' },
+      setServiceMode: vi.fn(),
+      setAsrProvider: vi.fn(),
+      saveCustomAsr: vi.fn(),
+      clearCustomAsrApiKey: vi.fn(),
+      resetToDefault: vi.fn(),
+    };
+    await act(async () => {
+      render(<MemoryRouter><VoiceInputSection /></MemoryRouter>);
+    });
+  }
+
+  it('keeps an ElevenLabs key failure on this page', async () => {
+    await renderRecovery('elevenlabs-scribe-realtime');
+    expect(screen.getByText('settings.voiceInput.serviceSource.credentialError.elevenlabsMissing')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' })).toBeNull();
+  });
+
+  it('still offers model providers when a gateway key is missing', async () => {
+    await renderRecovery('litellm-qwen3-asr-flash-realtime');
+    expect(screen.getByText('settings.voiceInput.serviceSource.credentialError.gatewayMissing')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' })).toBeTruthy();
+  });
+
+  it.each([
+    ['local-asr-model-missing', 'localAsrModelMissing'],
+    ['local-asr-unsupported', 'localAsrUnsupported'],
+  ])('keeps %s recovery on the voice page', async (failureReason, message) => {
+    serviceModel.current = {
+      ready: true, asrProfiles: [],
+      selection: { serviceMode: 'byok', asrProvider: 'local-sherpa-onnx' },
+      readiness: { ok: false, provider: 'local-sherpa-onnx', failureReason },
+      localAsrStatus: { supported: failureReason !== 'local-asr-unsupported', ready: false },
+    };
+    await act(async () => { render(<MemoryRouter><VoiceInputSection /></MemoryRouter>); });
+    expect(screen.getByText(`settings.voiceInput.serviceSource.credentialError.${message}`)).toBeTruthy();
+    expect(screen.getByText('settings.voiceInput.serviceSource.localAsr.notice')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.localAsr.chooseFolder' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' })).toBeNull();
+  });
+
 });

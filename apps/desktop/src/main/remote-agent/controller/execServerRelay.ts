@@ -27,6 +27,7 @@ import { readExistingTextSync } from '../executor/files';
 import type { ExecutorAction, ExecutorGateDecision } from '../executor/gate';
 import { resolveExecutorShell } from '../executor/shell';
 import { ExecutorPathError, type ExecutorAgentProjection, type ExecutorWorkspace } from '../executor/workspace';
+import { applyManagedSkillOverlay, managedSkillOverlayRequest, type ManagedSkillOverlay, type ManagedSkillOverlayRequest } from './managedSkillOverlay';
 
 export const EXEC_SERVER_WS_PATH = '/ws/exec-server';
 /** exec-server 单行(一条 JSON-RPC 消息)上限：大文件读写的 base64 也在这里面。 */
@@ -57,6 +58,8 @@ export interface ExecServerRelayDeps {
    * 启动失败、确认处理完、带着工作的连接被整条关掉。对连接池来说这是一次活动。
    */
   onProcessesEnded?(): void;
+  /** 带给对方的托管 Skill(对方路径 → 本机目录)：Codex 找项目 Skill 时在它们的上级目录里补齐(见 managedSkillOverlay)。 */
+  managedSkillOverlays?(): readonly ManagedSkillOverlay[];
 }
 
 /**
@@ -88,6 +91,8 @@ interface Connection {
   processes: Set<string>;
   /** 启动请求 id → 进程编号(启动失败时据此移除)。 */
   starting: Map<string, string>;
+  /** 要补齐托管 Skill 的请求 id → 请求(回包到达时处理)。 */
+  overlays: Map<string, ManagedSkillOverlayRequest>;
 }
 
 /** `["/bin/zsh","-lc","cmd"]` → `cmd`；其它形态按空格拼接。 */
@@ -468,7 +473,7 @@ export class ExecServerRelay {
       this.send({ connId, kind: 'close' });
       return;
     }
-    const connection: Connection = { child, buffer: '', closed: false, processes: new Set(), starting: new Map() };
+    const connection: Connection = { child, buffer: '', closed: false, processes: new Set(), starting: new Map(), overlays: new Map() };
     this.connections.set(connId, connection);
     // 只记耗时、字节数与退出码(不记输出内容)：首次握手失败时能分清是本机进程起得慢、异常退出，还是链路慢。
     const now = this.deps.now ?? Date.now;
@@ -534,6 +539,8 @@ export class ExecServerRelay {
     let actions: ExecutorAction[] = [];
     if (message && typeof message.method === 'string' && message.id !== undefined) {
       this.counts.requests += 1;
+      const overlay = managedSkillOverlayRequest(message.method, message.params, this.deps.managedSkillOverlays?.() ?? []);
+      if (overlay) connection.overlays.set(JSON.stringify(message.id), overlay);
       try {
         message.params = mapExecServerParams(message.params, this.deps.workspace, message.method, false);
       } catch (error) {
@@ -644,6 +651,7 @@ export class ExecServerRelay {
     this.counts.rejected += 1;
     // 被闸门拦下的启动没有到 exec-server，不会有进程。
     this.connections.get(connId)?.starting.delete(JSON.stringify(id));
+    this.connections.get(connId)?.overlays.delete(JSON.stringify(id));
     this.sendMessage(connId, JSON.stringify({
       id,
       error: { code: -32001, message: this.deps.workspace.mapTextForAgent(decision.reason ?? 'Not allowed in this workspace.') },
@@ -652,6 +660,7 @@ export class ExecServerRelay {
 
   private rejectInvalidPath(connId: string, id: unknown, message: string): void {
     this.counts.rejected += 1;
+    this.connections.get(connId)?.overlays.delete(JSON.stringify(id));
     this.sendMessage(connId, JSON.stringify({ id, error: { code: -32602, message: this.deps.workspace.mapTextForAgent(message) } }));
   }
 
@@ -659,7 +668,7 @@ export class ExecServerRelay {
     connection.child.stdout.pause();
     const next = (connection.output ?? Promise.resolve()).then(async () => {
       if (connection.closed) return;
-      const projected = await this.projectOutbound(line, connId);
+      const projected = await this.projectOutbound(line, connId, connection);
       if (!connection.closed) this.sendMessage(connId, projected);
     }).catch(() => {
       // 不发送未投影的本机路径；只结束这条连接，不能影响同一设备上的其它任务。
@@ -676,7 +685,7 @@ export class ExecServerRelay {
     });
   }
 
-  private async projectOutbound(line: string, connId: string): Promise<string> {
+  private async projectOutbound(line: string, connId: string, connection: Connection): Promise<string> {
     let value: unknown;
     try {
       value = JSON.parse(line);
@@ -692,7 +701,12 @@ export class ExecServerRelay {
       });
       error.message += '. Check sandbox support and the Codex version on the executing computer before retrying with the requested restrictions.';
     }
-    return JSON.stringify(await mapExecServerResult(value, this.deps.workspace));
+    const projected = await mapExecServerResult(value, this.deps.workspace);
+    const key = reply && reply.method === undefined && reply.id !== undefined ? JSON.stringify(reply.id) : undefined;
+    const overlay = key === undefined ? undefined : connection.overlays.get(key);
+    if (!overlay || !key) return JSON.stringify(projected);
+    connection.overlays.delete(key);
+    return JSON.stringify(await applyManagedSkillOverlay(overlay, projected as Record<string, unknown>));
   }
 
   private dropConnection(connId: string, notifyRemote: boolean): void {

@@ -226,6 +226,11 @@ function withPrewarmedStart(provider: AsrProvider, startPromise: Promise<void>):
       if (typeof innerRecover !== 'function') return undefined;
       return () => innerRecover.call(provider);
     },
+    get rotateSession(): (() => Promise<void>) | undefined {
+      const innerRotate = provider.rotateSession;
+      if (typeof innerRotate !== 'function') return undefined;
+      return () => innerRotate.call(provider);
+    },
   };
 }
 

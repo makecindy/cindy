@@ -179,6 +179,32 @@ it.each([
   expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
 });
 
+// PR #13634 review, unit: a Smart Routing account source can move a task to another account of the
+// same provider with engine, model and computer unchanged. The old same-engine no-op kept the native
+// session owned by the old account. Exercise the real transaction: it must close that session, never
+// reuse a parked one, and bind the new account after the route commits but before the fresh start.
+it('rebuilds a same-engine route when Smart Routing moves the task to another local account', async () => {
+  let row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', agentDeviceId: null });
+  const order: string[] = [];
+  const { deps, calls } = makeDeps({
+    getSessionRow: vi.fn(async () => ({ ...row })),
+    findParkedEngineSession: vi.fn(async () => ({ sdkSessionId: 'old-account-history', watermarkCreatedAt: 1, watermarkRowid: 1 })),
+    applyAgentSwitchToDb: vi.fn(async (_id, patch) => { order.push('db'); row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+    bootstrapSwitchedSession: vi.fn(async () => { order.push('bootstrap'); }),
+  });
+  const commit = vi.fn(async () => { order.push('bind-account'); });
+  const result = await performSessionAgentSwitch(deps, {
+    ...validParams, model: 'gpt-5.5', providerId: 'openai', applyNow: true, configStaged: true, preserveModelGroupBinding: true,
+    localSubscriptionAccount: { changes: true, commit },
+  });
+  expect(result).toMatchObject({ switched: true, engineReady: true });
+  expect(calls[0]).toBe('close');
+  expect(deps.findParkedEngineSession).not.toHaveBeenCalled();
+  expect(row).toMatchObject({ providerId: 'openai', model: 'gpt-5.5', sdkSessionId: null });
+  expect(order).toEqual(['db', 'bind-account', 'bootstrap']);
+  expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
+});
+
 it('rejects an unavailable same-device connection before closing or changing the source', async () => {
   const { deps } = makeDeps({
     getSessionRow: vi.fn(async () => makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' })),
@@ -2953,5 +2979,46 @@ describe('relocateForFreshStart (opening a task elsewhere when its own computer 
     await expect(relocateForFreshStart(noModel.deps, { sessionId: 's1', agentDeviceId: 'studio', providerId: 'xd' }))
       .rejects.toBeTruthy();
     expect(noModel.deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  });
+
+  // Value: performSessionAgentSwitch persists sanitized routeChangeAttribution onto the
+  // agent_switch boundary JSON and records runtime lastRouteChange at the commit point.
+  // Gap: prior switch tests did not assert attribution persistence or live runtime recording.
+  // Minimal input: staged agent switch with attribution landed on next send; tier: unit.
+  it('persists routeChangeAttribution on agent_switch boundary and records runtime lastRouteChange', async () => {
+    const { clearSessionRuntimeControlState, getSessionRuntimeControlSnapshot } = await import('../sessionRuntimeControl.js');
+    clearSessionRuntimeControlState('s1');
+    const pending = createPendingAgentSwitchRegistry();
+    const { deps } = makeDeps({
+      pendingSwitches: pending,
+      getSessionRow: vi.fn(async () => makeRow({ agentKind: 'cc', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null })),
+      assertAgentDeviceRouteUsable: vi.fn(async () => null),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'codex',
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      agentDeviceId: 'mac-studio',
+      runtimeSource: 'agent',
+      routeChangeAttribution: { by: 'model-group', reason: 'provider_safety_refusal' },
+    });
+    // Staging must not record committed lastRouteChange yet.
+    expect(getSessionRuntimeControlSnapshot('s1').lastRouteChange).toBeNull();
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0][1];
+    expect(boundary.attribution).toMatchObject({
+      by: 'model-group',
+      reason: 'provider_safety_refusal',
+      at: expect.any(String),
+    });
+    expect(getSessionRuntimeControlSnapshot('s1').lastRouteChange).toMatchObject({
+      by: 'model-group',
+      reason: 'provider_safety_refusal',
+      from: { agentKind: 'claude-code', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null },
+      to: { agentKind: 'codex', model: 'gpt-5.6', providerId: 'openai', agentDeviceId: 'mac-studio' },
+    });
+    clearSessionRuntimeControlState('s1');
   });
 });

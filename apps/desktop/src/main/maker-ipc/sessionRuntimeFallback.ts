@@ -22,6 +22,7 @@ import {
   sessionRuntimeControlOwnerEpochMatches,
   type FallbackRouteProfile,
   type SessionRuntimeProfile,
+  type SessionRuntimeRouteChangeAttribution,
 } from './sessionRuntimeControl.js';
 
 type FallbackPick = Parameters<typeof pickSessionRuntimeFallback>[0];
@@ -42,6 +43,7 @@ export type FallbackRuntimeSelection = (
     effortExplicit: boolean;
     fastExplicit: boolean;
     persistRoute?: boolean;
+    routeChangeAttribution?: SessionRuntimeRouteChangeAttribution;
   },
 ) => Promise<{
   deferred: boolean;
@@ -73,6 +75,12 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
   readModelGroupFallbackCandidate?(sessionId: string, current: FallbackRouteProfile, visited: readonly string[], recovery: ModelGroupRecovery, generation: number): Promise<{
     candidate: FallbackRouteProfile | null;
     bindCommittedRoute?(profile: FallbackRouteProfile): void;
+    /**
+     * The candidate is one local account of a pooled provider (Smart Routing flat sources). `changes`: the
+     * task moves to another account, so the switch must start a fresh native session (the old history belongs
+     * to the old account). `commit` binds the account once the switch has committed.
+     */
+    localAccount?: { changes: boolean; commit(): Promise<void> };
     /** Display names of the failed source and the candidate («model · source»). */
     labels?: { from: string; to: string };
   } | null>;
@@ -114,6 +122,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
     requireRouteChange = false,
     isCurrent: () => boolean = () => true,
     recovery?: SessionRuntimeFallbackContext,
+    fallbackReason?: string,
   ): Promise<RuntimeFallbackResult<RuntimeSession>> => {
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     let runtimeSession: RuntimeSession | null = null;
@@ -181,6 +190,8 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
         candidate = null;
       }
       let groupLabels = group?.labels;
+      // The candidate being tried and its own commit callbacks; advancing the chain replaces both together.
+      let groupStep = group;
       const switchedResult = (session: RuntimeSession | null): RuntimeFallbackResult<RuntimeSession> => ({
         session, outcome: 'switched', ...(group?.candidate && groupLabels ? { sourceSwitch: groupLabels } : {}),
       });
@@ -266,6 +277,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             latestControl.visitedRoutes, groupRecovery, latestControl.generation);
           candidate = next?.candidate ?? null;
           groupLabels = next?.labels;
+          groupStep = next ?? null;
           return candidate !== null;
         }
         if (!botFallback.isBot) return false;
@@ -281,6 +293,11 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       while (candidate) {
         if (!isCurrent()) return { session: runtimeSession, outcome: 'superseded' };
         const selected = candidate;
+        const routeChangeAttribution: SessionRuntimeRouteChangeAttribution = {
+          by: group ? 'model-group' : 'fallback',
+          reason: fallbackReason ?? (group ? 'unavailable' : 'fallback'),
+        };
+        const step = groupStep;
         const applyCandidate = () => withSendToSessionLock(sessionId, async () => {
           if (!isCurrent() || !sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch) ||
               !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) {
@@ -298,6 +315,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
               previousProfile: currentForFallback,
               effortExplicit: false,
               fastExplicit: false,
+              routeChangeAttribution,
               ...(group ? { persistRoute: true } : {}),
             },
           );
@@ -305,11 +323,12 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           // Move the durable group binding only when the session row moved too.
           if (result.persistedRoute && !result.deferred && !result.superseded &&
               sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
-            group?.bindCommittedRoute?.({
+            step?.bindCommittedRoute?.({
               ...selected,
               model: result.effectiveModelId ?? selected.model,
               providerId: result.effectiveProviderId === undefined ? selected.providerId : result.effectiveProviderId,
             });
+            await step?.localAccount?.commit().catch(() => undefined);
           }
           if (requireRouteChange && result.deferred && result.generation !== undefined &&
               cancelPendingSessionRuntimeMutation(sessionId, result.generation)) {
@@ -324,11 +343,13 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
         });
         const pluginEngineChanges = selected.agentKind === 'acp' && selected.providerId !== currentForFallback.providerId;
         if (selected.agentKind !== currentForFallback.agentKind || pluginEngineChanges
-          || (selected.agentDeviceId ?? null) !== (currentForFallback.agentDeviceId ?? null)) {
+          || (selected.agentDeviceId ?? null) !== (currentForFallback.agentDeviceId ?? null)
+          || step?.localAccount?.changes === true) {
           try {
             const result = await withSendToSessionLock(sessionId, async () => {
               if (!isCurrent() || !sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch) ||
                   !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) return null;
+              const localAccount = step?.localAccount;
               const switched = await performSessionAgentSwitch(agentSwitchDeps, {
                 sessionId,
                 targetAgentKind: selected.agentKind,
@@ -340,9 +361,20 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
                 applyNow: true,
                 configStaged: true,
                 preserveModelGroupBinding: true,
+                routeChangeAttribution,
+                ...(localAccount ? {
+                  localSubscriptionAccount: {
+                    changes: localAccount.changes,
+                    commit: async () => {
+                      await localAccount.commit();
+                      // Dispatch reads the selected route account during bootstrap, not after the switch returns.
+                      if (sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) step?.bindCommittedRoute?.(selected);
+                    },
+                  },
+                } : {}),
               });
               if (switched.switched && sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
-                group?.bindCommittedRoute?.(selected);
+                if (!localAccount) step?.bindCommittedRoute?.(selected);
                 acceptSessionRuntimeMutation({
                   sessionId,
                   source: 'fallback',

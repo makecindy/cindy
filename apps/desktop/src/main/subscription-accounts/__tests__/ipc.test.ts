@@ -15,6 +15,9 @@ const h = vi.hoisted(() => ({
   availability: vi.fn(),
   scheduling: vi.fn(),
   sessionRead: vi.fn(),
+  pluginSessionRead: vi.fn(),
+  pluginOfferedRemotely: new Set<string>(),
+  pluginModelTurnedOff: new Set<string>(),
   owner: 'owner-a',
   generation: 1,
   bindings: {} as Record<string, { providerId: 'anthropic' | 'openai'; accountId: string; via?: string }>,
@@ -115,6 +118,14 @@ vi.mock('../../device-link/remoteModelAccess.js', () => ({
   remoteModelAccess: { allows: (_id: string, model: string) => !!model && (h.remoteModels === null || h.remoteModels.includes(model)) },
 }));
 vi.mock('../service.js', () => ({ executeSubscriptionAccountCommand: h.execute }));
+vi.mock('../../plugin-engine-accounts/runtime.js', () => ({
+  onPluginEngineAccountsChanged: vi.fn(),
+  readPluginEngineSessionAccount: h.pluginSessionRead,
+}));
+vi.mock('../../maker-host/pluginEngineRemoteUse.js', () => ({
+  isPluginEngineOfferedRemotely: (providerId: string) => h.pluginOfferedRemotely.has(providerId),
+  isPluginEngineModelTurnedOff: (providerId: string, model?: string) => h.pluginModelTurnedOff.has(`${providerId}:${model ?? 'default'}`),
+}));
 vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
@@ -194,6 +205,9 @@ beforeEach(() => {
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
   h.availability.mockReset().mockResolvedValue(true);
   h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
+  h.pluginSessionRead.mockReset().mockResolvedValue({ providerId: 'acp-plugin:antigravity:agy', state: 'legacy' });
+  h.pluginOfferedRemotely.clear();
+  h.pluginModelTurnedOff.clear();
 });
 
 // Unit, duplicate-account regression: one account can retain two native homes. The production
@@ -633,6 +647,44 @@ describe('subscription management boundary', () => {
     h.sessionRead.mockRejectedValue(new Error('fixture-private-path'));
     await expect(invoke(query)).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_FAILED]');
     expect(h.sessionRead).toHaveBeenCalledTimes(6);
+    expect(h.execute).not.toHaveBeenCalled();
+
+    // 2026-11-28 (plugin-harnesses.md §6): plugin engine `session` probe enforces owner-only /
+    // own-computer boundaries, rejects provider-share peers and alias fields, and binds remote admission.
+    const pluginProvider = 'acp-plugin:antigravity:agy';
+    const pluginQuery = { action: 'session', providerId: pluginProvider, nativeSessionId: 'acp-sess-1', model: 'gemini-4-neon' };
+    h.context = { controllerDeviceId: 'own-mac' };
+    h.pluginOfferedRemotely.add(pluginProvider);
+    await expect(invoke(pluginQuery)).resolves.toEqual({ providerId: pluginProvider, state: 'legacy' });
+    const [calledProvider, calledQuery, calledOptions] = h.pluginSessionRead.mock.calls[0] as [
+      string,
+      unknown,
+      { remote: boolean; ownComputer: boolean; isRemoteOffered(pid: string, model?: string): boolean },
+    ];
+    expect(calledProvider).toBe(pluginProvider);
+    expect(calledQuery).toEqual(pluginQuery);
+    expect(calledOptions.remote).toBe(true);
+    expect(calledOptions.ownComputer).toBe(true);
+    expect(calledOptions.isRemoteOffered(pluginProvider, 'gemini-4-neon')).toBe(true);
+    h.pluginModelTurnedOff.add(`${pluginProvider}:gemini-4-neon`);
+    expect(calledOptions.isRemoteOffered(pluginProvider, 'gemini-4-neon')).toBe(false);
+    h.pluginModelTurnedOff.clear();
+    h.remoteModels = ['other-model'];
+    expect(calledOptions.isRemoteOffered(pluginProvider, 'gemini-4-neon')).toBe(false);
+    h.remoteModels = null;
+
+    h.context = { controllerDeviceId: providerShareGuestPeer('share', 'member', 'device') };
+    await expect(invoke(pluginQuery)).rejects.toThrow('PERMISSION_DENIED');
+    h.context = { sharedTask: {} };
+    await expect(invoke(pluginQuery)).rejects.toThrow('PERMISSION_DENIED');
+    h.context = null;
+    for (const badPlugin of [
+      { action: 'session', providerId: pluginProvider },
+      { ...pluginQuery, legacyProviderId: 'old-codex' },
+      { ...pluginQuery, routeProviderId: 'openai-sub-12345678' },
+    ])
+      await expect(invoke(badPlugin)).rejects.toThrow('INVALID_PARAMS');
+    expect(h.pluginSessionRead).toHaveBeenCalledTimes(1);
     expect(h.execute).not.toHaveBeenCalled();
   });
   it('rejects invalid account paths, settings and login keys before any native operation', async () => {

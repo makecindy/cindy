@@ -14,7 +14,9 @@ import {
   BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, MODEL_GROUP_SAME_SOURCE_RETRIES, canResumeAfterRuntimeFallback, isBotCandidateUnavailable,
   modelGroupFailureScope, modelGroupSwitchCause, type ModelGroupSwitchCause, type RuntimeFallbackResult,
 } from './botCandidateRecovery.js';
+import { isProviderSafetyRefusalError, PROVIDER_SAFETY_REFUSAL_REASON } from '@cindy/maker-shared/error-redaction';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
+import { sanitizeRouteChangeReason } from './sessionRuntimeControl.js';
 import type { SessionRuntimeFallbackContext } from './sessionRuntimeFallback.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
@@ -56,6 +58,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     requireRouteChange: boolean,
     isCurrent: () => boolean,
     recovery?: SessionRuntimeFallbackContext,
+    fallbackReason?: string,
   ): Promise<RuntimeFallbackResult<RuntimeSession>>;
   pendingSessionRuntimeFallbackRebuilds: { delete(session: RuntimeSession): unknown };
   providerGroupHeldErrors: { stash(sessionId: string, holdId: number, detail: unknown): void };
@@ -229,6 +232,11 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
               // Report retries must enter the original queue checkpoint before any
               // allocation. Runtime fallback can eagerly bootstrap a different route.
               if (!mayContinue()) return;
+              const fallbackReason = isProviderSafetyRefusalError(signals.message ?? '', signals.reason)
+                ? PROVIDER_SAFETY_REFUSAL_REASON
+                : groupScope !== null
+                  ? modelGroupSwitchCause(signals, groupScope)
+                  : sanitizeRouteChangeReason(signals.reason) ?? undefined;
               const fallback: RuntimeFallbackResult<RuntimeSession> = reportPreparation || localPreparation
                 ? { session: null, outcome: 'unchanged' }
                 : await maybeApplySessionRuntimeFallback(
@@ -239,11 +247,12 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   settlePausedResumeIntoHistory
                     ? () => ownsAttempt() && !inputCoordinator.isExecutionPaused(sessionId)
                     : isCurrent,
-                  ...(modelGroupPolicy !== undefined ? [{
+                  modelGroupPolicy !== undefined ? {
                     retrySameSource: !groupSwitch,
                     accountUnavailable: groupScope === 'connection',
                     hasImages,
-                  }] as const : hasImages ? [{ hasImages }] as const : []),
+                  } : hasImages ? { hasImages } : undefined,
+                  fallbackReason,
                 );
               fallbackRebuildSession = fallback.session;
               if (!mayContinue()) return;

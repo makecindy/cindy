@@ -457,7 +457,8 @@ export function TeammateWorkSegment({ blockId, childItems, active = false, onIns
   const tools = childItems.filter(child => child.kind === 'tools');
   const icon = active && (summary.running || !summary.toolCount) ? <Spinner size={14} />
     : summary.toolCount ? <Terminal size={14} /> : <Sparkles size={14} />;
-  const content = <><span aria-hidden className="inline-flex w-4 shrink-0 items-center justify-center">{icon}</span><span className="min-w-0 break-words">{title}</span></>;
+  const content = <><span aria-hidden className="inline-flex w-4 shrink-0 items-center justify-center">{icon}</span>
+    <span className={cn('min-w-0', tools.length && !memory.expanded ? 'truncate' : 'break-words')}>{title}</span></>;
   return <div className="min-w-0" data-teammate-segment="">
     {tools.length ? <button type="button" aria-expanded={memory.expanded} data-scroll-disclosure-header=""
       onClick={() => { memory.setExpanded(value => !value); (onInspect ?? inspectParent)?.(); }}

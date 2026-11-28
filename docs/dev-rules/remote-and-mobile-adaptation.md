@@ -1882,6 +1882,15 @@ socket 固定限速。最大逻辑消息仍可在排空后原子发送，不改�
 实现见 `packages/device-link/src/client.ts` 的 `sendInvokeResult`，多控制端回归见同包
 `src/__tests__/client.test.ts`。
 
+收到明确的对端离线信号时，Host 和 Desktop 使用共享 dispatch 的全量回包 outbox 门禁。
+门禁依据该对端承载连接的当代离线证据，保留原 TTL 和定向建链补发。有可用直连、对端重新建链或
+承载连接换代后，旧证据不再挡住发送。可靠队列入队时先按协商的读截止时间把过期结果改成 skip。
+发送尚未就绪且队头滞留超过 60 秒时，只移除可丢弃前缀。确已断链时，余下帧都已滞留超过阈值且
+没有仍需交付的回包，才允许兜底清空。等待确认的链路保留在途结果，仍靠原确认 ACK 推进。有
+未协商截止时间的回包时，队头年龄不能用来判断它已经过期。裸回包防死锁路径照常可用。
+故障和恢复均限于该 peer，共享 relay 沿用原定时器、预算、帧格式和签名规则。
+Host 的双控制端与全量 outbox 回归见 `apps/host/src/device-link.test.mjs`。
+
 ## 模块通过 Remote Resource 接入移动端
 
 面向移动端新增独立产品入口时，默认通过 `@cindy/device-link` 的 Remote Resource

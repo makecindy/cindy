@@ -55,6 +55,7 @@ vi.mock('../ipc.js', async (importOriginal) => {
   };
 });
 
+import { panelReadDeps } from '../ipc.js';
 import { __gitReviewDeviceOpTesting } from '../device-op.js';
 
 const { handleRemoteOp, GIT_REVIEW_MAX_JSON_BYTES } = __gitReviewDeviceOpTesting;
@@ -102,7 +103,7 @@ describe('git-review device-op', () => {
   it('routes get with parsed diff options', async () => {
     readReviewDataMock.mockResolvedValue({ scope: { sessionId: 's1' } });
     const res = await handleRemoteOp({ op: 'get', payload: { sessionId: 's1', ignoreWhitespace: true } });
-    expect(readReviewDataMock).toHaveBeenCalledWith('s1', { ignoreWhitespace: true });
+    expect(readReviewDataMock).toHaveBeenCalledWith('s1', { ignoreWhitespace: true }, panelReadDeps);
     expect(res).toEqual({ ok: true, result: { scope: { sessionId: 's1' } } });
   });
 

@@ -334,6 +334,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope, startBlockedReason: profileHoldMessage,
     hostToolRequest: requestHostTool, onStopped: disposeRuntimeHostServices,
+    // A stop that timed out left the reconcile unfinished; once the old processes are gone,
+    // rerun it so the plugin returns to its expected state instead of staying gated.
+    onStopSettledLate: () => { void reconcile().catch(error => log.warn('plugin reconcile after late stop failed', { error: String(error) })); },
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
     resolveOauthSecret: async (id, key, accountId) => {
       const decl = getGhost(id)?.manifest.network?.secrets?.find(item => item.key === key && item.source === 'oauth')?.oauth;

@@ -536,6 +536,7 @@ describe("mobile maker transport", () => {
       "device-link:voice:transcribe",
       "device-link:voice:dictionary-learning",
       "device-link:voice:dictionary:get",
+      "device-link:voice:dictionary:mutate",
       "maker:get-pending-interactions",
       "maker:resolve-interaction",
       "maker:get-context-usage",

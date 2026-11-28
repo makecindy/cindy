@@ -72,6 +72,7 @@ import {
   type SharedReconnectSendEvidence,
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
+import type { ManagedSkillOverlay } from './managedSkillOverlay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
 import { isSharedTaskAuthorizationDenied } from './poller';
@@ -651,6 +652,8 @@ async function prepareAndStartRemoteAgentSession(
   let personalRoots: Array<{ relative: string; local: string; managed?: true }> = [];
   /** 上一次打开时托管 Skill 的映射来源：这次不再有的要撤掉。 */
   let managedAliasFroms = new Set<string>();
+  /** 托管 Skill 在对方影子目录里的位置 → 本机目录(Codex 经执行环境找 Skill 时补齐上级目录，见 managedSkillOverlay)。 */
+  let managedSkillOverlays: ManagedSkillOverlay[] = [];
   /** 正在连或连着的那条连接(Codex 的执行环境帧经它推给对方)。 */
   let active: RemoteAgentRunClient | null = null;
   let linkState: LinkState = 'connecting';
@@ -690,6 +693,7 @@ async function prepareAndStartRemoteAgentSession(
         log: deps.log,
         // 后台终端跑完：闲置从这时算起。
         onProcessesEnded: () => touch(),
+        managedSkillOverlays: () => managedSkillOverlays,
       })
     : null;
 
@@ -817,6 +821,8 @@ async function prepareAndStartRemoteAgentSession(
         workspace.addAliases(aliases, new Set([...managedAliasFroms, ...managed]));
       } else workspace.setAliases(aliases);
       managedAliasFroms = managed;
+      const shadow = projection.shadowDir.replace(/[\\/]+$/, '');
+      managedSkillOverlays = personalRoots.filter((root) => root.managed).map((root) => ({ agentDir: `${shadow}/${root.relative}`, localDir: root.local }));
       workspace.setVirtualRoot(virtualRoot);
       if (virtualRoot && attachmentRoots) {
         const native = /^[A-Za-z]:|^\\\\/.test(virtualRoot) ? path.win32 : path.posix;

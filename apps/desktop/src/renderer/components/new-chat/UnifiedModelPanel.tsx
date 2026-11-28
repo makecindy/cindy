@@ -281,8 +281,8 @@ export interface UnifiedModelPanelProps {
   paymentRequiredLabel?: string;
   paymentRequiredUnlockLabel?: string;
   onPaymentRequired?: () => void;
-  /** false = 只选模型,不出配置浮层(设置类入口的 configurationEnabled)。 */
-  configurationEnabled?: boolean;
+  /** Settings can pick a Harness without editing model preferences. */
+  configurationEnabled?: boolean | 'harness';
   /**
    * 选择真的应用成功后,把该模型记进「最近使用」(见 state/recentModels 的语义边界)。
    * **默认关**:统一面板被对话之外的入口(定时任务 / IM 默认 / Bot / Hook / Worker /
@@ -1442,10 +1442,12 @@ function UnifiedModelPanelContent({
             });
           },
           justFavoritedKey: justFavorited,
-          configurationEnabled,
+          configurationEnabled: configurationEnabled === true,
           interactionDisabled: interactionDisabled || actionPending,
         }
       : undefined;
+
+  const harnessOnly = configurationEnabled === 'harness';
 
   // ── 浮层 ─────────────────────────────────────────────────────────────────
   const flyTarget = useMemo(() => {
@@ -1948,8 +1950,8 @@ function UnifiedModelPanelContent({
           : configOf(entry, row.favorite ?? row.recent, RAIL_ALL);
         const price = row.agentDeviceId ? null : priceDisplayOf(entry, config);
         const name = widthMeasure(localizedModelName(entry.displayName, t), 14, 500);
-        const effort = configurationEnabled && config.effort ? 4 + widthMeasure(effortLabelOf(config.agent, config.effort), 12, 400) : 0;
-        const fast = configurationEnabled && config.fast ? 15 : 0;
+        const effort = configurationEnabled === true && config.effort ? 4 + widthMeasure(effortLabelOf(config.agent, config.effort), 12, 400) : 0;
+        const fast = configurationEnabled === true && config.fast ? 15 : 0;
         const star = selectionPolicy === 'personalized' ? 28 : 0;
         const customize = configurationEnabled && !row.agentDeviceId && !row.recent ? 28 : 0;
         const badge = price?.kind === 'free'
@@ -2009,7 +2011,7 @@ function UnifiedModelPanelContent({
           active={sameAnchor(flyAnchor, row.anchor)}
           readable={readableRows}
           usageScope={pluginUsageScope}
-          configurationEnabled={configurationEnabled}
+          configurationEnabled={configurationEnabled === true}
           interactionDisabled={interactionDisabled || actionPending}
           onSelect={() => selectPluginEngineFavorite(row.pluginEngine!)}
           {...(selectionPolicy === 'personalized' && pluginEngineFavoritesController
@@ -2081,7 +2083,7 @@ function UnifiedModelPanelContent({
         // (引擎 / 深度 / Fast 由记录时的选择决定,改配置走模型行或收藏)。
         // 不出配置浮层的行(最近行只读副本、设置类入口)一律 customizable=false：
         // 按钮、← 快捷键与右键浮层都由这一个闸门收掉，不宣告存在却无响应。
-        customizable={configurationEnabled && !recentRow}
+        customizable={!!configurationEnabled && !recentRow}
         interactionDisabled={rowIsDisabled(row, config)}
         paymentRequired={row.entry.availability === 'requires_payment'}
         {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
@@ -2431,7 +2433,7 @@ function UnifiedModelPanelContent({
                         anchor={row.anchor}
                         active={false}
                         measurementOnly
-                        configurationEnabled={configurationEnabled}
+                        configurationEnabled={configurationEnabled === true}
                         interactionDisabled
                         onSelect={noop}
                         onRemove={noop}
@@ -2458,7 +2460,7 @@ function UnifiedModelPanelContent({
                       {...(priceDisplay ? { priceDisplay } : {})}
 
                       configurationEnabled={configurationEnabled}
-                      customizable={configurationEnabled && !row.recent}
+                      customizable={!!configurationEnabled && !row.recent}
                       interactionDisabled
                       paymentRequired={row.entry.availability === 'requires_payment'}
                       {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
@@ -2546,8 +2548,16 @@ function UnifiedModelPanelContent({
                     config.agent,
                   )
                 }
-                engineLocked={effectiveRail.kind === 'engine'}
+                harnessOnly={harnessOnly}
+                engineLocked={!harnessOnly && effectiveRail.kind === 'engine'}
                 onEngineChange={(engine) => {
+                  if (harnessOnly) {
+                    const next = resolveUnifiedRowConfig({ entry: target.entry, forceEngine: engine });
+                    if (next.engine !== engine || rowIsDisabled(target, next)) return;
+                    // Use the same selection path as the model row, including its wire id and device.
+                    void selectRow(target.anchor, next, undefined, target.entry);
+                    return;
+                  }
                   if (effectiveRail.kind === 'engine') return;
                   applyEngine(target.anchor, target.entry, config, engine);
                 }}

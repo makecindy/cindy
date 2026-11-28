@@ -347,7 +347,7 @@ export async function bindDeviceModelGroupSession(
   deviceId: string,
   sessionId: string,
   selection: ModelGroupSelection,
-  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'> | null,
+  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'> | null,
 ): Promise<void> {
   if (result && 'outcome' in result) commitDeviceModelGroupDecision(deviceId, result);
   const route = !result ? null : 'outcome' in result ? (result.outcome === 'routed' ? result.route : null) : result;
@@ -358,6 +358,7 @@ export async function bindDeviceModelGroupSession(
     route: {
       agentKind: route.agentKind, providerId: route.providerId, model: route.model,
       ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+      ...(route.accountId ? { accountId: route.accountId } : {}),
     },
   }]).catch((err: unknown) => log.warn('device model group binding failed', err));
 }

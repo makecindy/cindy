@@ -15170,7 +15170,7 @@ describe('Bot subscription startup admission', () => {
       expect(h.attemptCurrent).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(30_000);
       await flush();
-      expect(h.fallback).toHaveBeenCalledWith(h.sid, 1, expect.any(Number), true, expect.any(Function));
+      expect(h.fallback).toHaveBeenCalledWith(h.sid, 1, expect.any(Number), true, expect.any(Function), undefined, 'bot-subscription-startup-admission');
       expect(h.attemptCurrent).toHaveBeenCalledWith(h.sid, 1);
       expect(h.session.send).toHaveBeenCalledOnce();
       expect(h.onUserMessagePersisted).toHaveBeenCalledOnce();

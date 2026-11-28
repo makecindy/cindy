@@ -1178,7 +1178,7 @@
     "permissionMissing": "No concedido",
     "openPermissionSettings": "Conceder permiso",
     "recheckPermissions": "Comprobar de nuevo",
-    "permissionActionFailed": "No se pudo abrir la guía de permisos. Inténtalo de nuevo en la configuración de control remoto de la computadora.",
+    "permissionActionFailed": "No se pudo abrir la guía de permisos. Inténtalo de nuevo en Configuración → Conexión remota en la computadora.",
     "permissionCheckFailed": "No se pudieron comprobar los permisos. Asegúrate de que la computadora esté en línea e inténtalo de nuevo.",
     "openGuideOnComputer": "Abrir guía en la computadora",
     "permissionGuideOpened": "La guía de permisos está abierta en la computadora. Continúa allí.",
@@ -3222,7 +3222,8 @@
           "gatewayKey": "Requiere que tu puerta de enlace de IA admita esta ruta ASR en tiempo real",
           "codexLogin": "Usa tu inicio de sesión de Codex",
           "elevenlabsKey": "Utiliza tu clave de ElevenLabs (variable de entorno)",
-          "codexRealtimeUnsupported": "No disponible: el inicio de sesión de Codex no es una credencial de tiempo real de OpenAI API"
+          "codexRealtimeUnsupported": "No disponible: el inicio de sesión de Codex no es una credencial de tiempo real de OpenAI API",
+          "localOffline": "Se ejecuta sin conexión en este dispositivo (sin cuenta ni clave API)"
         },
         "credentialError": {
           "gatewayMissing": "No se encontró ninguna clave de puerta de enlace de IA; este modelo no está disponible.",
@@ -3230,10 +3231,24 @@
           "elevenlabsMissing": "No hay ninguna clave de ElevenLabs configurada (variable de entorno); este modelo no está disponible.",
           "customAsrConfigMissing": "Completa y guarda la configuración del servicio ASR en tiempo real antes de iniciar la entrada de voz.",
           "customAsrKeyMissing": "Agrega y guarda una clave API para el servicio ASR personalizado en tiempo real.",
-          "codexRealtimeUnsupported": "El inicio de sesión de Codex no se puede usar para el reconocimiento de voz en tiempo real. Elige un servicio ASR compatible."
+          "codexRealtimeUnsupported": "El inicio de sesión de Codex no se puede usar para el reconocimiento de voz en tiempo real. Elige un servicio ASR compatible.",
+          "localAsrModelMissing": "Selecciona una carpeta de modelo ASR sherpa-onnx local antes de iniciar la entrada de voz sin conexión.",
+          "localAsrUnsupported": "El reconocimiento de voz local sin conexión no es compatible con esta arquitectura."
         },
         "manageProviders": "Abrir proveedores de modelos",
-        "reset": "Restablecer los valores predeterminados"
+        "reset": "Restablecer los valores predeterminados",
+        "localAsr": {
+          "optionLabel": "Reconocimiento local sin conexión (sherpa-onnx)",
+          "optionDescription": "Reconocimiento ONNX en el dispositivo; funciona sin conexión sin cuenta ni clave API",
+          "notice": "Elige una carpeta de modelo local sherpa-onnx (SenseVoice, Paraformer, Whisper o Transducer con tokens.txt y pesos .onnx). El audio permanece en este equipo.",
+          "modelDirLabel": "Carpeta del modelo local",
+          "readyStatus": "Listo · {{kind}} ({{folder}})",
+          "unsupportedStatus": "No compatible en esta plataforma",
+          "notConfiguredStatus": "Aún no se ha seleccionado ninguna carpeta de modelo",
+          "clearFolder": "Limpiar",
+          "chooseFolder": "Elegir carpeta de modelo",
+          "invalidFolder": "Esa carpeta no contiene un modelo sherpa-onnx compatible (tokens.txt y archivos .onnx)."
+        }
       },
       "historyToggle": {
         "show": "Mostrar historial reciente",
@@ -3381,7 +3396,9 @@
           "filters": {
             "all": "Todos",
             "automatic": "Automáticos",
-            "manual": "Manuales"
+            "manual": "Manuales",
+            "candidates": "Candidatos",
+            "suppressed": "Suprimidos"
           },
           "sources": {
             "automatic": "Automático",
@@ -3394,6 +3411,28 @@
             "automaticAddedMultiple": "{{count}} términos agregados automáticamente, incluido {{term}}",
             "delete": "Eliminar",
             "deleteAriaLabel": "Eliminar término agregado automáticamente: {{term}}"
+          },
+          "export": {
+            "csv": "Exportar CSV",
+            "json": "Exportar JSON",
+            "successCsv": "Diccionario exportado como CSV",
+            "successJson": "Diccionario exportado como JSON"
+          },
+          "candidates": {
+            "hint": "Términos observados en tus ediciones manuales aún no promovidos automáticamente. Promuévelos o elimínalos.",
+            "evidenceCount": "Observado {{count}}×",
+            "promote": "Promover",
+            "promoteTooltip": "Promover este candidato al diccionario ahora",
+            "promotedToast": "Se promovió «{{term}}» al diccionario",
+            "empty": "Aún no hay términos candidatos."
+          },
+          "suppressed": {
+            "hint": "Los términos eliminados se suprimen para no volver a añadirse automáticamente. Restaura el aprendizaje o añádelos de nuevo.",
+            "restore": "Permitir aprendizaje",
+            "addToDictionary": "Volver a añadir",
+            "restoredToast": "Se restauró el aprendizaje automático para «{{term}}»",
+            "addedToast": "Se volvió a añadir «{{term}}» al diccionario",
+            "empty": "No hay términos suprimidos."
           }
         }
       },
@@ -3438,7 +3477,15 @@
         "toast": {
           "copied": "Copiado",
           "copyFailed": "No se pudo copiar"
-        }
+        },
+        "searchAriaLabel": "Buscar en el historial de voz",
+        "searchPlaceholder": "Buscar transcripciones o reconocimiento sin procesar…",
+        "showRawComparison": "Comparar original y refinado",
+        "hideRawComparison": "Ocultar comparación",
+        "rawLabel": "Reconocimiento original",
+        "refinedLabel": "Refinado",
+        "loadMore": "Cargar más ({{count}} restantes)",
+        "noSearchResults": "No hay transcripciones que coincidan."
       },
       "speakerFilter": {
         "label": "Reconocer mi voz",
@@ -11121,12 +11168,14 @@
       "fileCount_other": "{{count}} archivos",
       "emptyTitle": "Aún no hay cambios",
       "emptyDesc": "Esta sesión aún no ha editado archivos. Los cambios del Agent aparecerán aquí.",
+      "emptyDescSvn": "Los archivos versionados coinciden con su revisión base de SVN.",
+      "svnSelectFile": "Selecciona un archivo para ver sus cambios.",
       "emptyDescGit": "El worktree de git actual no tiene cambios preparados ni sin preparar.",
       "filterEmptyTitle": "No hay cambios con este filtro",
-      "filterEmptyDesc": "No hay cambios de git visibles con el filtro o la configuración actuales.",
+      "filterEmptyDesc": "No hay cambios visibles con el filtro o la configuración actuales.",
       "noSessionTitle": "No hay sesión",
       "noSessionDesc": "Selecciona una sesión local para revisar los cambios de su worktree de git.",
-      "loadingTitle": "Leyendo cambios de git",
+      "loadingTitle": "Leyendo cambios",
       "loadingDesc": "El panel conserva el contenido anterior hasta que se complete la actualización.",
       "errorTitle": "No se pudieron leer los cambios",
       "refresh": "Actualizar",
@@ -11330,7 +11379,24 @@
         "successToast": "Cambios enviados",
         "ready_many": "Enviar {{count}} commits locales.",
         "readyForceCandidate_many": "El remoto tiene {{count}} commits que no tienes; se requiere confirmación antes de enviar.",
-        "forceDesc_many": "El remoto {{remoteRef}} tiene {{count}} commits que no tienes. El envío forzado sobrescribirá la rama remota y no es fácil de deshacer."
+        "forceDesc_many": "El remoto {{remoteRef}} tiene {{count}} commits que no tienes. El envío forzado sobrescribirá la rama remota y no es fácil de deshacer.",
+        "divergedTitle": "La rama remota tiene nuevos commits",
+        "syncCleanDesc_many": "El remoto {{remoteRef}} tiene {{count}} commits que no tienes y no se detectaron conflictos. Sincroniza antes de hacer push para no sobrescribir el historial remoto.",
+        "syncCleanDesc_one": "El remoto {{remoteRef}} tiene {{count}} commit que no tienes y no se detectaron conflictos. Sincroniza antes de hacer push para no sobrescribir el historial remoto.",
+        "syncCleanDesc_other": "El remoto {{remoteRef}} tiene {{count}} commits que no tienes y no se detectaron conflictos. Sincroniza antes de hacer push para no sobrescribir el historial remoto.",
+        "divergedConflictDesc_many": "El remoto {{remoteRef}} tiene {{count}} commits que no tienes, con conflictos en {{files}}. Delega al Agent la sincronización o fuerza el push.",
+        "divergedConflictDesc_one": "El remoto {{remoteRef}} tiene {{count}} commit que no tienes, con conflictos en {{files}}. Delega al Agent la sincronización o fuerza el push.",
+        "divergedConflictDesc_other": "El remoto {{remoteRef}} tiene {{count}} commits que no tienes, con conflictos en {{files}}. Delega al Agent la sincronización o fuerza el push.",
+        "divergedDirtyDesc_many": "El remoto {{remoteRef}} tiene {{count}} commits nuevos y hay cambios sin confirmar. Delega al Agent la sincronización o fuerza el push.",
+        "divergedDirtyDesc_one": "El remoto {{remoteRef}} tiene {{count}} commit nuevo y hay cambios sin confirmar. Delega al Agent la sincronización o fuerza el push.",
+        "divergedDirtyDesc_other": "El remoto {{remoteRef}} tiene {{count}} commits nuevos y hay cambios sin confirmar. Delega al Agent la sincronización o fuerza el push.",
+        "divergedGeneralDesc_many": "El remoto {{remoteRef}} tiene {{count}} commits que no tienes. Delega al Agent la integración segura o fuerza el push.",
+        "divergedGeneralDesc_one": "El remoto {{remoteRef}} tiene {{count}} commit que no tienes. Delega al Agent la integración segura o fuerza el push.",
+        "divergedGeneralDesc_other": "El remoto {{remoteRef}} tiene {{count}} commits que no tienes. Delega al Agent la integración segura o fuerza el push.",
+        "syncAndPushConfirm": "Sincronizar y hacer push",
+        "askAgentSyncConfirm": "Resolver con Agent",
+        "syncedAndPushedToast": "Sincronizado con el remoto y enviado",
+        "agentPromptFilled": "Instrucciones cargadas en el editor. Pulsa Intro para ejecutar con Agent."
       },
       "changeStatus": {
         "renamed": "Renombrado",
@@ -11395,6 +11461,10 @@
         "non-git": {
           "title": "No es un repositorio de git",
           "desc": "El directorio de trabajo actual no contiene un repositorio de git utilizable."
+        },
+        "svn-unavailable": {
+          "title": "SVN no disponible",
+          "desc": "Instala el cliente de línea de comandos de Subversion para revisar esta copia de trabajo."
         },
         "git-unavailable": {
           "title": "Git no disponible",
@@ -15417,6 +15487,24 @@
       "removeFromList": "Quitar de la lista",
       "missingDir": "Carpeta no encontrada"
     },
+    "remoteOutbox": {
+      "notSent": "No enviado",
+      "retry": "Reintentar",
+      "delete": "Eliminar",
+      "deliveryUnconfirmed": "Envío sin confirmar",
+      "recheckDelivery": "Volver a comprobar",
+      "waitingForPrevious": "En espera del mensaje anterior",
+      "taskInactive": "Esta tarea no puede recibir mensajes en este momento.",
+      "inputNotSupported": "Este ordenador no permite enviar este tipo de mensaje a la tarea.",
+      "taskClearedBeforeSend": "La tarea se ha vaciado o se está vaciando. El mensaje sigue guardado en este dispositivo.",
+      "invalidInput": "El ordenador ha rechazado el mensaje porque contiene datos no válidos.",
+      "profileInUseByDesktop": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos. Ciérrala y vuelve a enviar.",
+      "other": "Esta acción no terminó. Inténtalo de nuevo en un momento.",
+      "deleteConfirmTitle": "¿Eliminar este mensaje?",
+      "deleteConfirmBody": "Este mensaje no se envió. Si lo eliminas, no podrás deshacerlo.",
+      "deleteUnconfirmedBody": "Es posible que la computadora ya haya recibido este mensaje. Al eliminarlo, solo se quitará el mensaje pendiente de este dispositivo. Si la computadora lo recibió, seguirá apareciendo en el historial de la conversación.",
+      "cancel": "Cancelar"
+    },
     "pendingQueue": {
       "waitingForDevice": "Sin enviar · Se enviará cuando el otro equipo se reconecte",
       "stopping": "Parando",
@@ -15537,7 +15625,11 @@
           "description": "Permite el acceso al micrófono y vuelve a hacer clic en la entrada de voz.",
           "confirm": "Conceder permiso",
           "cancel": "Cancelar"
-        }
+        },
+        "rewriteSelected": "Reescribir por voz",
+        "rewriteSelectedTooltip": "Dicta una instrucción para reescribir el texto seleccionado (se conserva el original si falla)",
+        "rewriteSelectedAria": "Reescribir el texto seleccionado por voz",
+        "rewriteFailed": "No se pudo completar la reescritura por voz; se conservó el texto seleccionado."
       },
       "remoteSwitchFailed": "Falló el cambio de configuración remota; no se aplicó",
       "switchFailed": "Falló el cambio de configuración; no se aplicó",
@@ -15748,7 +15840,29 @@
       "ahead_many": "{{count}} commits por delante de {{remote}}",
       "behind_many": "{{count}} commits por detrás de {{remote}}",
       "dirty_many": "{{count}} archivos sin commit",
-      "diverging_many": "{{ahead}} por delante, {{behind}} por detrás de {{remote}}"
+      "diverging_many": "{{ahead}} por delante, {{behind}} por detrás de {{remote}}",
+      "rebased_many": "Rebasado sobre {{count}} commits remotos",
+      "rebased_one": "Rebasado sobre {{count}} commit remoto",
+      "rebased_other": "Rebasado sobre {{count}} commits remotos",
+      "divergedCanRebase": "{{ahead}} por delante y {{behind}} por detrás de {{remote}}/{{remoteBranch}}, sin conflictos. Haz clic para rebasar los commits locales sobre {{remote}}/{{remoteBranch}}.",
+      "divergedConflictHint": "Divergió de {{remote}}/{{remoteBranch}} con conflictos ({{files}}). Haz clic para revisar o delegar al Agent.",
+      "divergedOpenDetails": "Revisar divergencia de rama y resolver con Agent",
+      "divergedRebaseNotice": "Divergió de {{remote}} ({{ahead}} por delante, {{behind}} por detrás). Sin conflictos previos.",
+      "divergedConflictNoticeFiles": "Divergió de {{remote}} con conflictos ({{files}}).",
+      "divergedDirtyNotice_many": "Divergió de {{remote}} con {{count}} cambios sin confirmar.",
+      "divergedDirtyNotice_one": "Divergió de {{remote}} con {{count}} cambio sin confirmar.",
+      "divergedDirtyNotice_other": "Divergió de {{remote}} con {{count}} cambios sin confirmar.",
+      "divergedConflictNotice": "Divergió de {{remote}} con posibles conflictos.",
+      "rebaseNow": "Sincronizar ahora",
+      "askAgentResolve": "Resolver con Agent",
+      "agentPromptFilled": "Instrucciones de sincronización listas en el cuadro de entrada.",
+      "agentPromptDivergedCounts": "Actualmente {{ahead}} por delante y {{behind}} por detrás",
+      "agentPromptConflictFiles": "Archivos con conflicto detectados: {{files}}",
+      "agentPromptDirty_many": "El árbol de trabajo tiene {{count}} archivos sin confirmar",
+      "agentPromptDirty_one": "El árbol de trabajo tiene {{count}} archivo sin confirmar",
+      "agentPromptDirty_other": "El árbol de trabajo tiene {{count}} archivos sin confirmar",
+      "agentPromptSyncOnly": "Sincroniza de forma segura la rama local {{branch}} con {{remoteRef}}.{{details}}\nRevisa git status y el historial primero, integra los cambios remotos mediante rebase o merge y resuelve los conflictos manteniendo la intención local. No uses git reset --hard ni descartes cambios sin confirmar. Resume el resultado y ejecuta las comprobaciones pertinentes.",
+      "agentPromptSyncAndPush": "Sincroniza de forma segura la rama local {{branch}} con {{remoteRef}} y haz push.{{details}}\nRevisa git status y el historial primero, integra los cambios remotos mediante rebase o merge y resuelve los conflictos manteniendo la intención local. No uses git reset --hard ni descartes cambios sin confirmar. Verifica las comprobaciones antes de hacer push."
     },
     "pluginUi": {
       "title": "El complemento «{{name}}» agregó páginas interactivas. Revísalas para habilitarlas.",
@@ -15851,6 +15965,106 @@
       "engineMissing": "El complemento que proporciona este motor está desactivado o desinstalado.",
       "worktreeUnsupported": "Los motores de complementos aún no pueden iniciar tareas en un worktree. Desactiva worktree para enviar.",
       "modelChangeFailed": "No se pudo cambiar el modelo"
+    },
+    "workspaceCapsule": {
+      "popoverTitle": "Espacio de tarea",
+      "checkUpdates": "Comprobar",
+      "checkingUpdates": "Comprobando…",
+      "checkUpdatesAria": "Comprobar estado remoto más reciente",
+      "openGuideAria": "¿Nuevo en ramas y worktree? Guía rápida",
+      "back": "Volver",
+      "worktreeTitle": "Ejecutar en copia aislada",
+      "worktreeOnDesc": "Crea una copia separada sin alterar los archivos de tu carpeta actual",
+      "worktreeOffDesc": "Edita la carpeta actual directamente; cambiar de rama afecta los archivos locales",
+      "worktreeCompareToggle": "¿Cuál es la diferencia?",
+      "compareDirectTitle": "Desactivado · Directo",
+      "compareIsolatedTitle": "Activado · Aislado",
+      "badgeCurrent": "Actual",
+      "badgeOff": "No",
+      "badgeRecommended": "Recomendado",
+      "compareMainDir": "Principal",
+      "compareDirectWrite": "Directo",
+      "compareDirectNote": "Rápido para una tarea, pero tareas en paralelo pueden pisarse",
+      "compareUntouched": "Intacto",
+      "compareTaskCopy": "Copia",
+      "compareIsolatedRun": "Aislado",
+      "remoteLatestReady": "Usando la última versión remota; no requiere sincronizar",
+      "syncedStatus": "Sincronizado con el remoto",
+      "aheadOnlyStatus": "{{count}} commit(s) local(es) por delante",
+      "behindTitle": "{{count}} cambio(s) nuevo(s) en el remoto",
+      "behindDesc": "Actualiza en local sin sobrescribir y sin gastar cuota de IA",
+      "syncNow": "Sincronizar",
+      "divergedCleanTitle": "Hay cambios nuevos en local y en remoto",
+      "divergedCleanDesc": "Sin conflictos detectados — sincronización segura en un clic sin gastar IA",
+      "divergedConflictTitle": "Local y remoto editaron las mismas líneas",
+      "divergedConflictDesc": "{{count}} archivo(s) con cambios superpuestos — deja que el Agent fusione sin perder nada",
+      "divergedDirtyTitle": "{{count}} cambio(s) local(es) sin guardar en commit",
+      "divergedDirtyDesc": "Para proteger tus ediciones, el Agent puede ayudarte a sincronizar con seguridad",
+      "divergedGenericDesc": "El historial divergió — deja que el Agent fusione de forma segura",
+      "techDetails": "Detalles técnicos",
+      "filesAndDetails": "Archivos y detalles",
+      "techRefsLabel": "Local / Remoto",
+      "techCommitsLabel": "Commits",
+      "techWorkingTreeLabel": "Árbol de trabajo",
+      "techFfSafety": "Usa fast-forward estricto (git merge --ff-only): se detiene ante cambios inesperados.",
+      "techRebaseSafety": "merge-tree de solo lectura sin conflictos; git rebase con reversión automática ante errores.",
+      "techAgentSafety": "Incluye reglas estrictas para el Agent: prohíbe git reset --hard y conserva tus cambios.",
+      "tooltipBehind": "{{count}} cambio(s) nuevo(s) en remoto — clic para sincronizar",
+      "tooltipConflict": "Cambios locales y remotos superpuestos — clic para ver opciones",
+      "branchSwitchReadOnly": "En la rama {{branch}}; activa la copia aislada arriba para elegir otra rama",
+      "remoteGroupHint": "Último código fusionado",
+      "localGroupHint": "Ramas en este equipo",
+      "remoteOptionSub": "Empezar desde lo último fusionado del equipo",
+      "footerGuideCta": "¿Nuevo en ramas y worktree? Guía en 30 s",
+      "kbdSwitchHint": "↑↓ mover",
+      "guideTitle": "Guía rápida de ramas y worktree",
+      "guideBranchTitle": "1. ¿Qué es una rama?",
+      "guideBranchDesc": "Un borrador paralelo de tu proyecto para desarrollar o experimentar sin alterar la versión principal.",
+      "guideGraphMain": "main",
+      "guideGraphTask": "borrador",
+      "guideWorktreeTitle": "2. ¿Qué es una copia aislada?",
+      "guideWorktreeDesc": "Cindy prepara una carpeta independiente para esta tarea, evitando colisiones cuando varios Agents trabajan a la vez.",
+      "guideChoiceTitle": "3. ¿Último en la nube o rama local?",
+      "guideRemoteLabel": "Último en la nube:",
+      "guideRemoteDesc": "Ideal para iniciar una tarea nueva desde el código ya fusionado.",
+      "guideLocalLabel": "Rama local:",
+      "guideLocalDesc": "Ideal para continuar cambios que aún solo están en tu equipo.",
+      "guideProHint": "Si dominas Git, abre «Detalles técnicos» para ver refs y comandos en cualquier momento."
+    },
+    "workspaceCleanup": {
+      "entrySuggestTitle": "Pedir a la IA ordenar ramas locales y worktrees",
+      "entryUrgentTitle": "Se recomienda ordenar ramas y worktrees",
+      "entrySub": "{{cindyBranches}} ramas históricas y {{idleWorktrees}} copias inactivas acumuladas",
+      "entrySubWithFailed": "{{cindyBranches}} ramas históricas, {{idleWorktrees}} inactivas y {{failed}} pendientes",
+      "entryCountBadge": "{{branches}} ramas · {{worktrees}} libres",
+      "capsuleRedDotTooltip": "{{branches}} ramas locales y {{worktrees}} copias inactivas — clic para ordenar con IA",
+      "paneTitle": "Ordenar ramas y worktrees con IA",
+      "safeBannerTitle": "Auditoría de solo lectura primero — nada se borra sin tu confirmación",
+      "safeBannerDesc": "La IA clasificará en Seguro limpiar, Requiere revisión y Protegido antes de tocar nada.",
+      "statBranchesLabel": "Ramas locales",
+      "statWorktreesLabel": "Copias aisladas (worktree)",
+      "statCount": "{{count}}",
+      "statCindyBranches": "incluye {{count}} ramas cindy/*",
+      "statActiveProtected": "{{count}} tarea(s) activa(s) protegidas",
+      "statIdleOnly": "{{count}} inactivas para revisar",
+      "statIdleAndFailed": "{{idle}} inactivas · {{failed}} pendientes",
+      "scopesTitle": "Revisar especialmente (multiselección)",
+      "scopeMerged": "Ramas antiguas fusionadas",
+      "scopeWorktrees": "Copias worktree inactivas",
+      "scopeUnpushed": "Avisar cambios sin subir",
+      "mainRepoNote": "Se ejecuta en la carpeta principal (sin crear otro worktree) y verifica PRs mediante el complemento de GitHub.",
+      "startAuditAction": "Rellenar entrada e iniciar auditoría con IA",
+      "snooze7Days": "Ahora no · ocultar punto rojo 7 días",
+      "snoozedToast": "Punto rojo silenciado 7 días; puedes ordenar cuando quieras desde el menú de ramas",
+      "agentPromptFilled": "Instrucción de auditoría de solo lectura lista en el directorio principal. Pulsa Enter para empezar.",
+      "promptIntro": "Realiza primero una auditoría ESTRICTAMENTE DE SOLO LECTURA de las ramas locales y git worktrees de este repositorio (la fase 1 NO debe borrar, hacer reset, checkout, fetch/prune ni diff/cherry masivo):",
+      "promptFocusMerged": "ramas locales y cindy/* fusionadas (incluidos Squash Merge: usa GraphQL en lote del complemento de GitHub y verifica que el HEAD SHA local coincida o sea ancestro del headRefOid del PR fusionado, nunca solo por nombre)",
+      "promptFocusWorktrees": "worktrees inactivos (estima espacio solo en candidatos limpiables sin du recursivo en el repo principal; en macOS APFS distingue bloques compartidos de node_modules del espacio real de compilación)",
+      "promptFocusUnpushed": "ramas o worktrees con commits sin subir, cambios sin commitear o git stash",
+      "promptStepFocus": "1. Alcance: {{focus}}.",
+      "promptStepProtect": "2. Triple protección obligatoria: (a) tareas activas no archivadas de Cindy (incluidas tareas limpias ahead=0 recién creadas, diferenciando Workers antiguos finalizados); (b) directorios usados por procesos activos (lsof) y .worktree-keep; (c) PRs OPEN/DRAFT o cambios sin fusionar/commitear.",
+      "promptStepOutput": "3. Informa en tres bloques («Seguro limpiar», «Requiere confirmación», «Protegido activo»); agrupa por prefijo/carpeta destacando los mayores consumos de espacio si hay muchos elementos, ofrece opciones numeradas y espera mi confirmación.",
+      "promptProtectedList": "4. Cindy detectó {{count}} worktrees de tareas activas sin archivar que DEBEN mantenerse en «Protegido activo»: {{paths}}."
     }
   },
   "onboarding": {
@@ -18286,7 +18500,51 @@
         "offlineCompleteRejectedNewActivity": "«{{title}}» volvió a Pendientes: hubo nueva actividad en su ordenador mientras estaba sin conexión.",
         "offlineCompleteRejectedRunning": "«{{title}}» volvió a Pendientes: la tarea está en ejecución.",
         "offlineCompleteRejectedAttached": "«{{title}}» volvió a Pendientes: la tarea está conectada o compartida y no se archivó automáticamente.",
-        "offlineCompleteRejectedPreflight": "«{{title}}» volvió a Pendientes: no se pudo verificar el estado del worktree antes de archivar."
+        "offlineCompleteRejectedPreflight": "«{{title}}» volvió a Pendientes: no se pudo verificar el estado del worktree antes de archivar.",
+        "health": {
+          "regionLabel": "Alertas de estado del entorno",
+          "dismiss": "Descartar alerta",
+          "summaryTitle_many": "{{count}} problemas del entorno requieren atención",
+          "summaryTitle_one": "{{count}} problema del entorno requiere atención",
+          "summaryTitle_other": "{{count}} problemas del entorno requieren atención",
+          "providerAuthSingleTitle": "Sesión de {{name}} caducada",
+          "providerAuthSingleDesc": "Vuelve a conectar este proveedor para seguir usando sus modelos.",
+          "providerAuthMultiTitle_many": "{{count}} proveedores de modelos requieren reconexión",
+          "providerAuthMultiTitle_one": "{{count}} proveedor de modelos requiere reconexión",
+          "providerAuthMultiTitle_other": "{{count}} proveedores de modelos requieren reconexión",
+          "providerAuthMultiDesc": "Afectados: {{names}}. Reconecta para continuar.",
+          "githubMissingTitle": "GitHub no conectado",
+          "githubNotLoggedInTitle": "Conexión de GitHub caducada",
+          "gitlabMissingTitle": "GitLab no conectado",
+          "gitlabNotLoggedInTitle": "Conexión de GitLab caducada",
+          "prAffectedDesc_many": "Afecta la actualización de estado de {{count}} PR.",
+          "prAffectedDesc_one": "Afecta la actualización de estado de {{count}} PR.",
+          "prAffectedDesc_other": "Afecta la actualización de estado de {{count}} PR.",
+          "auxiliaryTitle": "Cadena de modelos auxiliares degradada",
+          "auxiliarySingleDesc": "{{model}} no está disponible; títulos y resúmenes pueden degradarse.",
+          "auxiliaryMultiDesc_many": "{{count}} rutas de modelos auxiliares degradadas.",
+          "auxiliaryMultiDesc_one": "{{count}} ruta de modelo auxiliar degradada.",
+          "auxiliaryMultiDesc_other": "{{count}} rutas de modelos auxiliares degradadas.",
+          "auxiliaryUnavailableDesc": "No hay modelos auxiliares disponibles; títulos y resúmenes en pausa.",
+          "automationSingleTitle": "Automatización «{{name}}» bloqueada",
+          "automationMissingPluginDesc": "El plugin requerido «{{plugin}}» falta o está desactivado.",
+          "automationPrecheckDesc": "La comprobación previa bloqueó la última ejecución.",
+          "automationFailedDesc": "La última ejecución falló. Revisa la configuración y los registros.",
+          "automationMultiTitle_many": "{{count}} automatizaciones requieren atención",
+          "automationMultiTitle_one": "{{count}} automatización requiere atención",
+          "automationMultiTitle_other": "{{count}} automatizaciones requieren atención",
+          "automationMultiDesc": "Afectadas: {{names}}.",
+          "actions": {
+            "reconnect": "Reconectar",
+            "openProviders": "Abrir proveedores",
+            "configureGitlab": "Configurar GitLab",
+            "openSettings": "Abrir ajustes",
+            "inspectAutomation": "Revisar y reparar",
+            "viewAutomations": "Ver automatizaciones",
+            "connectGithub": "Conectar GitHub",
+            "openGithubPlugin": "Abrir complemento de GitHub"
+          }
+        }
       },
       "taskListMode": {
         "heading": "Modo de tareas",
@@ -18952,6 +19210,7 @@
       "subtitlePaused": "En pausa",
       "subtitleWaitingForResources": "Esperando un espacio disponible ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "En cola hasta que la sesión esté inactiva",
+      "subtitleDeferredForSession": "{{reason}} · aplazado {{count}} veces",
       "subtitleManual": "Manual",
       "subtitleOnce": "Una vez",
       "tagOnce": "Una vez",
@@ -18970,6 +19229,7 @@
     },
     "detail": {
       "manualTrigger": "Activación manual",
+      "deferredBanner": "{{reason}} · aplazado {{count}} veces desde {{since}}",
       "recentRuns": "EJECUCIONES RECIENTES · {{count}}",
       "noRunsHeading": "Aún no hay ejecuciones",
       "noRunsHint": "Selecciona Ejecutar ahora o espera a la próxima ejecución programada.",
@@ -19738,6 +19998,12 @@
       "cleanMergedConfirmAction": "Eliminar",
       "cleanMergedDone": "Se eliminaron {{count}} automatizaciones de PR finalizadas",
       "checkFailed": "No se pudo comprobar el estado de las PR en este momento"
+    },
+    "deferral": {
+      "busy": "Esperando a que la tarea de destino quede libre",
+      "usage": "Esperando que se restablezca el límite de uso",
+      "permission": "Esperando el estado de permisos",
+      "other": "Ejecución aplazada"
     }
   },
   "issueTracker": {
@@ -20964,6 +21230,8 @@
     },
     "errors": {
       "piStartupCloudFile": "Un archivo de instrucciones que solo está en la nube podría estar retrasando el inicio de Pi: {{path}}. Descarga este archivo en Finder, espera a que esté disponible localmente y vuelve a intentarlo. El tiempo de espera agotado podría tener otra causa.",
+      "remoteEngineMissing": "El ordenador remoto no tiene ningún motor disponible. Instala un motor en ese ordenador, reinicia Cindy y vuelve a intentarlo.",
+      "remoteCapabilityUnavailable": "El servidor o computadora actual aún no admite esta acción.",
       "hostProfileInUseByDesktop": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos. Ciérrala y vuelve a enviar.",
       "hostProfileInUseByDesktopAtStart": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos, así que el servicio en segundo plano de Cindy no se ha iniciado. Ciérrala, reinicia el servicio en segundo plano de Cindy y vuelve a abrir esta ventana de Cindy.",
       "hostProfileInUseByDesktopRetry": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos, así que ahora no se puede cambiar. Ciérrala y vuelve a intentarlo.",
@@ -23708,10 +23976,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "Esta conexión dejará de recibir tareas nuevas del grupo. Las tareas en curso continuarán en esta conexión.",
-    "mergeDescription": "Las tareas nuevas que se inicien en {{target}} podrán usar ambos proveedores. Las sesiones iniciadas, las claves y las tareas existentes se mantienen. Cindy probará la clave API de {{apiKey}} antes de vincular los proveedores.",
+    "mergeDescription": "Las tareas nuevas iniciadas en {{target}} se asignarán a los miembros disponibles. Las sesiones iniciadas, las claves y las tareas existentes se mantienen. Cindy probará la clave API de {{apiKey}}. Un saldo insuficiente o un límite de facturación no impedirán añadirla, pero no recibirá asignaciones automáticas hasta que vuelva a estar disponible.",
     "modelUnavailable": "Esta conexión no puede usar el modelo elegido para la prueba. Puedes probar de nuevo con otro candidato.",
     "noTestModel": "No hay ningún modelo configurado disponible para la prueba. Comprueba qué modelos puede usar tu proyecto de OpenAI y actualiza la lista de modelos de esta conexión.",
-    "billingPaused": "Asignación en pausa por saldo insuficiente o un límite de facturación.",
+    "billingPaused": "Asignación automática en pausa por saldo insuficiente o un límite de facturación.",
     "title": "Grupo de cuentas",
     "testPassed": "Prueba superada",
     "refresh": "Actualizar cuota"
@@ -23955,7 +24223,15 @@
       "exceptionImage": "El mensaje tiene imágenes, así que solo se consideraron las fuentes que pueden verlas",
       "exceptionImageFallback": "El mensaje tiene imágenes, pero ninguna fuente puede verlas, así que se eligió como siempre",
       "exceptionHours": "En este horario usa «{{name}}» en su lugar",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Elegida primero según tu uso habitual",
+      "usageHabitQuota": "Elegida primero según tu uso habitual ({{left}}% de cuota restante)",
+      "autoBalance": "Toma carga mientras otras fuentes están ajustadas u ocupadas",
+      "autoBalanceQuota": "Equilibrada por margen de cuota y carga ({{left}}% de cuota restante)",
+      "lessBusy": "Otras fuentes están ejecutando tareas, así que esta libre va primero",
+      "paygFallback": "Suscripciones y fuentes compartidas no disponibles; se usa pago por uso",
+      "paygReserve": "Reserva de pago por uso; solo se usa si las demás fuentes no están disponibles",
+      "standbyQuotaNeutral": "Le queda un {{left}}% de cuota y se restablece el {{reset}}; no elegida esta vez"
     },
     "settings": {
       "autoSwitch": {
@@ -23990,6 +24266,8 @@
       "sourcesFull": "Una ruta admite hasta {{count}} fuentes.",
       "addSource": "Añadir ruta de modelos",
       "chooseModel": "Elegir un modelo",
+      "editSource": "Editar origen",
+      "duplicateSource": "Esta ruta ya contiene esta combinación de origen, modelo y motor.",
       "notConnected": "Sin conexión",
       "moveUp": "Subir",
       "moveDown": "Bajar",

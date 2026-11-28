@@ -80,6 +80,7 @@ type CustomMarketCommitHooks = {
   expectedInstalledApproval?: string;
   beforeCommit?: () => void | Promise<void>;
   beforePackagePlacement?: () => void;
+  beforeRuntimeStopInLock?: () => void;
   onPackagePlaced?: () => void;
   withCommitLock?: <T>(fn: () => Promise<T>) => Promise<T>;
   afterCommit?: (
@@ -261,6 +262,9 @@ export async function commitCustomMarketPlugin(
       ...(input.beforePackagePlacement
         ? { beforeCommitInLock: input.beforePackagePlacement }
         : {}),
+      ...(input.beforeRuntimeStopInLock
+        ? { beforeRuntimeStopInLock: input.beforeRuntimeStopInLock }
+        : {}),
       ...(input.onPackagePlaced
         ? { onPackagePlacedInLock: input.onPackagePlaced }
         : {}),
@@ -301,6 +305,7 @@ export async function installCustomMarketPlugin(input: {
   beforeCommit?: () => void | Promise<void>;
   /** 真实包完成检查后、即将改动运行时前的同步事务钩。 */
   beforePackagePlacement?: () => void;
+  beforeRuntimeStopInLock?: () => void;
   /** 新包完成原子换位后的同步事务钩。 */
   onPackagePlaced?: () => void;
   /**
@@ -346,6 +351,7 @@ export async function installCustomMarketPlugin(input: {
       expectedInstalledApproval: input.expectedInstalledApproval,
       beforeCommit: input.beforeCommit,
       beforePackagePlacement: input.beforePackagePlacement,
+      beforeRuntimeStopInLock: input.beforeRuntimeStopInLock,
       onPackagePlaced: input.onPackagePlaced,
       withCommitLock: input.withCommitLock,
       afterCommit: input.afterCommit,

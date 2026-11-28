@@ -26,7 +26,7 @@ import { admitSharedTaskFsWatchTopics } from './sharedTaskFileAccess.js';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
-import { buildMobileDictionarySnapshot } from '../voice-input/dictionarySyncDriver.js';
+import { buildMobileDictionarySnapshot, mutateMobileDictionary } from '../voice-input/dictionarySyncDriver.js';
 import {
   setBroadcastTapListener,
 } from './broadcast-tap';
@@ -166,6 +166,7 @@ export const {
   setTelegramRemoteOnline: (...args) => setTelegramRemoteOnline(...args),
   adviseAndRecordVoiceInputDictionaryLearning: (...args) => adviseAndRecordVoiceInputDictionaryLearning(...args),
   buildMobileDictionarySnapshot: (...args) => buildMobileDictionarySnapshot(...args),
+  mutateMobileDictionary: (...args) => mutateMobileDictionary(...args),
   setBroadcastTapListener: (...args) => setBroadcastTapListener(...args),
   broadcastTap,
   RECOVERY_CHECKPOINT_MARKER,

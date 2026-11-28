@@ -913,6 +913,9 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
           },
           runtimeSelectionRequiresModelWindowConfirmation: result =>
             result.contextWindowConfirmationRequired !== undefined || result.contextTokensForConfirmation !== undefined,
+          // The Host never runs remote-agent sessions; explicit device IDs are never this computer.
+          isSelfDeviceId: () => false,
+          onExplicitRouteSelected: sessionId => deps.inputQueue.cancelUsageLimitWait(sessionId),
         }));
         const result = await write({ targetSessionId: id, expectedGeneration: generation,
           beforeMutation: async () => check(),
@@ -1047,7 +1050,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
           {
             readSession: (sid) => modelGroups.readBeforeSendSessionRow(sid),
             evaluateTurnRouting: (sid, current, turn) => modelGroups.evaluateTurnRouting(sid, current, turn),
-            applySameEngineRoute: ({ sessionId: sid, model, providerId, effort, fastMode }) =>
+            applySameEngineRoute: ({ sessionId: sid, model, providerId, effort, fastMode, cause }) =>
               applySessionRuntimeSelection(
                 sid,
                 model,
@@ -1061,9 +1064,10 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
                   preserveModelGroupBinding: true,
                   effortExplicit: Boolean(effort),
                   fastExplicit: Boolean(fastMode),
+                  routeChangeAttribution: { by: 'model-group', reason: cause ?? 'unavailable' },
                 },
               ),
-            performCrossSwitch: async ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap }) => {
+            performCrossSwitch: async ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap, cause }) => {
               if (targetAgentKind === 'acp') return { switched: false };
               return performSessionAgentSwitch(agentSwitchDeps, {
                 sessionId: sid,
@@ -1077,6 +1081,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
                 skipBootstrap,
                 configStaged: true,
                 preserveModelGroupBinding: true,
+                routeChangeAttribution: { by: 'model-group', reason: cause ?? 'unavailable' },
               });
             },
             writeSwitchNote: async (sid, note, clientId) => {

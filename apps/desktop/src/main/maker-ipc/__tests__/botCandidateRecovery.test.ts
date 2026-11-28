@@ -68,9 +68,11 @@ describe('Bot candidate recovery', () => {
     const input = { ...h.item, files: [{ category: 'image', ext: '.png' }] };
     expect(h.onResumableTurnError('s', { message: '[PI_IMAGE_INPUT_UNSUPPORTED] Image input is not enabled' }, input)).toBeNull();
     expect(h.fallback).not.toHaveBeenCalled();
-    expect(h.onResumableTurnError('s', { errorStatus: 503, message: 'HTTP 503 Service Unavailable' }, input)).not.toBeNull();
+    expect(h.onResumableTurnError('s', {
+      errorStatus: 503, reason: 'upstream-overload', message: 'HTTP 503 Service Unavailable',
+    }, input)).not.toBeNull();
     await h.run();
-    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, false, expect.any(Function), { hasImages: true });
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, false, expect.any(Function), { hasImages: true }, 'upstream-overload');
     expect(h.resume).toHaveBeenCalledWith('s', 1);
   });
 
@@ -166,7 +168,7 @@ describe('Bot candidate recovery', () => {
     expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(true);
     expect(h.onResumableTurnError('s', signals, h.item)).not.toBeNull();
     await h.run();
-    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function), undefined, undefined);
     expect(h.resume).toHaveBeenCalledTimes(outcome === 'switched' ? 1 : 0);
     if (outcome !== 'switched') expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
   });
@@ -210,7 +212,7 @@ describe('Bot candidate recovery', () => {
     expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(true);
     expect(h.onResumableTurnError('s', signals, h.item)).not.toBeNull();
     await h.run();
-    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function), undefined, undefined);
     expect(h.resume).toHaveBeenCalledOnce();
   });
 
@@ -228,7 +230,7 @@ describe('Bot candidate recovery', () => {
     expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(true);
     expect(h.onResumableTurnError('s', signals, h.item)).not.toBeNull();
     await h.run();
-    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function), undefined, undefined);
     expect(h.resume).toHaveBeenCalledTimes(outcome === 'switched' ? 1 : 0);
     if (outcome === 'exhausted') expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
   });
@@ -295,7 +297,7 @@ describe('Bot candidate recovery', () => {
     expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(true);
     expect(h.onResumableTurnError('s', signals, h.item)).not.toBeNull();
     await h.run();
-    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function), undefined, undefined);
     expect(h.resume).toHaveBeenCalledTimes(outcome === 'switched' ? 1 : 0);
     if (outcome !== 'switched') expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
   });
@@ -311,7 +313,7 @@ describe('Bot candidate recovery', () => {
     expect(bot.onResumableTurnError('s', drop, bot.item)).not.toBeNull();
     expect(bot.resume).not.toHaveBeenCalled();
     await bot.run();
-    expect(bot.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(bot.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function), undefined, 'pi-gateway-drop');
     expect(bot.resume).toHaveBeenCalledWith('s', 1);
   });
 
@@ -329,7 +331,7 @@ describe('Bot candidate recovery', () => {
     h.fallback.mockResolvedValue({ session: null, outcome: 'unchanged' });
     h.onResumableTurnError('s', { message: 'Connection error.' }, h.item);
     await h.run();
-    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, false, expect.any(Function));
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, false, expect.any(Function), undefined, undefined);
     expect(h.resume).toHaveBeenCalledOnce();
   });
 
@@ -377,7 +379,7 @@ describe('Bot candidate recovery', () => {
     // The dead remote Session closes right after this error; its scheduled resume must outlive that close.
     expect(h.rebuildLeases.get(h.liveSession)).toBe(1);
     await h.run();
-    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function), undefined, 'remote_agent_closed');
     expect(h.resume).toHaveBeenCalledOnce();
   });
 
@@ -397,7 +399,7 @@ describe('Bot candidate recovery', () => {
     h.groupMayHandle.mockReturnValue(true);
     expect(h.onResumableTurnError('s', remoteClosed, h.item)).not.toBeNull();
     await h.run();
-    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function), undefined, 'remote_agent_closed');
     expect(h.resume).toHaveBeenCalledOnce();
   });
 
@@ -407,7 +409,7 @@ describe('Bot candidate recovery', () => {
     h.fallback.mockResolvedValue({ session: null, outcome: 'unchanged' });
     expect(h.onResumableTurnError('s', overload, h.item)).not.toBeNull();
     await h.run();
-    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function), undefined, 'upstream-overload');
     expect(h.resume).toHaveBeenCalledOnce();
   });
 

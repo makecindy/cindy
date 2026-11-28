@@ -23,10 +23,19 @@ vi.mock('../../logger.js', () => ({
 
 const syncEnabled = { value: true };
 const mergeRemoteDictionaryState = vi.fn<(remote: unknown) => boolean>(() => true);
+const importManualDictionaryEntries = vi.fn();
+const editDictionaryEntry = vi.fn();
+const deleteDictionaryEntries = vi.fn();
 vi.mock('../VoiceInputDataStore.js', () => ({
   voiceInputDataStore: {
-    getSettings: () => ({ dictionarySyncEnabled: syncEnabled.value }),
+    getSettings: () => ({
+      dictionarySyncEnabled: syncEnabled.value,
+      dictionaryEntries: materialized.entries,
+    }),
     mergeRemoteDictionaryState: (remote: unknown) => mergeRemoteDictionaryState(remote),
+    importManualDictionaryEntries: (items: unknown) => importManualDictionaryEntries(items),
+    editDictionaryEntry: (id: string, text: string, aliases: string[]) => editDictionaryEntry(id, text, aliases),
+    deleteDictionaryEntries: (ids: string[]) => deleteDictionaryEntries(ids),
   },
 }));
 
@@ -65,6 +74,7 @@ const {
   isDesktopPlatform,
   notifyLocalDictionaryChanged,
   buildMobileDictionarySnapshot,
+  mutateMobileDictionary,
   readDictionaryProjectionForMobile,
   shouldExchangeDictionaryWith,
   stopVoiceDictionarySync,
@@ -81,6 +91,9 @@ beforeEach(() => {
   sendMobileSnapshot.mockClear();
   mergeRemoteDictionaryState.mockClear();
   mergeRemoteDictionaryState.mockReturnValue(true);
+  importManualDictionaryEntries.mockClear();
+  editDictionaryEntry.mockClear();
+  deleteDictionaryEntries.mockClear();
   onlineDesktops.length = 0;
   onlineMobiles.length = 0;
   stateOverride.value = null;
@@ -353,5 +366,36 @@ describe('手机只读投影', () => {
     if (first.ok && second.ok) {
       expect(second.emittedAt).toBeGreaterThan(first.emittedAt ?? 0);
     }
+  });
+
+  it('手机端词典增/改/删请求校验输入后转发到桌面 CRDT 并回传最新快照', () => {
+    const added = mutateMobileDictionary({
+      action: 'add',
+      text: '  SherpaONNX  ',
+      aliases: ['夏帕', 'SherpaONNX', '夏帕', ''],
+    });
+    expect(added.ok).toBe(true);
+    expect(importManualDictionaryEntries).toHaveBeenCalledWith([
+      { text: 'SherpaONNX', aliases: ['夏帕'] },
+    ]);
+
+    const edited = mutateMobileDictionary({
+      action: 'edit',
+      originalText: 'Cindy',
+      text: 'Cindy AI',
+      aliases: ['sindy', '辛迪'],
+    });
+    expect(edited.ok).toBe(true);
+    expect(editDictionaryEntry).toHaveBeenCalledWith('dict-sync-cindy', 'Cindy AI', ['sindy', '辛迪']);
+
+    const deleted = mutateMobileDictionary({
+      action: 'delete',
+      text: 'Cindy',
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleteDictionaryEntries).toHaveBeenCalledWith(['dict-sync-cindy']);
+
+    expect(mutateMobileDictionary({ action: 'add', text: '   ' })).toMatchObject({ ok: false });
+    expect(mutateMobileDictionary({ action: 'edit', originalText: 'Missing', text: 'New', aliases: [] })).toMatchObject({ ok: false });
   });
 });
