@@ -45,6 +45,7 @@ export interface AppShortcutStoreOptions {
   getFilePath: () => string;
   /** process.platform 注入, 便于单测按平台断言。 */
   platform: string;
+  osRelease?: string;
   /** overrides 变化时通知 (广播到 renderer + main 内部菜单重建)。 */
   onChanged?: (overrides: AppShortcutOverrides) => void;
 }
@@ -121,15 +122,15 @@ export class AppShortcutStore {
 
   /** main 消费端 (菜单 accelerator / before-input-event) 实时取某 id 的生效组合。 */
   getEffectiveCombos(id: AppShortcutId): AppShortcutCombo[] {
-    if (!isAppShortcutAvailableOnPlatform(id, this.options.platform)) return [];
+    if (!isAppShortcutAvailableOnPlatform(id, this.options.platform, this.options.osRelease)) return [];
     const override = this.load()[id];
     if (override === null) return []; // 用户删除了绑定
     if (override) return [override];
     return getAppShortcutDefinition(id).getDefaultCombos(this.options.platform);
   }
 
-  getEffectiveMap(): Map<AppShortcutId, AppShortcutCombo[]> {
-    return getEffectiveAppShortcuts(this.load(), this.options.platform);
+  getEffectiveMap(yieldToCombos: ReadonlyArray<AppShortcutCombo> = []): Map<AppShortcutId, AppShortcutCombo[]> {
+    return getEffectiveAppShortcuts(this.load(), this.options.platform, yieldToCombos, this.options.osRelease);
   }
 
   /**
@@ -147,7 +148,7 @@ export class AppShortcutStore {
     if (!isAppShortcutId(id)) return 'unknown-id';
     const def = getAppShortcutDefinition(id);
     if (!def.rebindable) return 'not-rebindable';
-    if (!isAppShortcutAvailableOnPlatform(id, this.options.platform)) return 'platform-unavailable';
+    if (!isAppShortcutAvailableOnPlatform(id, this.options.platform, this.options.osRelease)) return 'platform-unavailable';
     if (combo === null) {
       return null;
     }
@@ -171,7 +172,7 @@ export class AppShortcutStore {
     }
     // 跨 id 冲突兜底 (renderer 已前置校验, 这里防多窗口并发 / 直调 IPC):
     // 与重叠 scope 域内其它 id 的生效组合撞键则拒绝。
-    if (findAppShortcutConflict(id, normalized, current, this.options.platform)) {
+    if (findAppShortcutConflict(id, normalized, current, this.options.platform, this.options.osRelease)) {
       return 'conflict';
     }
     return null;
@@ -187,11 +188,17 @@ export class AppShortcutStore {
     this.replaceOverrides(next);
   }
 
-  /** 恢复全部默认 = 清空 overrides。 */
+  /** 恢复当前可用键的默认；暂不可用的覆盖保留，升级后继续生效。 */
   resetAll(): void {
     const current = this.load();
-    if (Object.keys(current).length === 0) return;
-    this.replaceOverrides({});
+    const next = { ...current };
+    let changed = false;
+    for (const id of Object.keys(current)) {
+      if (!isAppShortcutId(id) || !isAppShortcutAvailableOnPlatform(id, this.options.platform, this.options.osRelease)) continue;
+      delete next[id];
+      changed = true;
+    }
+    if (changed) this.replaceOverrides(next);
   }
 
   private load(): AppShortcutOverrides {

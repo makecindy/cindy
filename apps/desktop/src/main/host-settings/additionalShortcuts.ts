@@ -1,10 +1,12 @@
 import { getAppShortcutStore } from '../app-shortcuts/index.js';
-import { APP_SHORTCUT_IDS, getAppShortcutDefinition, isAppShortcutAvailableOnPlatform, type AppShortcutOverrides } from '../../shared/appShortcuts.js';
+import { getAppShortcutDefinition, isAppShortcutAvailableOnPlatform, type AppShortcutOverrides } from '../../shared/appShortcuts.js';
+import { SETTINGS_READ_SHORTCUT_IDS } from '../../shared/settingsReadCatalog.js';
 import { additionalSettingsSchemas, type SettingsEditableValue } from '../../shared/settingsEditableCatalog.js';
 import type { OverrideSettingsCommitOptions } from '../maker-host/override-settings-file.js';
 import { HostSettingsError } from './operations.js';
 
-const ids = () => APP_SHORTCUT_IDS.filter(id => {
+// 云设置沿用已发布的封闭目录；本机新增键既不下发，也不进入恢复默认的 editableIds。
+const ids = () => SETTINGS_READ_SHORTCUT_IDS.filter(id => {
   const definition = getAppShortcutDefinition(id);
   return definition.rebindable && !definition.hiddenInSettings && isAppShortcutAvailableOnPlatform(id, process.platform);
 });

@@ -16,6 +16,10 @@ vi.mock('../../logger.js', () => ({
 
 import { AppShortcutStore } from '../AppShortcutStore';
 import type { AppShortcutCombo } from '../../../shared/appShortcuts';
+import { nativeShortcutSettings } from '../../host-settings/additionalShortcuts';
+
+let nativeStore: AppShortcutStore;
+vi.mock('../index.js', () => ({ getAppShortcutStore: () => nativeStore }));
 
 let dir: string;
 
@@ -47,6 +51,35 @@ afterEach(() => {
 });
 
 describe('AppShortcutStore', () => {
+  // 本需求：主动离开沿用 override 持久化与恢复语义，升级不能抢占已有改绑。
+  it('persists a manual-away binding and lets existing user bindings take its default', () => {
+    const store = makeStore();
+    expect(store.setOverride('toggle-sidebar', combo('KeyL', { ctrl: true, shift: true }))).toBeNull();
+    expect(store.getEffectiveMap().get('away-guard')).toEqual([]);
+    const custom = combo('KeyK', { ctrl: true, shift: true });
+    expect(store.setOverride('away-guard', custom)).toBeNull();
+    expect(makeStore().getEffectiveMap().get('away-guard')).toEqual([custom]);
+    expect(store.setOverride('away-guard', null)).toBeNull();
+    expect(makeStore().getEffectiveMap().get('away-guard')).toEqual([]);
+    store.clearOverride('away-guard');
+    expect(store.getOverrides()).not.toHaveProperty('away-guard');
+    expect(makeStore('win32').getEffectiveMap().has('away-guard')).toBe(false);
+  });
+
+  // PR #10218：macOS 13 上没有执行入口，既不能占键，也不能丢掉升级后可复用的 override。
+  it('gates away shortcuts by system release without deleting saved overrides', () => {
+    const pathOptions = { getFilePath: filePath, platform: 'darwin' };
+    const current = new AppShortcutStore({ ...pathOptions, ...{ osRelease: '23.0.0' } });
+    const custom = combo('KeyK', { ctrl: true, shift: true });
+    expect(current.setOverride('away-guard', custom)).toBeNull();
+    const older = new AppShortcutStore({ ...pathOptions, ...{ osRelease: '22.6.0' } });
+    expect(older.getEffectiveMap().has('away-guard')).toBe(false);
+    expect(older.getEffectiveCombos('away-guard')).toEqual([]);
+    expect(older.setOverride('away-guard', null)).toBe('platform-unavailable');
+    expect(older.getOverrides()['away-guard']).toEqual(custom);
+    expect(current.getEffectiveCombos('away-guard')).toEqual([custom]);
+  });
+
   it('Host edits share native conflict checks, preserve hidden overrides and reject a stale form', async () => {
     const store = makeStore('darwin');
     fs.writeFileSync(filePath(), JSON.stringify({ version: 1, overrides: { 'save-file': null }, future: true }));
@@ -59,6 +92,27 @@ describe('AppShortcutStore', () => {
     await expect(store.commitHost({}, ['toggle-sidebar'], { expectedRevision: before.revision })).rejects.toThrow();
     await store.commitHost({}, ['toggle-sidebar'], { expectedRevision: saved.revision });
     expect(JSON.parse(fs.readFileSync(filePath(), 'utf8'))).toEqual({ version: 1, overrides: { 'save-file': null }, future: true });
+  });
+
+  // main 的云设置合并回归：本机 away 覆盖不能破坏固定 wire 目录，也不能被远程恢复默认删掉。
+  it('keeps the local away binding outside Host choices and preserves it when Host resets entries', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      nativeStore = new AppShortcutStore({ getFilePath: filePath, platform: 'darwin', osRelease: '23.0.0' });
+      const custom = combo('KeyK', { ctrl: true, shift: true });
+      expect(nativeStore.setOverride('away-guard', custom)).toBeNull();
+      expect(nativeStore.setOverride('toggle-sidebar', combo('KeyJ', { meta: true }))).toBeNull();
+      const before = nativeShortcutSettings.read();
+      expect(before.status).toBe('ready');
+      if (before.status !== 'ready') throw new Error('fixture');
+      expect(before.value.entries.map(entry => entry.id)).toEqual(['toggle-sidebar']);
+      expect(before.choices.entries.map(choice => choice.value.id)).not.toContain('away-guard');
+      await nativeShortcutSettings.commit({ set: {}, clear: ['entries'] }, { expectedRevision: before.revision });
+      expect(makeStore().getOverrides()).toEqual({ 'away-guard': custom });
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
   });
 
   it('returns registry defaults when no overrides exist', () => {
@@ -176,6 +230,20 @@ describe('AppShortcutStore', () => {
     const onDisk = JSON.parse(fs.readFileSync(filePath(), 'utf-8'));
     expect(onDisk.overrides).toEqual({});
     expect(store.getEffectiveCombos('toggle-sidebar')[0]!.code).toBe('KeyB');
+  });
+
+  // PR #10218 review 4684948336：旧系统恢复默认只能删除可用键，升级后仍应看到原自定义键。
+  it('resets available bindings while retaining an unavailable away override for upgrade', () => {
+    const options = { getFilePath: filePath, platform: 'darwin' };
+    const newer = new AppShortcutStore({ ...options, osRelease: '23.0.0' });
+    const custom = combo('KeyK', { ctrl: true, shift: true });
+    expect(newer.setOverride('away-guard', custom)).toBeNull();
+    expect(newer.setOverride('toggle-sidebar', combo('KeyJ', { meta: true }))).toBeNull();
+    const older = new AppShortcutStore({ ...options, osRelease: '22.6.0' });
+    older.resetAll();
+    expect(older.getOverrides()).toEqual({ 'away-guard': custom });
+    older.resetAll();
+    expect(new AppShortcutStore({ ...options, osRelease: '23.0.0' }).getEffectiveCombos('away-guard')).toEqual([custom]);
   });
 
   it('resetAll clears every override', () => {

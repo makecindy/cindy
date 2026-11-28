@@ -11,11 +11,11 @@ import { SettingsReader } from '../../maker-host/plugins/settings-reader.js';
 import { DEFAULT_DISABLED_PLUGIN_IDS } from '../../maker-host/plugins/types.js';
 import { inspectBrowserBackendSettings } from '../../browser-backend-settings-store.desktop.js';
 import { inspectAndroidAutomationSettings } from '../../android-automation-settings-store.js';
-import { APP_SHORTCUT_DEFINITIONS, getEffectiveAppShortcuts, isAppShortcutAvailableOnPlatform } from '../../../shared/appShortcuts.js';
+import { getAppShortcutDefinition, getEffectiveAppShortcuts, isAppShortcutAvailableOnPlatform } from '../../../shared/appShortcuts.js';
 import { IM_DEFAULT_SETTINGS_CHANNELS } from '../../../shared/imDefaultSettings.js';
 import { WORKLOUDER_MODELS, WORKLOUDER_CODEX_COMMAND_SLOTS, WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS, WORKLOUDER_CODEX_AGENT_SLOT_COUNT, WORKLOUDER_CODEX_ANALOG_DIRECTIONS, WORKLOUDER_CODEX_ENCODER_ACTIONS, type WorkLouderCodexAction } from '../../../shared/workLouderCodex.js';
 import { GAMEPAD_FAMILIES, XBOX_GAMEPAD_BUTTON_IDS, XBOX_GAMEPAD_STICK_IDS, XBOX_GAMEPAD_STICK_DIRECTIONS } from '../../../shared/xboxGamepad.js';
-import { SETTINGS_READ_KEY_CODES, SETTINGS_READ_FIELD_IDS } from '../../../shared/settingsReadCatalog.js';
+import { SETTINGS_READ_KEY_CODES, SETTINGS_READ_FIELD_IDS, SETTINGS_READ_SHORTCUT_IDS } from '../../../shared/settingsReadCatalog.js';
 import { settingsHasPath, isSettingsRecord } from '../../maker-host/inspect-settings-json.js';
 import { inspectedValue, type ReadonlySettingsInspection, type ReadonlySettingSource } from '../readTypes.js';
 
@@ -104,7 +104,8 @@ export function inspectInteractionSettings(options: InteractionInspectionOptions
     const yieldTo = shortcut && shortcut.trigger !== 'modifier' && !shortcut.modifiers.fn
       ? [{ code: shortcut.code, meta: shortcut.modifiers.meta, ctrl: shortcut.modifiers.ctrl, alt: shortcut.modifiers.alt, shift: shortcut.modifiers.shift }] : [];
     const combos = state.status === 'ready' ? getEffectiveAppShortcuts(state.value, platform, yieldTo) : null;
-    for (const def of APP_SHORTCUT_DEFINITIONS) {
+    for (const shortcutId of SETTINGS_READ_SHORTCUT_IDS) {
+      const def = getAppShortcutDefinition(shortcutId);
       const id = `shortcuts.${def.id}`;
       if (!isAppShortcutAvailableOnPlatform(def.id, platform)) { fields[id] = { status: 'unsupported' }; continue; }
       if (state.status !== 'ready' || !combos) { fields[id] = { status: 'unreadable' }; continue; }

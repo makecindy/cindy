@@ -82,13 +82,18 @@ describe('actual interaction preference readers', () => {
     expect(fs.readdirSync(root)).toEqual([]);
   });
   it('preserves explicit default-valued overrides and platform-specific shortcut definitions', () => {
-    write('app-shortcuts.v1.json', { version: 1, overrides: {
+    // 本机离开键不在已发布云目录中；只读投影既不能带出字段，也不能修改其覆盖。
+    const shortcutsFile = write('app-shortcuts.v1.json', { version: 1, overrides: {
       'toggle-sidebar': null,
       'new-maker': { code: 'KeyQ', key: 'private display text', meta: true },
       'copy-session-link': { code: 'KeyL', ctrl: true, alt: true, shift: true },
+      'away-guard': { code: 'KeyK', ctrl: true, shift: true },
     } }, false);
+    const shortcutsBefore = fs.readFileSync(shortcutsFile);
     write('browser-backend-settings.json', { kind: 'external', useRealProfile: true }, false);
     const result = noWrites(read);
+    expect(result.fields).not.toHaveProperty('shortcuts.away-guard');
+    expect(fs.readFileSync(shortcutsFile)).toEqual(shortcutsBefore);
     expect(value(result, 'shortcuts.toggle-sidebar')).toEqual([]);
     expect(result.fields['browser.backend']).toMatchObject({ source: 'override', value: 'external' });
     write('browser-backend-settings.json', { kind: 'user-browser', useRealProfile: false }, false);

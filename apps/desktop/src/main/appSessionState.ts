@@ -94,6 +94,21 @@ export function getDataOwnerLifetime(): number { return dataOwnerLifetime; }
 let appSessionCommitBoundaryHook: (() => void) | null = null;
 const sessionInvalidationListeners = new Set<() => void>();
 
+const sessionCommittedListeners = new Set<() => void>();
+
+/** 新 owner 已可读；在 commit 返回前同步更新依赖 owner 的本机运行态。 */
+export function onAppSessionCommitted(listener: () => void): () => void {
+  sessionCommittedListeners.add(listener);
+  return () => { sessionCommittedListeners.delete(listener); };
+}
+
+function notifySessionCommitted(): void {
+  for (const listener of sessionCommittedListeners) {
+    try { listener(); }
+    catch (error) { log.error('app session committed listener failed', error); }
+  }
+}
+
 /** Cancel owner-bound requests before teardown or a new generation becomes visible. */
 export function onAppSessionInvalidated(listener: () => void): () => void {
   sessionInvalidationListeners.add(listener);
@@ -239,6 +254,7 @@ export function commitActiveAppSession(
     generation: previous.generation + 1,
   };
   if (ownerChanged) dataOwnerLifetime++;
+  notifySessionCommitted();
   log.info('stable app session committed', {
     mode,
     dataOwnerId,
@@ -274,6 +290,7 @@ export function commitVolatileAppSession(
     generation: previous.generation + 1,
   };
   if (ownerChanged) dataOwnerLifetime++;
+  notifySessionCommitted();
   log.info('volatile app session committed', {
     mode,
     dataOwnerId,

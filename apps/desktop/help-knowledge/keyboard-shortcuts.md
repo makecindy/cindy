@@ -38,3 +38,15 @@ These also work but aren't shown on the page: Mod+1 … Mod+9 jump to the first 
 - **Xbox controller**, **PlayStation controller** (DualSense / DualShock), **Switch controller** (Switch Pro / Joy-Con), and **Generic controller** — scroll, talk, send, and switch tasks with a gamepad over USB or Bluetooth.
   - Turn on **Enable**; Cindy only listens while it's in the foreground.
   - Click a control to assign an action (a command, a skill, or **Voice input** — hold to talk, release to stop). A stick can **Scroll conversation** or use **Custom directions**. **Reset mapping** restores the defaults.
+
+### 打开隐私屏（macOS 14+）
+
+按 `Control+Shift+L`，3 秒后打开隐私屏，遮住本机所有屏幕，让工作在离开后继续。
+只有 AI 任务或即将开始的定时任务需要屏幕时才保持常亮，其余时间照常熄屏锁屏。
+本机再次有键盘或鼠标输入时会触发系统锁屏，再用系统方式解锁。
+此操作没有“试试看”的两分钟时限，也不改变自动离开的开关或等待时间。
+首次使用须授予现有的辅助功能权限；缺少权限时不会遮屏。
+可在「设置 → 键盘快捷键」修改或清除该快捷键，恢复默认会删除自定义绑定。
+
+将语音键新设为隐私屏的默认组合时，会在注册前临时让位；失败后按原设置重新仲裁。
+明确自定义的隐私屏快捷键不自动让位。快捷键页恢复全部默认只清除当前系统可用的覆盖，保留暂不可用的键供升级后继续使用。

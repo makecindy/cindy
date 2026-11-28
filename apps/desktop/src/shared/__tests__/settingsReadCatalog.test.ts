@@ -3,6 +3,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { TAB_IDS } from '../../renderer/lib/tabLabels.js';
 import { APP_SHORTCUT_DEFINITIONS } from '../appShortcuts.js';
+import { additionalSettingsSchemas } from '../settingsEditableCatalog.js';
 import { IM_DEFAULT_SETTINGS_CHANNELS, IM_DEFAULT_SETTINGS } from '../imDefaultSettings.js';
 import { SUBAGENT_MODEL_CARD_KEYS } from '../subagentModelSettings.js';
 import { WORKLOUDER_MODELS, WORKLOUDER_CODEX_DEFAULT_SETTINGS, WORKLOUDER_CODEX_COMMAND_SLOTS, WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
@@ -43,11 +44,16 @@ describe('settings read catalog independent coverage anchors', () => {
     }
     expectIds(SUBAGENT_MODEL_CARD_KEYS.map(key => `subagentModel.${key}`));
   });
-  it('classifies all 31 shortcuts including hidden and platform-only definitions', () => {
-    expect([...SETTINGS_READ_SHORTCUT_IDS].sort()).toEqual(APP_SHORTCUT_DEFINITIONS.map(def => def.id).sort());
-    expect(APP_SHORTCUT_DEFINITIONS).toHaveLength(31);
-    for (const shortcut of APP_SHORTCUT_DEFINITIONS) {
-      const field = SETTINGS_READ_CATALOG[`shortcuts.${shortcut.id}`];
+  // docs/cloud-instances.md：v2 字段集合冻结；仍逐项分类所有本机键，明确保留 away 为本机能力。
+  it('classifies 31 published shortcuts and the native-only away shortcut without extending v2', () => {
+    expect(SETTINGS_READ_SHORTCUT_IDS).toHaveLength(31);
+    expect([...SETTINGS_READ_SHORTCUT_IDS, 'away-guard'].sort()).toEqual(APP_SHORTCUT_DEFINITIONS.map(def => def.id).sort());
+    expect(APP_SHORTCUT_DEFINITIONS).toHaveLength(32);
+    expect(SETTINGS_READ_FIELD_IDS).not.toContain('shortcuts.away-guard');
+    expect(additionalSettingsSchemas.shortcuts.safeParse({ entries: [{ id: 'away-guard', code: 'KeyL', ctrl: true, shift: true, meta: false, alt: false }] }).success).toBe(false);
+    for (const id of SETTINGS_READ_SHORTCUT_IDS) {
+      const shortcut = APP_SHORTCUT_DEFINITIONS.find(def => def.id === id)!;
+      const field = SETTINGS_READ_CATALOG[`shortcuts.${id}`];
       expect(field.platforms).toEqual(shortcut.platforms ?? ['darwin', 'win32', 'linux']);
       expect(field.sourcePath).toBe(`shared/appShortcuts.ts#${shortcut.id}`);
     }

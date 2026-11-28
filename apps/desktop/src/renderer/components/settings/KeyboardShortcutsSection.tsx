@@ -27,7 +27,7 @@ import { Tip } from '@/components/ui/tooltip';
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Package, Pencil, RotateCcw, Trash2 } from 'lucide-react';
+import { Package, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { SettingsCard, SettingsPageHeader, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
@@ -234,10 +234,10 @@ export function KeyboardShortcutsSection({ scrollRef }: { scrollRef?: RefObject<
   );
 
   const visibleDefs = APP_SHORTCUT_DEFINITIONS.filter(
-    (def) => !def.hiddenInSettings && isAppShortcutAvailableOnPlatform(def.id, platform),
+    (def) => !def.hiddenInSettings && isAppShortcutAvailableOnPlatform(def.id, platform, window.electronAPI?.osRelease),
   );
 
-  const hasAnyOverride = Object.keys(overrides).length > 0;
+  const hasAnyOverride = visibleDefs.some((definition) => overrides[definition.id] !== undefined);
 
   const itemLabel = useCallback(
     (def: AppShortcutDefinition) => t(def.labelKey, { defaultValue: def.id }),
@@ -270,7 +270,7 @@ export function KeyboardShortcutsSection({ scrollRef }: { scrollRef?: RefObject<
         return t('settings.shortcuts.errors.globalUnusable');
       }
       // 跨 id 冲突: 与 main store 写入兜底共用 shared 的 findAppShortcutConflict。
-      const conflictId = findAppShortcutConflict(id, combo, getAppShortcutOverrides(), platform);
+      const conflictId = findAppShortcutConflict(id, combo, getAppShortcutOverrides(), platform, window.electronAPI?.osRelease);
       if (conflictId) {
         return t('settings.shortcuts.errors.conflict', {
           name: itemLabel(getAppShortcutDefinition(conflictId)),

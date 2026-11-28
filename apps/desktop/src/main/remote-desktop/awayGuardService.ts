@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { release as osRelease } from 'node:os';
-import { app, BrowserWindow, ipcMain, powerMonitor, powerSaveBlocker, screen } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, powerMonitor, powerSaveBlocker, screen } from 'electron';
 import type { DesktopPermissionStatus } from '@cindy/device-link';
 import { createLogger } from '../logger';
 import { t } from '../i18n.desktop';
@@ -19,6 +19,7 @@ import {
 import { watchAwayGuardInput, type AwayGuardInputMonitor } from './privacyInput';
 import { keepAwakeController } from '../device-link/power-blocker';
 import { PrivacyScreen } from './privacyScreen';
+import { installAwayGuardShortcut } from './awayGuardShortcut';
 import { privacyScreenHtml } from './privacyScreenHtml';
 import { macPermissionAppPath } from '../../shared/macControlPermission';
 import {
@@ -28,6 +29,7 @@ import {
   AWAY_GUARD_SET_DELAY_CHANNEL,
   AWAY_GUARD_SET_ENABLED_CHANNEL,
   isAwayGuardDelaySeconds,
+  isAwayGuardSupportedPlatform,
   type AwayGuardDelaySeconds,
   type AwayGuardFailure,
   type AwayGuardPreviewResult,
@@ -64,11 +66,7 @@ export interface AwayGuardServiceDeps {
  * backend (linuxPrivacy.ts).
  */
 export function supportsAwayGuard(): boolean {
-  if (process.platform === 'darwin')
-    return (
-      typeof process.getSystemVersion === 'function' &&
-      Number(process.getSystemVersion().split('.')[0]) >= 14
-    );
+  if (process.platform === 'darwin') return isAwayGuardSupportedPlatform(process.platform, osRelease());
   return (
     WINDOWS_PRIVACY_SCREEN_ENABLED &&
     process.platform === 'win32' &&
@@ -457,10 +455,36 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     log: (event, detail) => log.info(event, detail ?? {}),
   });
 
+  let shortcutTimer: ReturnType<typeof setTimeout> | null = null;
+  const stopShortcut = installAwayGuardShortcut(async () => {
+    if (shortcutTimer || controller?.masked || deps.screenLocked()) return;
+    await prepareAwayGuardPermission();
+    if ((await readDesktopInputPermission()) !== 'granted') {
+      await dialog.showMessageBox({
+        type: 'warning',
+        message: t('settings.windowBehavior.awayGuard.permission'),
+      });
+      return;
+    }
+    // 给主人松开快捷键的时间，避免松键被输入守卫当作返回而立即锁屏。
+    shortcutTimer = setTimeout(() => {
+      shortcutTimer = null;
+      void controller?.activate().catch(async (error) => {
+        log.warn('manual away cover failed', error);
+        await dialog.showMessageBox({
+          type: 'warning',
+          message: t('settings.windowBehavior.awayGuard.previewUnavailable'),
+        });
+      });
+    }, AWAY_GUARD_PREVIEW_DELAY_MS);
+  });
+
   screen.on('display-added', () => void controller?.displaysChanged());
   const timer = setInterval(() => void controller?.tick(), TICK_MS);
   timer.unref();
   onQuit('away-guard', () => {
+    stopShortcut();
+    if (shortcutTimer) clearTimeout(shortcutTimer);
     clearInterval(timer);
     // The helper also locks on EOF; ask first so the lock does not wait for exit.
     monitor?.lockOnExit();

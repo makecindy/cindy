@@ -16,6 +16,7 @@ export const SETTINGS_READ_HARNESSES = ['claude-code', 'codex', 'pi'] as const;
 export const SETTINGS_READ_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 /** Native IM default channels. `imessage` is newer than the frozen v2 wire and stays native-only. */
 export const SETTINGS_READ_IM_CHANNELS = ['global', 'feishu', 'slack', 'discord', 'wechat', 'telegram', 'dingtalk', 'wecom', 'imessage'] as const;
+/** v2 已发布的固定目录；本机 away-guard 不进入云设置读取、编辑或重置。 */
 export const SETTINGS_READ_SHORTCUT_IDS = [
   'copy-session-link', 'session-history-back', 'session-history-forward', 'region-screenshot',
   'toggle-sidebar', 'open-settings', 'new-maker', 'close-tab-or-window', 'right-tab-prev', 'right-tab-next',
