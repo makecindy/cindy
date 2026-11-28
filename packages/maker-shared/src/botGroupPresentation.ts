@@ -98,6 +98,16 @@ export function chatGroupMembership(group: Pick<BotGroupSummary, 'serverBacked' 
   return { self, owner, manager, canLeave };
 }
 
+/** Whether the signed-in human may broadcast @所有人 in this group (default managers only; all members when enabled). */
+export function canMentionAllInBotGroup(
+  group: Pick<BotGroupSummary, 'conversationKind' | 'serverBacked' | 'supportsMemberMentionAll' | 'allowMemberMentionAll' | 'members'>,
+): boolean {
+  if (group.conversationKind === 'direct' || group.serverBacked !== true || group.supportsMemberMentionAll !== true) return true;
+  if (group.allowMemberMentionAll === true) return true;
+  const self = group.members.find(member => member.isSelf === true);
+  return self?.role === 'owner' || self?.role === 'admin';
+}
+
 /** Group activity includes topic replies and system notices, but never deleted messages. */
 export function latestBotGroupMessage<T extends { seq: string; deleted?: boolean }>(messages: readonly T[]): T | undefined {
   let latest: T | undefined;
@@ -126,6 +136,82 @@ export function botGroupMemberNames(
 /** Collapse whitespace so a multi-line message fits a one-line preview. */
 export function botGroupPreviewLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+export type BotGroupUnreadBoundary =
+  | { kind: 'sequence'; sequence: string; throughSequence: bigint }
+  | { kind: 'time'; at: number; throughSequence: bigint };
+
+const NON_NEGATIVE_INTEGER_SEQUENCE = /^\d+$/;
+
+function parseBotGroupSequence(value: number | string | null | undefined): bigint | null {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+  if (typeof value === 'string' && NON_NEGATIVE_INTEGER_SEQUENCE.test(value)) return BigInt(value);
+  return null;
+}
+
+function isBotGroupVisibleTimelineMessage(
+  message: Pick<BotGroupMessageView, 'kind' | 'authorKind' | 'deleted' | 'capabilityNoticeCode' | 'threadRootId'> & { pending?: boolean },
+  threadRootId?: string,
+): boolean {
+  if (message.pending || message.deleted || (message.threadRootId ?? undefined) !== threadRootId) return false;
+  if (message.authorKind === 'system') return false;
+  return message.kind === 'message' || message.kind === 'plan'
+    || (message.kind === 'notice' && message.authorKind === 'bot' && isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode));
+}
+
+function isBotGroupIncomingMessage(
+  message: Pick<BotGroupMessageView, 'kind' | 'authorKind' | 'isSelf' | 'deleted' | 'capabilityNoticeCode' | 'threadRootId'> & { pending?: boolean },
+  threadRootId?: string,
+): boolean {
+  if (!isBotGroupVisibleTimelineMessage(message, threadRootId)) return false;
+  if (message.isSelf === true) return false;
+  return message.authorKind === 'bot' || message.isSelf === false;
+}
+
+function isAfterBotGroupUnreadBoundary(
+  message: Pick<BotGroupMessageView, 'sequence' | 'serverSequence' | 'createdAt'>,
+  boundary: BotGroupUnreadBoundary,
+): boolean {
+  const messageSeq = parseBotGroupSequence(message.serverSequence ?? message.sequence);
+  if (messageSeq === null || messageSeq > boundary.throughSequence) return false;
+  if (boundary.kind === 'sequence') {
+    const boundarySeq = parseBotGroupSequence(boundary.sequence);
+    return boundarySeq !== null && messageSeq > boundarySeq;
+  }
+  return Number.isFinite(boundary.at) && Number.isFinite(message.createdAt) && message.createdAt > boundary.at;
+}
+
+/** Whether any visible incoming message in this timeline sits after the captured read boundary. */
+export function hasUnreadBotGroupMessages(
+  messages: readonly (BotGroupMessageView & { pending?: boolean })[],
+  boundary: BotGroupUnreadBoundary | null | undefined,
+  threadRootId?: string,
+): boolean {
+  if (!boundary) return false;
+  return messages.some((message) => isBotGroupIncomingMessage(message, threadRootId) && isAfterBotGroupUnreadBoundary(message, boundary));
+}
+
+/**
+ * First visible incoming message after the captured read boundary. Only returns a message when
+ * at least one earlier real message sits above it, so a brand-new group or truncated unread head
+ * does not draw a misleading divider at the top.
+ */
+export function findFirstUnreadBotGroupMessageId(
+  messages: readonly (BotGroupMessageView & { pending?: boolean })[],
+  boundary: BotGroupUnreadBoundary | null | undefined,
+  threadRootId?: string,
+): string | null {
+  if (!boundary) return null;
+  let hasEarlierMessage = false;
+  for (const message of messages) {
+    if (!isBotGroupVisibleTimelineMessage(message, threadRootId)) continue;
+    if (isBotGroupIncomingMessage(message, threadRootId) && isAfterBotGroupUnreadBoundary(message, boundary)) {
+      return hasEarlierMessage ? message.id : null;
+    }
+    hasEarlierMessage = true;
+  }
+  return null;
 }
 
 /** Leading names shown inline before a collapsed join run summarizes the rest. */
@@ -204,10 +290,7 @@ export function botGroupNewMessageCount(messages: readonly BotGroupMessageView[]
   if (seenThrough === null) return 0;
   const incoming = new Set<string>();
   for (const message of messages) {
-    if (BigInt(message.serverSequence ?? message.sequence) <= BigInt(seenThrough) || message.deleted || (message.threadRootId ?? undefined) !== threadRootId || message.isSelf === true
-      || (message.kind !== 'message' && message.kind !== 'plan'
-        && !(message.kind === 'notice' && message.authorKind === 'bot' && isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)))
-      || (message.authorKind !== 'bot' && message.isSelf !== false) || message.authorKind === 'system') continue;
+    if (BigInt(message.serverSequence ?? message.sequence) <= BigInt(seenThrough) || !isBotGroupIncomingMessage(message, threadRootId)) continue;
     incoming.add(message.id);
   }
   return incoming.size;
@@ -324,6 +407,7 @@ export type BotGroupErrorVariant =
   | 'memberUnavailable'
   | 'mentionUnavailable'
   | 'allBotsMentionDisabled'
+  | 'allHumansMentionForbidden'
   | 'notFound'
   | 'hostNotReady'
   | 'planOpen'
@@ -349,6 +433,7 @@ const ERROR_VARIANTS: ReadonlyMap<string, BotGroupErrorVariant> = new Map<BotGro
   ['MEMBER_UNAVAILABLE', 'memberUnavailable'],
   ['MENTION_UNAVAILABLE', 'mentionUnavailable'],
   ['ALL_BOTS_MENTION_DISABLED', 'allBotsMentionDisabled'],
+  ['ALL_HUMANS_MENTION_FORBIDDEN', 'allHumansMentionForbidden'],
   ['NOT_FOUND', 'notFound'],
   ['HOST_NOT_READY', 'hostNotReady'],
   ['PLAN_OPEN', 'planOpen'],

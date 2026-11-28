@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { activeScheduleFailures, compareFailedScheduleRuns, scheduleFailureMessageKey, scheduleFailureMessageParams, shouldShowFailedScheduleNotice } from '../scheduleModel';
+import { taskInboxSection } from '../liveTaskPriority';
 import { buildSessionScheduleIndex } from '../sessionList';
 import type { RemoteScheduleRun } from '../scheduleTypes';
 const run = { runId: 'b', firedAt: 10 };
@@ -119,5 +120,36 @@ describe('historical schedule failure notice', () => {
       errorMsg: 'pre-run hook failed', preRunHookResult: { decision: 'block', missingPlugin } }];
     const failed = buildSessionScheduleIndex([], new Map([['a', rows]])).get('s')?.latestFailedRun;
     expect(failed && scheduleFailureMessageKey(failed)).toBe(key);
+  });
+
+  // Born-read transient precheck failures keep an active follow-up task in Inbox "Working"
+  // while still surfacing the in-task notice until recovery.
+  it('keeps born-read transient failures out of unread/pending while retaining latestFailedRun', () => {
+    const diagnosis = { kind: 'rate-limit', device: 'Mac Studio', failures: 1, retryAt: 1_800_000 };
+    const rows: RemoteScheduleRun[] = [{
+      id: 'rl-1',
+      scheduleId: 'a',
+      sessionId: 's',
+      status: 'failed',
+      firedAt: 100,
+      readAt: 101,
+      failureKind: 'rate-limit',
+      prCheckDiagnosis: diagnosis,
+    }];
+    const info = buildSessionScheduleIndex(
+      [{ id: 'a', name: 'PR follow', status: 'active', targetSessionId: 's' }],
+      new Map([['a', rows]]),
+    ).get('s')!;
+    expect(info.unreadRunIds).toEqual([]);
+    expect(info.unreadCount).toBe(0);
+    expect(info.hasUnreadFailedRun).toBe(false);
+    expect(info.latestFailedRun && scheduleFailureMessageKey(info.latestFailedRun)).toBe('prCheck_rate-limit');
+    expect(
+      taskInboxSection(
+        { status: 'active' },
+        { waiting: info.hasUnreadFailedRun === true, unread: info.unreadCount > 0, running: false, following: info.hasActiveFollowUp === true },
+        200,
+      ),
+    ).toBe('working');
   });
 });

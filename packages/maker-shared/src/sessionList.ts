@@ -28,6 +28,7 @@ export function compareSessionListStrings(left: string, right: string): number {
 export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   snoozedUntil?: string | null;
   snoozedAt?: string | null;
+  archivedAt?: string | null;
   tags?: import('./taskTags').TaskTag[];
   _count?: { messages?: number } | null;
   agentKind: 'cc' | 'codex' | string;

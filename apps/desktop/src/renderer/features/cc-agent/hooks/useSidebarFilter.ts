@@ -70,6 +70,7 @@ import {
   loadStatus,
   loadProjects,
   loadVendor,
+  nextVendorAfterToggle,
   loadGroupBy,
   loadGroupDialogue,
   loadGroupAutomation,
@@ -193,6 +194,8 @@ export interface UseSidebarFilterReturn {
   gc: (activeWorkingDirs: readonly string[]) => void;
   /** 设置 Harness 筛选，持久化到已有 vendor localStorage 键。 */
   setVendor: (v: FilterVendor) => void;
+  /** 勾选 / 取消一个 Harness（键见 sessionHarnessKey）；一个不剩时回到「全部」。 */
+  toggleVendor: (key: string) => void;
   /** 设置最近活跃范围，持久化到 localStorage。 */
   setLastActivity: (lastActivity: FilterLastActivity) => void;
   /** 设置主列表分组方式，持久化到 localStorage。 */
@@ -209,7 +212,10 @@ export interface UseSidebarFilterReturn {
   setPinnedSortBy: (sortBy: PinnedSortBy) => void;
   /** 设置项目行顺序，持久化到 localStorage。 */
   setProjectOrder: (projectOrder: FilterProjectOrder) => void;
-  /** 重置项目 / Harness / 最近活跃筛选；保留独立的任务状态与展示偏好。 */
+  /**
+   * 重置项目 / 伙伴 / Harness / 最近活跃筛选；保留独立的任务状态、「隐藏」选项（含隐藏伙伴的任务，
+   * 即 creators === 'none'）与展示偏好。
+   */
   resetContentFilters: () => void;
   /** 直接替换 Project 手动排序顺序，持久化到 localStorage。 */
   setManualProjectOrder: (order: readonly string[], activeWorkingDirs: readonly string[]) => void;
@@ -606,6 +612,14 @@ export function useSidebarFilter(
     persistVendor(v, mode);
   }, [mode, setVendorState]);
 
+  const toggleVendor = useCallback((key: string) => {
+    setVendorState((previous) => {
+      const next = nextVendorAfterToggle(previous, key);
+      persistVendor(next, mode);
+      return next;
+    });
+  }, [mode, setVendorState]);
+
   const setLastActivity = useCallback((next: FilterLastActivity) => {
     setLastActivityState(next);
     persistLastActivity(next, mode);
@@ -642,20 +656,22 @@ export function useSidebarFilter(
   }, []);
 
   const resetContentFilters = useCallback(() => {
-    setHideAutomations(false);
-    setHideTaskCreated(false);
     setProjectsState((prev) => {
       if (prev === 'all') return prev;
       persistProjects('all', ownerId, mode);
       return 'all';
     });
-    setCreators('all');
-    persistCreators('all', ownerId, mode);
+    setCreators((previous) => {
+      // 'none'（隐藏伙伴的任务）归菜单的「隐藏」管，重置筛选不动它。
+      if (previous === 'all' || previous === 'none') return previous;
+      persistCreators('all', ownerId, mode);
+      return 'all';
+    });
     setVendorState('all');
     persistVendor('all', mode);
     setLastActivityState('all');
     persistLastActivity('all', mode);
-  }, [ownerId, mode, setCreators, setProjectsState, setVendorState, setLastActivityState, setHideAutomations, setHideTaskCreated]);
+  }, [ownerId, mode, setCreators, setProjectsState, setVendorState, setLastActivityState]);
 
   const setManualProjectOrder = useCallback(
     (order: readonly string[], activeWorkingDirs: readonly string[]) => {
@@ -782,6 +798,7 @@ export function useSidebarFilter(
     setProjectsAll,
     gc,
     setVendor,
+    toggleVendor,
     setLastActivity,
     setGroupBy,
     setGroupDialogue,

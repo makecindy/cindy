@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ cloudRefresh: vi.fn(async () => {}), cloudError: null as string | null, push: vi.fn(),
   openTeammate: vi.fn(async (_row: unknown) => {}),
+  startBot: vi.fn(), startGroup: vi.fn(),
   cloudActor: null as null | { id: string }, createOptions: null as any, collapsed: false, showAvatars: true, unread: false,
   cacheRevision: 0, cacheListeners: new Set<() => void>(), unreadIds: new Set<string>(),
   stripRenders: [] as string[], avatarRenders: [] as string[], identityReads: 0 }));
@@ -11,9 +12,15 @@ vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { subscribe
 vi.mock('react-native', () => ({
   View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
   ScrollView: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
-  Pressable: ({ children, testID, disabled, onPress, accessibilityLabel }: any) => {
+  Pressable: ({ children, testID, disabled, onPress, onLongPress, accessibilityLabel }: any) => {
     if (testID?.startsWith('home.teammatesStrip.bot.')) h.stripRenders.push(testID);
-    return el('button', { 'data-testid': testID, disabled, onClick: onPress, 'aria-label': accessibilityLabel }, children);
+    return el('button', {
+      'data-testid': testID,
+      disabled,
+      onClick: onPress,
+      onContextMenu: onLongPress ? (event: MouseEvent) => { event.preventDefault(); onLongPress(); } : undefined,
+      'aria-label': accessibilityLabel,
+    }, children);
   },
   ActivityIndicator: () => el('i', { 'data-testid': 'spinner' }),
   Keyboard: { dismiss: () => {} },
@@ -24,7 +31,10 @@ vi.mock('expo-router/react-navigation', () => ({
 }));
 vi.mock('expo-router', () => ({ useFocusEffect: () => {} }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
-vi.mock('lucide-react-native', () => ({ ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Plus: () => null, RefreshCw: () => null, UsersRound: () => null }));
+vi.mock('lucide-react-native', () => ({
+  Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null,
+  Link2: () => null, Plus: () => null, RefreshCw: () => null, UserPlus: () => null, UsersRound: () => null,
+}));
 vi.mock('@/chat/chatInviteIntent', () => ({ openManualChatInvite: vi.fn() }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' } }) }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children) }));
@@ -53,11 +63,50 @@ vi.mock('@/session/BotGroupList', () => ({ OFFLINE_AVATAR_OPACITY: 0.45 }));
 vi.mock('@/session/CompanionListRow', () => ({ COMPANION_ROW_AVATAR_SIZE: 44, COMPANION_ROW_DOT_SIZE: 10 }));
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () => null }));
 vi.mock('@/session/HomeRosterContext', () => ({ useHomeRoster: () => null }));
-vi.mock('@/session/HomeListVisuals', () => ({ homeListStyles: () => ({}) }));
+vi.mock('@/session/HomeListVisuals', () => ({ homeListStyles: () => ({}), SESSION_ROW_LONG_PRESS_MS: 400 }));
+vi.mock('@/session/SwipeableSectionHeader', () => ({
+  SwipeableSectionHeader: ({ children, enabled = true, registry, onOptions, actionTestID }: any) => el('div', null,
+    children,
+    enabled && registry ? el('button', { 'data-testid': actionTestID, onClick: onOptions }, 'options') : null,
+  ),
+}));
+vi.mock('@/session/HomeSectionOptionsSheet', async () => {
+  const { useEffect, useRef } = await import('react');
+  return {
+    HomeSectionOptionsSheet: ({ visible, sections, testID, onClosed }: any) => {
+      const wasVisible = useRef(visible);
+      useEffect(() => {
+        if (wasVisible.current && !visible) onClosed?.();
+        wasVisible.current = visible;
+      }, [visible, onClosed]);
+      if (!visible) return null;
+      return el('div', { 'data-testid': testID }, sections.flatMap((section: any) =>
+        section.items.map((item: any) => el('button', {
+          key: item.id,
+          'data-testid': item.testID,
+          'aria-label': [item.title, item.subtitle].filter(Boolean).join(', '),
+          'aria-selected': item.selected,
+          disabled: item.disabled,
+          onClick: item.onPress,
+        }, item.title))));
+    },
+  };
+});
 vi.mock('@/session/listDisclosureTransition', () => ({ DisclosureItem: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children) }));
 vi.mock('@/session/TeammateCreateController', () => ({ useTeammateCreateController: (options: any) => {
   h.createOptions = options;
-  return { renderTrigger: (trigger: unknown) => trigger, press: () => {}, label: 'create', sheets: null };
+  return {
+    renderTrigger: (trigger: unknown) => trigger,
+    press: () => {},
+    label: 'create',
+    botLabel: 'devices.companions.createTeammate',
+    groupLabel: 'groupChat.create.title',
+    orderedTargets: options.targets ?? [],
+    orderedGroupTargets: options.groupTargets ?? [],
+    startBot: h.startBot,
+    startGroup: h.startGroup,
+    sheets: null,
+  };
 } }));
 vi.mock('@/session/TeammateList', () => ({
   useTeammateEntries: (items: any[], groups: any[] = [], query = '') => [...items.map(row => ({ kind: 'bot', row })), ...groups.map(row => ({ kind: 'group', row }))].filter(entry => entry.row.item.display.title.includes(query)),
@@ -89,24 +138,26 @@ const render = (refreshKey: number, overrides: Partial<Parameters<typeof HomeTea
 })));
 const byId = (id: string) => node.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
-// Unit regression: a failed background read must not insert a row above cached teammates.
-// The previous test required an immediate alert; now test the real delayed header action.
-it('keeps cached teammates and offers a quiet header retry only for a lasting failure', async () => {
+// Unit regression: a failed background read must not insert a row above cached teammates
+// or add a persistent refresh icon to the header; retry lives inside the header options sheet.
+it('keeps cached teammates and clean header chrome, exposing retry inside header options on failure', async () => {
   await render(0);
   expect(node.textContent).toContain('Mimi');
   expect(byId('home.teammatesRetry')).toBeNull();
   await act(async () => vi.advanceTimersByTimeAsync(CONNECTION_NOTICE_DELAY_MS));
   expect(byId('home.teammatesError')).toBeNull();
-  expect(byId('home.teammatesRetry')?.getAttribute('aria-label')).toContain('devices.companions.stale');
-  expect(byId('home.teammatesRetry')?.parentElement).toBe(byId('home.teammatesHeader')?.parentElement);
+  expect(byId('home.teammatesRetry')).toBeNull();
+  await act(async () => byId('home.teammatesHeader')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })));
+  expect(byId('home.teammatesOptions.retry')?.getAttribute('aria-label')).toContain('devices.companions.stale');
   h.cloudRefresh.mockClear();
-  await act(async () => byId('home.teammatesRetry')!.click());
+  await act(async () => byId('home.teammatesOptions.retry')!.click());
   expect(roster.refresh).toHaveBeenCalledTimes(1);
   expect(groups.refresh).not.toHaveBeenCalled();
   expect(h.cloudRefresh).not.toHaveBeenCalled();
   roster.error = null;
   await render(0);
-  expect(byId('home.teammatesRetry')).toBeNull();
+  await act(async () => byId('home.teammatesHeader')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })));
+  expect(byId('home.teammatesOptions.retry')).toBeNull();
 });
 
 it('never flashes a recovered background error', async () => {
@@ -231,22 +282,28 @@ it('retries a cloud roster failure without restarting healthy computer or group 
   roster.error = null; h.cloudError = 'CLOUD_ROSTER_FAILED';
   await render(0); h.cloudRefresh.mockClear();
   await act(async () => vi.advanceTimersByTimeAsync(CONNECTION_NOTICE_DELAY_MS));
-  await act(async () => byId('home.teammatesRetry')!.click());
+  expect(byId('home.teammatesRetry')).toBeNull();
+  await act(async () => byId('home.teammatesHeader')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })));
+  await act(async () => byId('home.teammatesOptions.retry')!.click());
   expect(h.cloudRefresh).toHaveBeenCalledTimes(1);
   expect(roster.refresh).not.toHaveBeenCalled(); expect(groups.refresh).not.toHaveBeenCalled();
 });
 
-// Unit merge regression: a zero-computer invite must survive header-only and avatar-strip settings.
+// Unit merge regression: a zero-computer invite must survive header-only and avatar-strip settings
+// inside the unified section header options sheet without permanent header '+' chrome.
 it.each([[false, false, false], [true, false, false], [false, true, false], [false, true, true]])(
-  'retains only a compact invite trigger with no computers (loading=%s, collapsed=%s, avatars=%s)', async (loading, collapsed, showAvatars) => {
+  'retains invite access via header options with no computers (loading=%s, collapsed=%s, avatars=%s)', async (loading, collapsed, showAvatars) => {
   const original = roster.items;
   try {
     roster.items = []; roster.loading = loading; roster.error = null;
     h.collapsed = collapsed; h.showAvatars = showAvatars;
     await render(0);
-    expect(byId('home.teammatesCreate')).not.toBeNull();
+    expect(byId('home.teammatesCreate')).toBeNull();
     expect(byId('home.teammatesAdd')).toBeNull();
     expect(h.createOptions.onInvite).toBeTypeOf('function');
+    await act(async () => byId('home.teammatesHeader')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })));
+    expect(byId('home.teammatesOptionsSheet')).not.toBeNull();
+    expect(byId('home.teammatesOptions.invite')).not.toBeNull();
     await render(0, { query: 'missing' });
     expect(byId('home.teammates')).toBeNull();
   } finally { roster.items = original; roster.loading = false; }
@@ -276,14 +333,26 @@ it('keeps only the header when avatars are disabled, restores the strip when ena
   expect(byId('row.bot')).toBeNull();
   expect(byId('home.teammatesStrip')).toBeNull();
 });
-it('keeps the compact create action without an empty body when collapsed with avatars disabled', async () => {
+it('keeps create and display preferences inside header options when collapsed with avatars disabled', async () => {
+  const onChangeShowCollapsedAvatars = vi.fn();
+  const swipeRegistry = { onRowOpen: vi.fn(), onRowClose: vi.fn(), closeOpenRow: vi.fn(() => false) };
   h.collapsed = true; h.showAvatars = false;
-  await render(0, { context: { navigation: null, route: null, shared: {
-    roster: { ...roster, items: [], createTargets: [item.host] }, groups,
-  } } } as any);
-  expect(byId('home.teammatesCreate')).not.toBeNull();
+  await render(0, {
+    onChangeShowCollapsedAvatars,
+    swipeRegistry,
+    context: { navigation: null, route: null, shared: {
+      roster: { ...roster, items: [], createTargets: [item.host] }, groups,
+    } },
+  } as any);
+  expect(byId('home.teammatesCreate')).toBeNull();
   expect(byId('home.teammatesAdd')).toBeNull();
   expect(byId('home.teammatesStripCreate')).toBeNull();
+  await act(async () => byId('home.teammatesSettings')!.click());
+  expect(byId('home.teammatesOptionsSheet')).not.toBeNull();
+  await act(async () => byId('home.teammatesOptions.showCollapsedAvatars')!.click());
+  expect(onChangeShowCollapsedAvatars).toHaveBeenCalledWith(true);
+  await act(async () => byId('home.teammatesOptions.createBot.host')!.click());
+  expect(h.startBot).toHaveBeenCalledExactlyOnceWith('host');
   await act(async () => byId('home.teammatesHeader')!.click());
   expect(byId('home.teammatesAdd')).not.toBeNull();
 });

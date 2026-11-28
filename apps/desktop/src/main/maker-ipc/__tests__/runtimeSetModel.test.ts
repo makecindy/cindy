@@ -1,6 +1,7 @@
 import { rehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression.js';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { setCustomProviders } from '../../maker-host/active-catalog.js';
+import { bindPoolExecutionRoute } from '../../subscription-accounts/session.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The route helper reaches worktree preferences transitively. Keep this unit
@@ -323,6 +324,44 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'ordinary-provider',
     });
   });
+
+  // Unit: the live Codex thread runs on the API member of a subscription pool,
+  // while the persisted task and user selection keep the logical pool source.
+  // Prior ordinary route cases lacked a reservation and rebuilt that valid thread.
+  it.each(['same-pool', 'invalid-reservation', 'independent-source'] as const)(
+    'preserves only a valid mixed-pool model switch (%s)', async mode => {
+      const sessionId = rememberSession(`mixed-pool-${mode}`);
+      setSessionProvider(sessionId, 'openai');
+      let valid = true;
+      const unbind = bindPoolExecutionRoute(sessionId, {
+        providerId: 'openai', connectionId: 'openai-api',
+        assertCurrent: () => { if (!valid) throw new Error('pool reservation unavailable'); },
+        captureTurnRejection: () => undefined,
+      });
+      const setModel = vi.fn(async () => {});
+      const closeSession = vi.fn(async () => {});
+      const maker: RuntimeSetModelMaker = {
+        getSession: () => ({ agentKind: 'codex', remoteHostId: null,
+          model: 'gpt-6', codexProxyActive: true,
+          codexThreadModelProviderId: 'cindy_gateway', setModel }),
+        listActiveSessions: () => [{ id: sessionId, agentKind: 'codex', isTurnRunning: () => false }],
+        closeSession,
+      };
+      const providerId = mode === 'independent-source' ? 'xd' : 'openai';
+      valid = mode !== 'invalid-reservation';
+      try {
+        await applyRuntimeSetModelChange({ maker, sessionId, model: 'gpt-6-astra', providerId });
+        if (mode === 'same-pool') {
+          expect(closeSession).not.toHaveBeenCalled();
+          expect(setModel).toHaveBeenCalledExactlyOnceWith('gpt-6-astra', { providerId: 'openai' });
+        } else {
+          expect(closeSession).toHaveBeenCalledExactlyOnceWith(sessionId, 'runtime-refresh');
+          expect(setModel).not.toHaveBeenCalled();
+        }
+        expect(getSessionProvider(sessionId)).toBe(providerId);
+      } finally { unbind(); }
+    },
+  );
 
   it('rolls back provider route when live setModel rejects', async () => {
     const sessionId = rememberSession('runtime-set-model-rollback');

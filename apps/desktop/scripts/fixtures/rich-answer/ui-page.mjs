@@ -5,11 +5,14 @@ export default {
   viewport: { width: 560, height: 480 },
   real: 'RichAnswer controls, message preview, explicit click, submitted state and theme tokens',
   notCovered: 'Real host sending, queue delivery and model continuation; covered separately in isolated Desktop.',
-  stubs: { 'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ user: { id: "rich-fixture" } });' },
+  stubs: {
+    'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ user: { id: "rich-fixture" } }); export const useOptionalAuthUser = () => null; export const useOptionalDataOwnerGeneration = () => 0;',
+  },
   cases: {
     default: { about: 'Edit values and explicitly submit the displayed message' },
     narrow: { about: 'Controls and submitted message at 320px', viewport: { width: 320, height: 520 } },
     readonly: { about: 'Read-only history cannot send a message' },
+    'argument-limit': { about: '#13479: a send expression with 33 entries keeps selection editable and explains the limit at 320px', viewport: { width: 320, height: 520 } },
     'invalid-image': { about: '#9158: invalid image references offer explicit redelivery rather than reloading the placeholder' },
     'invalid-image-narrow': { about: 'Invalid image recovery wraps at 320px', viewport: { width: 320, height: 520 } },
     'invalid-image-readonly': { about: 'Read-only invalid images cannot submit recovery messages' },
@@ -31,6 +34,17 @@ export default {
       return;
     }
     const button = page.getByRole('button', { name: '请帮我安排' });
+    if (ui.case === 'argument-limit') {
+      const destination = page.getByLabel('目的地');
+      await destination.selectOption('博物馆');
+      assert.equal(await destination.inputValue(), '博物馆');
+      assert.equal(await button.isDisabled(), true);
+      assert.equal(await page.getByTestId('sent-messages').innerText(), '');
+      const explanation = page.getByRole('status');
+      assert.equal(await explanation.count(), 1);
+      assert.equal(await explanation.textContent(), await ui.t('richAnswer.sendTooManyArguments', { limit: 32 }));
+      return;
+    }
     if (await button.isDisabled()) { assert.equal(await page.getByTestId('sent-messages').innerText(), ''); return; }
     await page.getByLabel('目的地').selectOption('博物馆');
     assert.equal(await page.getByTestId('sent-messages').innerText(), '');

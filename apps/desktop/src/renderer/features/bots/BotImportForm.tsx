@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { companionImportReasonKey, companionImportErrorCode, compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, type CompanionImportCategory, type CompanionImportEntry, type CompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
 import { normalizeBotName } from '../../../shared/botCreation';
 import { BOT_PORTRAIT_COUNT, BotPortraitPicker, galleryPortrait } from './BotPortraitPicker';
@@ -134,8 +135,7 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
     </div> : category ? <section className="space-y-3">
       <div className="flex items-center justify-between gap-3"><h3 className="text-16 font-medium">{tr(category)}</h3>
         <label className="flex items-center gap-2 text-13">{checkbox(categoryEntries.map(entry => entry.id), areCompanionImportEntriesSelected(categoryEntries, selected), tr('selectAll'))}{tr('selectAll')}</label></div>
-      {category !== 'bots' || categoryEntries.length > 20 ? <input type="search" aria-label={tr('search')} placeholder={tr('search')} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }}
-        className="h-9 w-full rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)] px-3 text-14 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]" /> : null}
+      {category !== 'bots' || categoryEntries.length > 20 ? <SearchInput aria-label={tr('search')} placeholder={tr('search')} value={query} onChange={value => { setQuery(value); setPage(0); }} /> : null}
       <div className="divide-y divide-[var(--border-default)]">
         {filtered.slice(page * 20, (page + 1) * 20).map(entry => <label key={entry.id} className="flex min-h-11 cursor-pointer items-start gap-3 py-3">
           <span className="flex h-5 shrink-0 items-center">{checkbox([entry.id], selectedSet.has(entry.id), entryLabel(entry))}</span>

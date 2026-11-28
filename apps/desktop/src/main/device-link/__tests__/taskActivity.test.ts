@@ -31,6 +31,23 @@ it('counts all owned inventory and prioritizes waiting, unread, running without 
   );
   expect(projectHostTaskActivity([row('read', 'completed')]).selected).toBeNull();
 });
+// Unit (protocol): the foreground device-link snapshot carries the selected companion like the
+// macOS Live Activity (waiting or replied only, thumbnail <= 2 KB), while the default projection
+// used for the official task-activity upload keeps its documented body.
+it('adds the waiting companion only to the device-link snapshot', () => {
+  const companion = { name: 'Lizi', hue: 'teal', glyph: 'L', glyphIsInitial: true, imageJpeg: 'AAAA' } as const;
+  const waiting = { ...row('wait', 'needs-interaction'), companion } as AgentIslandSessionSnapshot;
+  expect(projectHostTaskActivity([waiting]).selected).toEqual({ sessionId: 'wait', title: 'wait', status: 'attention' });
+  expect(projectHostTaskActivity([waiting], { includeCompanion: true }).selected?.companion).toEqual({
+    hue: 'teal', glyph: 'L', glyphIsInitial: true, imageJpeg: 'AAAA',
+  });
+  const running = { ...row('run', 'running'), companion } as AgentIslandSessionSnapshot;
+  expect(projectHostTaskActivity([running], { includeCompanion: true }).selected).not.toHaveProperty('companion');
+  const large = { ...waiting, companion: { ...companion, imageJpeg: 'A'.repeat(2052) } } as AgentIslandSessionSnapshot;
+  expect(projectHostTaskActivity([large], { includeCompanion: true }).selected?.companion).toEqual({
+    hue: 'teal', glyph: 'L', glyphIsInitial: true,
+  });
+});
 it('coalesces bursts, uploads the latest state and aborts the previous connection', async () => {
   vi.useFakeTimers();
   let resolve!: () => void;
