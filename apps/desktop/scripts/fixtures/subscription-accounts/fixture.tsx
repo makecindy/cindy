@@ -102,7 +102,7 @@ void mountPage({
     let view: SubscriptionPoolView = {
       providerId: isCodex ? 'openai' : 'anthropic',
       configured: true,
-      strategy: isCodex ? 'weight' : 'least',
+      strategy: isCodex ? 'weighted' : 'expiring',
       accounts: [
         {
           id: 'default',
@@ -157,7 +157,7 @@ void mountPage({
       view = {
         providerId: PLUGIN_PROVIDER,
         configured: true,
-        strategy: 'least',
+        strategy: 'expiring',
         pluginEngine: {
           engineKey: 'zcode-plugin:zcode',
           methods: [
@@ -175,12 +175,23 @@ void mountPage({
       };
     if (ctx.case === 'expiry-past')
       view.accounts[1].loginExpiresAt = new Date(now - 86_400_000).toISOString();
+    // Two accounts moved onto a long-lived token: one checked with its ordinary sign-in still
+    // active, one nearing the token's end after the ordinary sign-in has gone.
+    if (ctx.case.startsWith('long-lived-token')) {
+      view.accounts[0].longLivedToken = {
+        expiresAt: new Date(now + 300 * 86_400_000).toISOString(), storedLogin: true, verification: 'verified',
+      };
+      view.accounts[1].loginExpiresAt = undefined;
+      view.accounts[1].longLivedToken = {
+        expiresAt: new Date(now + 20 * 86_400_000).toISOString(), storedLogin: false, verification: 'pending',
+      };
+    }
     // Nothing signed in yet: the host lists only the unbound CLI default slot.
     if (ctx.case === 'empty')
       view = {
         providerId: 'anthropic',
         configured: false,
-        strategy: 'least',
+        strategy: 'expiring',
         accounts: [
           {
             id: 'default',
@@ -208,6 +219,8 @@ void mountPage({
       } },
       subscriptionAccounts: {
         onChanged: subscription('subscriptionAccounts'),
+        existingLogins: async () => ({ computer: 'Mac mini', candidates: ctx.case.startsWith('existing-login')
+          ? [{ identity: 'studio@example.com', plan: 'Pro', directory: '~/.claude-person', receipt: 'fixture' }] : [] }),
         command: async (command: SubscriptionAccountCommand) => {
           if (ctx.case === 'error') throw new Error('Fixture read failure');
           // The first read never lands, so the placeholder stays for the capture.

@@ -57,6 +57,7 @@ import {
   recoverOversizedMessage,
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
+  createMissingReasoningItemRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
   createResponsesToolAudioRecoveryRule,
   stripResponsesToolAudioFromBody,
@@ -139,8 +140,8 @@ import {
 import type { CodexSubagentRouteSnapshot } from './codex-subagent-config.js';
 import { getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed } from './session-provider-store.js';
 import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
-import { captureGuestRequestUsage, guestProviderModelDenial, guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel } from './guest-provider-route-store.js';
-import { getSessionSubscriptionAccount } from '../subscription-accounts/session.js';
+import { captureGuestRequestUsage, guestProviderModelDenial, guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel, poolAuthorizationProvider } from './guest-provider-route-store.js';
+import { getSessionSubscriptionAccount, readPoolExecutionRoute } from '../subscription-accounts/session.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { xaiServerSideTools } from './xai-server-side-tools.js';
@@ -458,6 +459,24 @@ function subscribeCodexUpstreamCapacity(
   };
 }
 
+const CODEX_USAGE_WS_INSPECT_MAX_BYTES = 4 * 1024 * 1024;
+
+function observeInboundWebSocketUsage(
+  headers: Readonly<Record<string, string>>,
+  fallbackThreadId: string,
+  message: Buffer,
+): void {
+  if (message.length === 0 || message.length > CODEX_USAGE_WS_INSPECT_MAX_BYTES) return;
+  if (!message.includes('"usage"')) return;
+  if (guardianParentThreadIdFromHeaders(headers)) return;
+  const sessionId = sessionIdFromHeaders(headers);
+  if (!sessionId) return;
+  const parsed = parseJsonObject(message.toString('utf8'));
+  if (!parsed) return;
+  const threadId = fallbackThreadId || selectedThreadIdFromHeaders(headers) || undefined;
+  captureUsagePricing(sessionId, undefined, threadId)(parsed);
+}
+
 function observeInboundWebSocketCapacity(threadId: string, message: Buffer): void {
   if (!threadId || message.length === 0 || message.length > CODEX_CAPACITY_WS_INSPECT_MAX_BYTES) return;
   if (
@@ -657,8 +676,9 @@ let dumpSeq = 0;
 
 const CODEX_RESPONSE_OBSERVER_MAX_BYTES = 2 * 1024 * 1024;
 
+const isSilentEncryptedRetryEnabled = () => readSilentEncryptedRetrySettings().enabled;
 const encryptedContentRecoveryRule = createEncryptedContentRecoveryRule({
-  enabled: () => readSilentEncryptedRetrySettings().enabled,
+  enabled: isSilentEncryptedRetryEnabled,
   onRetry: (threadId, model) => encryptedStripController.markActive(threadId, model),
 });
 const imageGenerationIdRecoveryRule = createImageGenerationIdRecoveryRule({
@@ -695,6 +715,7 @@ const xaiModelInputRecoveryRule = createXaiModelInputRecoveryRule({
 const vllmResponsesCompatibilityRule = createVllmResponsesCompatibilityRule();
 const CODEX_BODY_RECOVERY_RULES = [
   encryptedContentRecoveryRule,
+  createMissingReasoningItemRecoveryRule(isSilentEncryptedRetryEnabled),
   imageGenerationIdRecoveryRule,
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
@@ -740,7 +761,13 @@ function isRepairableToolItemIdError(errorText: string): boolean {
   const rule = CODEX_BODY_RECOVERY_RULES.find(
     (candidate) => candidate.enabled() && candidate.matches(errorText),
   );
-  const reason = rule?.id ?? (isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null);
+  // The OAuth WS upstream may reject item IDs without naming a specific ID. Use the
+  // existing per-thread HTTP fallback; only a precise HTTP error can authorize stripping.
+  const reason = rule?.id ?? (
+    /this request does not support user-supplied input item IDs\./i.test(errorText)
+      ? 'responses_input_item_ids_unsupported'
+      : isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null
+  );
   if (!reason) return null;
 
   const sessionId = args.sessionId.trim();
@@ -999,7 +1026,7 @@ function providerContextForRequest(
   }
   return {
     sessionId,
-    providerId: sessionId ? getSessionProvider(sessionId) : null,
+    providerId: readPoolExecutionRoute(sessionId)?.connectionId ?? (sessionId ? getSessionProvider(sessionId) : null),
     catalogModel: requestModel,
   };
 }
@@ -3096,11 +3123,12 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
   return async (body, ctx) => {
     const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const requestSessionId = sessionIdFromHeaders(ctx.headers);
+    const grantProviderId = poolAuthorizationProvider(guestSessionId, providerId);
     // This proxy belongs to one guest. Headerless calls use that binding, and
     // headers cannot borrow another guest's grants, even on the same provider.
     if (guestSessionId && ((requestSessionId && requestSessionId !== guestSessionId)
-      || guestProviderRouteForSession(guestSessionId)?.providerId !== providerId
-      || getSessionProvider(guestSessionId) !== providerId)) return codexGuestRouteRefusal();
+      || !grantProviderId || guestProviderRouteForSession(guestSessionId)?.providerId !== grantProviderId
+      || getSessionProvider(guestSessionId) !== grantProviderId)) return codexGuestRouteRefusal();
     const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
     if (account?.sharedProviderId && (authInjection !== 'oauth-bearer' || !leaseIsCurrent()))
       return codexGuestRouteRefusal();
@@ -3120,6 +3148,11 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
       : undefined;
     if (!await guestProviderModelAllowed(providerId, reviewerModel ?? requestModel, sessionId)) return codexGuestRouteRefusal(sessionId, reviewerModel ?? requestModel, 'model');
     if (customPath.kind !== 'not-custom-provider-route') return undefined;
+    if (grantProviderId !== providerId) {
+      if (sessionId && requestSessionId === sessionId && ctx.method === 'POST' && ctx.url.split('?', 1)[0]?.endsWith('/responses'))
+        return undefined; // The owner-side pool route resolves and revalidates this exact connection.
+      return codexGuestRouteRefusal();
+    }
     if (ctx.url.split('?', 1)[0]?.endsWith('/responses')) {
       const effectiveModel = providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ?? requestModel;
       if (effectiveModel !== requestModel && !await guestProviderModelAllowed(providerId, effectiveModel, sessionId)) return codexGuestRouteRefusal(sessionId, effectiveModel, 'model');
@@ -3545,6 +3578,17 @@ function resolveCodexCustomProviderRoutingDecision(
     // Provider/catalog model。嵌套子线程继承同一份路由快照。
     const subagentRoute = subagentRouteFromHeaders(ctx.headers);
     const model = subagentRoute?.catalogModel ?? reportedModel;
+    const poolRoute = readPoolExecutionRoute(sessionId);
+    if (poolRoute && model) {
+      const valid = () => readPoolExecutionRoute(sessionId) === poolRoute
+        && poolAuthorizationProvider(sessionId, poolRoute.connectionId, model) !== null;
+      if (!valid() || (subagentRoute && subagentRoute.providerId !== poolRoute.connectionId))
+        return codexCustomProviderRouteFailure(403, 'pool_account_route_unavailable');
+      return resolveProviderRouteDecision(poolRoute.connectionId, 'codex', _readGatewayKey(), model, sessionId)
+        .then(resolved => resolved?.decision && valid()
+          ? { ...resolved.decision, dispatchGenerationValid: valid }
+          : codexCustomProviderRouteFailure(403, 'pool_account_route_unavailable'));
+    }
     const explicitProviderId = subagentRoute?.providerId
       ?? (sessionId ? getSessionProvider(sessionId) : null);
     const authorizationModel = model === CODEX_AUTO_REVIEW_MODEL && guardianParentThreadIdFromHeaders(ctx.headers) && sessionId
@@ -3797,7 +3841,7 @@ function createTransformRequestChain(
     createArmedHttpRecoveryStripTransform(),
     createActiveStripTransform({
       controller: encryptedStripController,
-      enabled: () => readSilentEncryptedRetrySettings().enabled,
+      enabled: isSilentEncryptedRetryEnabled,
       strip: stripEncryptedContentFromBody,
     }),
     createActiveStripTransform({
@@ -4185,6 +4229,7 @@ async function createCodexProxyHandle(
         },
         (message) => {
           observeInboundWebSocketCapacity(wsThreadId, message);
+          observeInboundWebSocketUsage(ctx.headers, wsThreadId, message);
         },
       );
     },
@@ -4226,12 +4271,33 @@ async function createCodexProxyHandle(
         let model = '';
         try { const body = JSON.parse(ctx.requestBody.toString('utf8')); if (typeof body.model === 'string') model = body.model; } catch { return null; }
         const record = captureGuestRequestUsage(guestSessionId, model);
-        return record ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
+        return record
+          ? createUsagePricingObserver(
+              ctx.responseHeaders['content-type'] ?? '',
+              record,
+              ctx.responseHeaders['content-encoding'] ?? '',
+            )
+          : null;
       },
       ctx => {
-        const record = pricing.get(ctx.reqId);
-        return record && ctx.status >= 200 && ctx.status < 300
-          ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
+        if (ctx.status < 200 || ctx.status >= 300) return null;
+        let record = pricing.get(ctx.reqId);
+        if (!record && ctx.method === 'POST') {
+          const reqPath = ctx.url.split('?', 1)[0]?.replace(/\/+$/, '') ?? '';
+          if (reqPath.endsWith('/responses') && !guardianParentThreadIdFromHeaders(ctx.requestHeaders)) {
+            const sessionId = sessionIdFromHeaders(ctx.requestHeaders);
+            if (sessionId) {
+              record = captureUsagePricing(sessionId, undefined, selectedThreadIdFromObserver(ctx) || undefined);
+            }
+          }
+        }
+        return record
+          ? createUsagePricingObserver(
+              ctx.responseHeaders['content-type'] ?? '',
+              record,
+              ctx.responseHeaders['content-encoding'] ?? '',
+            )
+          : null;
       },
       createResponsesCallIdLimitObserver((threadId, model, upstreamBase) =>
         responsesCallIdLengthStripController.markActive(threadId, model, upstreamBase)),
@@ -4239,9 +4305,11 @@ async function createCodexProxyHandle(
       createCodexResponseObserver(),
       createProviderUpstreamErrorObserver({
         agent: 'codex',
+        resolveUserSessionId: headers => guardianParentThreadIdFromHeaders(headers) || isCollabSpawnRequest(headers)
+          ? null : sessionIdFromHeaders(headers) ?? null,
         resolveUserProviderId: (requestHeaders) => {
           const sessionId = sessionIdFromHeaders(requestHeaders);
-          return sessionId ? getUserProviderIdForSession(sessionId) : null;
+          return readPoolExecutionRoute(sessionId)?.connectionId ?? (sessionId ? getUserProviderIdForSession(sessionId) : null);
         },
         resolveUserProviderName: (providerId) =>
           getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,

@@ -25,6 +25,8 @@ vi.mock('@/session/mobileDurableOutbox', () => ({
   mobileDurableOutbox: { update: editOutbox.update, subscribe: () => () => {}, reconcileDrafts: async () => {} },
 }));
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { setMobileDebugSink } from '@/debug/mobileDebugLog';
+import { i18n } from '@/i18n';
 import { returnNewSessionToEdit } from '@/session/returnNewSessionToEdit';
 const recoveryAsyncStorage = vi.hoisted(() => ({
   getItem: vi.fn(async (key: string) => recoveryStorage.get(key) ?? null),
@@ -53,12 +55,14 @@ import {
   dismissRecoveredPrecreatedSession,
   drainStashedNewSessionDraft,
   getNewSessionCreationTask,
+  hasPendingHostDialogueCreation,
   prepareNewSessionCreationForEdit,
   retryNewSessionCreation,
   restoreNewSessionDurableEdit,
   shouldBlockSessionSync,
   stashNewSessionDraftForEdit,
   startNewSessionCreation,
+  subscribeNewSessionCreationTasks,
   withNewSessionCreationRemoval,
   type NewSessionCreationParams,
 } from '@/session/newSessionCreation';
@@ -177,6 +181,68 @@ async function flushPipeline(): Promise<void> {
 }
 
 describe('newSessionCreation pipeline', () => {
+  // Unit: a durable handoff must wake delivery on completion, without scanning on UI-only progress.
+  it('publishes creation progress to the screen and completion to the outbox', async () => {
+    const params = makeParams('wake-first', makeMaker());
+    params.transport.handoffFirstMessage = async () => {};
+    const screen: string[] = [];
+    const delivery: string[] = [];
+    const phase = () => getNewSessionCreationTask(params.sessionId)?.phase ?? 'finished';
+    const offScreen = subscribeNewSessionCreationTasks(() => screen.push(phase()));
+    const offDelivery = subscribeNewSessionCreationTasks(() => delivery.push(phase()), 'delivery');
+    try {
+      startNewSessionCreation(params);
+      await flushPipeline();
+      expect(screen).toEqual(['connecting', 'checkingModel', 'creating', 'sending', 'finished']);
+      expect(delivery).toEqual(['connecting', 'finished']);
+    } finally {
+      offScreen();
+      offDelivery();
+    }
+  });
+
+  // Unit: a transient create error used to reopen the editor.
+  // A committed send keeps its original IDs and background window available to the outbox,
+  // and keeps blocking session sync even if host creation later enters a failed state.
+  it('releases a submitted dialogue for delivery after a transient creation failure', async () => {
+    const record = recoveryOutboxRecord('pending-dialogue');
+    record.state = 'queued';
+    record.creation = { ...record.creation!, draft: { ...DRAFT, workspaceKind: 'dialogue' }, needsHostCreation: true };
+    editOutbox.records.mockReturnValue([record]);
+    try {
+      const endBackgroundDelivery = vi.fn();
+      const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[NOT_CONNECTED] offline'); }) });
+      const params = makeParams(record.item.sessionId, maker, {
+        firstMessageClientId: record.item.clientId,
+        endBackgroundDelivery,
+      });
+      params.transport.handoffFirstMessage = vi.fn();
+      startNewSessionCreation(params);
+      await flushPipeline();
+      expect(maker.createSession).toHaveBeenCalled();
+      expect(getNewSessionCreationTask(record.item.sessionId)).toBeNull();
+      expect(endBackgroundDelivery).not.toHaveBeenCalled();
+      expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(true);
+      expect(hasPendingHostDialogueCreation(record.item.sessionId, record.deviceId)).toBe(true);
+      expect(hasPendingHostDialogueCreation(record.item.sessionId, 'other-device')).toBe(false);
+      expect(hasPendingHostDialogueCreation(record.item.sessionId, '')).toBe(false);
+      expect(editOutbox.update).not.toHaveBeenCalledWith(record, expect.objectContaining({ state: 'failed' }));
+      // A subsequent permanent create failure must keep blocking sync instead of triggering NOT_FOUND.
+      editOutbox.records.mockReturnValue([{ ...record, state: 'failed', error: 'unauthenticated' }]);
+      expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(true);
+      expect(hasPendingHostDialogueCreation(record.item.sessionId, record.deviceId)).toBe(true);
+      // Once host creation is confirmed, sync is allowed again even before prepared is written.
+      editOutbox.records.mockReturnValue([{
+        ...record, state: 'failed',
+        creation: { ...record.creation!, needsHostCreation: undefined, hostCreated: true },
+      }]);
+      expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(false);
+      expect(hasPendingHostDialogueCreation(record.item.sessionId, record.deviceId)).toBe(false);
+    } finally {
+      editOutbox.records.mockReturnValue([]);
+    }
+  });
+
   it('carries unsent composer text and files through legacy memory recovery', async () => {
     const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[MODEL_UNAVAILABLE] unavailable'); }) });
     startNewSessionCreation(makeParams('s1', maker));
@@ -211,6 +277,53 @@ describe('newSessionCreation pipeline', () => {
     }
     expect(maker.worktree.discardPrecreated).toHaveBeenCalledOnce();
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  // 测试价值：经 startNewSessionCreation 跑真实管线，断言写进本机诊断的分段计时。用户反馈
+  // 「手机新任务点发送后二三十秒才发出去」(2026-11-25)时，本机没有任何分段证据能区分建链、
+  // 查模型、电脑建会话和交出首条消息；耗时必须落在对应阶段、失败时停在失败处，且不带正文。
+  it.each([
+    ['handed-off', undefined, { link: 1_000, modelCheck: 2_000, create: 5_000, handoff: 200 }, 0],
+    // 失败那一步没有走到下一个计时点：卡在 create 的 5 秒留在 restMs，不会被算进别的阶段。
+    ['create-failed', '[MODEL_UNAVAILABLE] unavailable', { link: 1_000, modelCheck: 2_000 }, 5_000],
+  ] as const)('records per-stage creation timing (%s)', async (outcome, createError, stages, restMs) => {
+    let clock = 50_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const records: unknown[] = [];
+    setMobileDebugSink((_level, scope, args) => {
+      if (scope === 'new-session' && args[0] === 'creation timing') records.push(args[1]);
+    });
+    try {
+      const maker = makeMaker({
+        createSession: vi.fn(async (opts: { id?: string }) => {
+          clock += 5_000;
+          if (createError) throw new Error(createError);
+          return { sessionId: opts.id };
+        }),
+        input: {
+          enqueue: vi.fn(async () => { clock += 200; return { sessionId: 's1', pendingQueue: [] }; }),
+          getProjection: vi.fn(async () => ({ sessionId: 's1', pendingQueue: [] })),
+        },
+      });
+      const params = makeParams('s1', maker, {
+        startedAt: clock - 300,
+        confirmUnauthenticated: async () => { clock += 2_000; return { unauthenticated: false, fresh: null }; },
+      });
+      params.transport.openLink = vi.fn(async () => { clock += 1_000; });
+      startNewSessionCreation(params);
+      await flushPipeline();
+      expect(records).toHaveLength(1);
+      const record = records[0] as { client: string; totalMs: number; stagesMs: Record<string, number> };
+      expect(record).toMatchObject({ outcome, agentKind: 'claude-code', path: 'direct', retry: false, prepareMs: 300, restMs });
+      expect(record.stagesMs).toMatchObject(stages);
+      if (createError) expect(record.stagesMs).not.toHaveProperty('create');
+      expect(record.totalMs).toBe(300 + restMs + Object.values(stages).reduce((sum, ms) => sum + ms, 0));
+      expect(record.client).toHaveLength(8);
+      expect(JSON.stringify(record)).not.toContain(DRAFT.firstMessage);
+    } finally {
+      setMobileDebugSink(undefined);
+      now.mockRestore();
+    }
   });
 
   beforeEach(async () => {
@@ -858,6 +971,30 @@ describe('newSessionCreation pipeline', () => {
       }),
       expect.anything(),
     );
+  });
+
+  // 测试价值:2026-11-29 手机新建 worktree 任务时，电脑明确拒绝(插件正在停用或更新),
+  // 失败页却提示「请重新连接设备后再试」——重连解决不了。失败后会自动带回新建页，
+  // 走真实管线的托管 worktree 分支:明确拒绝提示内容已带回、可重新发送，断连类不确定失败保留重连提示。
+  it.each([
+    ['The plugin is stopping or updating; try again after it is enabled', 'session.new.createRejectedResend'],
+    ['[NOT_CONNECTED] offline', 'session.new.worktreeCleanupPending'],
+  ] as const)('points a managed-worktree create failure at the step that helps (%s)', async (message, hintKey) => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error(message); }) });
+    startNewSessionCreation(makeParams('s23', maker, {
+      draft: { ...DRAFT, workingDir: '/repo/.cindy-worktrees/auto-three' },
+      precreatedWorktree: {
+        path: '/repo/.cindy-worktrees/auto-three',
+        recoveryKey: 'recovery-key-3333333333',
+        originalWorkingDir: '/repo',
+      },
+      precreatedWorktreeAccountId: 'owner-a',
+    }));
+    await flushPipeline();
+    const task = getNewSessionCreationTask('s23');
+    expect(task?.status).toBe('create-failed');
+    expect(task?.error).toContain(i18n.t(hintKey));
+    expect(maker.createSession).toHaveBeenCalledOnce();
   });
 
   it('started 写盘后二次鉴权中止:账本降回 precreated,任务可返回编辑(codex P2)', async () => {

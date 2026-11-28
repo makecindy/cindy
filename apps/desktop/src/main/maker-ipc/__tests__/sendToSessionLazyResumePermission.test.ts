@@ -1,5 +1,7 @@
-import { syncNewMakerDraftCache, getGroupAssistantPluginSelection, getSelectedNewMakerRoute } from '../../maker-host/newMakerDefaultsCache.js';
+import { syncNewMakerDraftCache, getGroupAssistantPluginSelection, getSelectedNewMakerRoute, GroupCindyRemoteEngineError } from '../../maker-host/newMakerDefaultsCache.js';
 import { admitPluginEngineSwitchTarget } from '../pluginEngineSessionAdmission.js';
+import { resolveSessionExecutionSelection, SessionModelUnavailableError, type SessionModelSelection } from '../sessionExecutionSelection.js';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines.js';
 import * as path from 'node:path';
 import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
@@ -8,6 +10,11 @@ import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
 import { withRemoteAccountReads } from '../../subscription-accounts/remotePreflight.js';
+import { createSessionHandoffHandler, type SessionHandoffSendResult } from '../sessionHandoffCore.js';
+import {
+  assertSessionNotRestarting, sendToSessionLocks, trackSendToSessionLockRun, SessionRestartInProgressError,
+  waitForSendToSessionLock, withSessionRestartLock,
+} from '../sendToSessionLock.js';
 /**
  * #5788:插件 errand 派活走 sendToSessionInternal 的 lazy-resume 时,必须按会话落库的
  * 权限档恢复,不能落到 main 侧通路的缺省 bypass。否则插件任务被提权,errand 复用判定也会
@@ -33,9 +40,11 @@ import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
+import { checkWorktreeBaseRefArg } from '../../worktree/sourceRef.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
+import { buildSessionCreatedBy, serializeSessionCreatedBy } from '../../../shared/sessionOrigin.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -78,10 +87,13 @@ describe('sendToSessionInternal lazy-resume permission mode', () => {
     expect(registerSource.slice(call, close)).toContain('resumeWithStoredPermissionMode: true,');
   });
 
-  it('reads the persisted permission mode in the row snapshot used by lazy resume', () => {
+  it('reads the persisted permission mode, effort, and fastMode in the row snapshot used by lazy resume', () => {
     const sessionsSource = readFileSync(resolve(__dirname, '..', '..', 'localDb', 'sessionDispatchSnapshot.ts'), 'utf8');
     const select = sessionsSource.slice(sessionsSource.indexOf('async function selectSessionRowSnapshot('));
-    expect(select.slice(0, select.indexOf('.from(sessions)'))).toContain('permissionMode: sessions.permissionMode,');
+    const fields = select.slice(0, select.indexOf('.from(sessions)'));
+    expect(fields).toContain('permissionMode: sessions.permissionMode,');
+    expect(fields).toContain('effort: sessions.effort,');
+    expect(fields).toContain('fastMode: sessions.fastMode,');
   });
 
   it('refreshes permissionMode from DB before a queued follow-up starts the harness', async () => {
@@ -160,7 +172,7 @@ const loadBotTaskDispatch = new Function(
 };
 
 function botTaskDispatchHarness(
-  rows: Record<string, { permissionMode: string | null; planModeEnabled: boolean }>,
+  rows: Record<string, { permissionMode: string | null; planModeEnabled: boolean; effort?: string | null; fastMode?: boolean | string | null; providerId?: string | null }>,
   live: Record<string, object> = {},
   overrides: Record<string, unknown> = {},
 ) {
@@ -244,7 +256,12 @@ function botTaskDispatchHarness(
         : null,
     getDbClient: () => dbClient,
     getCurrentDbClientSnapshot: () => dbClient,
+    buildSessionCreatedBy,
+    serializeSessionCreatedBy,
     normalizeAutoTitle,
+    // The real argument check: a malformed or misplaced base must be refused by production code.
+    checkWorktreeBaseRefArg,
+    resolveExplicitSourceRef: asyncNoop,
     refineCreatedTaskTitle: asyncNoop,
     messages: {},
     sessions: {},
@@ -264,6 +281,7 @@ function botTaskDispatchHarness(
     assertReviewExternalInputAllowed: asyncNoop,
     syncBotLanePermission: asyncNoop,
     reconcileBotModelRoute: asyncNoop,
+    runDesktopModelGroupBeforeSend: async () => ({ switched: false }),
     scheduledModelScope: { restore: asyncNoop },
     refreshBotCapabilityEpochBeforeSend: asyncNoop,
     assertSessionNotRestarting: noop,
@@ -301,6 +319,8 @@ function botTaskDispatchHarness(
     AcceptedCallbackDispatchCancelled: class extends Error {},
     // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
     resolveSendToSessionCreateRoute,
+    listPluginEngineViews: () => [],
+    readOfferedRemotePluginEngines: async () => [],
     isBotGroupInTaskClientId,
     getSelfDeviceId: () => 'self-device',
   };
@@ -316,6 +336,50 @@ function botTaskDispatchHarness(
   });
   return { ...loadBotTaskDispatch(scope), scope: stubs, bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
 }
+
+// Guard tier: run the installed sendToSessionInternal closure with the real
+// restart fence and receiving handoff core. Existing restart tests only check the lock.
+it('settles a created handoff refused at the desktop restart fence', async () => {
+  const id = '22222222-2222-4222-8222-222222222222';
+  const enqueue = vi.fn();
+  const h = botTaskDispatchHarness({}, {}, {
+    assertSessionNotRestarting, sendToSessionLocks, trackSendToSessionLockRun,
+    waitForSendToSessionLock, SessionRestartInProgressError, enqueueSendToSessionMessage: enqueue,
+  });
+  let releaseRestart!: () => void;
+  let enterRestart!: () => void;
+  const entered = new Promise<void>(resolve => { enterRestart = resolve; });
+  const restarting = withSessionRestartLock(id, () => new Promise<void>(resolve => {
+    releaseRestart = resolve;
+    enterRestart();
+  }));
+  await entered;
+  let receiptValid = true;
+  const validate = vi.fn(async (_peer: string, input: { release?: boolean }) => {
+    if (input.release) receiptValid = false;
+    return input.release === true || receiptValid;
+  });
+  const create = vi.fn().mockResolvedValue({ ok: true, targetSessionId: id });
+  const handle = createSessionHandoffHandler({
+    create, validate,
+    send: async params => h.sendToSessionInternal({ ...params }) as Promise<SessionHandoffSendResult>,
+  });
+  const request = {
+    action: 'create', sessionId: id, create: { permissionMode: 'ask' },
+    taskActionReceipt: 'desktop-restart-receipt', message: 'First message',
+    sender: { sessionId: 'source' },
+  };
+  try {
+    await expect(handle('sender-device', request)).resolves.toMatchObject({ ok: false, errorCode: 'CREATED_NOT_DELIVERED' });
+    expect(validate).toHaveBeenCalledWith('sender-device', expect.objectContaining({ release: true }), undefined);
+    await expect(handle('sender-device', request)).resolves.toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(create).toHaveBeenCalledOnce();
+    expect(enqueue).not.toHaveBeenCalled();
+  } finally {
+    releaseRestart();
+    await restarting;
+  }
+});
 
 // Unit/guard: execute the same service closure as Agent tools. A plugin has no task to
 // impersonate; its approved input carries one Host source for both saved labels and model notes.
@@ -377,6 +441,62 @@ it.each(['continue', 'fork'] as const)('preserves stored permissions through plu
     expect(h.bootstrapped[0]).toMatchObject({ id: target, permissionMode, planMode: rows[target]!.planModeEnabled });
     expect(h.sentTo).toEqual([{ sessionId: target, planMode: false }]);
   }
+});
+
+// Regression (guard): clicking Publish on a PR card (`cindy.agent.run` mode='continue') or
+// any `sendToSessionInternal` lazy-resume previously omitted `effort` and `fastMode`, silently
+// downgrading ACP tasks (e.g. gemini-4-neon xhigh -> high) and wiping prompt cache twice.
+// Minimal failing input: cold ACP/built-in row with stored effort='xhigh' resumed via continue. tier: guard.
+it.each([
+  { agentKind: 'acp' as const, storedEffort: 'xhigh', storedFastMode: true, expectedFastMode: false },
+  { agentKind: 'codex' as const, storedEffort: 'xhigh', storedFastMode: true, expectedFastMode: true },
+])('preserves stored effort and fastMode on $agentKind lazy resume via plugin continue', async ({ agentKind, storedEffort, storedFastMode, expectedFastMode }) => {
+  const rows = {
+    source: {
+      permissionMode: 'bypassPermissions',
+      planModeEnabled: false,
+      effort: storedEffort,
+      fastMode: storedFastMode,
+      providerId: agentKind === 'acp' ? 'acp-plugin:_root__cindy-antigravity-acp:agy' : 'openai',
+    },
+  };
+  const getSessionMeta = async (id: string) => ({
+    id,
+    agentKind,
+    workDir: '/tmp/fixture/source',
+    model: agentKind === 'acp' ? 'gemini-4-neon' : 'gpt-6.2-sol',
+    providerId: rows.source.providerId,
+    agentDeviceId: undefined,
+    remoteHostId: undefined,
+    sdkSessionId: `sdk-${id}`,
+  });
+  const h = botTaskDispatchHarness(rows, {}, {
+    maker: { getSession: () => undefined, getSessionMeta },
+  });
+  const runner = createGhostAgentTurnRunner({
+    readSessionMeta: getSessionMeta,
+    admitLocalSession: async () => undefined,
+    readPluginName: () => 'GitHub',
+    send: h.sendToSessionInternal,
+    readLatestAssistant: async () => undefined,
+    forkSessionAtMessage: async () => { throw new Error('Not a fork'); },
+    broadcastSessionCreated: () => {},
+  });
+  expect(await runner({
+    ghostId: 'cindy-github',
+    ghostVersion: '1.5.5',
+    sourceSessionId: 'source',
+    mode: 'continue',
+    prompt: 'Publish PR',
+    persistedContent: 'Publish PR',
+  })).toEqual({ ok: true, sessionId: 'source', disposition: 'resumed' });
+  expect(h.bootstrapped).toHaveLength(1);
+  expect(h.bootstrapped[0]).toMatchObject({
+    id: 'source',
+    agentKind,
+    effort: storedEffort,
+    fastMode: expectedFastMode,
+  });
 });
 
 // #9489 acceptance gap (guard): a mocked runner send result cannot prove that
@@ -497,24 +617,21 @@ describe('external handoff to hidden group lanes', () => {
     }));
   });
 
-  it('queues a plugin-engine group turn only from the group dispatcher', async () => {
+  // 2026-11-25 用户要求插件引擎在所有地方与内置引擎一样可用：插件引擎任务此前只接群聊调度的消息，其他任务经
+  // send_to_session 发来的一律 UNSUPPORTED_CAPABILITY。现在与其他任务一样接收(同一条发送路径)；群内部车道拒收
+  // 外部消息是另一条与引擎无关的规则，保持不变。最小失败输入：目标 meta agentKind='acp'。tier：unit。
+  it('delivers messages to a plugin-engine task like any task, keeping the group-lane rule', async () => {
     const maker = { getSession: () => undefined, getSessionMeta: async () => ({ id: 'child', agentKind: 'acp' }) };
     const h = groupHarness(false, { maker });
     const input = { targetSessionId: 'child', message: 'Reply to the group', clientId: 'bot-group:managed-turn' };
-    expect(await h.sendToSessionInternal(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(await h.dispatchBotSessionMessage(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(await h.sendToSessionInternal(input)).toMatchObject({ ok: false, message: expect.stringMatching(/group.*not.*delivered/i) });
     expect(await h.groupDispatch(input)).toMatchObject({ ok: true, wakeKind: 'queued', queuedMessageId: input.clientId });
-    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledTimes(1);
 
     const ordinary = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, { maker });
-    expect(await ordinary.groupDispatch(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(ordinary.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
-    const visible = { ...input, groupAssistantTask: true };
-    expect(await ordinary.sendToSessionInternal(visible)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(await ordinary.groupDispatch(visible)).toMatchObject({ ok: true, wakeKind: 'queued' });
-    expect(ordinary.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      targetSessionId: visible.targetSessionId, clientId: visible.clientId,
-    }));
+    expect(await ordinary.groupDispatch(input)).toMatchObject({ ok: true, agentKind: 'acp', wakeKind: 'queued' });
+    expect(await ordinary.sendToSessionInternal({ ...input, groupAssistantTask: true }))
+      .toMatchObject({ ok: true, agentKind: 'acp', wakeKind: 'queued' });
+    expect(ordinary.scope.enqueueSendToSessionMessage).toHaveBeenCalledTimes(2);
   });
 
   // #12496, unit: run the registered group opener and sender up to their DB and queue ports.
@@ -525,12 +642,20 @@ describe('external handoff to hidden group lanes', () => {
     const push = (selectedPluginEngine: unknown) => syncNewMakerDraftCache({ ownerStamp: owner,
       selectedPluginEngine, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner, 'user:1', false);
     const openSession = vi.fn(async () => ({ row: { id: 'created' } }));
-    const engine = { key: 'fixture:engine', availability: { state: 'available' }, models: [{ id: 'chosen' }],
-      permissionModes: [{ id: 'plan' }], defaultPermissionMode: 'ask' };
+    const engine = { key: 'fixture:engine', providerId, name: 'Fixture Engine',
+      availability: { state: 'available' }, models: [{ id: 'chosen' }],
+      permissionModes: [{ id: 'plan' }, { id: 'ask' }], defaultPermissionMode: 'ask' };
+    const localModel = { harness: 'codex', model: 'gpt-local', providerId: 'openai', effort: 'medium', fastMode: false };
+    const inspectAppDefaultModel = vi.fn(async () => ({ available: [{ route: localModel }] }));
+    const teammatePluginEngineModelChoices = vi.fn(() => (engine.availability.state === 'available'
+      ? [{ route: { providerId, model: 'chosen' }, displayName: 'Fixture Model' }] : []));
     const h = botTaskDispatchHarness({ created: { permissionMode: 'plan', planModeEnabled: true } }, {}, {
       captureSessionOwner: () => () => {}, activeOwnerScopeKey: () => 'user:1',
-      getGroupAssistantPluginSelection, getSelectedNewMakerRoute, admitPluginEngineSwitchTarget,
+      getGroupAssistantPluginSelection, getSelectedNewMakerRoute, admitPluginEngineSwitchTarget, GroupCindyRemoteEngineError,
+      SessionModelUnavailableError, PLUGIN_ENGINE_DEFAULT_MODEL,
       listPluginEngineViews: () => [engine], openSession, markGroupCindyTask: vi.fn(), broadcastSessionCreated: vi.fn(),
+      inspectAppDefaultModel, teammatePluginEngineModelChoices, getRemoteNewMakerDefaults: () => ({ permissionMode: 'ask' }),
+      permissionModeOrAsk: (mode: string | undefined) => mode ?? 'ask', log: { warn: vi.fn() },
       maker: { getSession: () => undefined, getSessionMeta: async () => ({ agentKind: 'acp' }) },
     });
     const request = { title: 'Group Cindy', projectDir: null };
@@ -544,16 +669,84 @@ describe('external handoff to hidden group lanes', () => {
     const input = { targetSessionId: opened.sessionId, clientId: 'bot-group:turn', message: 'Hello' };
     expect(await h.groupDispatch({ ...input, groupAssistantTask: true })).toMatchObject({ ok: true, wakeKind: 'queued' });
     expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(input));
-    for (const invalid of [{ ...selection, providerId: 'bad' }, { ...selection, deviceId: 'another-device' }]) {
-      push(invalid);
-      expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false });
-    }
+    push({ ...selection, providerId: 'bad' });
+    expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false, errorCode: 'LANE_UNAVAILABLE' });
+    expect(openSession).toHaveBeenCalledTimes(1);
     engine.availability.state = 'unavailable';
     push(selection);
-    expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false });
-    expect(openSession).toHaveBeenCalledTimes(1);
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: true, modelFallback: { name: 'gpt-local' } });
+    expect(openSession).toHaveBeenCalledTimes(2);
+    // 2026-11-26 incident: a new-task engine on another computer failed every @Cindy with a bare
+    // RUNTIME_ERROR. The executing computer now answers with its own model and says so; with no
+    // model at all it is the public MODEL_UNAVAILABLE, not a runtime error.
+    push({ ...selection, deviceId: 'another-device' });
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: true, sessionId: 'created', created: true, modelFallback: { name: 'gpt-local' } });
+    expect(openSession).toHaveBeenLastCalledWith(expect.objectContaining({ body: expect.objectContaining({
+      agentKind: 'codex', providerId: 'openai', model: 'gpt-local',
+    }) }));
+    inspectAppDefaultModel.mockResolvedValueOnce({ available: [] });
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: false, errorCode: 'MODEL_UNAVAILABLE' });
+    expect(openSession).toHaveBeenCalledTimes(3);
+    // #13163 review, existing guard fixture: no built-in routes, but one local
+    // plugin model. Its new task must not inherit the remote engine's Plan mode.
+    engine.availability.state = 'available';
+    inspectAppDefaultModel.mockResolvedValueOnce({ available: [] });
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: true, sessionId: 'created', created: true, modelFallback: { name: 'Fixture Model' } });
+    expect(openSession).toHaveBeenLastCalledWith(expect.objectContaining({ body: expect.objectContaining({
+      agentKind: 'acp', providerId, model: 'chosen', permissionMode: 'ask',
+    }) }));
     push(undefined);
   });
+
+  // #13163 §9: the registered opener admits the cached route before writing a row. The existing
+  // plugin fixture misses built-in location, provider and catalog failures. Guard tier (same
+  // production opener slice): exercise the real built-in resolver up to the storage port.
+  it.each(['remote', 'share', 'provider missing', 'model missing', 'engine missing', 'no fallback', 'bad tuning'] as const)(
+    'uses only an admitted local model for a built-in Cindy selection (%s)', async scenario => {
+      const owner = { dataOwnerId: 'user', ownerGeneration: 1 };
+      const local = { harness: 'codex', model: 'local', providerId: 'local-provider', effort: '', fastMode: false };
+      const selected = { ...local,
+        ...(scenario === 'provider missing' || scenario === 'no fallback' ? { providerId: 'gone' } : {}),
+        ...(scenario === 'model missing' ? { model: 'gone' } : {}),
+        ...(scenario === 'engine missing' ? { harness: 'claude' } : {}),
+        ...(scenario === 'remote' || scenario === 'share' ? { agentDeviceId: scenario === 'remote' ? 'other-device' : 'share:other' } : {}),
+        ...(scenario === 'bad tuning' ? { effort: 'high' } : {}),
+      };
+      const persist = vi.fn((_selection: ReturnType<typeof resolveSessionExecutionSelection>) => ({ row: { id: 'created' } }));
+      const openSession = async ({ body }: { body: SessionModelSelection }) => persist(resolveSessionExecutionSelection({
+        selection: body, availableAgents: ['codex'], availableModels: [{ id: local.model }], hasCindyAiApiKey: true,
+        providerRouting: { availability: { 'claude-code': [], pi: [], codex: [{ id: local.providerId, name: 'Local', models: [local.model] }] },
+          resolveDefaultProviderIdForModel: () => local.providerId },
+      }));
+      const h = botTaskDispatchHarness({}, {}, {
+        captureSessionOwner: () => () => {}, activeOwnerScopeKey: () => 'user:1',
+        getGroupAssistantPluginSelection, getSelectedNewMakerRoute, GroupCindyRemoteEngineError, SessionModelUnavailableError,
+        inspectAppDefaultModel: async () => ({ available: scenario === 'no fallback' ? [] : [{ route: local }] }),
+        listPluginEngineViews: () => [], teammatePluginEngineModelChoices: () => [],
+        getRemoteNewMakerDefaults: () => ({ permissionMode: 'ask' }), permissionModeOrAsk,
+        openSession, markGroupCindyTask: vi.fn(), broadcastSessionCreated: vi.fn(), log: { warn: vi.fn() },
+      });
+      const push = (selectedRoute?: typeof selected) => syncNewMakerDraftCache({ ownerStamp: owner,
+        selectedRoute, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner, 'user:1', false);
+      expect(push(selected)).toBe(true);
+      try {
+        const opened = await h.ensureGroupAssistantSession({ title: 'Group Cindy', projectDir: null });
+        if (scenario === 'no fallback' || scenario === 'bad tuning') {
+          expect(opened).toMatchObject({ ok: false, errorCode: scenario === 'no fallback' ? 'MODEL_UNAVAILABLE' : 'LANE_UNAVAILABLE' });
+          expect(persist).not.toHaveBeenCalled();
+        } else {
+          expect(opened).toMatchObject({ ok: true, modelFallback: { name: local.model } });
+          expect(persist).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ model: local.model, providerId: local.providerId }));
+        }
+      } finally {
+        push();
+      }
+    },
+  );
 
   it('preserves host continuations inside a group lane', async () => {
     const h = groupHarness(false);
@@ -693,6 +886,123 @@ it.each([
     projectDir, workingDir: workingDir === undefined ? '' : executionDir, workspaceKind,
   }) }), expect.any(Function));
   expect(h.bootstrapped[0]).toMatchObject({ projectDir, workingDir: executionDir });
+});
+
+// 2026-11-28 multi-computer retrospective: a project whose work branch is not the default one had
+// every new task start from the default branch, and the receipt named neither the base nor the
+// provider computer. This runs the production create closure: the tool test mocks the host, and
+// no other case sends a base through it. Minimal input: one create per outcome. Unit tier.
+it.each([
+  { label: 'explicit base', params: { useWorktree: true, baseRef: ' origin/release/2.x ' }, ok: true },
+  { label: 'default base', params: { useWorktree: true }, ok: true },
+  { label: 'base without a worktree', params: { baseRef: 'release/2.x' }, ok: false },
+  { label: 'malformed base', params: { useWorktree: true, baseRef: '--upload-pack=evil' }, ok: false },
+  { label: 'unresolvable base', params: { useWorktree: true, baseRef: 'origin/gone' }, ok: false },
+])('creates a local task worktree from the requested base and reports what took effect: $label', async ({ label, params, ok }) => {
+  const prepare = vi.fn(async (_deps: unknown, _dispatcher: unknown, _dir: unknown, options?: { sourceRef?: string }) =>
+    options?.sourceRef === 'origin/gone'
+      ? { ok: false as const, message: 'no such ref' }
+      : { ok: true as const, sessionId: 'new-child', staleBaseReason: options?.sourceRef ? 'fetch-failed' : undefined,
+        meta: { path: '/repo/.cindy-worktrees/child',
+          sourceBranch: options?.sourceRef ? `refs/remotes/${options.sourceRef}` : 'refs/remotes/origin/main' } });
+  const open = vi.fn(async (input: { body: Record<string, unknown> }, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) => {
+    const row = { ...input.body, id: 'new-child', workspaceKind: 'project' };
+    return { row, value: await create(row, async () => {}) };
+  });
+  const h = botTaskDispatchHarness({}, {}, {
+    openSession: open, broadcastSessionCreated: vi.fn(), worktreeManager: {}, resolveFreshSourceBranch: vi.fn(),
+    prepareHandoffWorktree: prepare,
+  });
+  const result = await h.sendToSessionInternal({ dispatcherSessionId: 'source', message: 'Work', forceQueue: true, ...params });
+  if (!ok) {
+    expect(result).toMatchObject({ ok: false, errorCode: label === 'unresolvable base' ? 'WORKTREE_UNAVAILABLE' : 'INVALID_ARGS' });
+    if (label === 'unresolvable base') expect((result as { message: string }).message).toContain('base_ref "origin/gone"');
+    else expect(prepare).not.toHaveBeenCalled();
+    // Nothing is created for a refused base, and it never falls back to the default branch.
+    expect(prepare).toHaveBeenCalledTimes(label === 'unresolvable base' ? 1 : 0);
+    expect(open).not.toHaveBeenCalled();
+    return;
+  }
+  const explicit = label === 'explicit base';
+  expect(prepare.mock.calls[0]?.[3]).toEqual(explicit ? { sourceRef: 'origin/release/2.x' } : undefined);
+  expect(result).toMatchObject({ ok: true, wakeKind: 'created', worktreePath: '/repo/.cindy-worktrees/child',
+    worktreeBaseRef: explicit ? 'refs/remotes/origin/release/2.x' : 'refs/remotes/origin/main',
+    // The source task runs on this computer's own provider, so the new task does too.
+    providerDeviceId: null });
+  expect((result as { worktreeBaseStaleReason?: string }).worktreeBaseStaleReason).toBe(explicit ? 'fetch-failed' : undefined);
+  expect(result).not.toHaveProperty('providerDeviceInherited');
+});
+
+// 2026-11-27: real sendToSessionInternal create closure with plugin engine (agentKind="acp").
+// Validates before worktree creation and passes acp + providerId + model + effort into openSession/bootstrapSession.
+it('creates a plugin-engine standalone task through sendToSessionInternal and rejects invalid config before worktree allocation', async () => {
+  const providerId = 'acp-plugin:antigravity:antigravity';
+  const engine = {
+    key: 'antigravity:antigravity',
+    providerId,
+    ghostId: 'antigravity',
+    harnessId: 'antigravity',
+    name: 'Antigravity',
+    availability: { state: 'available' },
+    models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' }],
+    permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Full access' }],
+    defaultPermissionMode: 'default',
+  };
+  const prepareWorktree = vi.fn(async () => ({ ok: true, sessionId: 'acp-child', meta: { path: '/repo/.cindy-worktrees/acp-child' } }));
+  const open = vi.fn(async (input: { id?: string; body: Record<string, unknown> }, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) => {
+    const row = { ...input.body, id: input.id ?? 'acp-child', workspaceKind: 'project', workingDir: input.body.workingDir ?? '/tmp/fixture/source' };
+    return { row, value: await create(row, async () => {}) };
+  });
+  const h = botTaskDispatchHarness({}, {}, {
+    listPluginEngineViews: () => [engine],
+    openSession: open,
+    broadcastSessionCreated: vi.fn(),
+    worktreeManager: {},
+    resolveFreshSourceBranch: vi.fn(),
+    prepareHandoffWorktree: prepareWorktree,
+  });
+
+  // Invalid effort must fail BEFORE allocating a worktree or calling openSession.
+  const rejected = await h.sendToSessionInternal({
+    dispatcherSessionId: 'source',
+    message: 'Fix bug',
+    useWorktree: true,
+    execution: { agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'ultra' },
+  });
+  expect(rejected).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(prepareWorktree).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+
+  const created = await h.sendToSessionInternal({
+    dispatcherSessionId: 'source',
+    message: 'Fix mobile QA ordering',
+    execution: { agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'xhigh' },
+  });
+  expect(created).toMatchObject({
+    ok: true,
+    wakeKind: 'created',
+    agentKind: 'acp',
+    providerId,
+    model: 'gemini-4-neon',
+    effort: 'xhigh',
+    fastMode: false,
+  });
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({
+    body: expect.objectContaining({
+      agentKind: 'acp',
+      providerId,
+      model: 'gemini-4-neon',
+      effort: 'xhigh',
+      fastMode: false,
+    }),
+  }), expect.any(Function));
+  expect(h.bootstrapped[0]).toMatchObject({
+    agentKind: 'acp',
+    providerId,
+    model: 'gemini-4-neon',
+    effort: 'xhigh',
+    fastMode: false,
+  });
 });
 
 // Existing cold-start tests omitted the receipt. Execute the actual production dispatch closure
@@ -1002,4 +1312,102 @@ describe('unbound Codex pre-send history wiring', () => {
     expect(order).toEqual(['durable-handoff', 'cancel-wait']);
     expect(failover).not.toHaveBeenCalled();
   });
+
+  // 2026-11-28 regression: plugin engine account handoffs must forward `retry` (so zero-progress
+  // auto-retries do not duplicate the user message in context handoff) and `invokeRemote` (remote Agent).
+  it('forwards retry context and invokeRemote to plugin engine account handoffs before cancelling the usage wait', async () => {
+    const start = registerSource.indexOf('export async function prepareUnhealthySessionForSend(');
+    const end = registerSource.indexOf('let runtimePluginBudgetClearer:', start);
+    const body = ts.transpileModule(registerSource.slice(start, end).replace('export ', ''), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const assertCurrent = vi.fn();
+    const prepareNativeSessionRecovery = vi.fn(async (_id: string, _mode: string, check: () => void) => { check(); });
+    const cancelUsageLimitWait = vi.fn();
+    const invokeRemote = vi.fn();
+    const retry = { clientId: 'retry-1', text: 'continue' };
+    const pluginPrepare = vi.fn(async (id: string, deps: {
+      invokeRemote?: unknown;
+      rebuild(id: string, check: () => void): Promise<void>;
+    }) => {
+      expect(deps.invokeRemote).toBe(invokeRemote);
+      await deps.rebuild(id, assertCurrent);
+      return true;
+    });
+    const prepare = vi.fn();
+    const failover = vi.fn();
+    const ports = {
+      withRemoteAccountReads,
+      subscriptionAccountRecoveryDeps: { rebuild: vi.fn(), invokeRemote, isRunning: vi.fn(), log: vi.fn() },
+      readCodexThreadStorageReadOnly: vi.fn(),
+      preparePluginEngineAccountForSend: pluginPrepare,
+      readSubscriptionRuntimeSession: vi.fn(),
+      prepareSubscriptionAccountForSend: prepare,
+      prepareSubscriptionAccountFailover: failover,
+      agentInputCoordinatorHolder: { cancelUsageLimitWait, getInputAbortSignal: () => undefined },
+      contextOverflowRolloverHolder: { prepareNativeSessionRecovery },
+    };
+    const run = new Function(...Object.keys(ports), `${body}; return prepareUnhealthySessionForSend;`)(...Object.values(ports));
+    expect(await run('acp-task', retry)).toBe(true);
+    expect(pluginPrepare).toHaveBeenCalledOnce();
+    expect(prepareNativeSessionRecovery).toHaveBeenCalledExactlyOnceWith('acp-task', 'retain-route', assertCurrent, undefined, retry);
+    expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('acp-task');
+    expect(prepare).not.toHaveBeenCalled();
+    expect(failover).not.toHaveBeenCalled();
+  });
+});
+
+// 依据：send_to_session create 分支在省略 working_dir 时此前缺省落到 bypassPermissions，
+// 使 ask / auto / plan 会话借创建独立子任务（或解耦任务）静默提权；
+// 既有测试只覆及插件显式传 inheritSourcePermissionMode:true 与跨电脑创建；
+// 最小失败输入：dispatcher 权限为 ask/auto/plan 且未传 workingDir / inheritSourcePermissionMode。tier: guard。
+describe('sendToSessionInternal create non-escalating permission inheritance', () => {
+  it.each(['ask', 'auto', 'plan', 'bypassPermissions'] as const)(
+    'inherits dispatcher permissionMode=%s without silently escalating to bypassPermissions',
+    async (sourceMode) => {
+      const openSessionCalls: Array<Record<string, unknown>> = [];
+      const dbChain = {
+        from: () => dbChain,
+        where: () => dbChain,
+        limit: async () => [{ id: 'source', title: 'Source', permissionMode: sourceMode, effort: 'medium', fastMode: false, providerId: 'anthropic' }],
+      };
+      const h = botTaskDispatchHarness({}, {}, {
+        getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+        openSession: async (input: { body: Record<string, unknown> }, run: (row: Record<string, unknown>, assertCurrent: () => void) => Promise<unknown>) => {
+          openSessionCalls.push(input.body);
+          const row = { id: 'created-task', ...input.body };
+          const value = await run(row, () => {});
+          return { row, value };
+        },
+        broadcastSessionCreated: () => {},
+        readClaudeApiKey: () => 'fixture-key',
+        getProviderRoutingContext: async () => ({
+          availability: { 'claude-code': [{ id: 'anthropic', name: 'Anthropic', models: ['claude-opus-fixture'] }], codex: [], pi: [] },
+          resolveDefaultProviderIdForModel: () => 'anthropic',
+        }),
+        maker: {
+          getSession: () => undefined,
+          getSessionMeta: async () => ({
+            id: 'source',
+            agentKind: 'claude-code',
+            workDir: '/tmp/fixture/source',
+            projectDir: null,
+            workspaceKind: 'dialogue',
+            model: 'claude-opus-fixture',
+            remoteHostId: null,
+          }),
+          getCapabilities: () => ({ availableModels: [{ id: 'claude-opus-fixture' }] }),
+        },
+      });
+      const res = await h.sendToSessionInternal({
+        dispatcherSessionId: 'source',
+        message: 'Follow PR #122 in an independent task',
+        title: '#122 Fix deadlock',
+      });
+      expect(res).toMatchObject({ ok: true, wakeKind: 'created' });
+      expect(openSessionCalls).toHaveLength(1);
+      expect(openSessionCalls[0]?.permissionMode).toBe(sourceMode);
+      expect(h.bootstrapped[0]?.permissionMode).toBe(sourceMode);
+    },
+  );
 });

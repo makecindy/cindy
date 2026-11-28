@@ -35,6 +35,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
 }));
 
 import { ExecServerRelay } from '../controller/execServerRelay';
+import type { ManagedSkillOverlay } from '../controller/managedSkillOverlay';
 import { RemoteExecutor } from '../executor/executor';
 import { ExecutorGate, type ExecutorAction, type ExecutorGateDecision } from '../executor/gate';
 import { ExecutorWorkspace } from '../executor/workspace';
@@ -52,8 +53,11 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function setup(authorize?: (action: ExecutorAction) => ExecutorGateDecision) {
-  const workspace = new ExecutorWorkspace({ workingDir: root });
+function setup(
+  authorize?: (action: ExecutorAction) => ExecutorGateDecision,
+  managed?: { aliases: Array<{ from: string; to: string }>; overlays: ManagedSkillOverlay[] },
+) {
+  const workspace = new ExecutorWorkspace({ workingDir: root, aliases: managed?.aliases });
   const approved = new Set<string>();
   const pending: Array<{ action: ExecutorAction; answer(allowed: boolean): void }> = [];
   const replies: Array<Record<string, unknown>> = [];
@@ -79,6 +83,7 @@ function setup(authorize?: (action: ExecutorAction) => ExecutorGateDecision) {
     push: async (frames) => {
       for (const frame of frames) if (frame.kind === 'message' && frame.data) replies.push(JSON.parse(frame.data));
     },
+    ...(managed ? { managedSkillOverlays: () => managed.overlays } : {}),
   });
   relay.handle({ t: 'ws', connId: 'c1', kind: 'open', path: '/ws/exec-server' });
   const send = (message: Record<string, unknown>) =>
@@ -362,5 +367,88 @@ describe('exec-server relay summary (#5764)', () => {
     relay.close();
     expect(relay.stats()).toMatchObject({ requests: 1, rejected: 0, slowPushes: 0 });
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+// 测试价值：对方的 Codex 经执行环境找项目 Skill(`.agents/skills` 先 getMetadata，再 canonicalize、walk)，
+// 托管 Skill 只有逐个目录的路径映射，修复前上级目录在项目里不存在就整个看不到(#13718)。入口是中继的
+// 真实收发；最小输入是三条 NotFound 回包与一条带项目 Skill 的 walk 回包。unit，exec-server 用内存假进程。
+describe('managed Skills in the agent project Skill directory (#13718)', () => {
+  const cleanups: Array<() => void> = [];
+  afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
+  function managedSetup() {
+    const shadow = '/agent/runs/task-1/workspace';
+    // 托管 Skill 在项目之外(这台电脑的插件目录)；工作目录就是项目。
+    const skill = path.join(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-relay-skill-'))), 'learn');
+    cleanups.push(() => fs.rmSync(path.dirname(skill), { recursive: true, force: true }));
+    fs.mkdirSync(path.join(skill, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(skill, 'SKILL.md'), '---\nname: learn\n---\n');
+    fs.writeFileSync(path.join(skill, 'scripts', 'run.sh'), 'echo hi\n');
+    // 文件名里的 `%41` 不能被对方解成 `A`。
+    fs.writeFileSync(path.join(skill, 'scripts', '50%41.md'), '');
+    const agentDir = `${shadow}/.agents/skills/cindy-learn`;
+    const project = root;
+    const context = setup(undefined, {
+      aliases: [{ from: agentDir, to: skill }, { from: shadow, to: project }],
+      overlays: [{ agentDir, localDir: skill }],
+    });
+    // 虚拟工作区：回包里的本机路径投影回对方的路径。
+    context.workspace.setVirtualRoot('/agent/runs/task-1');
+    const reply = async (id: number, line: Record<string, unknown>) => {
+      spawned.outputs[0].write(JSON.stringify({ id, ...line }) + '\n');
+      await vi.waitFor(() => expect(context.replies.some((item) => item.id === id)).toBe(true));
+      return context.replies.find((item) => item.id === id)!;
+    };
+    return { ...context, shadow, project, reply, uri: (agentPath: string) => `file://${agentPath}` };
+  }
+  const notFound = { error: { code: -32004, message: 'No such file or directory (os error 2)' } };
+
+  it('answers for the Skill directory when the project has none, and leaves other directories alone', async () => {
+    const { relay, send, reply, shadow, uri } = managedSetup();
+    try {
+      send({ id: 1, method: 'fs/getMetadata', params: { path: uri(`${shadow}/.agents/skills`) } });
+      expect((await reply(1, notFound)).result).toMatchObject({ isDirectory: true, isFile: false });
+      send({ id: 2, method: 'fs/canonicalize', params: { path: uri(`${shadow}/.agents/skills`) } });
+      expect((await reply(2, notFound)).result).toEqual({ path: uri(`${shadow}/.agents/skills`) });
+      send({ id: 3, method: 'fs/walk', params: { path: uri(`${shadow}/.agents/skills`), options: { maxDepth: 6, maxEntries: 100, pruneHiddenDirectories: true } } });
+      expect((await reply(3, notFound)).result).toEqual({
+        entries: [
+          { path: uri(`${shadow}/.agents/skills/cindy-learn`), kind: 'directory' },
+          { path: uri(`${shadow}/.agents/skills/cindy-learn/SKILL.md`), kind: 'file' },
+          { path: uri(`${shadow}/.agents/skills/cindy-learn/scripts`), kind: 'directory' },
+          { path: uri(`${shadow}/.agents/skills/cindy-learn/scripts/50%2541.md`), kind: 'file' },
+          { path: uri(`${shadow}/.agents/skills/cindy-learn/scripts/run.sh`), kind: 'file' },
+        ],
+        errors: [],
+        truncated: false,
+      });
+      // 只补 `.agents/skills` 这一层：上一层与其他目录的回包原样转回。
+      send({ id: 4, method: 'fs/getMetadata', params: { path: uri(`${shadow}/.agents`) } });
+      expect(await reply(4, notFound)).toEqual({ id: 4, ...notFound });
+      send({ id: 5, method: 'fs/walk', params: { path: uri(shadow), options: { maxDepth: 6, maxEntries: 100, pruneHiddenDirectories: false } } });
+      expect(await reply(5, notFound)).toEqual({ id: 5, ...notFound });
+    } finally { relay.close(); }
+  });
+
+  it('adds the managed Skills next to the project ones and replaces a same-named project directory', async () => {
+    const { relay, send, reply, shadow, project, uri } = managedSetup();
+    try {
+      send({ id: 1, method: 'fs/walk', params: { path: uri(`${shadow}/.agents/skills`), options: { maxDepth: 1, maxEntries: 100, pruneHiddenDirectories: true } } });
+      const local = (relative: string) => `file://${path.join(project, '.agents', 'skills', relative)}`;
+      const result = (await reply(1, { result: { entries: [
+        { path: local('release'), kind: 'directory' },
+        { path: local('release/SKILL.md'), kind: 'file' },
+        { path: local('cindy-learn'), kind: 'directory' },
+        { path: local('cindy-learn/OTHER.md'), kind: 'file' },
+      ], errors: [], truncated: false } })).result as { entries: Array<{ path: string }> };
+      expect(result.entries.map((entry) => entry.path)).toEqual([
+        uri(`${shadow}/.agents/skills/release`),
+        uri(`${shadow}/.agents/skills/release/SKILL.md`),
+        uri(`${shadow}/.agents/skills/cindy-learn`),
+        uri(`${shadow}/.agents/skills/cindy-learn/SKILL.md`),
+        // maxDepth 1：再下一层不列。
+        uri(`${shadow}/.agents/skills/cindy-learn/scripts`),
+      ]);
+    } finally { relay.close(); }
   });
 });

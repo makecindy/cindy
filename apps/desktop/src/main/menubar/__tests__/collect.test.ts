@@ -236,6 +236,22 @@ describe('collectMenubarInputs', () => {
     expect(view.details.glm.facts.map(fact => fact.label)).not.toContain('Weekly resets');
   });
 
+  // Tier 2: the same cached peer result is reused across a window reset.
+  it('drops expired remote GLM windows at each menu bar collection', async () => {
+    const peers = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: ready({
+      ...glmQuota, fiveHour: { usedPercent: 20, resetsAt: NOW + 2 }, weekly: { usedPercent: 35, resetsAt: NOW + 1 },
+    }) }), [provider({ id: 'glm-peer', agents: ['pi'], models: { pi: [] }, remoteInvocationEnabled: true,
+      zhipuCodingPlanUsage: true } as never)], 'unrelated'));
+    let now = NOW;
+    const cached = deps({ listProviders: async () => [], readRemoteSubscriptions: async () => peers.sources, now: () => now });
+    expect((await collectMenubarInputs(cached)).sources).toMatchObject([{ windows: [{ kind: 'session' }, { kind: 'week' }] }]);
+    now += 1;
+    expect((await collectMenubarInputs(cached)).sources).toMatchObject([{ windows: [{ kind: 'session' }] }]);
+    now += 1;
+    expect((await collectMenubarInputs(cached)).sources).toEqual([]);
+    expect(peers.sources[0]?.windows).toHaveLength(2);
+  });
+
   it('keeps existing providers’ amounts, resets, details and relative order with GLM connected', async () => {
     const reset = NOW + 86_400_000;
     const providers = [
@@ -296,7 +312,7 @@ describe('collectMenubarInputs', () => {
   // Existing coverage only deduplicated remote sources. Minimal failure: one provider,
   // two accounts; or two local providers pointing at the same account.
   const pool: SubscriptionPoolView = {
-    providerId: 'openai', configured: true, strategy: 'round',
+    providerId: 'openai', configured: true, strategy: 'rotate',
     accounts: ['default', 'extra'].map((id, index) => ({
       id, paused: false, limit: 4, weight: 1, directory: `/fixture/${id}`,
       identity: `${id}@example.com`, plan: index ? 'pro' : 'plus', status: 'ready', running: index,
@@ -476,6 +492,28 @@ describe('collectMenubarInputs', () => {
         : invoke(id, channel, args),
     };
   }
+
+  // Tier 2: a redacted catalog offers GLM via its host hint only. Old and
+  // disabled connections must not trigger a quota query or inherit a local account.
+  it('reads GLM windows only for an offered same-account connection', async () => {
+    const glm = { agents: ['pi'], models: { pi: [] }, remoteInvocationEnabled: true, zhipuCodingPlanUsage: true };
+    const read = vi.fn<RemoteSubscriptionDeps['invoke']>(async () => ({ ok: true, result: { status: 'ready', stale: false, snapshot: {
+      kind: 'zhipu-coding-plan-quota', level: 'pro', fetchedAt: NOW, noPlan: false,
+      fiveHour: { usedPercent: 42, resetsAt: null }, weekly: { usedPercent: 33, resetsAt: NOW + 1000 },
+    } } }));
+    const deps = remoteDeps(read, [
+      provider({ ...glm, id: 'offered' } as never),
+      provider({ ...glm, id: 'closed', remoteInvocationEnabled: false } as never),
+      provider({ ...glm, id: 'old', zhipuCodingPlanUsage: undefined } as never),
+    ], 'unrelated');
+    const result = await readRemoteSubscriptions(deps);
+    expect(read.mock.calls).toEqual([['peer', 'maker:usage:zhipu-coding-plan', [{ providerId: 'offered' }]]]);
+    expect(result.sources).toMatchObject([{ id: 'remote:peer:offered', family: 'zhipu', plan: 'PRO',
+      windows: [{ kind: 'session', usedPercent: 42 }, { kind: 'week', usedPercent: 33 }],
+    }]);
+    read.mockResolvedValue({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } });
+    expect(await readRemoteSubscriptions(deps)).toMatchObject({ sources: [], incomplete: false });
+  });
 
   it('removes locally stopped remote accounts from live quota and offline retention', async () => {
     const first = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: pool })));

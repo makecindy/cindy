@@ -2532,6 +2532,29 @@
       }
     },
     {
+      "id": "command-code",
+      "name": "Command Code",
+      "docsUrl": "https://commandcode.ai/docs/provider",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://api.commandcode.ai/provider",
+          "modelsUrl": "https://api.commandcode.ai/provider/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://api.commandcode.ai/provider/v1",
+          "modelsUrl": "https://api.commandcode.ai/provider/v1/models",
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "https://api.commandcode.ai/provider/v1",
+          "modelsUrl": "https://api.commandcode.ai/provider/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
       "id": "tokenrhythm",
       "name": "基元律动 · Token Rhythm",
       "docsUrl": "https://tokenrhythm.studio/docs/api-integration",

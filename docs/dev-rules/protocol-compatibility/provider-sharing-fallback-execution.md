@@ -15,6 +15,12 @@ executionId 调用 `complete`；打开任务的无 executionId `accept` 只确�
 撤权后仍可释放原轮次，旧回执不能释放后续轮次。服务端记录取消标识，先到的释放回执可阻止迟到准入。
 这是本次备用执行能力的配套接口，需使用包含上述接线的 Desktop；不改变既有在线 O 的委派路径。
 
+原生订阅组发布备用目录时，若本次 `policy.allowFast` 已为 false，各执行机（含离线旧登记）的
+`supportsFastMode` 与 `supportsUltrafastMode` 在模型一致性归一化前投影为 false。该描述与
+实际下发的组约束同源，不改执行机原目录或用户配置；允许 Fast 时保留执行机间真实差异，
+不放宽服务端同型号校验。自定义 API 不受此订阅策略投影影响。复用既有 HTTP 发布字段，
+无需升级服务端、Mobile 或官方／自建中转，不改变授权、CAS 与租约期限。
+
 ## Agent Net 的已准备执行机
 
 在支持 `directGuestStandby` 的两端，`delegate` 可随具体任务授权附带备用范围和并发上限。

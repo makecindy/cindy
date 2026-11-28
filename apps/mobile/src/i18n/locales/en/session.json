@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "Thinking…",
+    "replyStreaming": "Generating…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
@@ -398,7 +399,13 @@
     "forkConfirmTitle": "Start a new session from here?",
     "forkConfirmDescription": "A separate session will be created using the context at this point. The original session stays unchanged, and future messages in either session won't affect the other.",
     "forkConfirm": "Start new session",
-    "forkCancel": "Cancel"
+    "forkCancel": "Cancel",
+    "modelSwitchPreparation": {
+      "pending": "Next message",
+      "preparing": "Preparing…",
+      "failed": "Switch failed",
+      "usingPrevious": "This message uses {{actual}}; {{target}} is not ready."
+    }
   },
   "shareImage": {
     "title": "Share Conversation",
@@ -497,7 +504,8 @@
     "worktreeUnsupported": "Cindy on your computer can't safely create worktrees. Turn worktree off to continue, or update Cindy on your computer.",
     "worktreeCreateFailed": "Failed to create worktree: {{message}}",
     "worktreeRecoveryStateFailed": "Could not save the worktree recovery state. Try again.",
-    "worktreeCleanupPending": "The previous worktree is still awaiting cleanup. Reconnect the device and try again."
+    "worktreeCleanupPending": "The previous worktree is still awaiting cleanup. Reconnect the device and try again.",
+    "createRejectedResend": "Your content is back. Adjust it if needed and send again."
   },
   "menu": {
     "moveToProject": "Move task",
@@ -641,7 +649,7 @@
     "hideErrorDetails": "Hide Details",
     "diagnose": "Diagnose",
     "diagnoseHint": "Diagnose this error in a new session",
-    "diagnosePrompt": "Please diagnose this error: find the cause and tell me how to fix it.\n\nSession: {{sessionUrl}}\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
+    "diagnosePrompt": "Diagnose this error: find the cause and tell me how to fix it.\n\nSession: {{sessionUrl}}\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
     "interrupted": "The app exited mid-task, so it was interrupted.",
     "continueTask": "Continue Task",
     "retry": "Retry",
@@ -649,6 +657,9 @@
     "ignore": "Ignore",
     "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
     "unexecutedToolMarkup": "The model wrote a tool call as text. Execution could not be confirmed, so this turn did not complete.",
+    "codexReconnectStalled": "The model connection did not recover within 2 minutes.",
+    "reconnectAutoResumeDisabled": "Automatic continuation is turned off.",
+    "reconnectAutoResumeExhausted": "Automatic continuation reached its retry limit.",
     "silentStopExhausted": "An empty response was detected. Automatic continuation is paused.",
     "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",
     "outputLimitReasoning": "Reasoning consumed most of this request’s output budget, so the response may be incomplete. Lower the reasoning effort or compact the conversation history before continuing.",
@@ -661,7 +672,20 @@
     "toolUseLoopDetectedRotationWithCount": "The model kept rotating through tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
     "codexThreadLost": "The Codex auth mode changed, so this session can't continue. Start a new session.",
     "remoteCompactEncryptedContent": "Context compaction failed because the model could not read encrypted history. Automatic continuation did not complete. Retry to attempt recovery.",
-    "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (use “Start new session from here” to drop the encrypted protocol content and continue in a new session)."
+    "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (use “Start new session from here” to drop the encrypted protocol content and continue in a new session).",
+    "providerSafetyRefusal": "The model provider's safety policy blocked this reply. Adjust your request and try sending again.",
+    "providerSafetyRefusalWithProvider": "{{provider}}'s safety policy blocked this reply. Adjust your request and try sending again.",
+    "overloadBusy": "The model provider is temporarily busy and has no available capacity. Try again later or switch to another model.",
+    "overloadBusyWithProvider": "{{provider}} is temporarily busy and has no available capacity. Try again later or switch to another model.",
+    "streamInterrupted": "The reply stream from the model provider was interrupted mid-response. Try again later.",
+    "streamInterruptedWithProvider": "The reply stream from {{provider}} was interrupted mid-response. Try again later.",
+    "upstreamStatusError": "The model provider service returned an error (HTTP {{status}}). This reply did not complete.",
+    "upstreamStatusErrorWithProvider": "{{provider}} returned an error (HTTP {{status}}). This reply did not complete.",
+    "modelAccessDenied": "Your current model provider account does not have access to this model. Switch models or verify access with the provider.",
+    "modelAccessDeniedWithProvider": "Your {{provider}} account does not have access to this model. Switch models or verify model access.",
+    "providerQuotaExhausted": "Insufficient quota or balance on your model provider account. Check your provider account.",
+    "providerQuotaExhaustedWithProvider": "Your {{provider}} account has insufficient quota or balance. Check your account.",
+    "usageLimitReachedWithProvider": "Your {{provider}} account has reached its usage limit"
   },
   "row": {
     "markRead": "Mark as read",
@@ -677,9 +701,15 @@
   "outbox": {
     "deleteConfirmTitle": "Delete this message?",
     "deleteConfirmBody": "This message wasn't sent. Deleting it can't be undone.",
+    "deleteUnconfirmedBody": "The computer may have received this message. Deleting it only removes the pending message from this device. If the computer received it, it will still appear in the conversation history.",
     "legacyPlanRecovery": "This computer cannot restore saved messages in Plan mode. Turn off Plan mode or update Cindy on the computer, then retry.",
     "creationRecoveryRequired": "Retry creating this task before deleting its first message. That message keeps the recovery details for your later messages.",
     "confirmationRequired": "This computer cannot confirm whether the message was received. Check its history or update Cindy before retrying.",
+    "profileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
+    "taskInactive": "This task cannot receive messages right now.",
+    "inputNotSupported": "This computer does not support sending this type of message to the task.",
+    "invalidInput": "The computer rejected the message because its contents are invalid.",
+    "taskClearedBeforeSend": "The task was cleared or is being cleared. The message is still saved on this device.",
     "taskCleared": "This task was cleared after you sent the message. The saved message has been kept for you to review.",
     "restoreFailed": "Saved messages could not be restored. They have not been deleted. Restart the app and try again.",
     "recoveryTarget": "Keep the original computer while recovering this task. Its later messages are still saved.",
@@ -695,7 +725,7 @@
     "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Message not sent. Cindy couldn’t confirm the safety record in time.",
     "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "The available accounts for this model have reached their usage limit. Switch models or continue when the quota resets.",
-    "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page on the computer.",
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the computer group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page on the computer.",
     "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
     "AUTO_REVIEW_UNAVAILABLE_QUOTA": "An automatic review provider has exhausted its quota. Check its usage or billing, or customize Auxiliary models in Settings on the computer running the Agent. Actions that need review still require your confirmation.",
@@ -708,7 +738,7 @@
     "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
     "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
     "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
-    "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
+    "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Try again.",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again.",
     "MCP_APPROVAL_AUTO_BLOCKED": "Auto approve blocked this tool call. No manual rejection was received.",
     "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "Auto approve blocked this tool call because its action details are incomplete.",
@@ -732,7 +762,7 @@
     "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
     "REMOTE_AGENT_UNAVAILABLE": "Could not communicate with the computer running the Agent. Check the error details.",
-    "REMOTE_AGENT_TIMEOUT": "Timed out waiting for the computer running the Agent. The result is unknown. Check the task before retrying.",
+    "REMOTE_AGENT_TIMEOUT": "The computer running the Agent hasn’t replied yet. Check the task’s progress. If it’s still running or already finished, there’s no need to retry.",
     "REMOTE_AGENT_LINK_BUSY": "Communication with the computer running the Agent is busy. Wait a moment before retrying.",
     "REMOTE_AGENT_UNRESPONSIVE": "The computer running the Agent repeatedly failed to respond, so calls were temporarily paused. Wait a moment before retrying.",
     "REMOTE_AGENT_OFFLINE": "The computer running the Agent is offline. Retry after it reconnects.",
@@ -861,7 +891,8 @@
       "WORKER_CREATION_IN_PROGRESS": "A Worker with the same name is being created. Try again shortly.",
       "WORKER_NOT_FOUND": "This Worker no longer exists. The list was refreshed.",
       "ORCA_CREATE_UNCONFIRMED": "Creating the Worker timed out and couldn't be confirmed. Check the Worker list first, and retry only if no new Worker appears.",
-      "ORCA_ACTION_UNCONFIRMED": "The request timed out, so the result isn't confirmed yet. The list has been refreshed; go by what it shows now."
+      "ORCA_ACTION_UNCONFIRMED": "The request timed out, so the result isn't confirmed yet. The list has been refreshed; go by what it shows now.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "This computer's version doesn't support starting collaboration on a plugin engine task."
     }
   },
   "resetAutoUse": {

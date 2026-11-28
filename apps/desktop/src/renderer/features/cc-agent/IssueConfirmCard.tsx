@@ -244,8 +244,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
                 ].join(' / ')}
                 value={type}
                 onValueChange={(next) => updateDraft({ type: next })}
-                height={28}
-                optionHeight={24}
+                density="sm"
                 optionClassName="px-2.5"
                 options={[
                   { value: 'bug', label: t('issueAgent.confirm.typeBug') },

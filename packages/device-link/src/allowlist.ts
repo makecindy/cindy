@@ -27,6 +27,7 @@
 import { FILE_PEER_CHANNEL } from './filePeer.js';
 import { MACHINE_STATUS_CHANNEL } from './machineStatus.js';
 import { AGENT_NET_SWITCH_CHANNEL, AGENT_NET_SWITCH_TIMEOUT_MS } from './agentNetSwitch.js';
+import { PEER_APP_UPDATE_CHANNEL, PEER_APP_UPDATE_TIMEOUT_MS } from './peerAppUpdate.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import {
@@ -36,6 +37,7 @@ import {
   ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_TIMEOUT_MS,
+  ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL,
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
 } from './orcaRemoteWorker.js';
 import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
@@ -190,6 +192,20 @@ export const DL_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionar
 export const DL_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
 
 /**
+ * 手机端语音词典编辑 channel（新增 / 修改词条与别名 / 删除）。
+ *
+ * 准入判据：
+ *  1. 不依赖 event.sender / 窗口对象；
+ *  2. 无本机 UI / shell / 对话框副作用，也不涉及凭证或通用全局设置；
+ *  3. 词典 CRDT 真相在桌面端：移动端直接将修改请求交给同账号在线桌面执行并取回最新快照，
+ *     桌面再借既有 CRDT 通道同步给其它电脑和手机，避免移动端维护可写副本导致分叉。
+ *
+ * 仅允许同账号本人控制端（共享任务访客与供应商分享受邀者在 dispatch 拒绝）。
+ * 老被控端不识别 → CHANNEL_NOT_ALLOWED，手机端降级为只读缓存浏览并提示升级电脑版。
+ */
+export const DL_VOICE_DICTIONARY_MUTATE_CHANNEL = 'device-link:voice:dictionary:mutate';
+
+/**
  * M3 核心集:远程会话全生命周期(新建/发消息/事件流/审批/中断/运行时切换)+ 基础读模型。
  * M4 将扩展 scheduler / orca worker / rewind / usage 等完整控制面。
  */
@@ -292,6 +308,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'model-groups:resolve',
   'model-groups:commit',
   'model-groups:bind-session',
+  'model-groups:unbind-session',
+  'model-groups:get-session-binding',
+  'model-groups:switch-offer',
   'model-groups:route-note',
   // —— 能力查询 ——
   'maker:get-capabilities',
@@ -445,6 +464,11 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 拦截执行，只给同账号电脑(共享任务访客与供应商分享受邀者再拒一次)。打开后必须在期限内经 Agent-Net
   // 收到同一发起端的确认，否则被控端自己退回。老版本无 handler → CHANNEL_NOT_ALLOWED,发起端显示需要更新。
   AGENT_NET_SWITCH_CHANNEL,
+  // 远程检查并触发同账号电脑的应用更新(2026-11-26 用户确认):只提供 status 只读检查与锁定
+  // expectedVersion 的 install 触发，走对端既有的 updateService 内置更新链路；裸 update-* IPC
+  // 仍然永不放行。被控端 dispatch 拦截执行，只给同账号电脑(共享任务访客与供应商分享受邀者再拒一次)。
+  // 老版本无 handler → CHANNEL_NOT_ALLOWED，卡片不显示更新图标。
+  PEER_APP_UPDATE_CHANNEL,
   // 远程 Agent(被控端 dispatch 拦截执行，不落 ipcMain handler)：在被控端用它自己的登录与
   // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
   // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
@@ -461,6 +485,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 手机拉取被控桌面的词典只读快照(被控端 dispatch 拦截执行,不落 ipcMain handler;
   // 老被控端不识别时回 CHANNEL_NOT_ALLOWED,手机据此回退到「无词典」而不是报错)。
   DL_VOICE_DICTIONARY_GET_CHANNEL,
+  // 手机编辑被控桌面的个人词典（增/改/删词条与别名），由桌面 CRDT 落盘并同步全端；
+  // 仅同账号本人，老被控端回 CHANNEL_NOT_ALLOWED，手机降级为只读缓存视图。
+  DL_VOICE_DICTIONARY_MUTATE_CHANNEL,
 ];
 
 /**
@@ -541,6 +568,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
   ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+  ORCA_REMOTE_WORKER_ARCHIVE_CHANNEL,
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
   // 远程控制 Lead 所在电脑时，读取那台视角下可选的运行设备(只读，真相在被控端)。
   ORCA_EXECUTION_DEVICES_CHANNEL,
@@ -651,6 +679,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:usage:xai-subscription',
   // Same-account read-only Kimi quota; no secrets, arbitrary endpoints, shared-task or share guests.
   // Old hosts reject the channel; callers never fall back to their local account.
+  'maker:usage:zhipu-coding-plan',
   'maker:usage:kimi-coding',
   'maker:usage:opencode-go',
   // cc 默认路由会话的生效计费路由观察值(只读,'gateway' | 'subscription' | null):
@@ -1023,6 +1052,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 要等那台电脑上的人确认(最多 2 分钟),再逐台连接 SSH 服务器授权新公钥。
   [SETUP_TRANSFER_CHANNEL]: SETUP_TRANSFER_TIMEOUT_MS,
   [AGENT_NET_SWITCH_CHANNEL]: AGENT_NET_SWITCH_TIMEOUT_MS,
+  [PEER_APP_UPDATE_CHANNEL]: PEER_APP_UPDATE_TIMEOUT_MS,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

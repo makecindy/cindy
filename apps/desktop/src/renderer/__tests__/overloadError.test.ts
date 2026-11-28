@@ -94,6 +94,9 @@ describe('isOverloadErrorMessage', () => {
     expect(
       parseOverloadError('The upstream declined this request.', undefined, UPSTREAM_OVERLOAD_REASON),
     ).toEqual({ kind: 'capacity' });
+    expect(
+      parseOverloadError('The upstream declined this request.', undefined, 'acp-overloaded'),
+    ).toEqual({ kind: 'capacity' });
     // 空文案同理(host 合成的错误可能不带 message)。
     expect(isOverloadErrorMessage('', undefined, UPSTREAM_OVERLOAD_REASON)).toBe(true);
   });

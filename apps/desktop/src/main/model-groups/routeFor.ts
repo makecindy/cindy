@@ -53,5 +53,6 @@ export function modelGroupRouteFor(
   if (!base) return { outcome: 'missing', groupName: '' };
   const date = new Date(now);
   const { route, via } = followHours(base, config, { hour: date.getHours(), day: date.getDay() });
-  return { outcome: 'found', groupName: base.name, route, via };
+  // 供应商路由在某个模型上的展开：说明里写那条供应商路由的名字(用户认识的是它)，模型名另有一栏。
+  return { outcome: 'found', groupName: base.parent?.name ?? base.name, route, via };
 }

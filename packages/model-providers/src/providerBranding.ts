@@ -13,8 +13,98 @@ export { MODEL_SPECTRUM_COLORS } from './modelSpectrum.js';
 
 export { CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_MARK_EARRING_COLOR } from './cindyMark.js';
 
+type CatalogLogoKind = keyof typeof PROVIDER_LOGO_PATHS | 'openai' | 'anthropic' | 'cindy' | 'xd' | 'openai-spectrum';
+// The spectrum treatment belongs to an organization connection and uses the same OpenAI glyph.
+type BrandLogo = Exclude<CatalogLogoKind, 'personal' | 'work' | 'openai-spectrum'>;
+
+// Keyed by the actual artwork so each new provider glyph also gets a picker entry.
+// The first tuple member is the stored override, distinct from an inferred logoKind.
+const connectionBrandCatalog = {
+  openai: ['mark-openai', 'OpenAI'],
+  anthropic: ['mark-claude', 'Claude'],
+  google: ['mark-gemini', 'Gemini'],
+  deepseek: ['mark-deepseek', 'DeepSeek'],
+  zhipu: ['mark-glm', 'GLM'],
+  moonshot: ['mark-kimi', 'Kimi'],
+  alibaba: ['mark-qwen', 'Qwen'],
+  minimax: ['mark-minimax', 'MiniMax'],
+  xai: ['mark-xai', 'xAI'],
+  mistral: ['mark-mistral', 'Mistral AI'],
+  zai: ['mark-zai', 'Z.ai'],
+  xiaomimimo: ['mark-xiaomimimo', 'Xiaomi MiMo'],
+  longcat: ['mark-longcat', 'LongCat'],
+  antgroup: ['mark-antgroup', 'Ant Group'],
+  'iflytek-maas': ['mark-iflytek-maas', 'iFLYTEK Spark'],
+  cindy: ['mark-cindy', 'Cindy AI'],
+  xd: ['mark-xd', 'XD'],
+  githubcopilot: ['mark-githubcopilot', 'GitHub Copilot'],
+  huggingface: ['mark-huggingface', 'Hugging Face'],
+  nvidia: ['mark-nvidia', 'NVIDIA'],
+  groq: ['mark-groq', 'Groq'],
+  together: ['mark-together', 'Together AI'],
+  fireworks: ['mark-fireworks', 'Fireworks AI'],
+  cerebras: ['mark-cerebras', 'Cerebras'],
+  baseten: ['mark-baseten', 'Baseten'],
+  nousresearch: ['mark-nousresearch', 'Nous Research'],
+  openrouter: ['mark-openrouter', 'OpenRouter'],
+  bedrock: ['mark-bedrock', 'Amazon Bedrock'],
+  azure: ['mark-azure', 'Microsoft Azure'],
+  cloudflare: ['mark-cloudflare', 'Cloudflare'],
+  vercel: ['mark-vercel', 'Vercel'],
+  siliconflow: ['mark-siliconflow', 'SiliconFlow'],
+  volcengine: ['mark-volcengine', 'Volcengine'],
+  tencentcloud: ['mark-tencentcloud', 'Tencent Cloud'],
+  ollama: ['mark-ollama', 'Ollama'],
+  lmstudio: ['mark-lmstudio', 'LM Studio'],
+  llamacpp: ['mark-llamacpp', 'llama.cpp'],
+  vllm: ['mark-vllm', 'vLLM'],
+  litellm: ['mark-litellm', 'LiteLLM'],
+  opencode: ['mark-opencode', 'OpenCode'],
+  'open-design': ['mark-open-design', 'Open Design'],
+  'command-code': ['mark-command-code', 'Command Code'],
+  tokenrhythm: ['mark-tokenrhythm', 'TokenRhythm'],
+  sub2api: ['mark-sub2api', 'Sub2API'],
+  openhubs: ['mark-openhubs', 'OpenHubs'],
+  agnes: ['mark-agnes', 'Agnes AI'],
+  hinoki: ['mark-hinoki', 'Hinoki'],
+  magpie: ['mark-magpie', 'Magpie'],
+} as const satisfies Record<BrandLogo, readonly [`mark-${string}`, string]>;
+
+export const CONNECTION_BRAND_OPTIONS = Object.values(connectionBrandCatalog).map(([value, label]) => ({ value, label }));
+export type ConnectionBrand = (typeof CONNECTION_BRAND_OPTIONS)[number]['value'];
+export const CONNECTION_BRANDS = Object.fromEntries(
+  Object.entries(connectionBrandCatalog).map(([kind, [value]]) => [value, kind]),
+) as Readonly<Record<ConnectionBrand, BrandLogo>>;
+
+export type ProviderConnectionIcon = 'personal' | 'work' | ConnectionBrand;
+export type ProviderConnectionImage = `data:image/png;base64,${string}`;
+export type ConnectionArtwork = ProviderConnectionIcon | ProviderConnectionImage;
+
+export function isConnectionBrand(value: unknown): value is ConnectionBrand {
+  return typeof value === 'string' && Object.hasOwn(CONNECTION_BRANDS, value);
+}
+
+// Only canvas-normalized 48×48 PNG thumbnails cross the presentation boundary.
+export function isProviderConnectionImage(value: unknown): value is ProviderConnectionImage {
+  return typeof value === 'string' && value.length <= 16_384 && (value.length - 22) % 4 === 0 &&
+    /^data:image\/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAw[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
+export function connectionArtworkFields(value: ConnectionArtwork | undefined) {
+  if (isProviderConnectionImage(value)) return { customIcon: value };
+  return isProviderConnectionIcon(value) ? { logoKind: value } : {};
+}
+
+export function isProviderConnectionIcon(value: unknown): value is ProviderConnectionIcon {
+  return value === 'personal' || value === 'work' || isConnectionBrand(value);
+}
+
 // Additional supplier marks: Lobe Icons 5.14.0 (MIT; included in THIRD-PARTY-NOTICES).
 export const PROVIDER_LOGO_PATHS = {
+  personal: 'M12 2a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM3 22v-2a9 7 0 0 1 18 0v2z',
+  work: 'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2h4a2 2 0 0 1 2 2v4H2V8a2 2 0 0 1 2-2zm2 0h4V4h-4zM2 14h9v2h2v-2h9v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z',
+  // Official foreground mark on a 24px grid: https://commandcode.ai/logos/command-code-light.svg
+  'command-code': 'M16.4675 4.6027C14.8882 4.6027 13.6036 5.8874 13.6036 7.4666V8.694H10.3305V7.4666C10.3305 5.8874 9.0459 4.6027 7.4666 4.6027C5.8874 4.6027 4.6027 5.8874 4.6027 7.4666C4.6027 9.0459 5.8874 10.3305 7.4666 10.3305H8.694V13.6036H7.4666C5.8874 13.6036 4.6027 14.8882 4.6027 16.4675C4.6027 18.0467 5.8874 19.3313 7.4666 19.3313C9.0459 19.3313 10.3305 18.0467 10.3305 16.4675V15.2401H13.6036V16.4675C13.6036 18.0467 14.8882 19.3313 16.4675 19.3313C18.0467 19.3313 19.3313 18.0467 19.3313 16.4675C19.3313 14.8882 18.0467 13.6036 16.4675 13.6036H15.2401V10.3305H16.4675C18.0467 10.3305 19.3313 9.0459 19.3313 7.4666C19.3313 5.8874 18.0467 4.6027 16.4675 4.6027ZM15.2401 8.694V7.4666C15.2401 6.7875 15.7883 6.2392 16.4675 6.2392C17.1467 6.2392 17.6948 6.7875 17.6948 7.4666C17.6948 8.1458 17.1467 8.694 16.4675 8.694H15.2401ZM7.4666 8.694C6.7875 8.694 6.2392 8.1458 6.2392 7.4666C6.2392 6.7875 6.7875 6.2392 7.4666 6.2392C8.1458 6.2392 8.694 6.7875 8.694 7.4666V8.694H7.4666ZM10.3305 13.6036V10.3305H13.6036V13.6036H10.3305ZM16.4675 17.6948C15.7883 17.6948 15.2401 17.1467 15.2401 16.4675V15.2401H16.4675C17.1467 15.2401 17.6948 15.7883 17.6948 16.4675C17.6948 17.1467 17.1467 17.6948 16.4675 17.6948ZM7.4666 17.6948C6.7875 17.6948 6.2392 17.1467 6.2392 16.4675C6.2392 15.7883 6.7875 15.2401 7.4666 15.2401H8.694V16.4675C8.694 17.1467 8.1458 17.6948 7.4666 17.6948Z',
   // Official foreground mark, scaled to 24px: https://tokenrhythm.studio/figma/current/brand-logo.svg
   tokenrhythm: 'M1.2534 2.7157L13.2616 2.7159C15.4348 2.716 17.6805 2.7443 19.8491 2.7019C18.3338 3.9625 16.4973 5.6829 15.0229 7.0278C14.3355 7.0688 13.3613 7.0419 12.653 7.0421C11.3395 7.0473 10.026 7.0437 8.7126 7.0313C9.5372 7.7643 10.8343 9.1471 11.6659 9.9802L17.6277 15.95L21.3423 19.6674C21.5662 19.8915 22.6482 20.9445 22.7467 21.116L22.6868 21.1344C20.6776 21.0672 18.5953 21.1261 16.5944 21.0364L10.0155 14.4541C8.5548 12.9925 7.0209 11.4983 5.5908 10.0129L5.5946 17.1219C4.1789 18.5055 2.6912 19.8877 1.2523 21.2541L1.2534 2.7157Z',
   // Lobe Icons Spark Mono (MIT), commit 55746b0b082258211121c70bd26e6878fd3bd292.
@@ -87,12 +177,12 @@ export const PROVIDER_LOGO_PATHS = {
   vllm: 'm23.6 0-8.721 4.59L9.829 24h7.41zM9.83 24V5.142H.4Z',
 } as const;
 
-export type ProviderLogoKind = keyof typeof PROVIDER_LOGO_PATHS | 'anthropic' | 'openai' | 'xd' | 'cindy' | 'openai-spectrum';
+export type ProviderLogoKind = CatalogLogoKind | ConnectionBrand;
 
 /** Device-link 等运行时边界不能信任静态 union；未知未来值应安全回退。 */
 export function isProviderLogoKind(value: unknown): value is ProviderLogoKind {
   return (
-    value === 'anthropic'
+    isConnectionBrand(value) || value === 'anthropic'
     || value === 'openai'
     || value === 'openai-spectrum'
     || value === 'xd'
@@ -110,6 +200,7 @@ export type ProviderLogoRouting = Readonly<
 
 /** Bundled regional presets share a brand and never infer it from display names. */
 const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
+  'command-code': 'command-code',
   tokenrhythm: 'tokenrhythm',
   'iflytek-maas': 'iflytek-maas',
   'open-design': 'open-design',
@@ -197,6 +288,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
 
 /** Renamed providers retain stable upstream hosts, matched only on DNS boundaries. */
 const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])[] = [
+  ['api.commandcode.ai', 'command-code'],
   ['tokenrhythm.studio', 'tokenrhythm'],
   ['maas-api.cn-huabei-1.xf-yun.com', 'iflytek-maas'],
   ['amr-link.open-design.ai', 'open-design'],

@@ -12,6 +12,10 @@ const ccAgentDir = resolve(__dirname, '..', 'features', 'cc-agent');
 const headerSource = readFileSync(resolve(ccAgentDir, 'SessionContentHeader.tsx'), 'utf8');
 const sessionItemSource = readFileSync(resolve(ccAgentDir, 'sidebar', 'SessionItem.tsx'), 'utf8');
 const sessionCardSource = readFileSync(resolve(ccAgentDir, 'sidebar', 'SessionCard.tsx'), 'utf8');
+const searchResultMenuSource = readFileSync(
+  resolve(ccAgentDir, 'sidebar', 'SearchResultTaskMenu.tsx'),
+  'utf8',
+);
 
 const sharedMenuSource = readFileSync(
   resolve(ccAgentDir, 'sidebar', 'SessionTaskMenu.tsx'),
@@ -20,14 +24,20 @@ const sharedMenuSource = readFileSync(
 
 describe('session menu parity across header and sidebar variants', () => {
   it('routes every surface through the same menu implementation', () => {
-    for (const source of [headerSource, sessionItemSource, sessionCardSource]) {
+    for (const source of [headerSource, sessionItemSource, sessionCardSource, searchResultMenuSource]) {
       expect(source).toContain('<SessionTaskMenu');
       expect(source).not.toContain('<DropdownMenuContent');
     }
   });
 
   it('keeps removed extras out of all task menus', () => {
-    for (const source of [headerSource, sessionItemSource, sessionCardSource, sharedMenuSource]) {
+    for (const source of [
+      headerSource,
+      sessionItemSource,
+      sessionCardSource,
+      searchResultMenuSource,
+      sharedMenuSource,
+    ]) {
       for (const key of ['exportHtml', 'compact', 'compacting', 'sessionBranches']) {
         expect(source).not.toContain(`sessionMenu.${key}')`);
         expect(source).not.toContain(`item('${key}'`);
@@ -39,7 +49,8 @@ describe('session menu parity across header and sidebar variants', () => {
     expect(headerSource).toContain("from './sidebar/menuStyles'");
     expect(sessionItemSource).toContain("from './menuStyles'");
     expect(sessionCardSource).toContain("from './menuStyles'");
-    for (const source of [headerSource, sessionItemSource, sessionCardSource]) {
+    expect(searchResultMenuSource).toContain("from './menuStyles'");
+    for (const source of [headerSource, sessionItemSource, sessionCardSource, searchResultMenuSource]) {
       expect(source).toContain('SessionProjectMoveSubmenu');
       expect(source).toContain('SessionShareExportDialog');
     }

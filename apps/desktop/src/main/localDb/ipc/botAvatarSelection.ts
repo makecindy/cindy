@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { isStrictBase64Chars } from '@cindy/maker-shared';
 import { app } from 'electron';
 import { writeBlob } from '../../cindy-media/blobStore.desktop.js';
 import { recordBlob, type LedgerDb } from '../../cindy-media/ledger.js';
@@ -30,7 +31,7 @@ export function decodeBotAvatarImage(value: unknown): { buffer: Buffer; mimeType
     !value.length ||
     value.length > Math.ceil(BOT_AVATAR_MAX_BYTES / 3) * 4 ||
     value.length % 4 !== 0 ||
-    !/^[A-Za-z0-9+/]+={0,2}$/.test(value)
+    !isStrictBase64Chars(value)
   ) {
     throwIpcError('INVALID_PARAMS', '头像图片格式无效，请重新选择 PNG、JPEG 或 WebP 图片');
   }

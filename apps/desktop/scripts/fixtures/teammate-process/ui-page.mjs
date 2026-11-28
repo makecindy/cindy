@@ -11,6 +11,7 @@ export default {
   real: 'MessageStream, ThreadPanel with compact styles, BotSessionTaskResultCard, teammate grouping, WorkGroupBlock, GeneratedFilesCard and SheetPreview, Markdown, theme and i18n',
   notCovered: 'Full CCAgentSessionView, login, host execution, document opening, native mobile layout and transport',
   cases: { default: { about: 'Live private turn with stage notes and initial thinking', data: { done: false } }, finished: { about: 'Completed private turn with final answer outside', data: { done: true } }, retry: { about: 'Two failed attempts followed by a running read: current action stays visible', data: { done: false, retry: true } },
+    'long-tool-title': { about: 'A title-only ACP command stays compact until inspected' },
     'feishu-columns': { about: 'Saved and incoming Feishu cards align with companion replies and keep quoted context collapsible' },
     'feishu-edit': { about: 'The inline Feishu editor keeps the source card’s responsive column' },
     'reply-columns': { about: 'Generated media, plan, running task and MCP App share the companion reply column', data: { columns: true } },
@@ -401,6 +402,24 @@ export default {
     assert.equal(await processPortrait.count(), 1);
     assert.equal(await processPortrait.isVisible(), true, 'The process portrait is visible');
     const heading = journal.locator(':scope > button');
+    if (ui.case === 'long-tool-title') {
+      const action = journal.locator('[data-teammate-segment] > button');
+      const label = action.getByText(/END_13720/);
+      const height = () => action.evaluate(el => el.getBoundingClientRect().height);
+      const collapsed = await height();
+      assert.ok(await label.evaluate(el => el.scrollWidth > el.clientWidth && getComputedStyle(el).textOverflow === 'ellipsis'));
+      await ui.capture('running');
+      await action.click();
+      assert.ok(await height() > collapsed);
+      assert.ok(await label.evaluate(el => el.scrollWidth === el.clientWidth));
+      await page.getByTestId('fixture-finish').click();
+      assert.equal(await action.getAttribute('aria-expanded'), 'true');
+      await ui.capture('complete-expanded');
+      await action.click();
+      assert.equal(await height(), collapsed);
+      await ui.capture('complete-collapsed');
+      return;
+    }
     if (definition.data.retry) {
       const action = journal.locator('[data-teammate-segment] > button');
       assert.match(await action.innerText(), /skills\.md/);

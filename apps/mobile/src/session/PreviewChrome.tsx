@@ -193,6 +193,7 @@ export function PreviewToolbar({ children }: { children: ReactNode }) {
 /** Always reachable, including when the content hides its playback/gesture chrome. */
 export function PreviewHeader({
   name,
+  showTitle = true,
   detail,
   onClose,
   actions = [],
@@ -202,6 +203,7 @@ export function PreviewHeader({
   sheetMenu = false,
 }: {
   name: string;
+  showTitle?: boolean;
   detail?: string;
   onClose: () => void;
   actions?: readonly PreviewAction[];
@@ -243,7 +245,7 @@ export function PreviewHeader({
       <View testID="preview.header" pointerEvents="box-none" style={frame}>
         <NativePreviewHeader
           standalone={standalone}
-          name={name}
+          name={showTitle ? name : undefined}
           onClose={onClose}
           closeLabel={t("message.attachmentPreview.close")}
           closeDisabled={closeDisabled}
@@ -271,11 +273,13 @@ export function PreviewHeader({
           />
         </PreviewGlassGroup>
         <View pointerEvents="box-none" style={styles.titleSlot}>
-          <View style={[styles.glass, styles.glassFallback, styles.titleCapsule]}>
-            <Text numberOfLines={1} style={[styles.title, styles.titleText]} testID="preview.title">
-              {name}
-            </Text>
-          </View>
+          {showTitle ? (
+            <View style={[styles.glass, styles.glassFallback, styles.titleCapsule]}>
+              <Text numberOfLines={1} style={[styles.title, styles.titleText]} testID="preview.title">
+                {name}
+              </Text>
+            </View>
+          ) : null}
         </View>
         {menuActions.length ? (
           <NativePullDownMenu

@@ -22,6 +22,7 @@ import {
 } from './usageHistoryStats';
 import { usageHistoryAgentColor, usageHistoryModelColor } from './usageHistoryColors';
 import { formatUsagePercent } from './formatUsagePercent';
+import { Badge } from '@/components/ui/badge';
 
 const UNKNOWN_VALUE = '—';
 // 表格样式、色块与占比格也给「远程与分享」页的用量表复用(provider-groups.md §7)，两处保持同一套。
@@ -195,11 +196,11 @@ export function UsageModelTable({
                     {formatModelShort(row.model)}
                   </span>
                   {/* 同一模型 id 可能跨 agent 撞名, 标签让两行区分得开 */}
-                  <span className="shrink-0 rounded-full border border-[var(--border-default)] px-1 py-px text-11 leading-[1.4] text-[var(--text-tertiary)]">
+                  <Badge tone="outline">
                     {row.agentKind === 'auxiliary'
                       ? t('usageHistory.auxiliary.label')
                       : row.agentKind}
-                  </span>
+                  </Badge>
                 </span>
               </td>
               <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>

@@ -182,6 +182,28 @@ describe('plugin providers in the provider list', () => {
     expect(api.setPluginEnginePrefs).not.toHaveBeenCalled();
   });
 
+  // Regression: the ACP report fills two rows without inferring model specifications or price.
+  it('shows reported Anti context and image support in the open model details', async () => {
+    stubApi();
+    const anti = engine({
+      name: 'Antigravity',
+      models: [{ id: 'gemini-4-hydrogen', displayName: 'Gemini 4 Hydrogen' }],
+      reportedModelDetails: [{ modelId: 'gemini-4-hydrogen', imageInput: false, contextWindow: 524288 }],
+    });
+    const { updateView } = renderDetail(anti);
+    await userEvent.click(screen.getByRole('button', { name: /advanced.openAria/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Gemini 4 Hydrogen' }));
+    const row = (name: string) => within(dialog.getByText(name).parentElement!);
+    expect(dialog.getByText(/524,288/)).toBeTruthy();
+    expect(row('settings.providers.models.advanced.imageInput').getByText('settings.providers.models.advanced.unsupported')).toBeTruthy();
+    expect(row('settings.providers.models.advanced.contextWindow').getByText('-')).toBeTruthy();
+    expect(row('settings.providers.models.priceOverride.input').getByText('-')).toBeTruthy();
+
+    updateView({ ...anti, reportedModelDetails: [{ modelId: 'gemini-4-hydrogen', imageInput: true }] });
+    expect(row('settings.providers.models.advanced.imageInput').getByText('settings.providers.models.advanced.supported')).toBeTruthy();
+    expect(dialog.queryByText(/524,288/)).toBeNull();
+  });
+
   // Unit: a renamed, suspended provider must still confirm uninstall of its exact plugin instance.
   it.each(['market', 'local'] as const)('confirms the plugin name before uninstalling a %s provider', async source => {
     const { __resetInstalledGhostsStoreForTest } = await import('@/cindy-brain/useInstalledGhosts');

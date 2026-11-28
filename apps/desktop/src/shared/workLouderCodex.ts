@@ -57,6 +57,29 @@ export const WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL = 'worklouder-codex:set
 
 /** One sidebar task, as the renderer reports it for the agent keys. */
 export type WorkLouderCodexPublishedTask = InputDevicePublishedTask;
+
+/**
+ * 任务标题的长度上限（按 UTF-16 code unit 计，与主进程校验同口径）。
+ *
+ * 设备侧按这个长度收标题：超长标题不是「丢这一条」，而是让**整份**任务列表被主进程
+ * 拒收 —— 一条超长标题就会连带其余任务都发不上去，设备键位全空。渲染端发布前按
+ * 同一上限截断，主进程继续按它校验。
+ */
+export const WORKLOUDER_CODEX_TASK_TITLE_MAX_LENGTH = 512;
+
+/**
+ * 按设备上限截断标题。
+ *
+ * 计数口径与主进程校验一致，所以截断后的标题一定不会再被拒收。切断处可能落在代理对
+ * 中间：留下半个代理对会让设备端显示成乱码，所以整对丢掉。
+ */
+export function capWorkLouderTaskTitle(title: string): string {
+  if (title.length <= WORKLOUDER_CODEX_TASK_TITLE_MAX_LENGTH) return title;
+  const capped = title.slice(0, WORKLOUDER_CODEX_TASK_TITLE_MAX_LENGTH);
+  const last = capped.charCodeAt(capped.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? capped.slice(0, -1) : capped;
+}
+
 export const WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL = 'worklouder-codex:state-changed';
 export const WORKLOUDER_CODEX_ACTION_CHANNEL = 'worklouder-codex:action';
 export const WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL = 'worklouder-codex:preview-input';

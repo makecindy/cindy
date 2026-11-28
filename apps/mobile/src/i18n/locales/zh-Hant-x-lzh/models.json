@@ -92,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "供方組 · {{count}} 機",
-    "groupBadge_other": "供方組 · {{count}} 機",
+    "groupBadge_one": "機組 · {{count}} 機",
+    "groupBadge_other": "機組 · {{count}} 機",
     "harness": "Harness",
     "restoreRecommended": "復所薦",
     "saveFailed": "存之未成，請再試。",
@@ -144,20 +144,33 @@
       "exceptionImage": "訊中有圖，唯於能觀圖之源中擇",
       "exceptionImageFallback": "訊中有圖，然無能觀圖之源，照常擇之",
       "exceptionHours": "此時段改行「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "循平素所用之慣，先擇此源",
+      "usageHabitQuota": "循平素所用之慣，先擇此源（尚餘 {{left}}%）",
+      "autoBalance": "他源限額偏緊或正繁忙，故先以此分擔",
+      "autoBalanceQuota": "權衡餘量與負載，先擇此源（尚餘 {{left}}%）",
+      "lessBusy": "他源方有事務在行，先用此閒源",
+      "paygFallback": "訂閱與共享皆暫不可用，暫以按量之源兜底"
     },
     "picker": {
       "switched": "「{{name}}」已將此差事易為 {{model}}",
       "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。",
-      "chooseUnavailable": "「{{name}}」今無可用之源，未取之。"
+      "chooseUnavailable": "「{{name}}」今無可用之源，未取之。",
+      "managedBy": "今由「{{name}}」常管",
+      "detach": "解管",
+      "detached": "已解智慧路由常管，仍用今之模型"
     },
-    "anotherDevice": "他機"
+    "anotherDevice": "他機",
+    "sourceRouteTitle_one": "{{name}} · 智慧路由（{{count}} 源）",
+    "sourceRouteTitle_other": "{{name}} · 智慧路由（{{count}} 源）",
+    "switchOffer": {
+      "button": "易為 {{model}} 並續行"
+    }
   },
   "pluginEngines": {
     "genericName": "法器引擎",
     "defaultModel": "預設模型",
     "unavailable": "{{engine}} 暫不可用",
-    "unavailableWithHint": "{{engine}} 暫不可用：{{hint}}",
-    "worktreeUnsupported": "法器引擎尚不能於 worktree 中新建差事，請先取消勾選 worktree 再發"
+    "unavailableWithHint": "{{engine}} 暫不可用：{{hint}}"
   }
 }

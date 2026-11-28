@@ -62,7 +62,11 @@ describe('actual interaction preference readers', () => {
     expect(value(result, 'computer.enabled')).toBe(false);
     expect(result.fields['im.wecom.notificationsEnabled']).toEqual({ status: 'private' });
     expect(value(result, 'im.official.slackEnabled')).toBe(false);
-    expect(Object.keys(result.fields).filter(k => k.startsWith('shortcuts.'))).toHaveLength(30);
+    expect(Object.keys(result.fields).filter(k => k.startsWith('shortcuts.')).sort())
+      .toEqual(SETTINGS_READ_SHORTCUT_IDS.map(id => `shortcuts.${id}`).sort());
+    expect(result.fields['shortcuts.copy-session-link']).toMatchObject({
+      status: 'value', source: 'default', value: [],
+    });
     for (const [key, item] of Object.entries(result.fields)) {
       expect(key in SETTINGS_READ_CATALOG, key).toBe(true);
       if (item.status === 'value' && !key.match(/^im\.(global|feishu|slack|discord|wechat|telegram|dingtalk|wecom|imessage)\.agents\..*\.(model|providerId)$/)) expect(z.safeParse(SETTINGS_READ_CATALOG[key as keyof typeof SETTINGS_READ_CATALOG].valueSchema, item.value).success, key).toBe(true);
@@ -78,11 +82,26 @@ describe('actual interaction preference readers', () => {
     expect(fs.readdirSync(root)).toEqual([]);
   });
   it('preserves explicit default-valued overrides and platform-specific shortcut definitions', () => {
-    write('app-shortcuts.v1.json', { version: 1, overrides: { 'toggle-sidebar': null, 'new-maker': { code: 'KeyQ', key: 'private display text', meta: true } } }, false);
+    write('app-shortcuts.v1.json', { version: 1, overrides: {
+      'toggle-sidebar': null,
+      'new-maker': { code: 'KeyQ', key: 'private display text', meta: true },
+      'copy-session-link': { code: 'KeyL', ctrl: true, alt: true, shift: true },
+    } }, false);
     write('browser-backend-settings.json', { kind: 'external', useRealProfile: true }, false);
     const result = noWrites(read);
     expect(value(result, 'shortcuts.toggle-sidebar')).toEqual([]);
     expect(result.fields['browser.backend']).toMatchObject({ source: 'override', value: 'external' });
+    write('browser-backend-settings.json', { kind: 'user-browser', useRealProfile: false }, false);
+    const userBrowserResult = noWrites(read);
+    expect(userBrowserResult.fields['browser.backend']).toMatchObject({ status: 'value', source: 'override', value: 'user-browser' });
+    expect(z.safeParse(SETTINGS_READ_CATALOG['browser.backend'].valueSchema, 'user-browser').success).toBe(true);
+    expect(projectSettingsSnapshotV2({
+      fields: {
+        ...Object.fromEntries(SETTINGS_READ_FIELD_IDS.map(id => [id, { status: 'unsupported' } as const])),
+        ...userBrowserResult.fields,
+      },
+      collections: Object.fromEntries(SETTINGS_READ_COLLECTION_IDS.map(id => [id, { status: 'unavailable' } as const])),
+    }).fields['browser.backend']).toEqual({ status: 'value', source: 'override', value: 'user-browser' });
     expect(value(result, 'shortcuts.new-maker')).toEqual([{ code: 'KeyQ', meta: true, ctrl: false, alt: false, shift: false }]);
     expect(result.fields['shortcuts.zoom-in']).toEqual({ status: 'unsupported' });
     const windows = inspectInteractionSettings({ ...context(), platform: 'win32' });
@@ -90,7 +109,10 @@ describe('actual interaction preference readers', () => {
     expect(value(windows, 'shortcuts.zoom-in')).toHaveLength(3);
     const linux = inspectInteractionSettings({ ...context(), platform: 'linux' });
     expect(value(linux, 'voice.shortcutConfigured')).toBe(false);
-    expect(SETTINGS_READ_SHORTCUT_IDS).toHaveLength(30);
+    expect(result.fields['shortcuts.copy-session-link']).toMatchObject({
+      status: 'value', source: 'override',
+      value: [{ code: 'KeyL', meta: false, ctrl: true, alt: true, shift: true }],
+    });
   });
   it('reads saved owner preferences, not live model eligibility, and drops sensitive payloads', () => {
     write('voice-input-data.v1.json', { settings: { language: 'ja', microphoneDeviceId: 'private-mic', refinementInstructions: 'private-prompt', dictionaryEntries: [{ text: 'private-dictionary' }], dictionarySyncEnabledOverride: false }, history: [{ transcript: 'private-history' }] });

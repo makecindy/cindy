@@ -69,7 +69,10 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
   };
 });
 
+import { openSubagentsTab } from '../lib/openSubagentsTab';
+import { startSubagentTabDiscovery } from '../../cc-agent/subagentTabDiscovery';
 import { RightSidebarShell } from '../RightSidebarShell';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import '../plugins/plugin-task';
 import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
 import { InlineHtmlPreview } from '../plugins/file-browser/InlineHtmlPreview';
@@ -325,6 +328,83 @@ describe('RightSidebarShell empty state', () => {
     window.localStorage.clear();
     installedGhostsMock.list = [];
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  // #11546, unit: an empty task sidebar and its + menu share the session's Review eligibility.
+  it.each([
+    ['guest', sharedTaskHostPeer('task', 'host'), true],
+    ['owner', null, true],
+    ['paired device', 'paired-device', true],
+  ] as const)('filters both Review creation surfaces for %s', async (_role, deviceLinkDeviceId, available) => {
+    const name = 'rightSidebar.tabs.kinds.review';
+    registerTabKind({
+      kind: 'review',
+      menu: { kind: 'review', labelKey: name, icon: (() => null) as unknown as LucideIcon, order: 1, enabled: true },
+      TabPillTitle: () => null, TabBody: () => null, defaultState: () => null,
+    });
+    try {
+      render(createElement(RightSidebarShell, {
+        sessionId: 's1', workdir: 'repo', remoteHostId: null, deviceLinkDeviceId, shellVisible: true, isMac: true,
+      }));
+      await screen.findByText('rightSidebar.tabs.empty.title');
+      expect(Boolean(screen.queryByRole('button', { name }))).toBe(available);
+      const add = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
+      vi.spyOn(add.parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 20, 24, 24));
+      fireEvent.pointerDown(add, { button: 0, ctrlKey: false });
+      await screen.findByRole('menu');
+      const entry = screen.queryByRole('menuitem', { name });
+      expect(Boolean(entry)).toBe(available);
+      if (entry) {
+        fireEvent.click(entry);
+        await waitFor(() => expect(tabsIpc.upsert).toHaveBeenCalled());
+      } else {
+        expect(tabsIpc.upsert).not.toHaveBeenCalled();
+      }
+    } finally {
+      unregisterTabKind('review');
+    }
+  });
+
+  // #13737, unit: after re-entry the empty task bucket has no selection. Exercise
+  // discovery against the shell to distinguish its displayed page from stored focus.
+  it.each(['natural', 'selected', 'empty'])('discovers Pi history in a %s sidebar', async (initial) => {
+    installedGhostsMock.list = [
+      { manifest: { id: 'alpha', name: 'Alpha', panel: { html: 'p.html' } }, enabled: true },
+    ];
+    const plugin = initial === 'empty' ? null : addGlobalPluginTab('alpha');
+    const displayed = vi.fn();
+    render(createElement(RightSidebarShell, {
+      sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, isMac: true,
+      subagentsAvailable: true, onActiveTabChange: displayed,
+    }));
+    await waitFor(() => expect(getBucket('s1').hydrated).toBe(true));
+    expect(displayed).toHaveBeenLastCalledWith(plugin?.id ?? null);
+    if (initial === 'selected') fireEvent.click(screen.getByText('rightSidebar.tabs.kinds.pluginView'));
+
+    const stop = startSubagentTabDiscovery({
+      sessionId: 's1',
+      listLocal: async () => ({ supported: true, runs: [{
+        id: 'child', parentSessionId: 's1', provider: 'pi', logicalAgentId: 'child',
+        identityAliases: [], providerRunIds: [], status: 'completed',
+        startedAt: 1, updatedAt: 2, endedAt: 2,
+        capabilities: { viewActivity: true, viewReturnedResult: true, viewFullTranscript: false,
+          resume: false, steer: false, stop: false, parentContext: 'none' },
+      }] }),
+      listRemote: vi.fn(), subscribeLocalChanges: () => () => {},
+      isRequestOwnerCurrent: () => true,
+      registerTab: () => openSubagentsTab('s1', { focusTab: false, revealSidebar: false, userInitiated: false }),
+    });
+    try {
+      await screen.findByText('rightSidebar.tabs.kinds.subagents');
+      const subagentsId = getBucket('s1').tabs[0]?.id;
+      expect(displayed).toHaveBeenLastCalledWith(plugin?.id ?? subagentsId);
+      expect(getBucket('s1').activeTabId).toBe(plugin ? null : subagentsId);
+      expect(getActiveGlobalTabId()).toBe(initial === 'selected' ? plugin?.id : null);
+      await act(() => openSubagentsTab('s1', { focusRunId: 'child', focusProvider: 'pi' }));
+      expect(displayed).toHaveBeenLastCalledWith(getBucket('s1').tabs[0]?.id);
+    } finally {
+      stop();
+    }
   });
 
   // 测试价值

@@ -106,6 +106,10 @@ describe("mobile maker transport", () => {
     expect(await maker.listSideChats('main')).toEqual([{ id: 'child' }]);
     await expect(maker.createSideChat('main')).rejects.toThrow('CHANNEL_NOT_ALLOWED');
     expect(calls).toEqual(['maker:side-chat:list:v1', 'maker:side-chat:v1']);
+    const invoke = vi.fn();
+    const modern = createMobileMakerTransport({ deviceId: 'side-host', invoke });
+    await modern.createSideChat('main', 'child');
+    expect(invoke.mock.calls[0].slice(0, 3)).toEqual(['side-host', 'maker:side-chat:v1', [{ parentSessionId: 'main', childId: 'child' }]]);
   });
   it('writes reset preferences to the execution device and rejects a different account response', async () => {
     const invoke = vi.fn(async () => ({ providerId: 'openai-b', autoUse: { accountKey: 'bound-account' } }));
@@ -532,6 +536,7 @@ describe("mobile maker transport", () => {
       "device-link:voice:transcribe",
       "device-link:voice:dictionary-learning",
       "device-link:voice:dictionary:get",
+      "device-link:voice:dictionary:mutate",
       "maker:get-pending-interactions",
       "maker:resolve-interaction",
       "maker:get-context-usage",

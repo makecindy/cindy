@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "Réflexion…",
+    "replyStreaming": "Génération…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} jetons",
     "tokenRate": "{{rate}} tok/s",
@@ -398,7 +399,13 @@
     "forkConfirmTitle": "Démarrer une nouvelle session à partir d'ici ?",
     "forkConfirmDescription": "Une session distincte sera créée avec le contexte à ce stade. La session d'origine reste inchangée, et les messages futurs de l'une n'affecteront pas l'autre.",
     "forkConfirm": "Démarrer une nouvelle session",
-    "forkCancel": "Annuler"
+    "forkCancel": "Annuler",
+    "modelSwitchPreparation": {
+      "pending": "Prochain message",
+      "preparing": "Préparation…",
+      "failed": "Échec du changement",
+      "usingPrevious": "Ce message utilise {{actual}} ; {{target}} n’est pas encore prêt."
+    }
   },
   "shareImage": {
     "title": "Partager la conversation",
@@ -498,7 +505,8 @@
     "worktreeUnsupported": "Cindy sur votre ordinateur ne peut pas créer de worktrees en toute sécurité. Désactivez le worktree pour continuer, ou mettez à jour Cindy sur votre ordinateur.",
     "worktreeCreateFailed": "Échec de la création du worktree : {{message}}",
     "worktreeRecoveryStateFailed": "Impossible d'enregistrer l'état de récupération du worktree. Réessayez.",
-    "worktreeCleanupPending": "Le worktree précédent est toujours en attente de nettoyage. Reconnectez l'appareil et réessayez."
+    "worktreeCleanupPending": "Le worktree précédent est toujours en attente de nettoyage. Reconnectez l'appareil et réessayez.",
+    "createRejectedResend": "Votre contenu a été restauré. Modifiez-le si besoin, puis renvoyez-le."
   },
   "menu": {
     "moveToProject": "Déplacer la tâche",
@@ -652,6 +660,9 @@
     "ignore": "Ignorer",
     "executionResultUnavailable": "Impossible de récupérer le résultat de l'exécution. La poursuite automatique s'est arrêtée. Demandez à l'assistant de vérifier le résultat d'exécution existant.",
     "unexecutedToolMarkup": "Le modèle a écrit un appel d’outil sous forme de texte. L’exécution n’a pas pu être confirmée ; ce tour n’est donc pas terminé.",
+    "codexReconnectStalled": "La connexion au modèle n’a pas été rétablie en 2 minutes.",
+    "reconnectAutoResumeDisabled": "La reprise automatique est désactivée.",
+    "reconnectAutoResumeExhausted": "Le nombre maximal de tentatives de reprise automatique a été atteint.",
     "silentStopExhausted": "Une réponse vide a été détectée. La poursuite automatique est en pause.",
     "outputLimit": "Le modèle a atteint sa limite de sortie ; cette réponse peut être incomplète. Envoyez un nouveau message pour continuer. Si cela se répète, réduisez l’effort de raisonnement ou compactez d’abord l’historique de la conversation.",
     "outputLimitReasoning": "Le raisonnement a consommé la majeure partie du budget de sortie de cette requête ; la réponse peut être incomplète. Réduisez l’effort de raisonnement ou compactez l’historique de la conversation avant de continuer.",
@@ -664,7 +675,20 @@
     "toolUseLoopDetectedRotationWithCount": "Le modèle enchaînait des appels d'outils en rotation, Cindy a donc arrêté ce tour après avoir détecté {{count}} appels dans la boucle. Envoyez un nouveau message pour continuer.",
     "codexThreadLost": "Le mode d'authentification Codex a changé : cette session ne peut donc pas continuer. Démarrez une nouvelle session.",
     "remoteCompactEncryptedContent": "La compaction du contexte a échoué, car le modèle n'a pas pu lire l'historique chiffré. La reprise automatique n'a pas abouti. Réessayez pour tenter une récupération.",
-    "encryptedContentInvalid": "Le changement de fournisseur a rendu le chiffrement indisponible : cette session ne fonctionne donc qu'avec le fournisseur d'origine. Réglez ce problème sur l'ordinateur (utilisez « Démarrer une nouvelle session à partir d'ici » pour abandonner le contenu chiffré du protocole et continuer dans une nouvelle session)."
+    "encryptedContentInvalid": "Le changement de fournisseur a rendu le chiffrement indisponible : cette session ne fonctionne donc qu'avec le fournisseur d'origine. Réglez ce problème sur l'ordinateur (utilisez « Démarrer une nouvelle session à partir d'ici » pour abandonner le contenu chiffré du protocole et continuer dans une nouvelle session).",
+    "providerSafetyRefusal": "La politique de sécurité du fournisseur de modèles a bloqué cette réponse. Modifiez votre demande puis réessayez.",
+    "providerSafetyRefusalWithProvider": "La politique de sécurité de {{provider}} a bloqué cette réponse. Modifiez votre demande puis réessayez.",
+    "overloadBusy": "Le fournisseur de modèles est temporairement saturé et sans capacité disponible. Réessayez plus tard ou changez de modèle.",
+    "overloadBusyWithProvider": "{{provider}} est temporairement saturé et sans capacité disponible. Réessayez plus tard ou changez de modèle.",
+    "streamInterrupted": "Le flux de réponse du fournisseur de modèles a été interrompu en cours de route. Réessayez plus tard.",
+    "streamInterruptedWithProvider": "Le flux de réponse de {{provider}} a été interrompu en cours de route. Réessayez plus tard.",
+    "upstreamStatusError": "Le service du fournisseur de modèles a renvoyé une erreur (HTTP {{status}}). La réponse n’a pas pu aboutir.",
+    "upstreamStatusErrorWithProvider": "Le service {{provider}} a renvoyé une erreur (HTTP {{status}}). La réponse n’a pas pu aboutir.",
+    "modelAccessDenied": "Votre compte actuel chez le fournisseur de modèles n’a pas accès à ce modèle. Changez de modèle ou vérifiez les droits d’accès.",
+    "modelAccessDeniedWithProvider": "Votre compte {{provider}} n’a pas accès à ce modèle. Changez de modèle ou vérifiez vos droits d’accès.",
+    "providerQuotaExhausted": "Quota ou solde insuffisant sur votre compte de fournisseur de modèles. Vérifiez votre compte.",
+    "providerQuotaExhaustedWithProvider": "Votre compte {{provider}} n’a plus assez de quota ou de solde. Vérifiez l’état de votre compte.",
+    "usageLimitReachedWithProvider": "Votre compte {{provider}} a atteint sa limite d’utilisation"
   },
   "row": {
     "markRead": "Marquer comme lu",
@@ -680,9 +704,15 @@
   "outbox": {
     "deleteConfirmTitle": "Supprimer ce message ?",
     "deleteConfirmBody": "Ce message n'a pas été envoyé. Sa suppression est irréversible.",
+    "deleteUnconfirmedBody": "L’ordinateur a peut-être déjà reçu ce message. La suppression retire uniquement le message en attente sur cet appareil. Si l’ordinateur l’a reçu, il apparaîtra toujours dans l’historique de la conversation.",
     "legacyPlanRecovery": "Cet ordinateur ne peut pas restaurer les messages enregistrés en mode Plan. Désactivez le mode Plan ou mettez à jour Cindy sur l'ordinateur, puis réessayez.",
     "creationRecoveryRequired": "Relancez la création de cette tâche avant de supprimer son premier message. Ce message conserve les informations de récupération de vos messages suivants.",
     "confirmationRequired": "Cet ordinateur ne peut pas confirmer la réception du message. Vérifiez son historique ou mettez à jour Cindy avant de réessayer.",
+    "profileInUseByDesktop": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule. Quittez-la, puis renvoyez le message.",
+    "taskInactive": "Cette tâche ne peut pas recevoir de messages pour le moment.",
+    "inputNotSupported": "Cet ordinateur ne prend pas en charge l’envoi de ce type de message à cette tâche.",
+    "invalidInput": "L’ordinateur a refusé le message, car son contenu est invalide.",
+    "taskClearedBeforeSend": "La tâche a été vidée ou est en cours de nettoyage. Le message reste enregistré sur cet appareil.",
     "taskCleared": "Cette tâche a été effacée après l'envoi de votre message. Le message enregistré a été conservé pour que vous puissiez le consulter.",
     "restoreFailed": "Impossible de restaurer les messages enregistrés. Ils n'ont pas été supprimés. Redémarrez l'application et réessayez.",
     "recoveryTarget": "Gardez l'ordinateur d'origine pendant la récupération de cette tâche. Ses messages suivants sont toujours enregistrés.",
@@ -735,7 +765,7 @@
     "REMOTE_WORKDIR_UNAVAILABLE": "Le répertoire de travail distant est indisponible. Vérifiez que le dossier existe toujours sur l'ordinateur distant, puis réessayez.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "L'ordinateur ne peut pas encore confirmer si ce message a été envoyé. Patientez un instant et réessayez. N'envoyez pas deux fois le même message.",
     "REMOTE_AGENT_UNAVAILABLE": "Impossible de communiquer avec l'ordinateur qui exécute l'Agent. Consultez les détails de l'erreur.",
-    "REMOTE_AGENT_TIMEOUT": "Le délai d'attente de l'ordinateur qui exécute l'Agent a expiré. Le résultat est inconnu. Vérifiez la tâche avant de réessayer.",
+    "REMOTE_AGENT_TIMEOUT": "L’ordinateur qui exécute l’Agent n’a pas encore répondu. Vérifiez l’avancement de la tâche. Si elle est encore en cours d'exécution ou déjà terminée, inutile de réessayer.",
     "REMOTE_AGENT_LINK_BUSY": "La communication avec l'ordinateur qui exécute l'Agent est saturée. Patientez un instant avant de réessayer.",
     "REMOTE_AGENT_UNRESPONSIVE": "L'ordinateur qui exécute l'Agent n'a pas répondu à plusieurs reprises. Les appels ont donc été temporairement suspendus. Patientez un instant avant de réessayer.",
     "REMOTE_AGENT_OFFLINE": "L'ordinateur qui exécute l'Agent est hors ligne. Réessayez une fois qu'il sera reconnecté.",
@@ -864,7 +894,8 @@
       "WORKER_CREATION_IN_PROGRESS": "Un Worker portant le même nom est en cours de création. Réessayez dans un instant.",
       "WORKER_NOT_FOUND": "Ce Worker n'existe plus. La liste a été actualisée.",
       "ORCA_CREATE_UNCONFIRMED": "La création du Worker a expiré et n'a pas pu être confirmée. Vérifiez d'abord la liste des Workers et ne réessayez que si aucun nouveau Worker n'apparaît.",
-      "ORCA_ACTION_UNCONFIRMED": "La requête a expiré : le résultat n'est donc pas encore confirmé. La liste a été actualisée ; fiez-vous à ce qu'elle affiche maintenant."
+      "ORCA_ACTION_UNCONFIRMED": "La requête a expiré : le résultat n'est donc pas encore confirmé. La liste a été actualisée ; fiez-vous à ce qu'elle affiche maintenant.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "La version sur cet ordinateur ne permet pas de démarrer la collaboration sur une tâche avec moteur de plugin."
     },
     "workerCountSummary_many": "{{count}} Workers · {{running}} en cours",
     "barLead_many": "Collaboration · {{count}} Workers · {{running}} en cours"

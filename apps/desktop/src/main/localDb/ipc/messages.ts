@@ -69,7 +69,7 @@ import {
   sumMoneyByCurrency,
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
-import { capReferenceMessageRows } from './history.js';
+import { capReferenceMessageRows, clampAroundRadius, requireReferenceContentCharLimit } from './history.js';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botRemoteResourceInvalidation';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
@@ -89,7 +89,7 @@ import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { createMessageClearRecovery } from '../messageClearRecovery.js';
 import { markLatestAgentHandoffConsumedWithPorts } from '../agentHandoffPendingQueries.js';
 
-export { listMessagesForAgentHandoff } from '../agentHandoffHistory.js';
+export { listMessagesForAgentHandoff, readAutoReviewHistoryPage } from '../agentHandoffHistory.js';
 export { findLatestContextRebuildMeta, findLatestUserMessageForRebuild } from '../contextRebuildQueries.js';
 export { findForkParentSessionId, findPendingAgentHandoff, findPendingForkOrigin } from '../agentHandoffPendingQueries.js';
 
@@ -1045,7 +1045,7 @@ export function commitContextRebuild(
       | 'idle-gap';
     sourceUserClientId: string | null;
     handoffCoverage?: HandoffCoverage;
-    sourceAgentKind?: 'cc' | 'codex' | 'pi';
+    sourceAgentKind?: 'cc' | 'codex' | 'pi' | 'acp';
     sourceModel?: string | null;
     sourceProviderId?: string | null;
     expectedClearedAt?: number | null;
@@ -1288,23 +1288,6 @@ export async function updateMessageContent(
     await reconcileUpdatedMessagePrRefs(dbClient, sessionId, row.id, isCurrent);
   }
   return row ? messageToCamel(row) : null;
-}
-
-function clampAroundRadius(raw: unknown): number {
-  const n = typeof raw === 'number' ? raw : Number(raw);
-  if (!Number.isFinite(n) || n < 0) return 60;
-  return Math.min(Math.max(Math.floor(n), 0), 200);
-}
-
-function requireReferenceContentCharLimit(raw: unknown): number | null {
-  if (raw === undefined || raw === null) return null;
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 8_000) {
-    throwIpcError(
-      'INVALID_PARAMS',
-      'contentCharLimit must be an integer between 1 and 8000 or null',
-    );
-  }
-  return raw;
 }
 
 /**

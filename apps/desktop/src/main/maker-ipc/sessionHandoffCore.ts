@@ -7,6 +7,7 @@ import { matchesForwardedRequest, readForwardedRequestSource, type AgentRequestR
 import { DL_SESSION_HANDOFF_CHANNEL } from '@cindy/device-link';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 import { sanitizeSourceName } from '@cindy/maker-shared/message-source';
+import { buildSessionCreatedBy } from '../../shared/sessionOrigin.js';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { hasRemoteBotSessionLookup } from '../device-link/remoteBotSessionBoundary.js';
@@ -58,6 +59,7 @@ function boundedString(value: unknown, name: string, max: number): string {
 export function createSessionHandoffHandler(deps: {
   send(params: SessionHandoffSendParams): Promise<SessionHandoffSendResult>;
   create?: ReturnType<typeof createRemoteSessionOpener>;
+  supportsPluginEngineCreate?: boolean;
   refineTitle?(sessionId: string, subject: string, initialTitle: string): void;
   listProjects?(options: { includeHidden: boolean; offset: number; limit: number }): Promise<unknown>;
   captureAccess?(controllerDeviceId: string): () => void;
@@ -66,7 +68,11 @@ export function createSessionHandoffHandler(deps: {
   // Claim before the first await. The sender receipt expires after one hour; retain
   // claims longer so transport replay cannot enqueue a second copy in that lifetime.
   const claimed = new Map<string, number>();
-  return async (controllerDeviceId: string, value: unknown): Promise<SessionHandoffSendResult> => {
+  return async (
+    controllerDeviceId: string,
+    value: unknown,
+    controllerDeviceName?: string,
+  ): Promise<SessionHandoffSendResult> => {
     const request = requireObject(value, 'request');
     const targetSessionId = boundedString(request.sessionId, 'sessionId', 512);
     const creation = request.action === 'create' ? remoteSessionCreationSchema.parse(request.create) : undefined;
@@ -125,7 +131,20 @@ export function createSessionHandoffHandler(deps: {
     let created: RemoteSessionCreated | undefined;
     if (creation) {
       const initial = !plugin && !creation.title?.trim() ? { ...creation, title: normalizeAutoTitle(body) } : creation;
-      const opened = await deps.create!(targetSessionId, initial, taskActionDeliveryGuard);
+      const createdBySession = !plugin
+        ? buildSessionCreatedBy({
+            sessionId: `${controllerDeviceId}::${senderSessionId}`,
+            title: senderSessionTitle,
+            deviceId: controllerDeviceId,
+            deviceName: controllerDeviceName,
+          })
+        : null;
+      const opened = await deps.create!(
+        targetSessionId,
+        initial,
+        taskActionDeliveryGuard,
+        createdBySession ? { createdBySession } : undefined,
+      );
       if (!opened.ok) {
         if (opened.errorCode !== 'DELIVERY_UNKNOWN') await taskActionDeliveryGuard.onSettled().catch(() => undefined);
         return opened;
@@ -189,7 +208,10 @@ export function registerSessionHandoffHandlers(
     const request = requireObject(value, 'request');
     if (request.action === 'task-action-capability') return {
       ...SESSION_HANDOFF_CAPABILITY,
-      ...(deps.create ? { ordinaryCreateVersion: 1 } : {}),
+      // ordinaryCreateBaseRef: `create.baseRef` is understood (2026-11-28). The opener is shared, so
+      // every host that can create accepts it; senders must not send the key without this bit.
+      ...(deps.create ? { ordinaryCreateVersion: 1, ordinaryCreateBaseRef: 1 } : {}),
+      ...(deps.create && deps.supportsPluginEngineCreate ? { ordinaryCreatePluginEngine: 1 } : {}),
       ...(deps.create && deps.refineTitle ? { ordinaryCreateAutoTitle: 1 } : {}),
       ...(deps.listProjects ? { projectCatalogVersion: 1 } : {}),
     };
@@ -213,6 +235,6 @@ export function registerSessionHandoffHandlers(
       });
       return { valid, ...(request.release === true ? { released: valid } : {}) };
     }
-    return handle(context!.controllerDeviceId, value);
+    return handle(context!.controllerDeviceId, value, context!.controllerName);
   });
 }

@@ -93,8 +93,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "Groupe de fournisseurs · {{count}} ordinateur",
-    "groupBadge_other": "Groupe de fournisseurs · {{count}} ordinateurs",
+    "groupBadge_one": "Groupe d'ordinateurs · {{count}} ordinateur",
+    "groupBadge_other": "Groupe d'ordinateurs · {{count}} ordinateurs",
     "harness": "Harness",
     "restoreRecommended": "Rétablir les paramètres recommandés",
     "saveFailed": "Impossible d'enregistrer. Réessayez.",
@@ -147,20 +147,34 @@
       "exceptionImage": "Le message contient des images : seules les sources capables de les voir ont été prises en compte",
       "exceptionImageFallback": "Le message contient des images, mais aucune source ne peut les voir : choix habituel",
       "exceptionHours": "Sur cette plage horaire, utilise « {{name}} »",
-      "separator": " ; "
+      "separator": " ; ",
+      "usageHabit": "Choisie en priorité selon vos habitudes d’utilisation",
+      "usageHabitQuota": "Choisie en priorité selon vos habitudes d’utilisation ({{left}} % de quota restant)",
+      "autoBalance": "Prend le relais pendant que les autres sources sont tendues ou occupées",
+      "autoBalanceQuota": "Équilibrée selon la marge de quota et la charge ({{left}} % de quota restant)",
+      "lessBusy": "Les autres sources exécutent des tâches, celle-ci est libre et passe en premier",
+      "paygFallback": "Abonnements et sources partagées indisponibles : bascule sur le paiement à l’usage"
     },
     "picker": {
       "switched": "« {{name}} » a basculé cette tâche sur {{model}}",
       "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé.",
-      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi."
+      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi.",
+      "managedBy": "Géré par « {{name}} »",
+      "detach": "Détacher",
+      "detached": "Détaché du routage intelligent. Le modèle actuel est conservé."
     },
-    "anotherDevice": "Autre ordinateur"
+    "anotherDevice": "Autre ordinateur",
+    "sourceRouteTitle_one": "{{name}} · Route intelligente ({{count}} source)",
+    "sourceRouteTitle_many": "{{name}} · Route intelligente ({{count}} sources)",
+    "sourceRouteTitle_other": "{{name}} · Route intelligente ({{count}} sources)",
+    "switchOffer": {
+      "button": "Passer à {{model}} et continuer"
+    }
   },
   "pluginEngines": {
     "genericName": "Moteur de plugin",
     "defaultModel": "Modèle par défaut",
     "unavailable": "{{engine}} est indisponible",
-    "unavailableWithHint": "{{engine}} est indisponible : {{hint}}",
-    "worktreeUnsupported": "Les moteurs de plugins ne peuvent pas encore démarrer de tâche dans un worktree. Désactivez worktree pour envoyer."
+    "unavailableWithHint": "{{engine}} est indisponible : {{hint}}"
   }
 }

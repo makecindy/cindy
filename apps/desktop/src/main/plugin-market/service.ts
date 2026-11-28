@@ -83,6 +83,7 @@ import {
   republishGhostRoster,
   uninstallGhostAndCleanup,
 } from '../cindy-brain/index.js';
+import { hasRunningPluginEngineTurn } from '../cindy-brain/pluginHarnesses.js';
 import {
   hasCindyOfficialTrustMetadata,
   isCindyOfficialTrustInfo,
@@ -607,7 +608,9 @@ function isGhostBusy(
   return (
     hasPendingGhostCalls(runtimeId) ||
     hasRunningGhostErrand(runtimeId) ||
-    hasRunningGhostCindyWork(runtimeId)
+    hasRunningGhostCindyWork(runtimeId) ||
+    // 更新会停掉插件全部进程；引擎上有任务回合在跑时延后，不打断正在用的旧版本。
+    hasRunningPluginEngineTurn(runtimeId)
   );
 }
 
@@ -2785,6 +2788,13 @@ export class PluginMarketService {
               replacedRoute = record;
             }
           },
+          ...(automatic ? {
+            beforeRuntimeStopInLock: () => {
+              if (isGhostBusy(plugin, listMarketInstallations())) {
+                throw new SilentUpgradeBusyError('Plugin is busy');
+              }
+            },
+          } : {}),
           onPackagePlaced: () => {
             packageLanded = true;
           },
@@ -3078,6 +3088,7 @@ export class PluginMarketService {
       /** 是否保留现有来源，或按明确意图切换来源。 */
       sourceReplacementMode?: ServerSourceReplacementMode;
       beforeCommitInLock?: () => void;
+      beforeRuntimeStopInLock?: () => void;
       assertCurrent?: () => void;
       /** 发起操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
       expectedInstalled: boolean;
@@ -3247,6 +3258,7 @@ export class PluginMarketService {
               ? { expectedInstalledApproval: options.expectedInstalledApproval }
               : {}),
             sourceReplacementMode,
+            beforeRuntimeStopInLock: options.beforeRuntimeStopInLock,
             beforeCommitInLock: namespaceFromLogin
               ? () => {
                   assertInstallIdentityCurrent();
@@ -3293,6 +3305,7 @@ export class PluginMarketService {
       expectedInstalledApproval?: string;
       sourceReplacementMode: ServerSourceReplacementMode;
       beforeCommitInLock?: () => void;
+      beforeRuntimeStopInLock?: () => void;
       assertCurrent?: () => void;
       expectedInstalled: boolean;
       verifiedServerRoot?: string;
@@ -3405,6 +3418,9 @@ export class PluginMarketService {
           : {}),
         ...(options.beforeCommitInLock || replacingSource
           ? { beforeCommitInLock: detachPreviousRoute }
+          : {}),
+        ...(options.beforeRuntimeStopInLock
+          ? { beforeRuntimeStopInLock: options.beforeRuntimeStopInLock }
           : {}),
         ...(replacingSource
           ? {
@@ -4284,6 +4300,11 @@ export class PluginMarketService {
                   freshState === 'conflict'
                     ? 'organization-default-takeover'
                     : 'preserve-existing-source',
+                beforeRuntimeStopInLock: () => {
+                  if (isGhostBusy(freshSummary, freshLocal.ghosts)) {
+                    throw new SilentUpgradeBusyError('Plugin is busy');
+                  }
+                },
                 // 下载期间用户可能从本地插件页完成显式卸载。最终落位前在
                 // ghostId 锁内重读卸载意图，不能让旧 snapshot 把插件装回来。
                 beforeCommitInLock: () => {
@@ -4474,6 +4495,11 @@ export class PluginMarketService {
               expectedInstalled: true,
               expectedInstalledApproval: ghostInstallApprovalToken(freshInstalled.approval),
               beforeCommitInLock: () => {
+                if (isGhostBusy(fresh.target, freshLocal.ghosts)) {
+                  throw new SilentUpgradeBusyError('Plugin is busy');
+                }
+              },
+              beforeRuntimeStopInLock: () => {
                 if (isGhostBusy(fresh.target, freshLocal.ghosts)) {
                   throw new SilentUpgradeBusyError('Plugin is busy');
                 }

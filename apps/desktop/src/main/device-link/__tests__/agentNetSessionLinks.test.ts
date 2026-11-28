@@ -1133,6 +1133,47 @@ describe('AgentNetSessionLinks', () => {
     expect(dialed).toBe(1);
   });
 
+  // 迁移接管（2026-11-27）：旧 V1 分享登记迁移时已在 Device Link 上建了可靠链路（isLinkReady=true）；在途任务未结束时不中途换路，
+  // 空闲后下一次 openLink 先按需拨通分享连接并切到 Agent-Net 会话，后续调用不再粘在旧 Device Link 上。
+  it('upgrades an already-open Device Link provider share onto its Agent-Net session once pending requests drain', async () => {
+    const hostKey = providerShareHostPeer('share-1', 'a-host'), guestKey = providerShareGuestPeer('share-1', 'member-1', 'g-guest');
+    const connectedAt = new Map<string, number>();
+    let dialed = 0, pending = true;
+    const { links, connect } = pair({
+      connected: false, hostKey, controllerKey: guestKey,
+      connectedAt: (id) => connectedAt.get(id) ?? null,
+      agentNetPeer: (id) => (id === hostKey ? 'online' : null),
+      connect: async (id) => { dialed++; connectedAt.set(id, performance.now()); queueMicrotask(connect); return true; },
+    });
+    links.host.onFrame((env) => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'session-host', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'agent-net-session' });
+    });
+    const calls: string[] = [];
+    const deviceLink = {
+      onPresenceChanged: () => () => {},
+      isLinkReady: (id: string) => id === hostKey,
+      needsLinkRecovery: () => false,
+      hasPendingRequestsTo: (id: string) => id === hostKey && pending,
+      getReliableSendQueueDepth: () => 0,
+      openLink: async () => { calls.push('device-link:openLink'); return { appVersion: 'dl', allowlistHash: 'dl' }; },
+      invoke: async () => { calls.push('device-link:invoke'); return { ok: true, result: 'device-link' }; },
+      connectionFor: () => deviceLink,
+    } as unknown as DeviceLinkClient;
+    const guest = routeSessionPeers(deviceLink, links.controller);
+    // 旧链路上仍有在途 poll/请求时不拨号、不换路。
+    await expect(guest.openLink(hostKey, openPayload)).resolves.toMatchObject({ appVersion: 'dl' });
+    await expect(guest.invoke(hostKey, { channel: 'maker:remote-agent:v1', args: [{ op: 'caps' }] })).resolves.toEqual({ ok: true, result: 'device-link' });
+    expect(dialed).toBe(0);
+    expect(calls).toEqual(['device-link:openLink', 'device-link:invoke']);
+    // 在途请求排空后，下一次建链自动拨通并切到 Agent-Net 会话。
+    pending = false;
+    await expect(guest.openLink(hostKey, openPayload)).resolves.toMatchObject({ appVersion: 'session-host' });
+    expect(dialed).toBe(1);
+    await expect(guest.invoke(hostKey, { channel: 'maker:remote-agent:v1', args: [{ op: 'caps' }] })).resolves.toEqual({ ok: true, result: 'agent-net-session' });
+    expect(calls).toEqual(['device-link:openLink', 'device-link:invoke']);
+  });
+
   // Unit: one body starts before the timeout, completes after it, and serves both listing callers.
   it('lets coalesced Agent-Net listing callers receive a slowly arriving body', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });

@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "思考中…",
+    "replyStreaming": "正在生成…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
@@ -398,7 +399,13 @@
     "forkConfirmTitle": "從這裡開啟一個新任務？",
     "forkConfirmDescription": "系統會根據這裡的對話上下文建立一個獨立的新任務。原任務不會改變，之後兩邊的訊息互不影響。",
     "forkConfirm": "開啟新任務",
-    "forkCancel": "取消"
+    "forkCancel": "取消",
+    "modelSwitchPreparation": {
+      "pending": "下則訊息",
+      "preparing": "準備中…",
+      "failed": "切換失敗",
+      "usingPrevious": "本次使用 {{actual}}，{{target}} 尚未就緒"
+    }
   },
   "shareImage": {
     "title": "分享對話",
@@ -497,7 +504,8 @@
     "worktreeUnsupported": "電腦端目前的 Cindy 無法安全建立 worktree，請關閉 worktree 後繼續，或更新電腦上的 Cindy。",
     "worktreeCreateFailed": "worktree 建立失敗：{{message}}",
     "worktreeRecoveryStateFailed": "無法儲存 worktree 恢復狀態，請重試。",
-    "worktreeCleanupPending": "上一次 worktree 仍待回收，請重新連線裝置後再試。"
+    "worktreeCleanupPending": "上一次 worktree 仍待回收，請重新連線裝置後再試。",
+    "createRejectedResend": "內容已帶回，可調整後重新傳送。"
   },
   "menu": {
     "moveToProject": "移動任務",
@@ -649,6 +657,9 @@
     "ignore": "忽略",
     "executionResultUnavailable": "未能取得執行結果，已停止自動接續。可以請助手檢查既有的執行結果。",
     "unexecutedToolMarkup": "模型把工具呼叫寫成了文字，無法確認執行結果，本輪未完成。",
+    "codexReconnectStalled": "模型連線在 2 分鐘內未能恢復。",
+    "reconnectAutoResumeDisabled": "自動續跑已關閉。",
+    "reconnectAutoResumeExhausted": "自動續跑已達重試次數上限。",
     "silentStopExhausted": "偵測到空回應，自動續跑已暫停。",
     "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以傳送新訊息繼續；若反覆觸發，請降低推理強度或先壓縮對話記錄。",
     "outputLimitReasoning": "思考已消耗本次輸出的大部分預算，回覆可能不完整。建議降低推理強度，或先壓縮對話記錄，再繼續。",
@@ -661,7 +672,20 @@
     "toolUseLoopDetectedRotationWithCount": "模型持續輪轉呼叫多個工具，Cindy 偵測到本輪已有 {{count}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
     "codexThreadLost": "Codex 驗證模式已切換，目前任務無法繼續，請新建任務。",
     "remoteCompactEncryptedContent": "整理上下文失敗：模型無法讀取歷史中的加密內容。自動接續未完成，可重試恢復。",
-    "encryptedContentInvalid": "由於更換供應商導致加密不可用，本任務只能在原供應商下使用；請回到電腦端處理（可以用「從這裡開啟新任務」丟棄協定加密內容，在新任務裡繼續）。"
+    "encryptedContentInvalid": "由於更換供應商導致加密不可用，本任務只能在原供應商下使用；請回到電腦端處理（可以用「從這裡開啟新任務」丟棄協定加密內容，在新任務裡繼續）。",
+    "providerSafetyRefusal": "模型供應商的安全政策攔截了本次回覆。如需繼續，請調整請求內容後再傳送",
+    "providerSafetyRefusalWithProvider": "{{provider}} 的安全政策攔截了本次回覆。如需繼續，請調整請求內容後再傳送",
+    "overloadBusy": "模型供應商暫時繁忙，目前沒有可用容量。可稍後重試，或換一個模型。",
+    "overloadBusyWithProvider": "{{provider}} 暫時繁忙，目前沒有可用容量。可稍後重試，或換一個模型。",
+    "streamInterrupted": "模型供應商回傳回覆時中途斷線，請稍後重試。",
+    "streamInterruptedWithProvider": "{{provider}} 回傳回覆時中途斷線，請稍後重試。",
+    "upstreamStatusError": "模型供應商服務回傳異常（HTTP {{status}}），本次回覆未完成。",
+    "upstreamStatusErrorWithProvider": "{{provider}} 服務回傳異常（HTTP {{status}}），本次回覆未完成。",
+    "modelAccessDenied": "目前模型供應商帳號無權存取此模型。請切換模型，或向供應商確認模型存取權限",
+    "modelAccessDeniedWithProvider": "目前 {{provider}} 帳號無權存取此模型。請切換模型，或確認模型存取權限",
+    "providerQuotaExhausted": "模型供應商帳戶配額或餘額不足，請檢查供應商帳戶",
+    "providerQuotaExhaustedWithProvider": "{{provider}} 帳戶配額或餘額不足，請檢查帳戶狀態",
+    "usageLimitReachedWithProvider": "{{provider}} 帳號已達到用量上限"
   },
   "row": {
     "markRead": "已讀",
@@ -677,9 +701,15 @@
   "outbox": {
     "deleteConfirmTitle": "刪除這則訊息？",
     "deleteConfirmBody": "這則訊息未能成功傳送，刪除後無法復原。",
+    "deleteUnconfirmedBody": "電腦可能已經收到這則訊息。刪除只會移除這部裝置上的待傳訊息。若電腦已收到，這則訊息仍會出現在對話記錄中。",
     "legacyPlanRecovery": "這臺電腦暫不支援在計畫模式下恢復待傳訊息。請關閉計畫模式，或更新電腦上的 Cindy 後重試。",
     "creationRecoveryRequired": "請先重試建立任務，再刪除首則訊息；這則訊息仍保存著後續訊息所需的任務恢復資訊。",
     "confirmationRequired": "電腦暫時無法確認是否收到這則訊息。請核對訊息記錄，或更新電腦上的 Cindy 後重試。",
+    "profileInUseByDesktop": "這份資料正被單獨執行的 Cindy 電腦端使用。請先結束它，再傳送。",
+    "taskInactive": "這個任務目前無法接收訊息。",
+    "inputNotSupported": "這部電腦暫不支援向這個任務傳送這類訊息。",
+    "invalidInput": "這則訊息包含無效內容，電腦未接收。",
+    "taskClearedBeforeSend": "任務已清空或正在清空，訊息仍儲存在這部裝置上。",
     "taskCleared": "傳送後，這個任務已被清空。訊息仍保存在手機上，請核對後處理。",
     "restoreFailed": "暫時無法恢復待傳訊息，已保存的內容沒有刪除。請重新啟動 App 後重試。",
     "recoveryTarget": "恢復這個任務時請保留原來的電腦，後續訊息仍保存在手機上。",
@@ -695,7 +725,7 @@
     "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "未傳送訊息，Cindy 未能及時確認安全記錄",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用帳號已達到用量上限。可改用其他模型，或等配額重置後繼續。",
-    "REMOTE_AGENT_GROUP_UNAVAILABLE": "供應商組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以在電腦上這個供應商的「遠端與分享」頁查看組內電腦。",
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "電腦組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以在電腦上這個供應商的「遠端與分享」頁查看組內電腦。",
     "REMOTE_DAEMON_CLOSED": "遠端連線中斷了，可能正在更新。這一輪已經結束，請重新傳送。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法存取本地檔案或圖片附件。請直接貼上內容。",
     "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自動審批模型的配額已耗盡。在執行 Agent 的電腦上檢查用量或計費，或在設定中自訂輔助模型。需要審批的操作仍需由你確認。",
@@ -732,7 +762,7 @@
     "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄現在無法使用。請確認那台電腦上的目錄還在，然後重試。",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "電腦端暫時無法確認這則訊息是否已經送出。請稍後再試，不要重複傳送同一則。",
     "REMOTE_AGENT_UNAVAILABLE": "未能與執行 Agent 的電腦通訊，請查看錯誤詳情。",
-    "REMOTE_AGENT_TIMEOUT": "等待執行 Agent 的電腦回應逾時，結果尚未確認。重試前請先檢查任務進度。",
+    "REMOTE_AGENT_TIMEOUT": "執行 Agent 的電腦還沒回覆。請先查看任務進度。如果任務還在執行或已有結果，就不必重試。",
     "REMOTE_AGENT_LINK_BUSY": "與執行 Agent 的電腦之間的通訊忙碌，請稍後重試。",
     "REMOTE_AGENT_UNRESPONSIVE": "執行 Agent 的電腦多次未回應，呼叫已暫時暫停。請稍後重試。",
     "REMOTE_AGENT_OFFLINE": "執行 Agent 的電腦目前離線，待重新上線後重試。",
@@ -861,7 +891,8 @@
       "WORKER_CREATION_IN_PROGRESS": "另一個同名 Worker 正在建立，請稍後重試。",
       "WORKER_NOT_FOUND": "這個 Worker 已不存在，列表已重新整理。",
       "ORCA_CREATE_UNCONFIRMED": "建立 Worker 逾時，暫時無法確認是否成功。請先查看 Worker 列表，確認沒有新建的 Worker 後再重試。",
-      "ORCA_ACTION_UNCONFIRMED": "操作逾時，暫時無法確認結果。已重新整理列表，請以目前顯示的狀態為準。"
+      "ORCA_ACTION_UNCONFIRMED": "操作逾時，暫時無法確認結果。已重新整理列表，請以目前顯示的狀態為準。",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "這台電腦的版本不支援在插件引擎任務中開啟協同。"
     }
   },
   "resetAutoUse": {

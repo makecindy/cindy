@@ -8,6 +8,19 @@
       "selected": "Ausgewählt"
     }
   },
+  "voiceCall": {
+    "title": "Sprachanruf",
+    "saved": "Anruftranskript gespeichert",
+    "you": "Du",
+    "companion": "Freund",
+    "sendFailed": "Senden fehlgeschlagen. Dein Gesprochenes wurde beibehalten.",
+    "handoff": {
+      "sending": "Wird übergeben…",
+      "accepted": "An deinen Freund übergeben",
+      "failed": "Übergabe fehlgeschlagen. Dein Gesprochenes wurde beibehalten.",
+      "completed": "Ergebnis erhalten"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Von lokaler App „{{name}}“ gesendet",
     "sourceLocalAppId": "App-ID: {{id}}",
@@ -67,7 +80,6 @@
       "dingtalk": "DingTalk",
       "imessage": "iMessage"
     },
-    "modelMismatch": "Diese Runde wurde von {{actual}} statt vom ausgewählten {{selected}} beantwortet (vorübergehende serverseitige Herabstufung)",
     "copyStateCopying": "Wird kopiert",
     "copyStateCopied": "Kopiert",
     "copyStateFailed": "Kopieren fehlgeschlagen",
@@ -133,6 +145,7 @@
     "retryRemoteMediaFetch": "Remote-Medium erneut abrufen",
     "retryFetch": "Erneut abrufen",
     "openMedia": "Medium öffnen",
+    "playAudio": "Audio abspielen",
     "readCurrentRemoteFile": "Aktuelle Remote-Datei lesen",
     "retryFilePreview": "Dateivorschau erneut versuchen",
     "readCurrentFile": "Aktuelle Datei lesen",
@@ -184,7 +197,8 @@
     "groupSent": "Aus einer Gruppe gesendet",
     "sourceGroupId": "Gruppen-ID: {{id}}",
     "selectText": "Text auswählen",
-    "you": "Du"
+    "you": "Du",
+    "recentActivity": "Letzte Aktivität"
   },
   "actions": {
     "attachmentsPrefix": "Anhänge: {{names}}",
@@ -249,6 +263,7 @@
     "edit": "Bearbeiten",
     "steer": "Einschieben",
     "steerQueued": "Noch nicht zugestellt. Deine Nachricht ist noch in der Warteschlange.",
+    "steerUnsupportedNotice": "Diese Engine unterstützt kein Einbringen. Nachrichten in der Warteschlange werden nach der aktuellen Runde gesendet.",
     "moveUp": "Nach vorne verschieben",
     "moveDown": "Nach hinten verschieben",
     "cancelSend": "Senden abbrechen",
@@ -262,11 +277,16 @@
     "delete": "Löschen",
     "retry": "Erneut versuchen",
     "notSent": "Nicht gesendet",
+    "deliveryUnconfirmed": "Sendeergebnis unbestätigt",
+    "recheckDelivery": "Erneut prüfen",
     "imagesNotUploaded_one": "{{count}} Bild wurde nicht hochgeladen",
     "imagesNotUploaded_other": "{{count}} Bilder wurden nicht hochgeladen",
     "waitingForNamedComputer": "Wird automatisch gesendet, sobald {{name}} verbunden ist",
     "reconnectComputer": "Neu verbinden",
+    "pendingDelivery": "Zustellung ausstehend",
+    "pendingDeliveryHint": "Auf diesem Gerät gespeichert. Warten auf die Bestätigung des Computers.",
     "waitingForComputer": "Wird gesendet, sobald dein Computer wieder verbunden ist",
+    "waitingForPrevious": "Wartet auf die vorherige Nachricht",
     "waitingForNetwork": "Wird gesendet, sobald du wieder online bist",
     "queued": "In der Warteschlange",
     "retryImage": "Dieses Bild erneut hochladen",
@@ -298,12 +318,13 @@
     "goalResumed": "Nutzung wieder verfügbar, Ziel wird weiterverfolgt",
     "goalCapacityRetry": "Modelldienst war ausgelastet — Ziel wird erneut versucht",
     "autoResume": {
-      "separator": "Verbindung unterbrochen — automatisch fortgesetzt",
+      "separator": "Leere Antwort – automatisch fortgesetzt",
       "succeeded": "Verbindung wiederhergestellt",
       "failed": "Erneute Verbindung fehlgeschlagen",
       "neutral": "Erneut verbinden",
       "usageReset": "Nutzung zurückgesetzt, automatisch fortgesetzt",
       "pending": "Verbindung wird wiederhergestellt…",
+      "continuingWithProgress": "Automatische Fortsetzung ({{attempt}}/{{total}})…",
       "pendingWithProgress": "Verbindung wird wiederhergestellt {{attempt}}/{{total}}…",
       "groupSwitchPending": "Wechsel zu einem anderen Computer…",
       "details": "Versuch {{attempt}}/{{total}} · {{count}} erneute Verbindungen in dieser Sitzung",
@@ -438,6 +459,9 @@
     "send": "Nachricht senden",
     "sending": "Wird gesendet…",
     "sent": "Eingereicht",
+    "sendTooManyArguments": "Diese Nachricht verarbeitet mehr als {{limit}} Einträge in einem Schritt. Bitte den Assistenten, sie in kleinere Gruppen aufzuteilen.",
+    "sendValueUnavailable": "Ein Wert für diese Nachricht ist nicht verfügbar. Bitte den Assistenten, die Formularfelder zu prüfen.",
+    "sendTextUnavailable": "Die Nachricht konnte nicht zum Senden vorbereitet werden.",
     "sendFailed": "Die Nachricht wurde nicht gesendet. Deine Eingaben sind noch da.",
     "playVideo": "Video abspielen",
     "downloadVideo": "Video herunterladen",
@@ -463,6 +487,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "10 Sekunden zurück",
+    "audioForwardTen": "10 Sekunden vor",
+    "audioMute": "Stummschalten",
+    "audioUnmute": "Ton einschalten",
+    "audioSpeed": "Wiedergabegeschwindigkeit",
+    "audioOutput": "Audioausgabe",
+    "fetchAudio": "Vom Computer abrufen",
+    "pauseAudio": "Audio pausieren",
+    "audioProgress": "Wiedergabeposition",
     "more": "Weitere Aktionen",
     "retry": "Erneut versuchen",
     "image": "Bild",
@@ -485,5 +518,103 @@
     "wrap": "Zeilenumbruch",
     "lineNumbers": "Zeilennummern",
     "rendered": "Dokument anzeigen"
+  },
+  "modelMismatch": {
+    "notice": "Der Modellanbieter hat diese Runde mit {{actual}} statt {{selected}} beantwortet",
+    "noticeWithProvider": "{{provider}} hat diese Runde mit {{actual}} statt {{selected}} beantwortet",
+    "infoLink": "Warum ist das passiert?",
+    "infoTitle": "Warum ein anderes Modell geantwortet hat",
+    "infoSummary": "Cindy hat diese Runde wie gewählt an {{selected}} gesendet, aber der Modellanbieter hat die Antwort über {{actual}} zurückgegeben.",
+    "infoSummaryWithProvider": "Cindy hat diese Runde wie gewählt an {{selected}} gesendet, aber {{provider}} hat die Antwort über {{actual}} zurückgegeben.",
+    "infoCausesTitle": "Häufige Ursachen",
+    "infoCausePolicy": "Sicherheits- oder Inhaltsrichtlinien-Fallback (einige Modelle weichen statt einer Ablehnung automatisch auf ein älteres Modell aus).",
+    "infoCauseLoad": "Vorübergehende Umleitung durch den Modellanbieter bei hoher Auslastung.",
+    "infoCauseGateway": "Modellzuordnung oder Routing-Regeln auf einem Drittanbieter- oder eigenen Gateway.",
+    "infoActionsTitle": "Was du tun kannst",
+    "infoActionContinue": "Keine Änderung der Einstellungen nötig: Dies betraf nur diese Runde, weitere Nachrichten fordern weiterhin {{selected}} an.",
+    "infoActionRetry": "Wenn diese Antwort nicht passt, formuliere deine Nachricht um und sende sie erneut, oder wechsle zu einem anderen verfügbaren Modell.",
+    "infoActionCheckProvider": "Tritt dies über mehrere Runden auf, prüfe das Kontingent beim Modellanbieter oder die Gateway-Zuordnung."
+  },
+  "errorExplain": {
+    "providerSafetyRefusal": {
+      "title": "Warum diese Antwort blockiert wurde",
+      "summary": "Cindy hat deine Anfrage unverändert gesendet, aber die integrierte Sicherheits- oder Inhaltsrichtlinie des Modellanbieters hat die Ausgabe blockiert. Dies ist weder eine Moderation durch Cindy noch eine lokale Plugin-Sperre.",
+      "summaryWithProvider": "Cindy hat deine Anfrage unverändert gesendet, aber die integrierte Sicherheits- oder Inhaltsrichtlinie von {{provider}} hat die Ausgabe blockiert. Dies ist weder eine Moderation durch Cindy noch eine lokale Plugin-Sperre.",
+      "cause1": "Eingabe, Anhang oder vorheriger Gesprächsverlauf haben die Sicherheitsprüfung des Anbieters ausgelöst.",
+      "cause2": "Ein Ausgabefilter hat die Antwort des Modells während der Erstellung gestoppt.",
+      "action1": "Ein identischer Neuversuch wird meist erneut blockiert; formuliere die Anfrage um oder entferne den auslösenden Abschnitt.",
+      "action2": "Falls früherer Kontext die Sperre auslöst, starte eine neue Aufgabe oder wechsle zu einem anderen Modell."
+    },
+    "overload": {
+      "title": "Warum der Dienst ausgelastet ist",
+      "summary": "Beim Modellanbieter sind die Rechenkapazitäten vorübergehend knapp (z. B. Spitzenlast oder HTTP 529). Das liegt weder an Cindy noch an deinem lokalen Netzwerk.",
+      "summaryWithProvider": "Bei {{provider}} sind die Rechenkapazitäten vorübergehend knapp (z. B. Spitzenlast oder HTTP 529). Das liegt weder an Cindy noch an deinem lokalen Netzwerk.",
+      "cause1": "Hohe Nachfrage zu Stoßzeiten hat die Kapazität für dieses Modell vorübergehend ausgeschöpft.",
+      "cause2": "Vorübergehende Wartung oder Kapazitätsbegrenzung beim Anbieter ist aktiv.",
+      "action1": "Du musst Cindy nicht neu starten und dein Netzwerk nicht ändern — warte kurz und klicke auf „Erneut versuchen“.",
+      "action2": "Um sofort weiterzumachen, wechsle vorübergehend zu einem anderen Modell oder einer anderen Quelle in deiner Modellgruppe."
+    },
+    "streamInterrupted": {
+      "title": "Warum die Ausgabe unterbrochen wurde",
+      "summary": "Der Modellanbieter hat die Streaming-Verbindung vor Abschluss der Antwort unerwartet getrennt. Cindy ist nicht abgestürzt; abgeschlossene Schritte und der Verlauf bleiben erhalten.",
+      "summaryWithProvider": "{{provider}} hat die Streaming-Verbindung vor Abschluss der Antwort unerwartet getrennt. Cindy ist nicht abgestürzt; abgeschlossene Schritte und der Verlauf bleiben erhalten.",
+      "cause1": "Ein vorübergehender Serverfehler beim Modellanbieter hat die Ausgabe unterbrochen.",
+      "cause2": "Ein Drittanbieter- oder eigenes Relay-Gateway lief bei einer langen Antwort in ein Timeout.",
+      "action1": "Klicke auf „Erneut versuchen“ oder sende „weiter“, damit das Modell fortfahren kann.",
+      "action2": "Wenn dies mehrfach passiert, probiere ein anderes Modell oder prüfe das Timeout deines Gateways."
+    },
+    "upstreamStatus": {
+      "title": "Warum ein Dienstfehler gemeldet wurde",
+      "summary": "Cindy hat deine Anfrage erfolgreich gesendet, doch der Modellanbieter meldete einen internen HTTP-{{status}}-Fehler ohne Details. Die Störung liegt beim externen Dienst, nicht bei Cindy.",
+      "summaryWithProvider": "Cindy hat deine Anfrage erfolgreich gesendet, doch {{provider}} meldete einen internen HTTP-{{status}}-Fehler ohne Details. Die Störung liegt beim externen Dienst, nicht bei Cindy.",
+      "cause1": "Beim Server des Modellanbieters trat ein vorübergehender interner Fehler auf.",
+      "cause2": "Ein Drittanbieter- oder selbst gehostetes Gateway konnte die Anfrage nicht weiterleiten oder lieferte einen eigenen 5xx-Status.",
+      "action1": "Klicke gleich noch einmal auf „Erneut versuchen“; kurze Störungen beheben sich meist rasch.",
+      "action2": "Wenn du ein Drittanbieter- oder eigenes Gateway nutzt, prüfe dessen Status und Logs oder wechsle den Anbieter."
+    },
+    "modelAccessDenied": {
+      "title": "Warum kein Zugriff auf dieses Modell besteht",
+      "summary": "Der Modellanbieter hat den Zugriff des aktuellen Kontos auf dieses Modell abgelehnt. Cindy kann anbieterseitige Modellberechtigungen nicht umgehen.",
+      "summaryWithProvider": "{{provider}} hat den Zugriff deines aktuellen Kontos auf dieses Modell abgelehnt. Cindy kann Berechtigungen von {{provider}} nicht umgehen.",
+      "cause1": "Dein aktueller Abo-Tarif oder API-Schlüssel enthält noch keinen Zugriff auf dieses Modell.",
+      "cause2": "Ein Organisationsadmin hat die erlaubten Modelle eingeschränkt oder deine Region wird noch nicht unterstützt.",
+      "action1": "Wechsle zu einem anderen für dein Konto freigeschalteten Modell, um weiterzuarbeiten.",
+      "action2": "Prüfe die Berechtigungen in der Anbieter-Konsole; nach einem Tarif-Upgrade verbinde das Konto neu und versuche es erneut."
+    },
+    "providerQuotaExceeded": {
+      "title": "Warum Kontingent oder Guthaben erschöpft ist",
+      "summary": "Das verbundene externe Modellanbieter-Konto hat kein Guthaben oder Kontingent mehr und hat die Anfrage abgelehnt. Dies ist unabhängig von deinem Cindy-Konto.",
+      "summaryWithProvider": "Dein verbundenes {{provider}}-Konto hat kein Guthaben oder Kontingent mehr, sodass {{provider}} die Anfrage abgelehnt hat. Dies ist unabhängig von deinem Cindy-Konto.",
+      "cause1": "Das Prepaid-Guthaben des Anbieterkontos ist aufgebraucht oder es ist keine gültige Zahlungsmethode hinterlegt.",
+      "cause2": "Das Ausgabenlimit dieses API-Schlüssels oder das Organisationskontingent wurde erreicht.",
+      "action1": "Lade Guthaben auf oder erhöhe das Limit auf der Abrechnungsseite des Anbieters und klicke auf „Erneut versuchen“.",
+      "action2": "Oder wähle im Modellauswahlmenü einen anderen Anbieter mit verfügbarem Kontingent."
+    },
+    "usageLimit": {
+      "title": "Warum das Nutzungslimit erreicht wurde",
+      "summary": "Das verbundene Modellkonto hat das periodische Nutzungsfenster des Modellanbieters ausgeschöpft und nimmt vorübergehend keine neuen Anfragen an. Dieses Limit stammt nicht von Cindy.",
+      "summaryWithProvider": "Dein verbundenes {{provider}}-Konto hat das periodische Nutzungsfenster von {{provider}} ausgeschöpft und nimmt vorübergehend keine neuen Anfragen an. Dieses Limit stammt nicht von Cindy.",
+      "cause1": "Das Abo hat das Kontingent im aktuellen Zeitfenster (z. B. 5-Stunden- oder Wochenfenster) ausgeschöpft.",
+      "cause2": "Mehrere gleichzeitig laufende Aufgaben oder Geräte mit demselben Konto teilen sich dasselbe Kontingentfenster.",
+      "action1": "Warte auf die Zurücksetzung und versuche es erneut; bei aktivierter automatischer Fortsetzung läuft die Aufgabe danach selbstständig weiter.",
+      "action2": "Um sofort weiterzumachen, wechsle vorübergehend zu einem anderen Modell, einem anderen Abo-Konto oder einem API-Anbieter."
+    },
+    "encryptedContent": {
+      "title": "Warum Teile des Verlaufs nicht lesbar sind",
+      "summary": "Manche Modelle speichern verschlüsselte interne Denkschritte im Verlauf, die nur der ursprüngliche Anbieter und das ursprüngliche Konto entschlüsseln können. Nach einem Wechsel oder einer entfernten Kontextkomprimierung kann der aktuelle Anbieter alte Blöcke eventuell nicht lesen.",
+      "summaryWithProvider": "Manche Modelle speichern verschlüsselte interne Denkschritte im Verlauf, die nur der ursprüngliche Anbieter und das ursprüngliche Konto entschlüsseln können. Nach einem Wechsel oder einer entfernten Kontextkomprimierung kann {{provider}} alte Blöcke eventuell nicht lesen.",
+      "cause1": "Du hast zu einem anderen Modellanbieter oder Konto gewechselt, das frühere verschlüsselte Inhalte nicht entschlüsseln kann.",
+      "cause2": "Bei entfernter Kontextkomprimierung oder anderem Endpunkt passte der Schlüssel nicht mehr.",
+      "action1": "Wechsle zurück zum ursprünglichen Modellanbieter oder Konto, um diese Aufgabe direkt fortzusetzen.",
+      "action2": "Oder wähle „In neuer Aufgabe fortfahren“: Cindy übernimmt den lesbaren Verlauf und entfernt nur unlesbare verschlüsselte Blöcke; die ursprüngliche Aufgabe bleibt erhalten."
+    },
+    "failedSamplingAttempt": {
+      "title": "Warum eine unvollständige Antwort angezeigt wird",
+      "summary": "Das Modell ist während dieser Antwort fehlgeschlagen oder wurde unterbrochen und hat nur den Anfang ausgegeben. Cindy lässt das Fragment als Referenz stehen, damit der bisherige Gedankengang nicht verloren geht.",
+      "cause1": "Ein Anbieterfehler, ein Verbindungsabbruch oder eine Sicherheitsblockade unterbrach den Stream.",
+      "cause2": "Die Runde endete mit einem Fehler oder wurde gestoppt, bevor die Antwort fertig war.",
+      "action1": "Prüfe die Fehlerkarte darunter, um die genaue Ursache zu sehen und ob sich ein Neuversuch lohnt.",
+      "action2": "Klicke auf „Erneut versuchen“ oder sende eine neue Nachricht — den sichtbaren Teil kannst du weiterhin als Referenz nutzen."
+    }
   }
 }

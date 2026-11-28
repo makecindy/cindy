@@ -1,8 +1,10 @@
 import { holdError, releaseFailure } from './profile-hold.ts';
+import { withSessionRouteLock } from '../../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
-import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
+import { assertHostTaskExecutionSupported } from './send-preflight.ts';
 import { hostCoordinatorDeps } from './coordinator-deps.ts';
 import { createHostAutoResume } from './auto-resume.ts';
 import { createHostProductTurn } from './product-turn.ts';
@@ -51,18 +53,19 @@ export function holdTaskForProfile(coordinator, id) {
   coordinator.setExecutionPaused(id, true);
 }
 const errorText = error => error instanceof Error ? error.message : String(error);
+const NEEDS_ARCHIVE_RESTORE_LOCK = Symbol('needs archive restore lock');
 
 /** Only composition fields cross the browser trust boundary. Host receipts,
  * scheduler origins, hook bypasses and remote-device identity never do. */
 function composeInput(item, stored, handoff) {
-  if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
+  if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throwIpcError('INVALID_PARAMS', 'clientId is required');
   const text = typeof item.text === 'string' ? item.text : item.content;
-  if (typeof text !== 'string' || !text.trim()) throw new Error('message text is required');
+  if (typeof text !== 'string' || !text.trim()) throwIpcError('INVALID_PARAMS', 'message text is required');
   // Picker changes already persist through their own entries (set-model, set-effort,
   // set-permission-mode and the like). Input fields are snapshots for presentation,
   // not another authority over task settings.
   const agentKind = makerKind(stored.agentKind);
-  if (!['claude-code', 'codex', 'pi'].includes(agentKind)) throw new Error('invalid agent kind');
+  if (!['claude-code', 'codex', 'pi', 'acp'].includes(agentKind)) throw new Error('invalid agent kind');
   const model = stored.model || '';
   const workingDir = stored.workingDir || '';
   const effort = stored.effort || '';
@@ -79,7 +82,7 @@ function composeInput(item, stored, handoff) {
       fastMode: stored.fastMode ?? undefined, planMode: stored.planModeEnabled ?? undefined } };
   for (const key of ['files', 'mentions', 'sessionRefs', 'agentReferences']) {
     if (item[key] !== undefined) {
-      if (!Array.isArray(item[key])) throw new Error(`invalid ${key}`);
+      if (!Array.isArray(item[key])) throwIpcError('INVALID_PARAMS', `invalid ${key}`);
       result[key] = item[key];
     }
   }
@@ -197,6 +200,19 @@ export function createInputQueue(deps) {
     function holdIfHeld(id) {
       if (profileHold) holdTaskForProfile(coordinator, id);
     }
+    function readExpectedClearBoundary(options) {
+      if (!options || typeof options !== 'object' || !Object.hasOwn(options, 'expectedClearBoundaryMs')) return;
+      const expected = normalizeAgentInputClearBoundaryMs(options.expectedClearBoundaryMs);
+      if (expected === undefined) throwIpcError('INVALID_PARAMS', 'expectedClearBoundaryMs must be null or a non-negative finite number');
+      return expected;
+    }
+    function assertExpectedClearBoundary(id, expected) {
+      if (expected === undefined) return;
+      const current = coordinator.getClearBoundaryMs(id);
+      if (expected !== current) throwIpcError('PRECONDITION_FAILED',
+        `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expected ?? 'null'}; currentClearBoundaryMs=${current ?? 'null'}`);
+    }
+
     /** The execution pause this module lifts after a write stays while the profile is held. */
     function unpause(id) {
       if (!profileHold) coordinator.setExecutionPaused(id, false);
@@ -247,6 +263,7 @@ export function createInputQueue(deps) {
     // auto-resume and the context recovery settle a held one when they give up.
     const productTurn = createHostProductTurn({ getBoundSession: id => executor.boundSession(id),
       touchActivity: deps.touchSessionActivity, log });
+    const modelGroupInputs = new WeakMap();
     // The desktop's auto-resume (auto-resume.ts), one per owner runtime with its coordinator.
     const autoResume = createHostAutoResume({
       productTurn: () => productTurn,
@@ -255,9 +272,13 @@ export function createInputQueue(deps) {
       history: id => executor.autoResumeHistory(id),
       getSession: id => deps.getMaker()?.getSession(id),
       createDbMessage: (id, input, options) => deps.persistMessage?.(id, input, options),
-      onTakeoverReleased: id => releaseResumeOrigin(id),
+      onTakeoverReleased: (id, reason) => releaseResumeOrigin(id, reason),
+      onSuppressedErrorSurfaced: (id, detail) => {
+        if (isCurrent()) deps.hub?.publish({ type: 'auto_resume_error_surfaced', sessionId: id, detail });
+      },
       maybeApplySessionRuntimeFallback: deps.maybeApplySessionRuntimeFallback,
       pendingSessionRuntimeFallbackRebuilds: deps.pendingSessionRuntimeFallbackRebuilds,
+      readModelGroupInputMode: deps.readModelGroupAutoSwitchMode ? (createOpts => modelGroupInputs.get(createOpts)) : undefined,
       isProfileHeld: () => profileHold !== null,
       log,
     });
@@ -267,14 +288,17 @@ export function createInputQueue(deps) {
     const resumeOrigins = new Map();
     // A resume that gives up writes the held error row (once) or drops the takeover: the input it
     // continued stopped there, so its stream gets the interrupted receipt once that row is stored.
-    function releaseResumeOrigin(id) {
+    function releaseResumeOrigin(id, reason) {
       const origin = resumeOrigins.get(id);
       if (origin === undefined) return;
       resumeOrigins.delete(id);
       const history = executor.autoResumeHistory(id);
       void history.drain().then(() => {
         if (history.hasFailedWrites() || !isCurrent()) return;
-        deps.hub?.publish({ type: 'input_receipt', sessionId: id, inputClientId: origin, clientId: origin, status: 'interrupted' });
+        deps.hub?.publish({
+          type: 'input_receipt', sessionId: id, inputClientId: origin, clientId: origin, status: 'interrupted',
+          ...(reason === 'error-surfaced' ? { autoResumeErrorSurfaced: true } : {}),
+        });
       });
     }
     const executor = createTurnExecutor({ ...deps, storedSessionOptions,
@@ -339,6 +363,10 @@ export function createInputQueue(deps) {
       noteAborting: (id, aborting) => { stateFor(id).aborting = aborting; },
       publish, persist, flushed, afterSnapshot, attachmentOwnership, acceptedCallbacks,
       schedulePreparations, scheduleDiscardWatchers, autoResume, rollover: () => rollover,
+      markModelGroupInput: (createOpts, mode) => {
+        if (mode) modelGroupInputs.set(createOpts, mode);
+        else modelGroupInputs.delete(createOpts);
+      },
     }));
     // The desktop's idle-runtime release (idle-release.ts), one set of watchers per owner runtime.
     const idleRelease = deps.readClaudeIdleMinutes ? createHostIdleRelease({
@@ -394,14 +422,14 @@ export function createInputQueue(deps) {
         }
       },
     });
-    function command(id, fn) {
+    function command(id, fn, { restoreQueue = true } = {}) {
       const state = stateFor(id);
       const admission = state.admission;
       const result = state.commands.catch(() => {}).then(async () => {
         if (closing && !ownerStopping) refuseWhileHeld();
         if (closing || state.closed) throw new Error('session is closed');
         assertCurrent();
-        await coordinator.ensureQueueRestored(id);
+        if (restoreQueue) await coordinator.ensureQueueRestored(id);
         assertCurrent();
         holdIfHeld(id);
         if (state.admission !== admission) throw new Error('input cancelled before acceptance');
@@ -409,6 +437,14 @@ export function createInputQueue(deps) {
       });
       state.commands = result;
       return result;
+    }
+    function inputRouteSignal(id, generation = coordinator.getGeneration(id)) {
+      return AbortSignal.any([routeStartup.signal, coordinator.getInputAbortSignal(id, generation)]);
+    }
+    function commandWithRouteLock(id, fn) {
+      const signal = inputRouteSignal(id);
+      return command(id, (state, admission) =>
+        withSessionRouteLock(id, () => fn(state, admission), signal));
     }
     async function mutate(id, fn) {
       return command(id, async state => {
@@ -432,6 +468,9 @@ export function createInputQueue(deps) {
       await state.aborting;
       await state.commands.catch(() => {});
       await flushed(id);
+      if (!coordinator.hasPendingQueuedWork(id) && isCurrent()) {
+        deps.hub?.publish({ type: 'queue_emptied', sessionId: id });
+      }
       return project(coordinator.getProjection(id));
     }
     if (deps.createContextRecoveryRollover) {
@@ -484,6 +523,7 @@ export function createInputQueue(deps) {
         getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
       }),
       isTurnRunning: executor.isRunning,
+      drainHistories: () => executor.drainHistories(),
       isTurnRecovering: executor.isRecovering,
       /** Closes a task's idle runtime with the executor letting go of it first (turn-executor.mjs). */
       closeRuntime: id => { assertCurrent(); return executor.closeRuntime(id); },
@@ -515,7 +555,7 @@ export function createInputQueue(deps) {
           if (closing || state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
         };
       },
-      preparePiSkillRuntime: (id, dir, options = {}) => command(id, async (state, admission) => {
+      preparePiSkillRuntime: (id, dir, options = {}) => commandWithRouteLock(id, async (state, admission) => {
         const check = () => {
           refuseWhileHeld();
           options.assertPreparationCurrent?.();
@@ -536,7 +576,7 @@ export function createInputQueue(deps) {
         await executor.preparePiSkillRuntime(id, dir, check);
         check();
       }),
-      restoreSession: (id, check) => command(id, async () => {
+      restoreSession: (id, check) => commandWithRouteLock(id, async () => {
         await check(); assertCurrent();
         const session = await executor.restoreSession(id, storedSessionOptions(await deps.readSession(id)), check);
         await check(); assertCurrent(); return session;
@@ -568,45 +608,121 @@ export function createInputQueue(deps) {
       }),
       // The optional third argument is supplied only by the in-process handoff adapter.
       // HTTP/IPC input still goes through composeInput's untrusted-field filter.
-      enqueue(id, item, handoff) {
+      async enqueue(id, item, handoff, userInputOptions) {
         const admission = stateFor(id).admission;
-        return command(id, async state => {
+        const ordinaryInput = !handoff && userInputOptions !== undefined && !getDeviceLinkInvokeContext()?.sharedTask;
+        const generation = ordinaryInput || handoff ? coordinator.getGeneration(id) : undefined;
+        const expectedClearBoundary = readExpectedClearBoundary(userInputOptions);
+        let wakeAfterRouteLock = false;
+        const assertAdmitted = state => {
+          assertCurrent();
+          refuseWhileHeld();
+          if (closing || state.closed || admission !== state.admission
+              || (generation !== undefined && !coordinator.isGenerationCurrent(id, generation))) {
+            throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
+          }
+          assertExpectedClearBoundary(id, expectedClearBoundary);
+        };
+        const enqueue = async (state, routeSignal) => {
           if (coordinator.hasKnownClientId(id, item?.clientId)) {
+            handoff?.onQueueAcceptanceStarted?.();
             await flushed(id);
             return api.projection(id);
           }
           const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
-          if (known?.has(item?.clientId)) return api.projection(id);
-          refuseWhileHeld();
-          const stored = handoff ? await deps.readSession(id, { forHandoff: true }) : await deps.readSession(id);
+          assertCurrent();
+          if (known?.has(item?.clientId)) {
+            handoff?.onQueueAcceptanceStarted?.();
+            return api.projection(id);
+          }
+          const check = () => assertAdmitted(state);
+          check();
+          const stored = await deps.readSession(id, handoff ? { forHandoff: true }
+            : ordinaryInput ? { forUserInput: true } : undefined);
           if (handoff && !stored) {
             assertCurrent();
             return { ok: false, errorCode: 'NOT_FOUND', message: 'Session does not exist' };
           }
+          const restore = ordinaryInput && stored.status === 'archived';
+          if (restore) {
+            if (!routeSignal) return NEEDS_ARCHIVE_RESTORE_LOCK;
+            assertHostTaskExecutionSupported(stored);
+            deps.assertProviderExecutionSupported?.(id, stored.providerId, stored.sdkSessionId);
+          }
           const queued = composeInput(item, stored, handoff);
           if (handoff) bindTaskActionInput(id, queued, handoff.taskActionDeliveryGuard);
           const prepared = await prepareAttachments(id, queued, admission);
-          if (handoff) {
-            await handoff.taskActionDeliveryGuard();
-            assertCurrent();
-            refuseWhileHeld();
-            if (state.admission !== admission) throw new Error('input cancelled before acceptance');
-          }
           let accepted = false;
           try {
+            if (handoff) await handoff.taskActionDeliveryGuard();
+            check();
+            const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
+            if (restore) {
+              await deps.restoreArchivedSessionForSend(id, {
+                assertAdmitted: check,
+                signal: routeSignal,
+              });
+              // The restore is a durable task transition. If admission changes
+              // after it commits, leave the task active without accepting this input.
+              check();
+            }
             state.lastUserActionAt = Date.now();
             coordinator.setExecutionPaused(id, true);
+            // The coordinator may mutate the queue before reporting a failure.
+            handoff?.onQueueAcceptanceStarted?.();
             coordinator.enqueue(id, prepared.item);
             accepted = true;
             if (prepared.ownerId) attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId);
             await flushed(id);
             await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
-            if (!state.persistenceError) unpause(id);
+            commitAutoTitle?.();
+            if (!state.persistenceError) {
+              if (routeSignal) wakeAfterRouteLock = true;
+              else unpause(id);
+            }
             return api.projection(id);
           } finally {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
           }
-        });
+        };
+        if (!handoff) {
+          const result = await command(id, state => enqueue(state));
+          if (result !== NEEDS_ARCHIVE_RESTORE_LOCK) return result;
+        }
+        // Handoff, runtime starts, and direct sends take command -> route lock.
+        // Deletion takes the route lock first; its Stop cancels lock admission
+        // before draining the commands. A write that already holds the lock
+        // must finish its own admission checks and release it normally.
+        const result = await command(id, async state => {
+          assertAdmitted(state);
+          const signal = inputRouteSignal(id, generation);
+          let acquired = false;
+          try {
+            return await withSessionRouteLock(id, async () => {
+              acquired = true;
+              if (!handoff) return enqueue(state, signal);
+              const target = await handoff.validateTarget();
+              if (!target.ok) return target;
+              assertAdmitted(state);
+              // A refused target must not load or reconcile its durable queue.
+              await coordinator.ensureQueueRestored(id);
+              assertAdmitted(state);
+              const queued = await enqueue(state, signal);
+              return queued?.ok === false ? queued : target;
+            }, signal);
+          } catch (error) {
+            if (!acquired && signal.aborted) assertAdmitted(state);
+            throw error;
+          }
+        }, { restoreQueue: !handoff });
+        const state = states.get(id);
+        // A drain scheduled inside the route lock inherits its async context.
+        // Start it after release so its send takes the lock as an independent operation.
+        if (!wakeAfterRouteLock || !state || !isCurrent() || closing || state.closed
+            || state.persistenceError || state.admission !== admission
+            || !coordinator.isGenerationCurrent(id, generation)) return result;
+        unpause(id);
+        return handoff ? result : api.projection(id);
       },
       /**
        * Capture the input epoch before any asynchronous preparation. The stamp is
@@ -614,23 +730,13 @@ export function createInputQueue(deps) {
        */
       assertRemoteInputControlBoundary(id, opts) {
         const expectedInputGeneration = coordinator.getGeneration(id);
-        const hasExpectedBoundary = opts && typeof opts === 'object'
-          && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
-        const expectedBoundary = hasExpectedBoundary
-          ? normalizeAgentInputClearBoundaryMs(opts.expectedClearBoundaryMs)
-          : undefined;
-        if (hasExpectedBoundary && expectedBoundary === undefined) {
-          throwIpcError('INVALID_PARAMS', 'expectedClearBoundaryMs must be null or a non-negative finite number');
-        }
+        const expectedClearBoundary = readExpectedClearBoundary(opts);
         return command(id, () => {
           if (!coordinator.isGenerationCurrent(id, expectedInputGeneration)) {
             throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
           }
           const currentBoundary = coordinator.getClearBoundaryMs(id);
-          if (hasExpectedBoundary && expectedBoundary !== currentBoundary) {
-            throwIpcError('PRECONDITION_FAILED',
-              `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expectedBoundary ?? 'null'}; currentClearBoundaryMs=${currentBoundary ?? 'null'}`);
-          }
+          assertExpectedClearBoundary(id, expectedClearBoundary);
           return {
             expectedClearBoundaryMs: currentBoundary,
             expectedInputGeneration,
@@ -640,9 +746,10 @@ export function createInputQueue(deps) {
       },
       /** The desktop-compatible direct maker:send path, using the full turn executor transaction. */
       send(id, message, createOpts, sendOpts) {
+        const signal = inputRouteSignal(id);
         return command(id, () => {
           refuseWhileHeld();
-          return executor.send(id, message, createOpts, sendOpts);
+          return executor.send(id, message, createOpts, sendOpts, signal);
         });
       },
       stop,
@@ -667,6 +774,7 @@ export function createInputQueue(deps) {
         return command(id, async (state, admission) => {
           refuseWhileHeld();
           const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
+          const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
           const previous = prepared.ownerId
             ? attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId) : null;
           let accepted = false;
@@ -675,6 +783,7 @@ export function createInputQueue(deps) {
             if (accepted) {
               await flushed(id);
               await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
+              commitAutoTitle?.();
             }
             return accepted;
           } finally {
@@ -685,7 +794,13 @@ export function createInputQueue(deps) {
           }
         });
       },
-      remove: (id, clientId) => mutate(id, () => coordinator.remove(id, clientId)),
+      remove: (id, clientId) => mutate(id, () => {
+        const res = coordinator.remove(id, clientId);
+        if (!coordinator.hasPendingQueuedWork(id) && isCurrent()) {
+          deps.hub?.publish({ type: 'queue_emptied', sessionId: id });
+        }
+        return res;
+      }),
       updateText: (id, clientId, text) => mutate(id, () => coordinator.updateText(id, clientId, text)),
       updateContent(id, clientId, item) {
         return command(id, async (state, admission) => {
@@ -725,6 +840,9 @@ export function createInputQueue(deps) {
       clearSession: id => stop(id, { keepQueue: false }),
       /** The running turn's accepted input, as the desktop's Auto-review context reads it. */
       acceptedInputProvenance: id => coordinator.getAcceptedInputProvenance(id),
+      whenTurnErrorPersisted: (id, persistId) => executor.whenTurnErrorPersisted?.(id, persistId) ?? Promise.resolve(),
+      getHistoryToolName: (id, toolUseId) => executor.getHistoryToolName?.(id, toolUseId) ?? '',
+      hasPendingQueuedWork: id => coordinator.hasPendingQueuedWork(id),
       async disposeSession(id) {
         stateFor(id).closed = true;
         await stop(id);

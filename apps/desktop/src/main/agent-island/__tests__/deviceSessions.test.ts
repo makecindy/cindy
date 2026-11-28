@@ -120,6 +120,19 @@ describe('Agent Island device sessions', () => {
     ]);
   });
 
+  it('preserves remote plugin-engine agentKind instead of coercing acp to claude-code', () => {
+    const state = createAgentIslandState();
+    syncAgentIslandDeviceSessions(state, [remote('running', { agentKind: 'acp' })], 1_000);
+    const display = buildAgentIslandDisplayState(state, 1_000);
+    expect(display.sessions).toEqual([
+      expect.objectContaining({
+        sessionId: 'remote-1',
+        agentKind: 'acp',
+        phase: 'running',
+      }),
+    ]);
+  });
+
   it('lists a first-seen waiting remote task without expanding its card', () => {
     const state = createAgentIslandState();
     syncAgentIslandDeviceSessions(

@@ -11,6 +11,7 @@
  */
 
 import type { AgentKind, CatalogModel, Effort } from './types.js';
+import { isProviderConnectionIcon, isProviderConnectionImage } from './providerBranding.js';
 import type { ProviderView } from './registry.js';
 import { isAgentSelectableModel } from './classification.js';
 import { deriveModelList, deriveModelSections } from './modelList.js';
@@ -65,8 +66,9 @@ export type ModelIconKind = 'claude' | 'codex' | 'cindy';
  * 缺省 / 未知值返回 null:渲染层回落该行来源供应商标(ProviderMark),
  * 网关先于客户端登记新图标时优雅降级、不会渲染错图。
  */
-export function resolveModelIconKind(icon: string | undefined): ModelIconKind | null {
-  if (!icon) return null;
+export function resolveModelIconKind(icon: string | undefined, providerLogoKind?: string, artwork?: string): ModelIconKind | null {
+  // A user-selected connection mark distinguishes identical models from different accounts.
+  if (!icon || isProviderConnectionIcon(providerLogoKind) || isProviderConnectionImage(artwork)) return null;
   switch (icon.trim().toLowerCase()) {
     case 'claude':
     case 'anthropic':

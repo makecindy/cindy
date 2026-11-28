@@ -17,7 +17,22 @@
 
 ## 2026-11
 
+- **11-28 DESIGN.md 正文只写 Token 名，历史说明移入本文件（主人裁决，DESIGN.md 瘦身 4a）**——主人裁决：DESIGN.md 正文写角色和 Token 名，不再写具体色值；Classic 的值只留在 §10 生成表，CINDY 的值只留在 §15.16（§15.1 表仍保留 CINDY 色值记录）。§10 生成表的表头由「Default Light / Default Dark」改为「Classic Light / Classic Dark」，避免被误读成新用户默认皮肤。§9 删去颜色速查，Iteration Guide 改为指向原章节。§15.13 的手机色值一节并入手机设计指南 §2，DESIGN.md 原位置留指针。同时修正几处措辞矛盾：§6 的层次改为「靠字号」，与 §3、§7 一致；§6 阴影清单补上 `--shadow-soft-panel` 与 `--shadow-chip-raised`。正文里的历史说明逐字移入本文件，见文末「2026-11-28 · DESIGN.md 瘦身 4a」。
+
+- **11-28 分段控件定为 4 档，下划线标签的黑线必须贴着分割线（主人裁决）**——组件入库 B 加了 `density` 四档后，还有 20 个调用点写着对不上四档的高度。主人逐处看过真实位置的候选图（现在和候选档、浅色和深色）后全部按建议定档：设置、表单和弹窗里的 15 处并到 md；dense 的 Agent 切换用 sm，远程连接页的「设备 / 供应商」标签原本就是 28/24，改写成 sm；自定义供应商的 Runtime 切换和飞书「服务」用 lg；代码审查工具栏的「统一 / 分栏」保留 xs，因为同行的按钮都是 24px，换 sm 会高出 4px。由此 4 档定稿，xs 只给两种场景：和 24px 控件同行的紧凑工具栏，以及和 12px 图标同行的紧凑菜单行（侧边栏「显示设置」菜单的分段行，2026-11-28 主人确认，尺寸沿用 #13544）。看图时主人另定一条通则：下划线标签的黑线必须贴着下面的分割线（黑线底边与分割线底边重合，盖住那条线）。技能页「公开 / 本地技能」原来与分割线空 1px，改为保留原组件、只修贴线；插件页「已安装 / 插件市场」原本就贴线，不动。这两处是改成下划线样式的分段控件，保留显式尺寸：套档位只会让标签变矮、黑线离开分割线；也不换成 `UnderlineTabs`，因为插件页标题级标签要 15px 字、市场总数加载前占位、窄窗横向滚动，换过去还会和标题栏原有分割线叠成两层。被取代：11-23「显式尺寸只留给尚未归档的旧调用点」。候选图见该批 PR 的 review 目录 candidates.html。现行落点：DESIGN.md §4 Tabs「Underline on the divider」、Desktop segmented controls「Density presets」、`skillhub-home.css`。
+
+- **11-27 经中转的两段各写各的：本机那段写在本机到中转的线上，通往对方的线写对方那段**——用户对照两台分别通过 WS 和 UDP 经中转的电脑，发现拓扑上的协议标注对不上。原因是经中转的线一直跟着本机到中转那段写，本机并不知道对方那段怎么走。看过原型后用户要求：中转在中间，两段各自写在自己那段线上，中转点上方不再写走法。现行：本机到中转的「UDP / WS · 往返」写在这台电脑到中转站的线上（中转点往外挪、设备列跟着往外让，扇出的线只让出设备标签富余的宽度；名字列不足 100px 或线上标签会盖住本机名称或协议时，写回中转点旁）；空间不足时标签可上下叠放，两行标签用 4px 圆角防止文字被裁。通往对方的线写对方到中转那段，由对方经加密连接的控制流告诉本机，旧版对方不说时只写往返。设备卡片「连接方式」写「本机 UDP · 对方 WS」。线上往返仍是两台之间的总往返（用户先按此体验）。被取代：11-19「经中转随本机中转走法写」及 11-18 中转点上方第三行的位置。落点：DESIGN.md §4「Remote connection V2 topology」、`topologyGeometry` 的 `trunkLabel`、`RemoteConnectionTopology` 的 `TrunkPill`；回归 `pnpm ui:check --page remote-connection-v2`。
+
+- **11-26 推翻「中文徽标至少用 sm」，改为 xs 加宽到左右 8（主人裁决）**——同日先定的「中文徽标至少 sm」让中文徽标的字号和高度都变大了。主人看图后改口：中文字号不要变大、高度不要变大，可以在原来的基础上把胶囊左右加宽。对比了四组候选（高度都是 16px）：A 10px·左右 8、B 9.5px·左右 8、C 9px·左右 8、D 9px·左右 7，选定 A。B、C、D 在普通（非 Retina）屏幕上 9px 中文笔画发糊，也低于 §3 的 10px 下限；D 的 7px 不在间距刻度上。现行：`xs` 为 10px、左右 8、高 16，中英文共用；原改成 sm 的 24 处改回 xs，Beta、折扣、待推送数这 6 处原有 xs 随之变宽。候选对比图见该批 PR 的 review 目录 candidates.md。现行落点：DESIGN.md §4 Badges。
+
+- **11-26 中文徽标至少用 sm（主人裁决）**——看 Badge 入库的对比图时，主人指出会话交接卡的「新建」从高 20px、左右 8px 变成 16px、6px 后中文显得拥挤贴边。现行：`xs`（10px）只给数字、计数和短英文（版本号、Beta 等）；文字是中文或可能被翻译成中文的徽标至少用 `sm`。同批主人还定：统一时带出的文字变深、描边变深、字重 400→500、账单计数变小等接受；NewTag 文字、Beta 标签白底、命令结果状态的卡片底色与文字色退回原样。现行落点：DESIGN.md §4 Badges。
+
+- **11-26 徽标、计数、快捷键键帽入库（主人 2026-11-23 裁决：组件盘点 #3 / #4 / #5 按建议）**——盘点发现桌面端约 70 处徽标有 15 种以上写法（字号 10–12、内边距、有无描边、大小写各异），计数徽标只在侧栏抽过一次，键帽 7 处各写各的。主人选定：默认规格取 B1（11px、左右 8px、上下 1px 的灰底胶囊），另给 `xs`（10px，计数与密集列表）；保留描边样式、去掉强制大写（大写只对英文生效，中英界面效果不一致）；计划气泡徽标并入 `md`，它的专用主题槽位保留为一种 tone。现行：新增 `Badge` / `CountBadge` / `Kbd`，旧的 `NavigationCountBadge` 升格为 `CountBadge`（读屏改为读完整说明，不再只读到被截断的数字），`NewTag`、`LocalModelTag`、`SkillTagList` 等小组件改用 `Badge` 实现、对外接口不变。保留原写法的位置和理由、外观变化清单记在该批 PR 正文。现行落点：DESIGN.md §4 Badges。
+- **11-27 从侧栏任务范围下拉菜单移除云主机入口**——11-25 #12823 在「远程连接 → 我的设备」加入云主机一行时，误将用户「侧边栏的菜单不用动」（意指不在菜单里新增「设备管理」入口）理解为保留菜单里原有的「管理云主机」「添加云主机」入口。用户明确纠正：侧栏任务范围下拉菜单去掉云主机入口，云主机的添加、查看进度与管理统一留在「远程连接 → 我的设备」。被取代：11-25 条目中「侧栏机器菜单不动／与侧栏菜单读同一份入口」。落点：`DESIGN.md` §4「Device access pills」段、`MachineSwitcherMenu.tsx`、`CloudComputerRow.tsx`；回归测试 `features/cloud-settings/__tests__/menu-entry.test.tsx`。
+
 - **11-25 「我的设备」就是设备管理：Agent-Net 开着也列出全部设备，云主机入口放进来**——用户找不到设备列表：这台电脑开着「Agent-Net (Beta)」，按 11-07 的决定「我的设备」只剩本机卡片，其它设备只在拓扑图里。用户要求单独有一个设备管理的地方，暂时放在「远程连接」页里，云主机的添加和管理也放进来，侧栏机器菜单不动。现行：开关开不开，「我的设备」都是同一个可折叠列表（本机卡常驻，其它设备展开可见），拓扑图接在下面只管连接；设备深链统一由「我的设备」定位，拓扑不再打开深链指向的那台设备的卡片。有云主机入口的组织成员在本机卡下面多一行「云主机」，按入口状态给出添加云主机、查看进度或管理云主机，打开网页；与侧栏菜单读同一份入口。被取代：11-07「开关打开时『我的设备』只留本机卡片」及「深链指向其它设备时在拓扑里打开它的卡片」。没做：单独的设置页面（用户说暂时放在远程连接里）、改名「设备管理」（沿用「我的设备」，消息里的「在我的设备中查看」等仍指向这里）。落点：DESIGN.md §4「Remote connection V2 topology」与「My devices」段，RemoteControlSection、CloudComputerRow、features/device-link/cloudComputerEntry；测试 remoteControlDevicesDeepLink.test.tsx。
+
+- **11-25 流式正文改为匀速放出，淡入拉长到 500ms 线性**——用户认为流式输出不够丝滑，要求对照 Codex Desktop 优化，并加回归防止被误改。黑盒基准（隔离 `--mock` 桌面 + 本机假模型，`apps/desktop/scripts/streaming-smoothness.e2e.mjs`）测得改动前：匀速流每秒约 9 次可见更新；突发流每秒约 3 次、单次跳出约 300 字、单帧滚动近 300px；打字时每秒约 4 次。原因是 Markdown 前固定 100–400ms 按长度分档的节流，且到达多少就显示多少；多标题长文还会整篇重解析。被取代的方案：固定时间节流（`useStreamingThrottle`）；150ms ease-out 加 16ms 错峰的短淡入（成批时仍是一批词同时闪现）。现行：自适应缓冲按积压匀速放出，按词边界截断，在动画帧内发布，按实测渲染耗时退避，打字时至少 50ms 一次；淡入改为 `--motion-stream-word` 500ms 线性，形成连续渐显前沿；多标题长文分片解析，标题 id 在渲染后按文档顺序统一分配，与终版一致（不从源码猜标题）。用户追加要求覆盖不同出字速率（有些模型非常快）：基准分慢速约 60、匀速约 160、长文约 600、快速约 1500、超快约 4000 字/秒五档。持续高速时摊开速度跟随实测到达速度，淡入按出字密度逐段缩短（最短 150ms），同时淡入的段数有上限。流式结束时剩余积压在 150ms 内收尾放完；改写、隐藏窗口、关闭动效时立即显示全文。500ms 淡入这一可见动效变化已由用户确认。落点：DESIGN.md §14.4「Stream-word fade」的 Stream pacing 与 Motion tokens 的窄例外、`streamingReveal.ts`、`streamingReveal.test.tsx`、`streamingMarkdownChunks.test.tsx`。
 
 - **11-24 提问导航条只在悬停预览里区分本人消息**——找自己问过的那一轮时，任务、插件和 IM 来信也有刻度，原有预览看不出谁发的。保留所有刻度，只给本人的问题加用户气泡同色的圆角底框；其余沿用聊天来源，正文降一档。未读圆点、已读状态和「N 条提问已回答」会给人催促感；长短刻度已有悬停和当前阅读位置的含义，再加来源需要学图例；只画本人提问会丢掉其他轮次的跳转入口。时间轴与滚动条重复，补载时位置会跳；目录面板、⌥↑／⌥↓ 快捷键和新设置超出本次需要。落点：DESIGN.md §4「Desktop message nav rail preview」、MessageNavRail 与 messageNavRailModel 的预览测试。
 
@@ -1055,6 +1070,26 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 
 滚动预览补充裁决（2026-10-26）：用户指出窄缩略卡片与期望体验不同。预览优先使用选区旁可用空间，随选区宽度扩展、最大宽度 640 DIP，随内容增高至屏幕可用高度；图片按宽度保持比例，超高后在预览内滚动，不再随整图长度继续缩小。新增长图向下／向上扩展时分别跟随尾部／头部，停止增长时可滚轮回看。
 
+### 2026-10-29: 逐模型自动压缩阈值改回 50–95 的 1% 粒度
+
+用户复核 2026-10-27 的「统一上下文圆环与模型压缩设置」方案后指出：模型详情高级区的自动压缩
+只给了 50/60/70/80/85/90 六档，不能像旧版全局滑杆那样在 50–95 之间按 1% 连续调节。裁决：
+逐模型设置（供应商连接 + 规范模型 ID，三个引擎共用）保留不变，比例区间放回 50–95，
+UI 从下拉改为滑杆：整段区间、1% 一档，拖动只做预览、松手才落盘，未改动的模型仍按默认 90%。
+「恢复默认」沿用共享的还原按钮，未自定义时显示为禁用占位；该按钮的无障碍名带
+「自动压缩」前缀，避免与同一抽屉里的窗口上限还原按钮同名。
+比例等于默认值 90 等同恢复默认：存储层不落这一条覆盖，界面也就不会把 90 标成
+「已自定义」（用户 2026-10-29 实测指出拖回 90 仍显示已自定义）。区间常量收在
+`shared/modelContextLimit.ts`，主进程存储与 IPC 校验共用同一口径。
+拖动只预览、松手才落盘；取消手势由共享 Slider 显式报告（消费者没法靠数值巧合
+分清「取消回放」与「正常调到同一个值」），取消即丢弃预览、界面跟住落盘值；
+预览在策略变化时也跟住落盘值，但属于
+还没发送的尾部提交或在途写入的预览留住，界面显示值永远等于主进程保存的值；尾部提交
+绑定提交时的账号代次，账号已切换直接作废，换模型与卸载也会作废还没发送的提交。
+写入节奏：距上次写入超过 300ms 的提交立刻落盘
+（拖拽只有一次提交，不让人等窗口），窗口内的连续提交（键盘连按）合并成窗口末尾的
+一次写入 —— 一次按键风暴只多落一次盘、只多刷一次运行期。
+本条为产品与实现记录，实机视觉验收以当次 dev 验收为准。
 ### 2026-10-31 — 收起伙伴头像小于展开头像
 
 用户纠正收起头像比展开更大的倒挂：Desktop / iOS / Android 收起头像从 48 缩为 36，展开保持 44；点击热区独立保留至少 48，头像周围 6 的余量容纳右下角状态点；选中样式沿用独立的 56 底板，不随头像缩放。组合头像、+N 与新增圆形入口同步缩小，状态语义不变。当前规格见 `DESIGN.md §5`。
@@ -1267,3 +1302,133 @@ Toast 仍在它之上：Toast 不拦截操作、只占角落，盖住阻断提�
 同一次预设圆角裁决（盘点基线 `ceb6e01d077`，32 组全部按推荐）中：手写文字按钮换共享 `Button`，定时任务「Cron / 相对间隔」换共享 `SegmentedControl`，手画勾选框换共享 `Checkbox`（尺寸与选中色随共享组件）。只塑形焦点环的无框文字按钮、远程连接拓扑图的名称标注、邮件发件域名图标裁切、插画与示意图内部形状登记为例外，值不变。改值部分见「桌面端预设圆角类改到刻度值」一条。
 
 现行规则见 `DESIGN.md` §5 Border Radius Scale。
+
+## 2026-11-25 · 分享对话选择模式：消息勾选恢复圆形，全选恢复成按钮（主人裁决）
+
+#12342 按 B-10 把分享选择模式里两处手画圆形勾选换成了共享 `Checkbox` 的方框。主人裁决恢复原样：
+
+- 每条消息左侧是 20px 圆形勾选；底栏「全选」是 32px 胶囊按钮，里面是 16px 圆形指示。尺寸、颜色与 #12342 之前一致。
+- 仍然用共享组件，不回到各自手画：`components/ui/checkbox.tsx` 增加 `shape="circle"`（原生 input）和两处共用的 `CheckCircleMark`（纯装饰）。「全选」保持 `role="checkbox"` + `aria-checked` 的按钮，按钮里不嵌 input。
+- 圆形样式只用于消息多选（分享对话选择），圆角归 pill 档。侧栏导航自定义、模型分组添加、新建群聊、话题「同时发送」四处和其他勾选框保持方形，2026-11-23 的「#6 选框」对它们继续有效。
+
+现行规则见 `DESIGN.md` §4 Desktop settings controls（Switch or Checkbox）。
+
+## 2026-11-25 · 交互组件入库：搜索框、分段控件密度、下划线标签条（主人裁决，组件库盘点 PR B）
+
+组件库盘点（基线 `ceb6e01d077`）里搜索框有 12 种写法、分段控件调用方直接传 11 种高度组合、页面级下划线标签条两处手写。主人 2026-11-23 定「需要主人定的事」全部按建议，本条记下 #1、#2、#8、#9 落到现行规则的部分。
+
+- **#1 搜索框选 A、#2 图标 14px**：新增 `SearchInput`（`Input` 加 `leading` 插槽），一律 32px 胶囊、13px 文字、14px 图标。菜单和浮层里透明底、跟面板描边，聚焦只加深描边；页面、设置卡片和弹窗正文里 elevated 底。原来 34/36/40px 的设置页和弹窗搜索框降到 32px，28px 的文件筛选与代码审查搜索框升到 32px，方角（`rounded-lg` / `rounded-md`）改胶囊，12/15/16px 图标统一 14px。侧栏悬停展开的搜索、插件 / 技能管理页标题栏的搜索（展开式或毛玻璃）、选择器面板顶部的无框搜索行、文件内容搜索（带大小写切换）和 PDF 查找栏是各自的形态，保留。
+- **#8 分段控件收成四档**：`density="xs/sm/md/lg"` = 24/18、28/24、32/28、38/32，默认 `md`。恰好等于某一档的调用点改成 `density`，外观不变；对不上的组合（34/28、34/30、36/26、36/30、30/24、32/24、32/32、40/32、40/40、44/34）暂时保留显式 `height`，并到哪一档另行裁决，不静默换成最近一档。
+- **#9 下划线标签条入库**：新增 `UnderlineTabs`，替换插件详情（目前被产品开关隐藏）和设置里共享任务页的手写下划线标签；补齐方向键、Home/End 和 tablist 语义。Cindy Make 设置里用按钮拼的标签改成 `SegmentedControl`（胶囊式标签就是分段控件）。
+
+现行规则见 `DESIGN.md` §4 Inputs & Forms、§4 Tabs、§4 Desktop segmented controls。
+
+## 2026-11-27 · 6 套内置主题与导入主题的「允许」键帽改色（主人裁决，设计系统 PR2）
+
+- **键帽**：atom-one-light、solarized-light、eclipse、one-dark-pro、monokai-pro、material-ocean-hc 给「允许」按钮配了彩色底，但 `--perm-allow-kbd-*` 仍是页面级 chip 色，键帽文字（70% 不透明）只有 1.06–1.33:1。看候选图后选「混用」：eclipse、monokai-pro、material-ocean-hc 沿用 cindy-dark 的写法叠黑 8% / 描边 20%；atom-one-light 叠黑 30% / 42%、solarized-light 叠黑 40% / 52%、one-dark-pro 叠白 30% / 42%，因为这三套按钮主文字本身只有 3.20–5.92:1，只能让键帽往文字的反方向走。6 套都到 4.08–4.59:1；cindy、default、github-dark 不变。值登记在 DTCG `reference/themes.json` 与 `themes/builtin.json`。
+- **导入主题同一规则**（主人同日裁决）：主题导入模板（`shared/theme-import/palette.ts`）不再把键帽设成 chip / border，改按同一规则派生：先按 cindy 方向叠（深字叠黑 8% / 描边 20%，浅字叠白 16% / 30%），键帽文字（70% 不透明，叠在按钮底上）不到 4:1 就往反方向从 10% 起每档 +10%，取第一个到 4:1 的，描边 = 底 + 12%；加到 100% 仍不到时取对比度最高的一档。这条规则对 6 套内置主题算出的就是上面的值，golden 测试对照。已导入的主题导入时就写成文件，不重算；Omarchy 主题每次跟随系统重新转换，会跟着变。
+
+现行规则见 `DESIGN.md` §4 Kbd、主题导入一节。
+
+## 2026-11-27 · 危险按钮保持无描边（主人裁决，设计系统 PR2）
+
+共享 `Button` 的 `tone="danger"` 会把描边清成透明，`variant="secondary"` 的危险按钮因此没有 secondary 那条描边（#12342 只在 Cindy Make「重置来源」上局部补过一个 class）。设计系统 PR2 曾经让危险按钮统一带描边（含 `danger-surface`、Webhook「释放地址」），主人看过加描边前后的对比图后决定：**危险按钮保持无描边（现状），这是定稿，不是待修问题。** `tone="danger"`（任何 variant）与 `danger-surface` 都不带描边；`danger-solid` 不变。PR2 的描边改动已撤回，只保留键帽部分。「重置来源」上的局部描边本次未动，与其它危险按钮不一致，留待后续处理。
+
+现行规则见 `DESIGN.md` §4 Icon buttons、§4 Desktop settings controls（Destructive actions）。
+
+## 2026-11-24 · 设置 → IM 机器人：一个聊天软件一行，点进去设置（主人裁决，方案 A）
+
+原页面把官方、个人两组共 11 张卡依次展开，页面很长，每张卡展开后也很长，普通用户找不到要改的东西。主人选方案 A：
+
+- **主页**：一个聊天软件一行（图标、名称、一句状态，例如「已连接 · Cindy 回复」「已连接 · 小雪回复」），分「已连接」「还可以连接」两组；底部「插件」组里是「项目与模型」入口。行内只放状态，不放开关。
+- **子页**：点进去是该软件自己的页面，左上角返回。主卡固定顺序「谁来回复 → 项目 → 模型」，之后是群聊、名字与性格等二级入口（再点进下一层），最后是连接身份、在本机接收、解绑。同时有官方机器人和自建机器人的软件，两种方式在同一页分开写。
+- **谁来回复**：Cindy 或一位伙伴。选伙伴后「项目」「模型」两行收起，换成「{伙伴} 的设置」入口，因为说什么、用什么模型都来自伙伴。伙伴是可选项，不另开一套接线页。
+- **项目**：子页只选项目，不在子页改项目的模型（主人：内页只要能选项目）。选了项目就没有「模型」行，模型与权限只在主页的「项目与模型」页改；个人机器人选「对话」时才显示这个平台自己的「模型」行。官方机器人子页也是一个「项目」下拉（所有官方机器人共用一个默认项目，Slack 在频道里各自选所以没有），不再嵌整张项目表。
+- **项目与模型页**：只管每个项目的模型与权限，没有默认项目单选；没开官方机器人、没装插件也显示，因为个人机器人选了项目也用它。
+- 伙伴设置「消息平台」页只读列出从设置交给它的机器人，一键回到设置。
+
+回归见 `scripts/fixtures/im-bot-pages`；实现见 `components/settings/ImBotSection.tsx`、`ImBotPageParts.tsx`。
+
+## 2026-11-24 · 个人 IM 机器人「群聊」总表：蒸馏微信插件的会话设置（主人裁决）
+
+主人认为微信插件「会话设置」对每个群的控制做得好，要求把好的部分都搬进 设置 → IM 机器人，并入同一个 PR：
+
+- **版式照微信插件**（主人看过第一版后要求「和微信插件一样」）：平台页上一张「群聊」卡（Discord「频道」），收起时
+  写群数、单独设置数并露出几个群头像，右边「展开」；展开就地出现搜索框和群列表，不另开子页。组件
+  `components/settings/ImChatSettingsSection.tsx` 的 `ImChatSettingsCard`，飞书、Telegram、Discord、钉钉、企业微信同一份。
+- **一行一个群**：头像（群名首字，灰度，不用彩色头像）、群名、「群聊」，右边一句状态「demo-shop · 已单独设置 ·
+  群成员可提问」，没设就是「跟随机器人」；群成员被暂停或项目已不在侧栏时这句用警示色。单独设置过的排前，不搜索时
+  先显示 20 个；窄于 520px 时状态换到群名下面。
+- **展开一个群**：项目、模型、权限三格并排（窄时竖排），跟随时显示继承的值；模型单独设过时下面有「模型改回跟随」，
+  权限第一项是「跟随 · 继承的档位」。下面是「群成员也能提问」（勾选框 + 两段说明，暂停时写原因并给「恢复」），
+  最后一句生效说明。放宽权限先确认。
+- 微信插件的「允许对方私聊提问」没有搬：个人机器人的私聊只认主人。Telegram 的「群成员也能提问」就是原有的群准入。
+- 未合并：Telegram 原有的「群聊里什么时候回复」（仅 @ / 全响应）仍是单独一行，与官方机器人共用组件，合并另做。
+
+回归见 `ImChatSettingsSection.test.tsx`、`scripts/fixtures/im-bot-pages`。
+
+## 2026-11-28 · DESIGN.md 瘦身 4a：从正文移出的历史说明
+
+DESIGN.md 瘦身 4a 把下列历史说明从正文移到这里，原文逐字保留。它们记录的是被取代的做法或裁决经过，现行规则以 `DESIGN.md` 为准。
+
+- **§2 Chip & Button Neutrals：已废弃的 Border Light**
+
+  > > ~~**Border Light** (`#d4d4d4`)~~ — deprecated (2026-06, G2). Once labeled the "white-button border color", but no real component ever used it (only bare hardcodes in the experimental view). White Pill secondary borders uniformly use **Board** (`--border-default` `#d7d7d4`).
+
+- **§2 Neutrals & Text：已废弃的 Button Text Dark**
+
+  > > ~~**Button Text Dark** (`#404040`)~~ — deprecated (2026-06, G1). Once labeled the "white-surface button text color", but no real button ever used it (only bare hardcodes in the experimental view). White Pill secondary text uniformly uses **Near Black** (`--text-primary` `#262626`).
+
+- **§3 Principles · Weight restraint 末尾的历史说明**
+
+  > (2026-08 revision, issue #1505 — this supersedes the former "400/500 only" wording)
+
+- **§4 Typography roles · Title weights 的来源说明**
+
+  > (2026-11-11 maintainer ruling, audit B-03; the former 600 form and prompt titles were moved to 500)
+
+- **§4 Dialog & Modal · 弹窗内浮层的旧做法**
+
+  > (2026-09-08 DS-6 review fix; superseded 2026-11-22 by the §6 z-index layers): the shared `Tip` used to portal on `z-[60]` and the shared menus/popovers on `z-50`, both **below** the `z-[10000]` overlay, so every call site inside a dialog had to raise them by hand.
+
+- **§15.1 Palette · Secondary info 一格的历史说明**
+
+  > (2026-10-22 ink ladder, supersedes `#888883` and U2; full ladder in 15.16)
+
+- **§15.2 Red-Boundary Test Maps · 旧 `BRAND_RED_*` 表的保留状态**
+
+  > - The pre-E1D `BRAND_RED_*` maps are retained in `cindyDecisionData.ts` only for D2T migration and are marked for deletion; their contents are archived in the decision log — do not treat them as current rules.
+
+- **§15.13 Cross-platform color semantics 全文（现行正本已并入手机设计指南 §2）**
+
+  > #### Cross-platform color semantics (mobile owns its ramp — ruling 2026-09-26)
+  >
+  > - Mobile shares Cindy's brand identity and semantic roles with desktop — the same meanings for background, card, body, secondary / tertiary text, borders, neutral-inverse CTA, brand red, status colors, caret and focus blue — but **owns its own ramp values, contrast and warmth** (user ruling 2026-09-25: mobile design may decouple from desktop and should be higher contrast; values finalized 2026-09-26). Do not copy desktop hex values into mobile, and do not sync them back to desktop; semantics stay mirrored, values do not. This supersedes the 2026-07-18 "isomorphism" baseline and the 2026-08 pending mobile follow-up.
+  > - **Mobile light = bright ivory**: page `#F9F9F6` (user-specified: brighter than desktop `#F2F2ED`, warmth B = R−3 — a lighter ivory than desktop's R−5), card / list row / popover `#FFFFFC`, chip / selected `#EAEAE6`, border `#CCCCC8`. Body text stays neutral `#0F0F0F`; secondary `#4D4D4A`, tertiary `#686864`.
+  > - **Consequence of the brighter page — mobile light cards separate by hairline, not by fill.** Against `#F9F9F6` the near-white ceiling leaves only a 1.05 card lift (desktop 1.12, iOS grouped background 1.12). Every new raised mobile-light surface (card, list row, popover, input container) therefore **must carry the 1px `border`**; do not rely on the `surfaceElevated` fill alone. Surfaces that must read as recessed (chip / selected, expanded block, code card) sit **below** the page instead.
+  > - **Mobile dark = pure neutral near-black**: page `#121212`, card `#1E1E1E`, chip `#2A2A2A`, border `#383838`; body `#EDEDED`, secondary `#BDBDBD`, tertiary `#999999`. No warmth.
+  > - **Text tiers are ordered and legible**: body → secondary → tertiary go from strongest to weakest, and all three are ≥ 4.5:1 on every surface they sit on (page, card, chip, code card, sheet action group). This replaces the inverted pre-2026-09 mobile order where secondary (`#8C8E94` / `#6F6F6F`, 2.8 / 2.9:1) was lighter than tertiary; the U2 exception (15.5) no longer applies to mobile. Guarded by `themeTokens.test.ts` and the frozen `theme-colors-snapshot.json`.
+  > - **Mobile text colors are five neutral tiers** (ruling 2026-09-27): body, secondary, tertiary, placeholder, neutral-inverse (`ctaText`). `textPlaceholder` (light `#858581` / dark `#757575`, ≥ 3:1 on page, card and chip) is a registered exception to the 4.5:1 tier rule and may be used only for input placeholders and the voice-listening prompt that mirrors them. Sheet action labels use `textPrimary` (the former `sheetActionText` alias was removed); text on a `textPrimary` / `cta` fill uses `ctaText`, never `surface`; the shared-task danger button label uses `#FFFFFF` / `#121212`. The login skin (§16) keeps its own registered grays for now.
+  > - **Neutral-inverse CTA on mobile**: light `#0F0F0F` / `#FFFFFF`, dark `#EDEDED` / `#121212` (19.17 / 16.00:1).
+  > - The appearance mode is a user setting (Settings → Appearance: follow system / light / dark, default follow system; only an explicit light / dark choice is persisted). It forces native system surfaces to the same mode; the first-launch light login gate (§16.5) still applies inside the login stage.
+  > - Values live only in `apps/mobile/src/theme/tokens.ts`; the proposal record and before / after comparison are in Design Lab (`colors` study, platform iPhone / Android). Login skin tokens (§16), brand splash, status four, task tags and syntax colors are outside this ramp and keep their own registered values.
+  > - Mobile-only tokens carry only mobile-specific layers or geometry:
+  >
+  > | Mobile token          | Light                    | Dark                  | Use                             |
+  > | --------------------- | ------------------------ | --------------------- | ------------------------------- |
+  > | `surfaceListRow`      | `#FFFFFC`                | `#1E1E1E`             | List project/task rows          |
+  > | `surfaceTranslucent`  | `rgba(249,249,246,0.78)` | `rgba(18,18,18,0.78)` | Sticky chrome (page at opacity) |
+  > | `edgeBlurShade`       | `transparent`            | `rgba(0,0,0,0.18)`    | Shade on the single-layer edge blur (composer), so an empty page stays `surface` |
+  > | `edgeBlurShadeLayered`| `transparent`            | `rgba(0,0,0,0.08)`    | Same shade on each of the three header blur layers |
+  > | `surfaceListExpanded` | `#EAEAE6`                | `#121212`             | Expanded list block             |
+  > | `activeGlyph`         | `#DF0C27`                | `#A61629`             | Leading active glyph in lists   |
+  > | `chatCodeSurface`     | `#F1F1EC` (recessed)     | `#1A1A1A`             | Chat / task code card           |
+  > | `chatCodeBorder`      | `#CCCCC8`                | `#383838`             | Chat / task code card border    |
+  > | `inputCaret`          | `#417CDD`                | `#417CDD`             | All input carets                |
+  > | `sheetSurface`        | `rgba(249,249,246,0.96)` | `rgba(28,28,28,0.96)` | Bottom-sheet root               |
+  > | `sheetActionSurface`  | `#FFFFFC`                | `#262626`             | Sheet action group / row        |
+  > | `sheetActionBorder`   | `#CCCCC8`                | `#383838`             | Sheet action group / row border |
+  > | `sheetGrabber`        | `#C2C2BE`                | `#5C5C5C`             | Sheet / composer grabber        |
+  > | `textPlaceholder`     | `#858581`                | `#757575`             | Input placeholder only (≈3.5:1) |
+
+现行规则见 `DESIGN.md` §2、§3、§4 Dialog & Modal、§15.1、§15.2，以及手机设计指南 §2。

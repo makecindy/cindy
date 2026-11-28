@@ -9,11 +9,12 @@ import { voiceModelKey } from '@/../shared/voiceConversation';
 import {
   normalizeRealtimeVoiceSelection,
   realtimeSystemVoices,
-  REALTIME_PROTOCOLS,
+  COMPATIBLE_REALTIME_PROTOCOLS,
   type RealtimeVoiceModel,
   type RealtimeVoiceSelection,
 } from '@/../shared/realtimeVoice';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { providerDisplayName } from '@/lib/providerDisplayName';
 
 /** Independent from TTS: changing call transport must not change message read-aloud. */
 export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisabled, beforeLeaveRef, children }: {
@@ -94,7 +95,15 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
   const selectedModel = models.find(
     (m) => selection && voiceModelKey(m) === voiceModelKey(selection),
   );
-  const visible = models.filter((m) => m.pickerVisible !== false || m === selectedModel);
+  // The picker shows one Flash per provider; call validation keeps every eligible runtime.
+  const visible = new Map<string, RealtimeVoiceModel>();
+  const preferred = selection ?? previousSelection.current;
+  for (const model of models) {
+    if (model.pickerVisible === false && model !== selectedModel) continue;
+    const routeKey = voiceModelKey(model);
+    const optionKey = model.protocol === 'glm-realtime' ? voiceModelKey({ ...model, agent: undefined }) : routeKey;
+    if (!visible.has(optionKey) || (preferred && routeKey === voiceModelKey(preferred))) visible.set(optionKey, model);
+  }
   const save = (value: RealtimeVoiceSelection | null) => {
     if (
       saveLock.current ||
@@ -152,9 +161,14 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
               value={selection ? voiceModelKey(selection) : 'speech'}
               options={[
                 { value: 'speech', label: t('bots.voiceMode.realtime.off') },
-                ...visible.map((m) => ({
+                ...Array.from(visible.values(), (m) => ({
                   value: voiceModelKey(m),
-                  label: `${m.name} · ${m.providerName}`,
+                  label: [
+                    m.name,
+                    providerDisplayName({ id: m.providerId, name: m.providerName }, t),
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
                 })),
                 ...(selection && !selectedModel
                   ? [{ value: voiceModelKey(selection), label: selection.modelId, disabled: true }]
@@ -177,7 +191,7 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
                 chooseRoute({
                   mode: 'realtime',
                   providerId: model.providerId,
-                  agent: model.agent,
+                  ...(model.agent ? { agent: model.agent } : {}),
                   modelId: model.id,
                   protocol,
                   voice: (model.systemVoices ?? realtimeSystemVoices(protocol, model.id))[0]?.id ?? '',
@@ -195,7 +209,7 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
                     {...control}
                     label={t('bots.voiceMode.protocol')}
                     value={selection.protocol}
-                    options={REALTIME_PROTOCOLS.map((p) => ({
+                    options={COMPATIBLE_REALTIME_PROTOCOLS.map((p) => ({
                       value: p,
                       label: p === 'openai-realtime' ? 'OpenAI Realtime' : 'Qwen-Audio Realtime',
                     }))}
