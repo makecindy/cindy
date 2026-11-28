@@ -37,10 +37,11 @@ async function thumbnail(file: File) {
   }
 }
 
-export function ProviderAppearanceDialog({ provider, scope, onClose }: {
+export function ProviderAppearanceDialog({ provider, scope, onClose, writeAndReadback }: {
   provider: ProviderView;
   scope: { dataOwnerId: string | null; ownerGeneration: number };
   onClose: () => void;
+  writeAndReadback?: (change: () => Promise<unknown>) => Promise<void>;
 }) {
   const { t } = useTranslation();
   const nameId = useId();
@@ -93,12 +94,16 @@ export function ProviderAppearanceDialog({ provider, scope, onClose }: {
     setBusy(true);
     setError('');
     try {
-      await window.electronAPI.maker.setProviderPresentation({
-        ...scope, providerId: provider.id, action: 'appearance',
-        ...(name.trim() !== initial.name ? { name: name.trim() } : {}),
-        ...(icon !== initial.icon ? { icon } : {}),
-      });
-      onClose();
+      const change = async () => {
+        await window.electronAPI.maker.setProviderPresentation({
+          ...scope, providerId: provider.id, action: 'appearance',
+          ...(name.trim() !== initial.name ? { name: name.trim() } : {}),
+          ...(icon !== initial.icon ? { icon } : {}),
+        });
+        onClose();
+      };
+      if (writeAndReadback) await writeAndReadback(change);
+      else await change();
     } catch {
       setError(t('settings.providers.custom.toast.saveFailed'));
     } finally { setBusy(false); }

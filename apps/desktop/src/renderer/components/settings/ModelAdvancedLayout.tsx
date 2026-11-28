@@ -7,6 +7,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 export function ModelAdvancedContent({
+  closeDisabled = false,
   onCloseAutoFocus,
   onEscapeKeyDown,
   title,
@@ -14,6 +15,7 @@ export function ModelAdvancedContent({
   titleExtra,
   children,
 }: {
+  closeDisabled?: boolean;
   onCloseAutoFocus?: ComponentProps<typeof Dialog.Content>['onCloseAutoFocus'];
   onEscapeKeyDown?: ComponentProps<typeof Dialog.Content>['onEscapeKeyDown'];
   title: string;
@@ -48,6 +50,7 @@ export function ModelAdvancedContent({
             <p className="mt-0.5 truncate text-12 text-[var(--text-tertiary)]">{providerName}</p>
           </div>
           <Dialog.Close
+            disabled={closeDisabled}
             className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 text-[var(--text-secondary)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] hover:text-[var(--text-primary)]"
             aria-label={t('settings.providers.models.advanced.close')}
           >
@@ -112,10 +115,12 @@ export function ModelAdvancedRow({
 }
 
 export function ModelAdvancedSection({
+  settingId,
   title,
   hint,
   children,
 }: {
+  settingId?: string;
   title: string;
   hint?: string;
   children: ReactNode;
@@ -127,6 +132,7 @@ export function ModelAdvancedSection({
         {hint && (
           <Tip text={hint}>
             <button
+              data-setting-id={settingId}
               type="button"
               data-settings-search-action="Show help for this advanced model section"
               aria-label={hint}

@@ -38,7 +38,7 @@ import { providerUsageReaderSource } from '../new-chat/useProviderWeeklyQuota';
  *     fetchProviderModels,additions-only 合并进配置(与 OAuth 动态发现同语义)。
  */
 
-import { Activity, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Activity, createContext, useContext, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
@@ -524,16 +524,20 @@ async function disconnectProvider(
   }
 }
 
+// One page-owned guard also covers actions in the rail and detail header.
+const ProviderConfigWrite = createContext<((change?: () => Promise<unknown>) => Promise<void>) | null>(null);
+
 function useProviderManagement(provider?: ProviderView) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
   const { refetch, ownerGeneration } = useProviders();
   const { dataOwnerId } = getDataOwnerGeneration();
+  const writeAndReadback = useContext(ProviderConfigWrite);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<(ProviderOwnerScope & { providerId: string }) | null>(null);
   const editor = editing && provider && editing.providerId === provider.id && editing.dataOwnerId === dataOwnerId && editing.ownerGeneration === ownerGeneration
-    ? <ProviderAppearanceDialog key={provider.id} provider={provider} scope={editing} onClose={() => setEditing(null)} />
+    ? <ProviderAppearanceDialog key={provider.id} provider={provider} scope={editing} onClose={() => setEditing(null)} writeAndReadback={writeAndReadback ?? undefined} />
     : null;
   const rename = async () => {
     if (!provider || busy) return;
@@ -561,14 +565,15 @@ function useProviderManagement(provider?: ProviderView) {
       )
         return;
       setBusy(true);
-      await window.electronAPI.maker.setProviderPresentation({
+      const change = () => window.electronAPI.maker.setProviderPresentation({
         providerId: provider.id,
         action: 'rename',
         name,
         dataOwnerId: scope.dataOwnerId,
         ownerGeneration: scope.ownerGeneration,
       });
-      refetch();
+      if (writeAndReadback) await writeAndReadback(change);
+      else { await change(); await refetch(); }
     } catch {
       toast.error(t('settings.providers.custom.toast.saveFailed'));
     } finally {
@@ -1594,6 +1599,12 @@ function GenericOAuthHeader({
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
+  const writeAndReadback = useContext(ProviderConfigWrite);
+  const publishChange = useCallback(async (change: () => Promise<boolean>) => {
+    if (provider.source === 'user' && !provider.auth.native && writeAndReadback) {
+      await writeAndReadback(change);
+    } else if (await change()) onChanged();
+  }, [onChanged, provider.auth.native, provider.source, writeAndReadback]);
   const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const [xaiDeviceLogin, setXaiDeviceLogin] = useState(false);
@@ -1619,23 +1630,31 @@ function GenericOAuthHeader({
     setXaiDeviceLogin(method === 'device');
     const ownedLogin = beginOwnedLogin();
     try {
-      const r = await window.electronAPI.maker.providerOAuthLogin(provider.id, {
-        ownerId: ownedLogin.ownerId,
-        ...(xaiDeviceFlow ? { method } : {}),
+      await publishChange(async () => {
+        const r = await window.electronAPI.maker.providerOAuthLogin(provider.id, {
+          ownerId: ownedLogin.ownerId,
+          ...(xaiDeviceFlow ? { method } : {}),
+        });
+        if (attempt !== loginAttempt.current) return false;
+        if (r.ok) {
+          toast.success(t('settings.providers.genericOAuth.toast.loggedIn', { name: provider.name }));
+          // The login is committed; only the settings write guard waits for the
+          // catalog. Do not extend OAuth ownership/cancellation through readback.
+          ownedLogin.finish();
+          setLoggingIn(false);
+          setXaiDeviceLogin(false);
+          return true;
+        } else if (r.reason === 'login_cancelled') {
+          /* 用户取消,不弹错 */
+        } else if (r.reason === 'claude_account_retired') {
+          toast.info(t('settings.providers.claudeAccountRetired'), { duration: 8000 });
+        } else {
+          toast.error(
+            t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }),
+          );
+        }
+        return false;
       });
-      if (attempt !== loginAttempt.current) return;
-      if (r.ok) {
-        toast.success(t('settings.providers.genericOAuth.toast.loggedIn', { name: provider.name }));
-        onChanged();
-      } else if (r.reason === 'login_cancelled') {
-        /* 用户取消,不弹错 */
-      } else if (r.reason === 'claude_account_retired') {
-        toast.info(t('settings.providers.claudeAccountRetired'), { duration: 8000 });
-      } else {
-        toast.error(
-          t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }),
-        );
-      }
     } catch {
       if (attempt === loginAttempt.current)
         toast.error(
@@ -1648,7 +1667,7 @@ function GenericOAuthHeader({
         setXaiDeviceLogin(false);
       }
     }
-  }, [beginOwnedLogin, clearDeviceCode, onChanged, provider.id, provider.name, t, xaiDeviceFlow]);
+  }, [beginOwnedLogin, clearDeviceCode, publishChange, provider.id, provider.name, t, xaiDeviceFlow]);
 
   const handleLogout = useCallback(async () => {
     try {
@@ -1663,16 +1682,17 @@ function GenericOAuthHeader({
       });
       if (!confirmed) return;
       setBusy(true);
-      if (!(await confirmProviderChange((options) => disconnectProvider(provider, scope, options))))
-        return;
-      toast.success(t('settings.providers.genericOAuth.toast.loggedOut', { name: provider.name }));
-      onChanged();
+      await publishChange(async () => {
+        if (!(await confirmProviderChange((options) => disconnectProvider(provider, scope, options)))) return false;
+        toast.success(t('settings.providers.genericOAuth.toast.loggedOut', { name: provider.name }));
+        return true;
+      });
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.logoutFailed', { name: provider.name }));
     } finally {
       setBusy(false);
     }
-  }, [confirm, confirmProviderChange, onChanged, provider, t]);
+  }, [confirm, confirmProviderChange, publishChange, provider, t]);
 
   const reconnectRequired = provider.openAiAccount?.reconnectRequired === true;
   const status = {
@@ -2339,8 +2359,10 @@ function CustomProviderHeader({
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
+  const writeAndReadback = useContext(ProviderConfigWrite);
   const [disconnecting, setDisconnecting] = useState(false);
   const disconnect = async () => {
+    let readbackHandled = false;
     try {
       const scope = await window.electronAPI.maker.listProviders();
       if (
@@ -2355,13 +2377,18 @@ function CustomProviderHeader({
       )
         return;
       setDisconnecting(true);
-      if (!(await confirmProviderChange((options) => disconnectProvider(provider, scope, options))))
-        return;
+      if (writeAndReadback) {
+        readbackHandled = true;
+        await writeAndReadback(async () => {
+          try { await confirmProviderChange((options) => disconnectProvider(provider, scope, options)); }
+          catch { toast.error(t('settings.providers.genericOAuth.toast.logoutFailed', { name: provider.name })); }
+        });
+      } else if (!(await confirmProviderChange((options) => disconnectProvider(provider, scope, options)))) return;
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.logoutFailed', { name: provider.name }));
     } finally {
       setDisconnecting(false);
-      onChanged();
+      if (!readbackHandled) onChanged();
     }
   };
   const isOAuth =
@@ -2673,6 +2700,8 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
   const confirmProviderChange = useProviderChangeConfirmation();
   const { providers: currentProviders, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
   const providers = useMemo(() => currentProviders.map(withSubscriptionDisplayModels), [currentProviders]);
+  const latestProvidersRef = useRef(providers);
+  latestProvidersRef.current = providers;
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
@@ -2799,14 +2828,6 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
   } | null>(null);
   const [providerImportId, setProviderImportId] = useState<string | string[] | null>(null);
   const closeProviderImport = useCallback(() => setProviderImportId(null), []);
-  const finishProviderImport = useCallback(
-    (providerId: string) => {
-      setProviderImportId(null);
-      selectProvider(providerId);
-      refetch();
-    },
-    [refetch, selectProvider],
-  );
   const addProviderButtonRef = useRef<HTMLButtonElement>(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
   const [rediscovering, setRediscovering] = useState(false);
@@ -2828,6 +2849,54 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
   // #11298: models a complete refresh no longer found upstream, awaiting the user's choice.
   const [withdrawnReview, setWithdrawnReview] = useState<WithdrawnModelsOwnedReview | null>(null);
   const [removingWithdrawn, setRemovingWithdrawn] = useState(false);
+  // A failed/superseded removal readback cannot release whole-config writers
+  // against that same catalog snapshot. A new publication releases the guard.
+  const [unconfirmedRemovalSnapshot, setUnconfirmedRemovalSnapshot] = useState<ProviderView | null>(null);
+  const unconfirmedRemovalProviderId = unconfirmedRemovalSnapshot && providers.includes(unconfirmedRemovalSnapshot)
+    ? unconfirmedRemovalSnapshot.id : null;
+  // Whole-config writers wait from mutation admission through catalog readback,
+  // including when a newer read supersedes this one without an error.
+  const [externalReadbacks, setExternalReadbacks] = useState<{
+    owner: ReturnType<typeof getDataOwnerGeneration>; pending: number;
+  } | null>(null);
+  const [unconfirmedExternalSnapshots, setUnconfirmedExternalSnapshots] = useState<ProviderView[]>([]);
+  const providerWriteOwner = getDataOwnerGeneration();
+  const readbackSavedProvider = useCallback(async (change?: () => Promise<unknown>) => {
+    const owner = providerWriteOwner;
+    if (!isDataOwnerGenerationCurrent(owner)) return;
+    setExternalReadbacks(current => ({ owner, pending: (current?.owner === owner ? current.pending : 0) + 1 }));
+    let confirmed = false;
+    let mutationCompleted = false;
+    try {
+      if (change && await change() === false) return;
+      mutationCompleted = true;
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      confirmed = await refetch();
+    } finally {
+      if (mutationCompleted && !confirmed && isDataOwnerGenerationCurrent(owner)) {
+        setUnconfirmedExternalSnapshots(latestProvidersRef.current);
+      }
+      setExternalReadbacks(current => current?.owner === owner
+        ? { ...current, pending: current.pending - 1 } : current);
+    }
+  }, [providerWriteOwner, refetch]);
+  const externalReadbackPending = externalReadbacks !== null && externalReadbacks.pending > 0
+    && isDataOwnerGenerationCurrent(externalReadbacks.owner);
+  // These dialogs own their mutation lifetimes. Lock before their save starts;
+  // onDone/onSaved transfers the guard to the shared catalog readback.
+  const providerDialog = dialog ?? wizard ?? providerImportId ?? speechProvider;
+  const providerDialogOwner = useRef({ dialog: providerDialog, owner: getDataOwnerGeneration() });
+  if (providerDialogOwner.current.dialog !== providerDialog) {
+    providerDialogOwner.current = { dialog: providerDialog, owner: getDataOwnerGeneration() };
+  }
+  const providerDialogOpen = !!providerDialog && isDataOwnerGenerationCurrent(providerDialogOwner.current.owner);
+  const aliasReadbackBlocked = (providerId: string) => providerDialogOpen || externalReadbackPending
+    || unconfirmedExternalSnapshots.some(snapshot => snapshot.id === providerId && providers.includes(snapshot));
+  const finishProviderImport = useCallback((providerId: string) => {
+    setProviderImportId(null);
+    selectProvider(providerId);
+    void readbackSavedProvider();
+  }, [readbackSavedProvider, selectProvider]);
   // A newer refresh supersedes the previous prompt; its list may already be stale.
   const withdrawnToastIdRef = useRef<string | null>(null);
 
@@ -3341,7 +3410,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
           }
           if (p.auth.native) {
             toast.success(t('settings.providers.models.refreshDone'));
-            refetch();
+            void readbackSavedProvider();
             return;
           }
           refreshedAgents.add(agent);
@@ -3383,16 +3452,18 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
             absent?.has(model.id) ? { ...model, missingUpstream: true as const } : model);
         }
         if (!refreshedAgents.size) {
+          let readback: Promise<void> | undefined;
           if (flashAccessRevoked) {
             const saved = await confirmProviderChange(options => updateCustomProvider(config, {}, options));
             if (!saved) return;
-            refetch();
+            readback = readbackSavedProvider();
           }
           toast.error(t(failureCode === 'AUTH_INVALID' && p.auth.method === 'oauth'
             ? 'settings.providers.models.refreshReconnect'
             : failureCode && failureCode !== 'UNKNOWN'
               ? `providerError.${failureCode}`
               : 'settings.providers.models.refreshFailed'));
+          await readback;
           return;
         }
         // Main owns the active Registry and classifies the complete discovery
@@ -3441,14 +3512,14 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
         } else {
           toast.success(t('settings.providers.models.refreshNoNew'));
         }
-        refetch();
+        await readbackSavedProvider();
       } catch {
         toast.error(t('settings.providers.models.refreshFailed'));
       } finally {
         finishProviderRefresh(p.id);
       }
     },
-    [beginProviderRefresh, confirmProviderChange, dataOwnerId, finishProviderRefresh, ownerGeneration, refetch, t],
+    [beginProviderRefresh, confirmProviderChange, dataOwnerId, finishProviderRefresh, ownerGeneration, readbackSavedProvider, t],
   );
 
   /**
@@ -3467,6 +3538,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
         toast.error(t('settings.providers.models.withdrawn.removeFailed'));
         return;
       }
+      if (!beginProviderRefresh(provider.id)) return;
       setRemovingWithdrawn(true);
       // Preference cleanup must stay with the account that performed the removal.
       const owner = getDataOwnerGeneration();
@@ -3494,7 +3566,12 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
           withdrawnLog.warn('withdrawn model cleanup skipped after account change', { count: removed.length });
           return;
         }
-        refetch();
+        const readbackConfirmed = await refetch();
+        // The readback may cross an account switch; preference cleanup must not.
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        if (!readbackConfirmed) {
+          setUnconfirmedRemovalSnapshot(latestProvidersRef.current.find(candidate => candidate.id === provider.id) ?? null);
+        }
         if (removed.length === 0) {
           toast.info(t('settings.providers.models.withdrawn.stale'));
           return;
@@ -3523,10 +3600,11 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
         withdrawnLog.warn('withdrawn model removal failed', { error: error instanceof Error ? error.name : 'unknown' });
         toast.error(t('settings.providers.models.withdrawn.removeFailed'));
       } finally {
+        finishProviderRefresh(review.providerId);
         setRemovingWithdrawn(false);
       }
     },
-    [confirmProviderChange, dataOwnerId, ownerGeneration, providers, refetch, removingWithdrawn, t, withdrawnReview],
+    [beginProviderRefresh, confirmProviderChange, dataOwnerId, finishProviderRefresh, ownerGeneration, providers, refetch, removingWithdrawn, t, withdrawnReview],
   );
 
   /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
@@ -3831,6 +3909,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
   };
 
   return (
+    <ProviderConfigWrite.Provider value={readbackSavedProvider}>
     <SubscriptionPoolViewCache.Provider value={subscriptionPoolViews}>
     <div className="flex h-full min-h-0 flex-col gap-6">
       {shareManagePage}
@@ -4288,14 +4367,14 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
                           {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
                             ? {
                                 onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
-                                refreshing: refreshingProviderId === effectiveSelected.id,
+                                refreshing: refreshingProviderId === effectiveSelected.id || unconfirmedRemovalProviderId === effectiveSelected.id || aliasReadbackBlocked(effectiveSelected.id),
                                 refreshDisabled: refreshingProviderId !== null,
                                 refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                               }
                             : effectiveSelected.source === 'user' && effectiveSelected.id !== MANAGED_LLAMACPP_PROVIDER_ID
                               ? {
                                   onRefresh: () => void handleRefreshModels(effectiveSelected),
-                                  refreshing: refreshingProviderId === effectiveSelected.id,
+                                  refreshing: refreshingProviderId === effectiveSelected.id || unconfirmedRemovalProviderId === effectiveSelected.id || aliasReadbackBlocked(effectiveSelected.id),
                                   refreshDisabled: refreshingProviderId !== null,
                                 }
                               : {})}
@@ -4409,7 +4488,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
         <AddSpeechModelsDialog key={`${dataOwnerId}:${ownerGeneration}:${speechProvider.provider.id}`}
           mode={speechProvider.mode}
           provider={speechProvider.provider} onClose={() => setSpeechProvider(null)}
-          onSaved={() => { setSpeechProvider(null); void refetch(); }} />
+          onSaved={() => { setSpeechProvider(null); void readbackSavedProvider(); }} />
         </Suspense>
       )}
       {wizard && (
@@ -4435,7 +4514,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
             // 只清理本次搜索挂起的草稿；刷新期间用户可以打开另一个编辑框。
             setDialog(current => current?.mode === 'create' && current === dialog ? null : current);
             if (providerId) selectProvider(providerId);
-            await refetch();
+            await readbackSavedProvider();
           }}
         />
         </Suspense>
@@ -4458,7 +4537,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
           onClose={() => setDialog(null)}
           onSaved={() => {
             setDialog(null);
-            refetch();
+            void readbackSavedProvider();
           }}
         />
         </Suspense>
@@ -4481,5 +4560,6 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
       )}
     </div>
     </SubscriptionPoolViewCache.Provider>
+    </ProviderConfigWrite.Provider>
   );
 }

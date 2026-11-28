@@ -20,6 +20,7 @@ import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataO
 import { resetProviderShareStoreForTests } from '@/features/provider-share/providerShareStore';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderShareCommand } from '../../shared/providerShare';
+import type { ConfirmOptions } from '@/components/ui/confirm-dialog-provider';
 import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 
 const {
@@ -36,7 +37,7 @@ const {
   requestAutoRefreshSpy: vi.fn(async () => ({ ok: true as const })),
   setProviderOrderSpy: vi.fn(async () => ({ ok: true as const })),
   refetchProvidersSpy: vi.fn(),
-  confirmSpy: vi.fn(async () => false),
+  confirmSpy: vi.fn<(options: ConfirmOptions) => Promise<boolean>>(async () => false),
   authState: { dataOwnerId: 'owner-1' as string | null },
   providerSnapshotState: {
     dataOwnerId: 'owner-1' as string | null,
@@ -50,20 +51,16 @@ const {
     /** The run location the user chose for Anthropic on this computer's provider page. */
     anthropicRunLocation: undefined as string | undefined,
     loading: false,
-    error: null as { reason: 'storage-quota' } | null,
+    error: null as { reason: 'storage-quota' | 'catalog-unavailable' } | null,
   },
   wizardSpy: vi.fn(),
 }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: { count?: number }) =>
-      key === 'settings.providers.models.manage.selected' || key === 'settings.providers.models.modelCount'
-        ? `${key}:${options?.count}`
-        : key,
-    i18n: { language: 'zh-CN' },
-  }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string, options?: { count?: number }) =>
+    key === 'settings.providers.models.manage.selected' || key === 'settings.providers.models.modelCount' ? `${key}:${options?.count}` : key;
+  return { useTranslation: () => ({ t, i18n: { language: 'zh-CN' } }) };
+});
 
 // 同账号的其他电脑及其供应商目录。缺省没有其他电脑，与测试环境里真实 hook 的结果相同。
 const ownDevicesState = vi.hoisted(() => ({
@@ -227,17 +224,22 @@ vi.mock('@/lib/providerSubtitle', () => ({
 vi.mock('@/state/modelVisibilityPrefs', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/state/modelVisibilityPrefs')>(),
   isModelEnabled: () => true,
+  isModelVisibilityCustomized: () => false,
   resetModelVisibilities: vi.fn(async () => true),
   setModelVisibilities: vi.fn(),
   setModelVisibility: vi.fn(),
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
-  ProviderConnectionDialog: () => null,
-}));
+const connectionDialogFixture = vi.hoisted(() => ({ real: false }));
+vi.mock('@/components/settings/ProviderConnectionDialog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/settings/ProviderConnectionDialog')>();
+  return { ProviderConnectionDialog: (props: React.ComponentProps<typeof actual.ProviderConnectionDialog>) =>
+    connectionDialogFixture.real ? React.createElement(actual.ProviderConnectionDialog, props) : null };
+});
 
-vi.mock('@/components/settings/AddProviderWizard', () => ({
+vi.mock('@/components/settings/AddProviderWizard', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/components/settings/AddProviderWizard')>(),
   AddProviderWizard: (props: { entry?: { kind: string; providerId: string } }) => {
     wizardSpy(props.entry);
     return React.createElement('div', { 'data-testid': 'wizard-stub' });
@@ -255,6 +257,7 @@ type ScanResult = { detections: unknown[] };
 let scanResult: ScanResult;
 
 beforeEach(() => {
+  connectionDialogFixture.real = false;
   localStorage.clear();
   setDataOwnerGeneration('owner-1');
   authState.dataOwnerId = 'owner-1';
@@ -273,6 +276,8 @@ beforeEach(() => {
   ownDevicesState.catalogs = new Map();
   scanResult = { detections: [] };
   confirmSpy.mockReset().mockResolvedValue(false);
+  // A successful catalog read returns true; undefined is not a publication.
+  refetchProvidersSpy.mockReset().mockResolvedValue(true);
   vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     providerGroup: {
@@ -294,6 +299,10 @@ beforeEach(() => {
       requestProviderModelsAutoRefresh: requestAutoRefreshSpy,
       setProviderOrder: setProviderOrderSpy,
       onProviderOAuthProgress: vi.fn(() => () => {}),
+      getModelPriceOverride: vi.fn(async (target: Parameters<typeof window.electronAPI.maker.getModelPriceOverride>[0]) => ({
+        target, editable: true, effective: null, reference: null, override: null,
+        conflict: false, allowedCurrencies: ['USD', 'CNY'], registryUpdatedAt: null,
+      })),
     },
   };
 });
@@ -304,6 +313,366 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // #6601 PRRT_kwDOTgdRUs66eURW, unit/component: real rename input and import
+  // review. Main's in-place import preserves config (providerHandlers), so that
+  // case checks admission, not hypothetical route/model replacement. Prior
+  // dialog cases missed mutation admission and a late old-owner completion.
+  it.each(['rename', 'import', 'owner-changed', 'disconnect', 'oauth-disconnect', 'oauth-login', 'oauth-cancel'] as const)('locks aliases through the %s mutation and superseded readback', async source => {
+    const scrollIntoView = HTMLElement.prototype.scrollIntoView;
+    // jsdom has no scrolling; the real Select still handles focus and selection.
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    let stored: CustomProviderConfig = { id: 'edit-existing', name: 'Old provider', runtimes: {
+      codex: { baseUrl: 'https://old.example.invalid/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'private', name: 'Private', nameExplicit: true }] },
+    } };
+    if (source.endsWith('disconnect') || source.startsWith('oauth-')) {
+      stored.runtimes.codex!.models[0]!.discoveredSource = { kind: 'magpie', providerId: 'Old account' };
+      if (source.startsWith('oauth-')) stored.auth = { method: 'oauth', oauth: {
+        clientId: 'test-client', scopes: '', tokenUrl: 'https://old.example.invalid/token',
+        authorizeUrl: 'https://old.example.invalid/authorize',
+      } };
+    }
+    providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: !['oauth-login', 'oauth-cancel'].includes(source) };
+    providerSnapshotState.order = [stored.id];
+    let finishMutation!: () => void;
+    const mutation = new Promise<void>(resolve => { finishMutation = resolve; });
+    let finishReadback!: () => void;
+    const readback = new Promise<void>(resolve => { finishReadback = resolve; });
+    const persist = vi.fn(async (config: CustomProviderConfig) => { stored = structuredClone(config); return { ok: true as const }; });
+    const rename = vi.fn(async ({ name }: { name?: string }) => { await mutation; stored.name = name!; });
+    const disconnect = vi.fn(async () => {
+      await mutation;
+      // Actual Main disconnect invalidates this metadata; the key/token stays Main-only.
+      delete stored.runtimes.codex!.models[0]!.discoveredSource;
+      return { ok: true as const };
+    });
+    const login = vi.fn(async () => {
+      await mutation;
+      if (source === 'oauth-cancel') return { ok: false as const, reason: 'login_cancelled' as const };
+      delete stored.runtimes.codex!.models[0]!.discoveredSource;
+      return { ok: true as const };
+    });
+    const confirmImport = vi.fn(async (_id: string, target?: string) => {
+      await mutation;
+      expect(target).toBe(stored.id);
+      return { ok: true as const, providerId: stored.id, authMethod: 'apiKey' as const };
+    });
+    Object.assign(window.electronAPI.maker, {
+      updateCustomProvider: persist, setProviderPresentation: rename,
+      disconnectCustomProvider: disconnect, providerOAuthLogout: disconnect,
+      providerOAuthLogin: login, providerOAuthCancel: vi.fn(async () => undefined),
+      previewProviderImport: vi.fn(async (_id: string, target?: string) => ({
+        importId: 'draft-existing', kind: 'custom', name: 'Import', authMethod: 'apiKey',
+        action: target ? 'update' : 'create', providerId: target || 'new', runtimes: [],
+        updateTargets: [{ id: stored.id, name: 'Old provider' }],
+      })),
+      confirmProviderImport: confirmImport, cancelProviderImport: vi.fn(async () => ({ ok: true })),
+      getModelContextLimit: async () => ({ limit: null, isCustomized: false }),
+      getModelImageInputOverride: async () => ({ value: null, mixed: false }),
+    });
+    const actual = await vi.importActual<typeof import('@/lib/customProviders')>('@/lib/customProviders');
+    vi.mocked(updateCustomProvider).mockImplementation(actual.updateCustomProvider);
+    refetchProvidersSpy.mockImplementation(async () => { await readback; return false; });
+    const page = () => <MemoryRouter initialEntries={[source === 'import' ? '/?import=draft-existing' : '/']}><ProvidersSection /></MemoryRouter>;
+    const view = render(page());
+    try {
+      if (source === 'oauth-login' || source === 'oauth-cancel') {
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.button.authorize' }));
+        await waitFor(() => expect(login).toHaveBeenCalledOnce());
+      } else if (source.endsWith('disconnect')) {
+        confirmSpy.mockResolvedValue(true);
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.button.disconnect' }));
+        await waitFor(() => expect(disconnect).toHaveBeenCalledOnce());
+      } else if (source !== 'import') {
+        fireEvent.doubleClick(screen.getByRole('button', { name: /Old provider/ }));
+        fireEvent.change(await screen.findByRole('textbox', { name: 'settings.providers.wizard.nameLabel' }), { target: { value: 'New provider' } });
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+        await waitFor(() => expect(rename).toHaveBeenCalledOnce());
+      } else {
+        await screen.findByRole('button', { name: 'settings.providers.import.create' });
+        fireEvent.click(screen.getByRole('combobox', { name: 'settings.providers.import.destination' }));
+        fireEvent.click(await screen.findByRole('option', { name: /Old provider/ }));
+        fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.import.replaceKey' }));
+        await waitFor(() => expect(confirmImport).toHaveBeenCalledOnce());
+      }
+      if (source === 'rename' || source === 'owner-changed') {
+        expect((screen.getByRole('button', { name: 'settings.providers.custom.save' }) as HTMLButtonElement).disabled).toBe(true);
+        expect(persist).not.toHaveBeenCalled();
+      } else if (source !== 'import') {
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+        const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' });
+        fireEvent.change(input, { target: { value: 'Work alias' } });
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }));
+        expect(persist).not.toHaveBeenCalled();
+      }
+      if (source === 'owner-changed') setDataOwnerGeneration('owner-2');
+      await act(async () => { finishMutation(); });
+      if (source === 'owner-changed') {
+        expect(refetchProvidersSpy).not.toHaveBeenCalled();
+        expect(persist).not.toHaveBeenCalled();
+        return;
+      }
+      if (source === 'oauth-cancel') {
+        expect(refetchProvidersSpy).not.toHaveBeenCalled();
+        expect(toast.error).not.toHaveBeenCalled();
+        expect((screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement).disabled).toBe(false);
+        return;
+      }
+      await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledOnce());
+      const committed = structuredClone(stored);
+      if (source === 'oauth-login') {
+        expect(screen.queryByRole('button', { name: 'settings.providers.button.cancel' })).toBeNull();
+        expect(window.electronAPI.maker.providerOAuthCancel).not.toHaveBeenCalled();
+      }
+      expect(committed.name).toBe(source === 'rename' ? 'New provider' : 'Old provider');
+      if (source.endsWith('disconnect') || source === 'oauth-login') expect(committed.runtimes.codex!.models[0]).not.toHaveProperty('discoveredSource');
+      if (source === 'import' || source === 'rename') fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      fireEvent.click(save);
+      expect(persist).not.toHaveBeenCalled();
+      await act(async () => { finishReadback(); });
+      expect(save.disabled).toBe(true);
+      expect(input.value).toBe('Work alias');
+      providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+      view.rerender(page());
+      await waitFor(() => expect(save.disabled).toBe(false));
+      refetchProvidersSpy.mockResolvedValue(true);
+      await act(async () => { fireEvent.click(save); });
+      expect(persist).toHaveBeenCalledOnce();
+      committed.runtimes.codex!.models[0]!.name = 'Work alias';
+      expect(stored).toEqual(committed);
+    } finally {
+      finishMutation(); finishReadback();
+      HTMLElement.prototype.scrollIntoView = scrollIntoView;
+      vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset();
+    }
+  });
+  // #6601 PRRT_kwDOTgdRUs66eH66, component/unit: real page and both real
+  // save dialogs, then open the alias drawer while catalog readback is pending.
+  // Prior refresh/removal cases did not exercise these external onSaved paths.
+  it.each(['speech', 'connection'] as const)('keeps the %s dialog commit through an external alias readback', async source => {
+    let stored: CustomProviderConfig = { id: 'external-save', name: 'My MiniMax', runtimes: {
+      codex: { baseUrl: 'https://api.minimax.io/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'MiniMax-M3', name: 'Private chat', nameExplicit: true }] },
+    } };
+    providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+    providerSnapshotState.order = [stored.id];
+    connectionDialogFixture.real = true;
+    let finishReadback!: () => void;
+    const readback = new Promise<void>(resolve => { finishReadback = resolve; });
+    const persist = vi.fn<typeof window.electronAPI.maker.updateCustomProvider>(async (config, _keys, options) => {
+      stored = options?.appendSpeechModelsOnly
+        ? { ...stored, runtimes: { codex: { ...stored.runtimes.codex!,
+          models: [...stored.runtimes.codex!.models, ...config.runtimes.codex!.models],
+        } } } : structuredClone(config);
+      return { ok: true };
+    });
+    Object.assign(window.electronAPI.maker, {
+      updateCustomProvider: persist,
+      listProviderPresets: vi.fn(async () => ({ presets: [] })),
+      fetchProviderModels: vi.fn(async () => ({ ok: true, models: [] })),
+      getModelContextLimit: async () => ({ limit: null, isCustomized: false }),
+      getModelImageInputOverride: async () => ({ value: null, mixed: false }),
+    });
+    const actual = await vi.importActual<typeof import('@/lib/customProviders')>('@/lib/customProviders');
+    vi.mocked(updateCustomProvider).mockImplementation(actual.updateCustomProvider);
+    const page = () => <MemoryRouter><ProvidersSection /></MemoryRouter>;
+    const view = render(page());
+    refetchProvidersSpy.mockImplementation(async () => { await readback; return false; });
+    try {
+      if (source === 'speech') {
+        fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.manage.menu' }), { key: 'ArrowDown' });
+        fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.speechSetup.add' }));
+        const dialog = await screen.findByRole('dialog', { name: 'settings.providers.speechSetup.add' });
+        await waitFor(() => expect(within(dialog).queryByRole('status')).toBeNull());
+        fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.wizard.addManualModel' }));
+      } else {
+        fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+        fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.custom.editAria' }));
+        const baseUrl = await screen.findByRole('textbox', { name: 'settings.providers.custom.fields.baseUrl' });
+        fireEvent.change(baseUrl, { target: { value: 'https://api.minimax.io/custom/v1' } });
+        await act(async () => {});
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+      }
+      await waitFor(() => expect(persist).toHaveBeenCalledOnce());
+      await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledOnce());
+      const externalConfig = structuredClone(stored);
+      if (source === 'speech') expect(externalConfig.runtimes.codex!.models.length).toBeGreaterThan(1);
+      else expect(externalConfig.runtimes.codex!.baseUrl).toBe('https://api.minimax.io/custom/v1');
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      await act(async () => { fireEvent.click(save); });
+      expect(persist).toHaveBeenCalledOnce();
+      expect(save.disabled).toBe(true);
+      await act(async () => { finishReadback(); });
+      expect(save.disabled).toBe(true); // superseded read, without a catalog error
+      expect(input.value).toBe('Work alias');
+      providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+      view.rerender(page());
+      await waitFor(() => expect(save.disabled).toBe(false));
+      refetchProvidersSpy.mockResolvedValue(true);
+      await act(async () => { fireEvent.click(save); });
+      expect(persist).toHaveBeenCalledTimes(2);
+      Object.assign(externalConfig.runtimes.codex!.models.find(model => model.id === 'MiniMax-M3')!,
+        { name: 'Work alias', nameExplicit: true });
+      expect(stored).toEqual(externalConfig);
+    } finally {
+      finishReadback(); connectionDialogFixture.real = false;
+      vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset();
+    }
+  });
+  // #6601 review / #5090, unit: real ProvidersSection → list → drawer. Existing
+  // discovery tests only cover completed refreshes. One pending fetch/readback
+  // must block alias writes, keep the draft, then save against the refreshed config.
+  it.each(['success', 'failed', 'superseded', 'owner-changed'] as const)('keeps a name draft across a %s refresh readback', async (outcome) => {
+    // The successful read adds the same row under Pi, changing its primary
+    // engine without selecting another model. The old Codex-only input missed
+    // this draft-loss branch; reuse the existing unit case, no extra I/O/waits.
+    const initial = { id: 'refresh-rename', name: 'Relay', runtimes: {
+      codex: { baseUrl: 'https://relay.example.invalid/v1', models: [{ id: 'private', name: 'Private', extra: { keep: true } }] },
+      ...(outcome === 'success' ? { pi: { baseUrl: 'https://relay.example.invalid/v1', models: [] } } : {}),
+    } };
+    let stored: CustomProviderConfig = initial;
+    providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+    providerSnapshotState.order = [stored.id];
+    let finishFetch!: () => void;
+    let discoveryReady = false;
+    const discovery = { ok: true, models: [{ id: 'private', name: 'Discovered' }, { id: 'new', name: 'New' }] };
+    const fetchModels = vi.fn(() => discoveryReady ? Promise.resolve(discovery) : new Promise(resolve => {
+      finishFetch = () => { discoveryReady = true; resolve(discovery); };
+    }));
+    let finishReadback!: () => void;
+    const readback = new Promise<void>(resolve => { finishReadback = resolve; });
+    const persist = vi.fn(async (config: CustomProviderConfig) => {
+      stored = structuredClone(config);
+      if (outcome === 'owner-changed') setDataOwnerGeneration('owner-2');
+      return { ok: true as const };
+    });
+    Object.assign(window.electronAPI.maker, { fetchProviderModels: fetchModels, updateCustomProvider: persist, getModelContextLimit: async () => ({ limit: null, isCustomized: false }) });
+    const actual = await vi.importActual<typeof import('@/lib/customProviders')>('@/lib/customProviders');
+    vi.mocked(updateCustomProvider).mockImplementation(actual.updateCustomProvider);
+    const page = () => <MemoryRouter><ProvidersSection /></MemoryRouter>;
+    const view = render(page());
+    refetchProvidersSpy.mockImplementation(async () => {
+      await readback;
+      if (outcome === 'superseded') return false;
+      if (outcome === 'failed') {
+        providerSnapshotState.error = { reason: 'catalog-unavailable' };
+        view.rerender(page());
+        return false;
+      }
+      providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+      view.rerender(page());
+      return true;
+    });
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' }));
+      await waitFor(() => expect(fetchModels).toHaveBeenCalledOnce());
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work Alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      expect(save.disabled).toBe(true);
+      fireEvent.click(save);
+      expect(persist).not.toHaveBeenCalled();
+      await act(async () => { finishFetch(); });
+      if (outcome === 'owner-changed') {
+        expect(persist).toHaveBeenCalledOnce();
+        expect(refetchProvidersSpy).not.toHaveBeenCalled();
+        return;
+      }
+      await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledOnce());
+      expect(save.disabled).toBe(true);
+      expect(persist).toHaveBeenCalledOnce();
+      expect(fetchModels).toHaveBeenCalledTimes(Object.keys(initial.runtimes).length);
+      const refreshed = structuredClone(stored);
+      await act(async () => { finishReadback(); });
+      if (outcome !== 'success') {
+        expect(save.disabled).toBe(true);
+        fireEvent.click(save);
+        expect(persist).toHaveBeenCalledOnce();
+        expect(input.value).toBe('Work Alias');
+        refetchProvidersSpy.mockImplementation(async () => {
+          providerSnapshotState.error = null;
+          providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+          view.rerender(page());
+          return true;
+        });
+        if (outcome === 'failed') {
+          await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' })); });
+        } else {
+          providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+          view.rerender(page());
+        }
+      }
+      expect(input.value).toBe('Work Alias');
+      await waitFor(() => expect(save.disabled).toBe(false));
+      fireEvent.click(save);
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(2));
+      const expected = structuredClone(refreshed);
+      for (const runtime of Object.values(expected.runtimes)) {
+        for (const model of runtime?.models ?? []) if (model.id === 'private') {
+          Object.assign(model, { name: 'Work Alias', nameExplicit: true });
+        }
+      }
+      expect(stored).toEqual(expected);
+      if (outcome === 'success') expect(stored.runtimes.pi!.models.find(model => model.id === 'private')).toMatchObject({ name: 'Work Alias', nameExplicit: true });
+      expect(stored.runtimes.codex!.models.map(model => model.id).sort()).toEqual(['new', 'private']);
+    } finally { finishReadback(); vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset(); }
+  });
+
+  // #6601 inverse-order review: unit, real provider -> list -> drawer. The
+  // name-save-first tests cannot expose a slow footer closing a later rename.
+  // One deferred admission IPC distinguishes success (close) from failure
+  // (retain the draft and permit retry), with no network or timed sleeps.
+  it.each(['success', 'failed'] as const)('serializes a %s footer request before a name save', async outcome => {
+    const config = { id: 'footer-rename', name: 'Relay', runtimes: { codex: {
+      baseUrl: 'https://relay.example.invalid/v1', models: [{ id: 'private', name: 'Private' }],
+    } } };
+    providerSnapshotState.customOverride = { ...buildUserProvider(config), connected: true };
+    providerSnapshotState.order = [config.id];
+    refetchProvidersSpy.mockResolvedValue(true);
+    let finish: (() => void) | undefined;
+    const toggle = vi.fn<typeof window.electronAPI.maker.setModelDisable>(() => new Promise<{ ok: true }>((resolve, reject) => {
+      finish = () => outcome === 'success' ? resolve({ ok: true }) : reject(new Error('admission failed'));
+    }));
+    window.electronAPI.maker.setModelDisable = toggle;
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work Alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      expect(save.disabled).toBe(false);
+      // A queued name click must also be blocked before React renders the lock.
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.disableModel' }));
+        fireEvent.click(save);
+      });
+      expect(toggle).toHaveBeenCalledOnce();
+      expect(updateCustomProvider).not.toHaveBeenCalled();
+      expect(input.disabled).toBe(true);
+      expect(save.disabled).toBe(true);
+      await act(async () => { finish!(); });
+      if (outcome === 'success') {
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+        expect(updateCustomProvider).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() => expect(save.disabled).toBe(false));
+        expect(input.value).toBe('Work Alias');
+        fireEvent.click(save);
+        await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());
+        expect(vi.mocked(updateCustomProvider).mock.calls[0]![0]).toMatchObject({ runtimes: { codex: {
+          models: [{ id: 'private', name: 'Work Alias', nameExplicit: true }],
+        } } });
+      }
+    } finally { finish?.(); }
+  });
+
   // Unit: the real settings page and received store must keep the selected
   // share's retry reachable after one unavailable snapshot, then retire it on removal.
   it('offers a retry for the selected received share after its list fails', async () => {
@@ -573,6 +942,102 @@ describe('ProvidersSection — 双栏管理', () => {
   const answerRemoval = (removed: { agent: 'codex' | 'pi'; modelId: string }[], gone: string[]) =>
     vi.mocked(updateCustomProvider).mockImplementation(async (_config, _keys, options) =>
       options?.removeWithdrawnModels ? { ok: true, withdrawnRemoved: removed, withdrawnGoneIds: gone } : { ok: true });
+
+  // #6601 PRRT_kwDOTgdRUs66cozt: unit, real page -> withdrawal review ->
+  // still-open drawer. Existing refresh/removal cases never rename through a
+  // delayed removal readback. A stale full-config alias save must not resurrect
+  // a confirmed removal, including a failed or superseded catalog read.
+  it.each(['success', 'failed', 'superseded', 'owner-changed'] as const)('preserves confirmed removals across a %s alias readback', async outcome => {
+    let stored = withdrawnConfig();
+    providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+    providerSnapshotState.order = [stored.id];
+    let finishRemoval!: () => void;
+    const removal = new Promise<void>(resolve => { finishRemoval = resolve; });
+    let finishReadback!: () => void;
+    const readback = new Promise<void>(resolve => { finishReadback = resolve; });
+    const persist = vi.fn<typeof window.electronAPI.maker.updateCustomProvider>(async (config, _keys, options) => {
+      if (options?.removeWithdrawnModels) {
+        await removal;
+        // Main's committed response; normal saves below replace the full config.
+        stored = { ...stored, runtimes: { codex: { ...stored.runtimes.codex!,
+          models: stored.runtimes.codex!.models.filter(model => model.id !== 'old-a'),
+        } } };
+        return { ok: true, withdrawnRemoved: [{ agent: 'codex', modelId: 'old-a' }], withdrawnGoneIds: ['old-a'] };
+      }
+      stored = structuredClone(config);
+      return { ok: true };
+    });
+    Object.assign(window.electronAPI.maker, {
+      updateCustomProvider: persist,
+      fetchProviderModels: vi.fn(async () => ({ ok: true, models: current, complete: true })),
+      getModelContextLimit: async () => ({ limit: null, isCustomized: false }),
+      getModelImageInputOverride: async () => ({ value: null, mixed: false }),
+      setModelDisable: vi.fn(async () => ({ ok: true })),
+    });
+    const actual = await vi.importActual<typeof import('@/lib/customProviders')>('@/lib/customProviders');
+    vi.mocked(updateCustomProvider).mockImplementation(actual.updateCustomProvider);
+    const page = () => <MemoryRouter><ProvidersSection /></MemoryRouter>;
+    const view = render(page());
+    const publish = () => {
+      providerSnapshotState.error = null;
+      providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+      view.rerender(page());
+      return true;
+    };
+    refetchProvidersSpy.mockImplementation(async () => publish());
+    try {
+      await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+      const row = screen.getByText('keep-1').parentElement!;
+      fireEvent.click(within(row).getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work Alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      await act(async () => { vi.mocked(toast.info).mock.lastCall![1]!.action!.onClick(); });
+      refetchProvidersSpy.mockImplementation(async () => {
+        await readback;
+        if (outcome === 'success') return publish();
+        if (outcome === 'failed') providerSnapshotState.error = { reason: 'catalog-unavailable' };
+        view.rerender(page());
+        return false;
+      });
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'settings.providers.models.withdrawn.confirm' }));
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(2));
+      await act(async () => { finishRemoval(); });
+      await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledTimes(2));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      await act(async () => { fireEvent.click(save); });
+      expect(persist).toHaveBeenCalledTimes(2);
+      expect(save.disabled).toBe(true);
+      expect(stored.runtimes.codex!.models.some(model => model.id === 'old-a')).toBe(false);
+      if (outcome === 'owner-changed') {
+        setDataOwnerGeneration('owner-2');
+        await act(async () => { finishReadback(); });
+        expect(resetModelVisibilities).not.toHaveBeenCalled();
+        expect(window.electronAPI.maker.setModelDisable).not.toHaveBeenCalled();
+        return;
+      }
+      await act(async () => { finishReadback(); });
+      if (outcome !== 'success') {
+        await act(async () => { fireEvent.click(save); });
+        expect(persist).toHaveBeenCalledTimes(2);
+        expect(save.disabled).toBe(true);
+        // A later successful shared catalog publication, without another removal.
+        await act(async () => { publish(); });
+      }
+      expect(input.value).toBe('Work Alias');
+      await waitFor(() => expect(save.disabled).toBe(false));
+      const removedConfig = structuredClone(stored);
+      refetchProvidersSpy.mockImplementation(async () => publish());
+      await act(async () => { fireEvent.click(save); });
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(3));
+      removedConfig.runtimes.codex!.models.find(model => model.id === 'keep-1')!.name = 'Work Alias';
+      removedConfig.runtimes.codex!.models.find(model => model.id === 'keep-1')!.nameExplicit = true;
+      expect(stored).toEqual(removedConfig);
+    } finally {
+      finishRemoval(); finishReadback();
+      vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset();
+    }
+  });
   it.each([
     ['incomplete catalog', { ok: true, models: current, complete: false }],
     ['catalog without completeness', { ok: true, models: current }],
@@ -1047,14 +1512,25 @@ describe('ProvidersSection — 双栏管理', () => {
       ok: false, code: 'AUTH_INVALID' as const, glmFlashProbe: access,
     }));
     vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
+    let releaseReadback!: () => void;
+    const readback = new Promise<void>(resolve => { releaseReadback = resolve; });
+    refetchProvidersSpy.mockImplementation(async () => { await readback; return false; });
     render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
-    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    const refresh = await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' });
+    await act(async () => { fireEvent.click(refresh); });
     expect(toast.error).toHaveBeenCalledWith('providerError.AUTH_INVALID');
     expect(toast.success).not.toHaveBeenCalled();
     if (access === 'unknown') {
       expect(updateCustomProvider).not.toHaveBeenCalled();
     } else {
       expect(updateCustomProvider).toHaveBeenCalledOnce();
+      expect(refetchProvidersSpy).toHaveBeenCalledOnce();
+      expect(refresh.isConnected).toBe(true);
+      expect((refresh as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => { releaseReadback(); });
+      fireEvent.click(screen.getAllByRole('button', { name: 'settings.providers.models.advanced.openAria' })[0]);
+      fireEvent.change(screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }), { target: { value: 'Work alias' } });
+      expect((screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement).disabled).toBe(true);
       const models = vi.mocked(updateCustomProvider).mock.calls[0][0].runtimes.codex!.models;
       expect(models).toContainEqual(expect.objectContaining(chat));
       const flash = models.find(m => m.id === 'glm-realtime-flash');
