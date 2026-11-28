@@ -7448,175 +7448,174 @@ function CCAgentSessionContent({
                 也复用这一行 inline 显示,替换原 Monitor+basename chip。完成后 store
                 自动 clear,UI 回到正常显示。设计参考用户反馈"把这部分的体验逻辑放到
                 chatinput 底部 显示 work dir 的地方"——不再在 chat stream 插 SystemCard。 */}
-              {!botChatIdentity ? (
-                <div
-                  className={cn(
-                    'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
-                    !creationPreview && !session?.workingDir && !worktreeCreation && !hasPluginStatusbar && 'invisible',
-                  )}
-                >
-                  {/* Left: workingDir — 点击在系统文件管理器中打开;
-                  click 区域宽度与文本一致(不拉伸到整行) */}
-                  {creationPreview && !creationPreview.editAfterFailure ? (
-                    <span role="status" className="inline-flex items-center gap-1.5 text-12 text-muted-foreground">
-                      <Spinner size={12} />{localCreationPreview ? t('ccAgent.layout.worktreeCreating') : t('goal.newGoalDialog.starting')}
+              <div
+                className={cn(
+                  'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
+                  !botChatIdentity && !creationPreview && !session?.workingDir && !worktreeCreation && !hasPluginStatusbar && 'invisible',
+                  botChatIdentity && 'justify-end',
+                )}
+              >
+                {/* Left: workingDir — 点击在系统文件管理器中打开;
+                click 区域宽度与文本一致(不拉伸到整行) */}
+                {botChatIdentity ? null : creationPreview && !creationPreview.editAfterFailure ? (
+                  <span role="status" className="inline-flex items-center gap-1.5 text-12 text-muted-foreground">
+                    <Spinner size={12} />{localCreationPreview ? t('ccAgent.layout.worktreeCreating') : t('goal.newGoalDialog.starting')}
+                  </span>
+                ) : worktreeCreation?.status === 'creating' ? (
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <Spinner size={12} className="text-[var(--workingdir-icon)]" />
+                    <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
+                      {t('ccAgent.layout.worktreeCreating', '正在创建 worktree')}{' '}
+                      <code className="font-mono text-11 text-[var(--text-tertiary)]">
+                        {worktreeCreation.name}
+                      </code>
+                      …
                     </span>
-                  ) : worktreeCreation?.status === 'creating' ? (
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <Spinner size={12} className="text-[var(--workingdir-icon)]" />
-                      <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
-                        {t('ccAgent.layout.worktreeCreating', '正在创建 worktree')}{' '}
-                        <code className="font-mono text-11 text-[var(--text-tertiary)]">
-                          {worktreeCreation.name}
-                        </code>
-                        …
-                      </span>
-                    </div>
-                  ) : worktreeCreation?.status === 'failed' ? (
-                    <Tip text={worktreeCreation.error} mono side="top">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <AlertCircle
-                          size={12}
-                          className="shrink-0 text-[var(--error-fg)]"
-                        />
-                        <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--error-fg)]">
-                          {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
-                          {' — '}
-                          {worktreeCreation.error}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (sessionId) worktreeCreationStore.clear(sessionId);
-                          }}
-                          className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/10"
-                          aria-label={t('common.dismiss', 'Dismiss')}
-                        >
-                          <X size={10} className="text-[color-mix(in_srgb,var(--error-fg)_70%,transparent)]" />
-                        </button>
-                      </div>
-                    </Tip>
-                  ) : hasWorkdirMenu && sessionId && composerDir && !isRemoteWorktreeSession && !remoteDeviceId ? (
-                    <PluginUiWorkdirButton key={JSON.stringify([sessionId, composerDir])}
-                      sessionId={sessionId} path={composerDir} onOpenDirectory={handleOpenWorkingDir}>
-                      {workingDirChipContent}
-                    </PluginUiWorkdirButton>
-                  ) : (
-                    <WorkingDirectoryTip
-                      path={composerDir}
-                      deviceId={remoteDeviceId ?? session?.deviceLinkDeviceId}
-                      deviceName={session?.deviceLinkDeviceName}
-                      remoteHostId={session?.remoteHostId}
-                    >
-                      {isRemoteWorktreeSession ? (
-                        <div className="flex min-w-0 items-center gap-1.5">
-                          {workingDirChipContent}
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left transition-opacity active:opacity-60"
-                          onClick={handleOpenWorkingDir}
-                          aria-label={t('ccAgent.layout.openWorkingDirAria')}
-                        >
-                          {workingDirChipContent}
-                        </button>
-                      )}
-                    </WorkingDirectoryTip>
-                  )}
-
-                  {hasPluginStatusbar && (
-                    <div className="min-w-0 flex-1 overflow-x-auto">
-                      <div className="w-max">
-                        <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Right: quota segments may wrap before the context indicator. */}
-                  <div className="flex min-w-0 max-w-full items-center gap-3">
-                    {session?.usedProjectContext && (
-                      <Tip text={t('ccAgent.layout.projectContextLoaded')} side="top">
-                        <Brain
-                          size={14}
-                          strokeWidth={1.75}
-                          className="shrink-0 -translate-y-px text-foreground/70"
-                          aria-label={t('ccAgent.layout.projectContextLoaded')}
-                        />
-                      </Tip>
-                    )}
-                    {pluginUsageKey && viewVisible && !session?.remoteHostId && !isSharedTaskPeer(remoteDeviceId ?? '')
-                      && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
-                      <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey])}
-                        engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
-                        modelId={pluginEngineSwitchIntent?.model ?? session?.model ?? null}
-                        modelName={pluginEngineModelName(usageEngine, pluginEngineSwitchIntent?.model ?? session?.model ?? '') ?? null}
-                        running={agentStatus.isRunning} {...(sessionId ? { sessionId } : {})} />
-                    )}
-                    {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (
-                      <TodaySpendChip
-                        vendorKey={normalizeDbAgentKind(displayAgentKind)}
-                        modelId={agentSwitchIntent?.model ?? session?.model ?? null}
-                        providerId={usageChipProviderId}
-                        sessionId={sessionId}
-                        sessionInitialMoney={session?.totalMoney ?? null}
-                        sessionInitialCostUsd={session?.totalCostUsd ?? null}
-                        sessionInitialUsdApproximate={session?.totalCostUsdIsApproximate}
-                        sessionInitialTokens={session?.totalTokenUsage ?? null}
-                        remoteHostId={session?.remoteHostId ?? null}
-                        deviceLinkDeviceId={remoteDeviceId ?? null}
-                        usageAccount={usageAccount}
-                      />
-                    )}
-                    <ContextCapacityRing
-                      visible={viewVisible}
-                      reportedOnly={pluginEngineTask}
-                      isRunning={agentStatus.isRunning}
-                      sessionId={sessionId}
-                      providerId={agentSwitchIntent ? agentSwitchIntent.providerId : session?.providerId}
-                      providers={{ providers }}
-                      disabled={readOnly || !session}
-                      contextTokens={agentStatus.contextTokens}
-                      model={agentSwitchIntent?.model ?? session?.model ?? ''}
-                      vendorKey={normalizeDbAgentKind(displayAgentKind)}
-                      sdkContextWindow={agentStatus.contextWindow}
-                      // 插件引擎的上下文窗口只来自它上报的用量(sdkContextWindow)，不查内置目录。
-                      verifiedContextWindow={pluginEngineTask ? undefined : resolveSessionContextWindow(
-                        { providers },
-                        {
-                          agentKind: normalizeDbAgentKind(displayAgentKind),
-                          model: agentSwitchIntent?.model ?? session?.model,
-                          providerId: agentSwitchIntent
-                            ? agentSwitchIntent.providerId
-                            : session?.providerId,
-                        },
-                      )}
-                      deviceId={remoteDeviceId}
-                      onCompact={
-                        // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
-                        // 其余声明 manualCompact.supported(Pi / Codex)走 compact-session 通道;
-                        // SSH 远程会话
-                        // (remoteHostId)无 compact-session 路由 → 不开放(与 SessionContentHeader
-                        // 压缩菜单仅本地/device-link 一致);device-link 远程 pi 走隧道,照常开放。
-                        // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
-                        // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
-                        // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
-                        !readOnly &&
-                        compactChannel !== null &&
-                        !(compactChannel === 'compact-session' && !!session?.remoteHostId) &&
-                        session != null &&
-                        agentStatus.contextTokens > 0 &&
-                        !(compactChannel === 'compact-session' && agentStatus.isRunning)
-                          ? handleCompactRequest
-                          : undefined
-                      }
-                    />
                   </div>
+                ) : worktreeCreation?.status === 'failed' ? (
+                  <Tip text={worktreeCreation.error} mono side="top">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <AlertCircle
+                        size={12}
+                        className="shrink-0 text-[var(--error-fg)]"
+                      />
+                      <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--error-fg)]">
+                        {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
+                        {' — '}
+                        {worktreeCreation.error}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (sessionId) worktreeCreationStore.clear(sessionId);
+                        }}
+                        className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/10"
+                        aria-label={t('common.dismiss', 'Dismiss')}
+                      >
+                        <X size={10} className="text-[color-mix(in_srgb,var(--error-fg)_70%,transparent)]" />
+                      </button>
+                    </div>
+                  </Tip>
+                ) : hasWorkdirMenu && sessionId && composerDir && !isRemoteWorktreeSession && !remoteDeviceId ? (
+                  <PluginUiWorkdirButton key={JSON.stringify([sessionId, composerDir])}
+                    sessionId={sessionId} path={composerDir} onOpenDirectory={handleOpenWorkingDir}>
+                    {workingDirChipContent}
+                  </PluginUiWorkdirButton>
+                ) : (
+                  <WorkingDirectoryTip
+                    path={composerDir}
+                    deviceId={remoteDeviceId ?? session?.deviceLinkDeviceId}
+                    deviceName={session?.deviceLinkDeviceName}
+                    remoteHostId={session?.remoteHostId}
+                  >
+                    {isRemoteWorktreeSession ? (
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        {workingDirChipContent}
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left transition-opacity active:opacity-60"
+                        onClick={handleOpenWorkingDir}
+                        aria-label={t('ccAgent.layout.openWorkingDirAria')}
+                      >
+                        {workingDirChipContent}
+                      </button>
+                    )}
+                  </WorkingDirectoryTip>
+                )}
+
+                {hasPluginStatusbar && (
+                  <div className="min-w-0 flex-1 overflow-x-auto">
+                    <div className="w-max">
+                      <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Right: quota segments may wrap before the context indicator. */}
+                <div className="flex min-w-0 max-w-full items-center gap-3">
+                  {!botChatIdentity && session?.usedProjectContext && (
+                    <Tip text={t('ccAgent.layout.projectContextLoaded')} side="top">
+                      <Brain
+                        size={14}
+                        strokeWidth={1.75}
+                        className="shrink-0 -translate-y-px text-foreground/70"
+                        aria-label={t('ccAgent.layout.projectContextLoaded')}
+                      />
+                    </Tip>
+                  )}
+                  {!botChatIdentity && pluginUsageKey && viewVisible && !session?.remoteHostId && !isSharedTaskPeer(remoteDeviceId ?? '')
+                    && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
+                    <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey])}
+                      engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
+                      modelId={pluginEngineSwitchIntent?.model ?? session?.model ?? null}
+                      modelName={pluginEngineModelName(usageEngine, pluginEngineSwitchIntent?.model ?? session?.model ?? '') ?? null}
+                      running={agentStatus.isRunning} {...(sessionId ? { sessionId } : {})} />
+                  )}
+                  {!botChatIdentity && !pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (
+                    <TodaySpendChip
+                      vendorKey={normalizeDbAgentKind(displayAgentKind)}
+                      modelId={agentSwitchIntent?.model ?? session?.model ?? null}
+                      providerId={usageChipProviderId}
+                      sessionId={sessionId}
+                      sessionInitialMoney={session?.totalMoney ?? null}
+                      sessionInitialCostUsd={session?.totalCostUsd ?? null}
+                      sessionInitialUsdApproximate={session?.totalCostUsdIsApproximate}
+                      sessionInitialTokens={session?.totalTokenUsage ?? null}
+                      remoteHostId={session?.remoteHostId ?? null}
+                      deviceLinkDeviceId={remoteDeviceId ?? null}
+                      usageAccount={usageAccount}
+                    />
+                  )}
+                  <ContextCapacityRing
+                    showWindowBudget={!botChatIdentity}
+                    contextUsageKnown={!botChatIdentity || agentStatus.contextWindowFromRuntime === true || agentStatus.contextTokens > 0}
+                    visible={viewVisible}
+                    reportedOnly={pluginEngineTask}
+                    isRunning={agentStatus.isRunning}
+                    sessionId={sessionId}
+                    providerId={agentSwitchIntent ? agentSwitchIntent.providerId : session?.providerId}
+                    providers={{ providers }}
+                    disabled={readOnly || !session}
+                    contextTokens={agentStatus.contextTokens}
+                    model={agentSwitchIntent?.model ?? session?.model ?? ''}
+                    vendorKey={normalizeDbAgentKind(displayAgentKind)}
+                    sdkContextWindow={agentStatus.contextWindow}
+                    // 插件引擎的上下文窗口只来自它上报的用量(sdkContextWindow)，不查内置目录。
+                    verifiedContextWindow={pluginEngineTask ? undefined : resolveSessionContextWindow(
+                      { providers },
+                      {
+                        agentKind: normalizeDbAgentKind(displayAgentKind),
+                        model: agentSwitchIntent?.model ?? session?.model,
+                        providerId: agentSwitchIntent
+                          ? agentSwitchIntent.providerId
+                          : session?.providerId,
+                      },
+                    )}
+                    deviceId={remoteDeviceId}
+                    onCompact={
+                      // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
+                      // 其余声明 manualCompact.supported(Pi / Codex)走 compact-session 通道;
+                      // SSH 远程会话
+                      // (remoteHostId)无 compact-session 路由 → 不开放(与 SessionContentHeader
+                      // 压缩菜单仅本地/device-link 一致);device-link 远程 pi 走隧道,照常开放。
+                      // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
+                      // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
+                      // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
+                      !readOnly &&
+                      compactChannel !== null &&
+                      !(compactChannel === 'compact-session' && !!session?.remoteHostId) &&
+                      session != null &&
+                      agentStatus.contextTokens > 0 &&
+                      !(compactChannel === 'compact-session' && agentStatus.isRunning)
+                        ? handleCompactRequest
+                        : undefined
+                    }
+                  />
                 </div>
-              ) : (
-                <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
-              )}
+              </div>
             </div>
           </div>
         </div>
