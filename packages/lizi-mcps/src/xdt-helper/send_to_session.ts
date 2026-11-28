@@ -86,6 +86,7 @@ export type SendToSessionCallback = (params: {
     | "INVALID_ARGS"
     | "LEAD_NOT_SUPPORTED"
     | "WORKTREE_UNAVAILABLE"
+    | "TASK_ACTION_AUTHORIZATION_EXPIRED"
     | "HOST_NOT_READY"
   > & { recoverySessionId?: string }
 >;

@@ -164,7 +164,12 @@ import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGrou
 import { createSharedTaskTools, type SharedTaskCallerAccess } from './sharedTaskTools.js';
 import { createSharedTaskProgressReader } from './sharedTaskProgress.js';
 import { createSharedTaskDelivery } from './sharedTaskDelivery.js';
-import { assertTaskActionCurrent, captureTaskActionSyncGuard, taskActionRevocationCode } from '../maker-ipc/taskActionAuthorization.js';
+import {
+  assertTaskActionCurrent,
+  captureTaskActionSyncGuard,
+  TaskActionAuthorizationError,
+  taskActionRevocationCode,
+} from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   getSessionRowSnapshotStrict,
@@ -1396,7 +1401,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
           return result;
         } catch (err) {
-          return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+          const errorCode = err instanceof TaskActionAuthorizationError ? err.code : 'INTERNAL';
+          return { ok: false, errorCode, message: err instanceof Error ? err.message : String(err) };
         }
       },
       botMessaging: {

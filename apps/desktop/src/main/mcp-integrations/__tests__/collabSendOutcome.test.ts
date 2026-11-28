@@ -152,6 +152,7 @@ import {
   logCollabDispatchFailure,
   resolveCollabDispatchResult,
 } from '../../maker-ipc/collabSendOutcome.js';
+import { TaskActionAuthorizationError } from '../../maker-ipc/taskActionAuthorization.js';
 import { createDesktopMcpProviders } from '../mcp-providers.js';
 import * as sessionMeta from '../../localDb/ipc/sessions.js';
 import * as companionCloud from '../../companion-cloud/runtime.js';
@@ -380,6 +381,34 @@ describe('collab send outcome semantics', () => {
     mockState.invitationInput = null;
     mockState.invitationOwner = true;
     vi.clearAllMocks();
+  });
+
+  // #7720, unit: the service can reject after admission. Exercise the Desktop
+  // provider that translates that rejection into the local tool result.
+  it('preserves genuine authorization errors from local send_to_session', async () => {
+    const accepted = {
+      ok: true, targetSessionId: 'target', agentKind: 'codex', wakeKind: 'already-active',
+      targetTitle: null, targetLastUserSendAt: null,
+    };
+    const expired = new TaskActionAuthorizationError();
+    const lookalike = Object.assign(new Error(expired.message), { code: expired.code });
+    mockState.collabService = createCollabService({
+      sendToSession: vi.fn().mockResolvedValueOnce(accepted)
+        .mockRejectedValueOnce(expired).mockRejectedValueOnce(lookalike),
+    });
+    createDesktopMcpProviders({
+      botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => false, getPlugins: () => [] } as never, invokeRemote: vi.fn(),
+    });
+    const helper = mockState.capturedProvidersConfig!.xdtHelper as XdtHelperMcpDeps;
+    const request = { targetSessionId: 'target', dispatcherSessionId: 'source', message: 'hello' };
+    await expect(helper.sendToSession!(request)).resolves.toEqual(accepted);
+    await expect(helper.sendToSession!(request)).resolves.toEqual({
+      ok: false, errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED', message: expired.message,
+    });
+    await expect(helper.sendToSession!(request)).resolves.toEqual({
+      ok: false, errorCode: 'INTERNAL', message: lookalike.message,
+    });
   });
 
   // #12112, unit: a move requested in chat must surface the same skill and upgrade action as the settings UI.
