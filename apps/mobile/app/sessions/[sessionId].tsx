@@ -68,7 +68,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
-import { isDurableOutboxSettled, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { hasUncreatedHostSession, isDurableOutboxSettled, isPendingHostDialogueCreation, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError, isSharedTaskPeer, isScopedPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -1293,6 +1293,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // existing link/subscription path to establish reachability instead of
   // blocking both history and sync until a presence change happens to arrive.
   const currentSession = useRemoteSessionDetail(deviceId, sessionId);
+  const creationTask = useNewSessionCreationTask(sessionId);
+  const creationBlocksReads = currentSession?.pendingLocalCreation === true
+    || creationTask?.status === 'running' || creationTask?.status === 'create-failed';
   const sideChatPending = currentSession?.source === 'side-chat' && currentSession.pendingLocalCreation === true;
   const remoteHistoryAvailable = !sideChatPending && status === 'online' && getPresenceAvailability(deviceId) !== false;
   // Unknown presence while connecting is loading, not evidence of a lost computer.
@@ -1301,7 +1304,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : '');
   const sideChatBoundary = mobileSessionHistoryBoundary(currentSession);
   const unfilteredHistoryView = useRemoteHistoryView(deviceId, sessionId, maker,
-    () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
+    () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable && !creationBlocksReads);
   const historyView = useMemo(() => ({ ...unfilteredHistoryView,
     snapshot: historyAfter(unfilteredHistoryView.snapshot, sideChatBoundary)!,
   }), [unfilteredHistoryView.view, unfilteredHistoryView.snapshot, unfilteredHistoryView.cacheRestoring, sideChatBoundary]);
@@ -2820,7 +2823,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setPendingPlanViewerState('half');
     }
   }, [activePendingKind, activePendingRequestId, sessionOperationLayout.composerSlot]);
-  const creationTask = useNewSessionCreationTask(sessionId);
   // A failed chat is handing its composer to the editor. Running creation still
   // keeps the normal composer; stop further edits only during this handoff.
   const canUseComposer = sessionOperationLayout.canUseComposer && !sessionResourceCards.blocked && companionEntry.canCompose
@@ -4080,7 +4082,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   ]);
 
   useEffect(() => {
-    if (!deviceId || !sessionAgentSwitchSupported) {
+    if (creationBlocksReads || !deviceId || !sessionAgentSwitchSupported) {
       agentSwitchIntentLoadSeqRef.current += 1;
       return;
     }
@@ -4106,7 +4108,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return () => {
       cancelled = true;
     };
-  }, [connectionEpoch, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
+  }, [connectionEpoch, creationBlocksReads, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
 
   const syncSession = useCallback(async (syncRun: RemoteSyncRun) => {
     const snapshotStartedAt = Date.now();
@@ -4120,7 +4122,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 新建会话乐观管线在途(running / create-failed):被控端可能还没有这个会话,
     // getSession 会 NOT_FOUND 报错横幅。统一在这里挡掉全部 load 触发点;管线完成
     // (task 移除)后由下方 effect 触发一轮真正的同步。
-    if (shouldBlockSessionSync(sessionId)) {
+    if (shouldBlockSessionSync(sessionId, deviceId)) {
       if (!syncRun.isStale()) setLoading(false);
       return;
     }
@@ -4587,10 +4589,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     },
   });
+  const pendingHostCreationStatus = useMemo(() => {
+    const record = durableOutboxRecords.find((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && isPendingHostDialogueCreation(r));
+    if (!record) return null;
+    return record.state === 'failed' ? 'create-failed' : 'running';
+  }, [durableOutboxRecords, deviceId, sessionId]);
   const prevCreationStatusRef = useRef<string | null>(null);
-  useEffect(() => {
+  useEffect(function syncAfterCreationTransition() {
     const prev = prevCreationStatusRef.current;
-    const status = creationTask?.status ?? null;
+    const status = creationTask?.status ?? pendingHostCreationStatus;
     prevCreationStatusRef.current = status;
     if (status === prev) return;
     if (status === null) {
@@ -4609,6 +4616,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         }).catch((err) => {
           if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) setError(formatRemoteError(err));
         });
+        // Creation succeeded: refresh the open page while the outbox recovers the first input.
+        void load();
         return;
       }
       // 首条消息没发出,而创建期间用户可能已经发了后续消息(composer 全程可用)。
@@ -4649,7 +4658,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       dismissNewSessionCreation(sessionId);
       void load();
     }
-  }, [creationTask, deviceId, deviceName, load, navigation, router, sessionId, setComposerDraft]);
+  }, [creationTask, deviceId, deviceName, load, navigation, pendingHostCreationStatus, router, sessionId, setComposerDraft]);
 
   // 排队行里该显示「在途转圈」的 clientId:本页 enqueue 在途的条目,加上新建会话
   // 乐观管线仍在跑(create + 首条 enqueue 都还没确认)时的首条消息——它同样是
@@ -5774,7 +5783,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     && !isSharedTaskPeer(deviceId) && !['bot', 'review'].includes(currentSession.source ?? '')
     && !currentSession.pendingLocalCreation;
   const sideChatCount = useSideChatCount({ deviceId, sessionId, maker, owner: outboxOwner,
-    enabled: canUseSideChats && currentSession?.source !== 'side-chat' && remoteHistoryAvailable,
+    enabled: !creationBlocksReads && canUseSideChats && currentSession?.source !== 'side-chat' && remoteHistoryAvailable,
     refreshKey: `${connectionEpoch}:${sideChatsOpen}`,
   });
   const openSideChat = useCallback((row: RemoteSession) => {
@@ -6581,7 +6590,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ...outboxDisplayItem(item),
       ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
       historyConfirmation: record?.historyConfirmation,
-      canCancel: !record?.historyConfirmation && !(record?.creation && !record.prepared && !record.template),
+      canCancel: !record?.historyConfirmation && !(record && hasUncreatedHostSession(record)),
     };
   }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
 
@@ -9399,7 +9408,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // push 继续负责增量；打开菜单与动作结束时再读取权威状态。
   const goalStatus = useSessionGoalStatus(sessionId);
   useFocusEffect(useCallback(() => {
-    if (!appStateActive || !remoteHistoryAvailable || !deviceId || !sessionId || isSharedTaskPeer(deviceId)) return;
+    if (creationBlocksReads || !appStateActive || !remoteHistoryAvailable || !deviceId || !sessionId || isSharedTaskPeer(deviceId)) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -9415,7 +9424,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return () => {
       cancelled = true;
     };
-  }, [appStateActive, connectionEpoch, contextSheetOpen, contextSheetView, deviceId, maker, remoteHistoryAvailable, sessionId]));
+  }, [appStateActive, connectionEpoch, contextSheetOpen, contextSheetView, creationBlocksReads, deviceId, maker, remoteHistoryAvailable, sessionId]));
   // 暂停 / 继续 / 结束目标:先乐观切本地状态镜像(面板当帧反馈,不等往返),
   // RPC 后台;成功回读权威收敛(既有语义)。失败时报错并还原:优先回读权威状态,
   // 回读也失败(离线 / 超时,与 action 同因高概率连败)则还原到乐观前的快照——
