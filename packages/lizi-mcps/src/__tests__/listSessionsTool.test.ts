@@ -66,19 +66,25 @@ function historyWithSessions(): XdtHelperHistoryDeps {
 }
 
 describe("list_sessions agent_kind", () => {
-  it("passes the pi filter through registry validation to the host", async () => {
+  it("passes the pi and acp filters through registry validation to the host", async () => {
     const history = historyWithSessions();
     const registry = new XdtHelperToolRegistry();
     registerListSessionsTool(registry, { history });
 
     expect(registry.get("list_sessions")?.description).toContain(
-      "agent_kind: cc(Claude Code) | codex | pi",
+      "agent_kind: cc(Claude Code) | codex | pi | acp(插件引擎)",
     );
     const result = await registry.call("list_sessions", { agent_kind: "pi" });
 
     expect(parse(result)).toMatchObject({ ok: true });
     expect(history.listSessions).toHaveBeenCalledWith(
       expect.objectContaining({ agentKind: "pi" }),
+    );
+
+    const acpResult = await registry.call("list_sessions", { agent_kind: "acp" });
+    expect(parse(acpResult)).toMatchObject({ ok: true });
+    expect(history.listSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKind: "acp" }),
     );
   });
 });

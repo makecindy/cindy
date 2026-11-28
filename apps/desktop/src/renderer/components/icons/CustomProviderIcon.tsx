@@ -1,3 +1,4 @@
+import { isProviderConnectionImage } from '@cindy/model-providers/branding';
 import { useState, type ReactNode } from 'react';
 
 export function CustomProviderIcon({ svg, size, className, children }: {
@@ -9,7 +10,7 @@ export function CustomProviderIcon({ svg, size, className, children }: {
   if (typeof svg !== 'string' || !svg) return children;
   let src: string;
   try {
-    src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    src = isProviderConnectionImage(svg) ? svg : `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   } catch {
     return children;
   }

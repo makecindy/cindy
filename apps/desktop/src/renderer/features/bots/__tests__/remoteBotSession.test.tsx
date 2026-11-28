@@ -7,6 +7,7 @@ import type { BotChatBinding } from '../botChatPresentation';
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
   markRead: vi.fn(),
+  retryRoster: vi.fn(),
   pin: vi.fn(),
   merge: vi.fn(),
   view: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock('react-router-dom', () => ({
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../useRemoteBots', () => ({
   markRemoteBotRead: h.markRead,
+  retryRemoteBotRoster: h.retryRoster,
   useRemoteBots: () => !h.listed ? [] : [
     {
       id: 'writer',
@@ -77,6 +79,7 @@ import { CLOUD_HOME_GRACE_MS, RemoteBotSessionView } from '../RemoteBotSessionVi
 import { FIRST_CONNECTION_WINDOW_MS, startDeviceLinkFirstConnectionWatch, useDeviceLinkFirstConnectionPending } from '@/features/device-link/deviceLinkFirstConnection';
 beforeEach(() => {
   h.markRead.mockClear();
+  h.retryRoster.mockClear();
   h.navigate.mockReset();
   h.requestedSessionId = undefined;
   h.online = true;
@@ -514,6 +517,36 @@ it('shows preparation instead of offline recovery for an online home with a stal
   h.devices = [{ deviceId: 'home', online: false, remoteControlEnabled: true, controlEnabled: true }];
   rerender(<RemoteBotSessionView />);
   await screen.findByText('cloud-offline-view');
+});
+
+// #13372, unit tier: the directory stays online but the roster never settles.
+// The brief preparation checks above do not exercise timeout, retry or late recovery.
+it.each([true, false])('recovers from a roster timeout with a retained row: %s', async listed => {
+  h.listed = listed;
+  h.online = false;
+  h.devices = [{ deviceId: 'home', online: true, remoteControlEnabled: true, controlEnabled: true }];
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  vi.useFakeTimers();
+  try {
+    const view = render(<RemoteBotSessionView />);
+    act(() => { vi.advanceTimersByTime(29_999); });
+    expect(screen.getByText('bots.remote.preparing')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(screen.getByText('bots.sessionLoadFailedDescription')).toBeTruthy();
+    expect(h.cloudView).not.toHaveBeenCalled();
+    act(() => screen.getByRole('button', { name: 'bots.retry' }).click());
+    expect(h.retryRoster.mock.calls).toEqual([['home']]);
+    expect(screen.getByText('bots.remote.preparing')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(30_000); });
+    expect(screen.getByRole('button', { name: 'bots.retry' })).toBeTruthy();
+    h.listed = h.online = true;
+    await act(async () => view.rerender(<RemoteBotSessionView />));
+    expect(screen.getByText('remote-conversation')).toBeTruthy();
+    expect(h.view.mock.lastCall?.[0]).toMatchObject({ sessionIdProp: 'new-canonical', readOnly: false });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // Merge with #10758 (be8107dd42): inside the first-connection window, a directory that already

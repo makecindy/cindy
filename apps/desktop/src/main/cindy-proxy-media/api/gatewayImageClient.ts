@@ -378,5 +378,12 @@ function joinProxyUrl(baseUrl: string, endpointPath: string): string {
   if (!trimmed) {
     throw new Error('art: proxy endpoint path is required');
   }
-  return `${baseUrl}/${trimmed.replace(/^\/+/, '')}`;
+  const path = trimmed.replace(/^\/+/, '');
+  if (path.startsWith('v1/')) {
+    const base = URL.parse(baseUrl);
+    if (base?.pathname.endsWith('/v1') && !base.search && !base.hash) {
+      return `${baseUrl}/${path.slice('v1/'.length)}`;
+    }
+  }
+  return `${baseUrl}/${path}`;
 }

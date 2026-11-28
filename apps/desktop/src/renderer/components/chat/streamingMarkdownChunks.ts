@@ -42,49 +42,18 @@ function hasGlobalMarkdownDefinitions(markdown: string): boolean {
   return /^ {0,3}\[(?:\\[^\r\n]|[^\]\\\r\n])+\]:/m.test(markdown);
 }
 
-function hasMultipleHeadings(markdown: string): boolean {
-  const lines = markdown.split(/\r?\n/);
-  let headingCount = 0;
-  let fence: FenceState | null = null;
-
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    const fenceRun = readFenceRun(line);
-    if (fenceRun) {
-      if (!fence) fence = { marker: fenceRun.marker, length: fenceRun.length };
-      else if (
-        fenceRun.marker === fence.marker &&
-        fenceRun.length >= fence.length &&
-        fenceRun.rest.trim().length === 0
-      ) {
-        fence = null;
-      }
-      continue;
-    }
-    if (fence) continue;
-
-    const isAtx = /^ {0,3}#{1,6}(?:[\t ]+|$)/.test(line);
-    const isSetext =
-      line.trim().length > 0 &&
-      index + 1 < lines.length &&
-      /^ {0,3}(?:=+|-+)[\t ]*$/.test(lines[index + 1]);
-    if ((isAtx || isSetext) && ++headingCount > 1) return true;
-  }
-  return false;
-}
-
 function hasPotentialHtmlBlock(markdown: string): boolean {
   return /^ {0,3}<(?:!--|\?|!\[CDATA\[|![A-Za-z]|\/?[A-Za-z][A-Za-z0-9-]*(?:[\t />]|$))/m.test(
     markdown,
   );
 }
 
+/**
+ * 多个标题不再强制整篇解析：流式期间标题 id 不在分片内各自计算，而是渲染后按
+ * 文档顺序统一分配（streamingHeadingIds.ts），与整篇解析的去重结果一致。
+ */
 function needsWholeDocumentContext(markdown: string): boolean {
-  return (
-    hasGlobalMarkdownDefinitions(markdown) ||
-    hasMultipleHeadings(markdown) ||
-    hasPotentialHtmlBlock(markdown)
-  );
+  return hasGlobalMarkdownDefinitions(markdown) || hasPotentialHtmlBlock(markdown);
 }
 
 export const STREAMING_MARKDOWN_THROTTLE_BASE_MS = 100;
@@ -93,8 +62,8 @@ export const STREAMING_MARKDOWN_THROTTLE_MAX_MS = 400;
 /**
  * Choose a bounded stream update interval from the amount of Markdown work.
  *
- * Multi-heading documents intentionally stay one ReactMarkdown tree so heading
- * ids, reference definitions, and raw HTML keep their document-wide context.
+ * Documents with reference definitions or raw HTML stay one ReactMarkdown tree
+ * so they keep their document-wide context.
  * Increasing the interval for those expensive trees reduces repeated parse /
  * highlight work without changing the rendered source or chunk boundaries.
  * The caller still flushes the latest value when streaming ends.

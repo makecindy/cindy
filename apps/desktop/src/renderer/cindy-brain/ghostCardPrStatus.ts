@@ -20,8 +20,9 @@ import type { GhostCardTaskAutoArchiveState } from './ghostCardTaskArchive';
 import { appIconMarkup, preloadAppIconMarkup } from './ghostCardIcons';
 
 const SLOT_SELECTOR = 'div[data-ghost-pr-status]';
-const SLOT_ATTR_RE = / data-ghost-(?:pr-status|pr-open-only|task-archive)="([^"]+)"/;
+const SLOT_ATTR_RE = / data-ghost-(?:pr-status|pr-open-only|pr-merge-ready|task-archive)="([^"]+)"/;
 const OPEN_ONLY_SELECTOR = '[data-ghost-pr-open-only]';
+const MERGE_READY_SELECTOR = 'button[data-ghost-pr-merge-ready]';
 const TASK_ARCHIVE_SELECTOR = 'button[data-ghost-task-archive]';
 type Tone = PrStatusItemTone;
 type Label = (key: string, options?: Record<string, unknown>) => string;
@@ -69,23 +70,61 @@ export function prStatusItems(status: Extract<PrStatusResult, { ok: true }>, t: 
 
 /** 状态位被宿主内容替换前的原始子节点:之后查不到状态时据此恢复插件的兜底内容。 */
 const slotFallbacks = new WeakMap<HTMLElement, Node[]>();
-/** 被藏起来的 open-only 元素原本的内联 display,恢复时还原。 */
-const hiddenDisplays = new WeakMap<HTMLElement, { value: string; priority: string }>();
+/** 受宿主 PR 显隐控制的元素的原始内联 display(首次改写前记录,用于状态回退时恢复插件快照)。 */
+const initialDisplays = new WeakMap<HTMLElement, { value: string; priority: string }>();
+
+function captureInitialDisplay(el: HTMLElement): { value: string; priority: string } {
+  let saved = initialDisplays.get(el);
+  if (!saved) {
+    saved = { value: el.style.getPropertyValue('display'), priority: el.style.getPropertyPriority('display') };
+    initialDisplays.set(el, saved);
+  }
+  return saved;
+}
+
+function restoreInitialDisplay(el: HTMLElement): void {
+  const saved = initialDisplays.get(el);
+  if (!saved) return;
+  if (saved.value) el.style.setProperty('display', saved.value, saved.priority);
+  else el.style.removeProperty('display');
+}
 
 /** PR 已合并或关闭时藏起 open-only 部分;状态回到开着或查不到时还原。可反复调用。 */
-function applyOpenOnly(doc: Document, lookup: (key: string) => PrStatusResult | undefined): void {
+function applyOpenOnly(doc: Document, lookup: (key: string) => PrStatusResult | undefined): Set<HTMLElement> {
+  const hidden = new Set<HTMLElement>();
   for (const el of Array.from(doc.querySelectorAll<HTMLElement>(OPEN_ONLY_SELECTOR))) {
+    captureInitialDisplay(el);
     const key = prStatusSlotKey(el.getAttribute('data-ghost-pr-open-only') ?? '');
     const status = key ? lookup(key) : undefined;
     const ended = status?.ok === true && (status.status === 'merged' || status.status === 'closed');
-    const saved = hiddenDisplays.get(el);
-    if (ended && !saved) {
-      hiddenDisplays.set(el, { value: el.style.getPropertyValue('display'), priority: el.style.getPropertyPriority('display') });
+    if (ended) {
       el.style.setProperty('display', 'none', 'important');
-    } else if (!ended && saved) {
-      hiddenDisplays.delete(el);
-      if (saved.value) el.style.setProperty('display', saved.value, saved.priority);
-      else el.style.removeProperty('display');
+      hidden.add(el);
+    } else {
+      restoreInitialDisplay(el);
+    }
+  }
+  return hidden;
+}
+
+/**
+ * 合并就绪按钮(data-ghost-pr-merge-ready="owner/repo#123"):标题栏同源状态确认 open 且
+ * mergeState === 'CLEAN' 时露出,明确非 CLEAN 或已结束时隐藏;查不到状态或旧宿主缺 mergeState 时
+ * 恢复插件初始快照的 display。与 data-ghost-pr-open-only 共挂同一按钮时共享同一份初始快照,
+ * 且 open-only 已因结束隐藏的按钮不再被露出。
+ */
+function applyMergeReady(doc: Document, lookup: (key: string) => PrStatusResult | undefined, hiddenByOpenOnly: Set<HTMLElement>): void {
+  for (const el of Array.from(doc.querySelectorAll<HTMLElement>(MERGE_READY_SELECTOR))) {
+    captureInitialDisplay(el);
+    if (hiddenByOpenOnly.has(el)) continue;
+    const key = prStatusSlotKey(el.getAttribute('data-ghost-pr-merge-ready') ?? '');
+    const status = key ? lookup(key) : undefined;
+    if (status?.ok === true && status.status === 'open' && status.mergeState === 'CLEAN') {
+      el.style.setProperty('display', 'inline-flex', 'important');
+    } else if (status?.ok === true && (status.status !== 'open' || status.mergeState !== undefined)) {
+      el.style.setProperty('display', 'none', 'important');
+    } else {
+      restoreInitialDisplay(el);
     }
   }
 }
@@ -195,7 +234,8 @@ export function fillGhostCardPrStatus(
   taskEligible = false,
 ): boolean {
   fillPrHeaderTiles(doc, lookup);
-  applyOpenOnly(doc, lookup);
+  const hiddenByOpenOnly = applyOpenOnly(doc, lookup);
+  applyMergeReady(doc, lookup, hiddenByOpenOnly);
   const autoArchive = applyTaskArchive(doc, lookup, taskEligible, t);
   for (const slot of Array.from(doc.querySelectorAll<HTMLElement>(SLOT_SELECTOR))) {
     const key = prStatusSlotKey(slot.getAttribute('data-ghost-pr-status') ?? '');
