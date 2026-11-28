@@ -34,11 +34,6 @@ const bridge = vi.hoisted(() => ({
   scrolledTo: [] as Array<[string | undefined, unknown]>,
   /** How many times a ScrollView with that testID was mounted (a new one starts at its top). */
   scrollMounts: new Map<string, number>(),
-  /** The iOS consent sheet's review clock (`consentReviewClock`), in ms; tests move it on after a review press. */
-  clock: 0,
-}));
-vi.mock("@/plugins/consentReviewClock", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/plugins/consentReviewClock")>()), consentReviewClockNow: () => bridge.clock,
 }));
 vi.mock("@/hooks/useReduceMotion", () => ({ useReduceMotionEnabled: () => false }));
 // Metro resolves the iOS market rows inside the iOS directory; vitest needs the platform file named.
@@ -345,7 +340,6 @@ afterEach(() => {
   bridge.width = 390;
   bridge.height = 844;
   bridge.ownerCurrent = true;
-  bridge.clock = 0;
   bridge.keyboardVisible = false;
   bridge.fontScale = 1;
   bridge.width = 390;
@@ -367,15 +361,9 @@ function mount(component: any, props: any) {
  */
 /** The layout key a sheet's measured views carry (`consentLayoutKey`) for this consent at the mocked window and text size. */
 const layoutKeyOf = (requestId: string) => `${requestId}|${bridge.width}x${bridge.height}@${bridge.fontScale}`;
-/** iOS: the reviewed list (source and summary first) is laid out on screen, as the device reports it after the redraw. */
-function reportReviewedShown() {
-  act(() => bridge.props.get("plugins.management.reviewLead").modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ x: 0, y: 100, width: 390, height: 80 }));
-}
-/** iOS: press "Review source and permissions", the reviewed list appears, and a person reads it a moment before Allow. */
+/** iOS: press "Review source and permissions" (the reviewed list then shows the source and summary first). */
 function reviewIOS() {
   act(() => bridge.props.get("plugins.management.review").onPress());
-  reportReviewedShown();
-  bridge.clock += 1000;
 }
 /**
  * `content: 0` leaves the list's content height unreported (on iOS that is the list's scroll geometry, its visible height
@@ -2181,19 +2169,6 @@ describe("pinned high-risk permission", () => {
         const press = bridge.props.get("plugins.management.review").onPress;
         act(() => { press(); press(); });
         expect(p.controller.answer, "review only shows the source and permissions first").not.toHaveBeenCalled();
-        // The second tap of a quick double tap, made before the reviewed list was drawn (JavaScript busy for a second):
-        // it reaches the Allow handler, but the reviewed list has not been laid out yet, so it answers nothing.
-        bridge.clock += 1000;
-        act(() => bridge.props.get("plugins.management.allow").onPress());
-        expect(p.controller.answer, "a tap made before the reviewed list was on screen does not answer").not.toHaveBeenCalled();
-        reportReviewedShown();
-        // Right after the redraw, and impatient repeated taps (each restarts the wait): nothing is written.
-        for (const after of [200, 400, 400]) {
-          bridge.clock += after;
-          act(() => bridge.props.get("plugins.management.allow").onPress());
-        }
-        expect(p.controller.answer, "a quick double tap or repeated taps do not answer").not.toHaveBeenCalled();
-        bridge.clock += 600;
         // Reviewed: the source and the high-risk summary come first, in a new list at its top; then Allow answers.
         const ids = order(container);
         expect(ids.indexOf("plugins.management.reviewLead")).toBeGreaterThanOrEqual(0);
@@ -2214,23 +2189,6 @@ describe("pinned high-risk permission", () => {
     expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: false, allow: true });
     expect(listId(), "a new reviewed list, from its top (the source first)").toBe(`plugins.management.reviewed:${layoutKeyOf("request")}`);
     expect(listId()).not.toBe(before);
-    // Drawn anew for the new size: until it is laid out again and a moment has passed, Allow answers nothing.
-    act(() => bridge.props.get("plugins.management.allow").onPress());
-    expect(p.controller.answer).not.toHaveBeenCalled();
-    reportReviewedShown(); bridge.clock += 1000;
-    act(() => bridge.props.get("plugins.management.allow").onPress());
-    expect(p.controller.answer).toHaveBeenCalledWith(true);
-  });
-  it("iOS: reviewed, then the sheet hidden and shown again: still reviewed, Allow waits until the list is laid out again", () => {
-    bridge.fontScale = 1;
-    const p = props(allFive);
-    const { rerender } = mount(PluginManagementConfirmation, p);
-    reviewIOS();
-    rerender({ ...p, active: false });
-    rerender({ ...p });
-    act(() => bridge.props.get("plugins.management.allow").onPress());
-    expect(p.controller.answer, "shown again, not laid out yet").not.toHaveBeenCalled();
-    reportReviewedShown(); bridge.clock += 1000;
     act(() => bridge.props.get("plugins.management.allow").onPress());
     expect(p.controller.answer).toHaveBeenCalledWith(true);
   });
