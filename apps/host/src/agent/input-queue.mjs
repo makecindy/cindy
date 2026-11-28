@@ -1,6 +1,6 @@
 import { holdError, releaseFailure } from './profile-hold.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
-import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
 import { hostCoordinatorDeps } from './coordinator-deps.ts';
@@ -76,14 +76,16 @@ function requireSessionRefs(value) {
   return value;
 }
 
-function requireTrustedReferenceContexts(refs, value) {
+function requireTrustedReferenceContexts(refs, value, controllerDeviceId) {
   if (value == null) return undefined;
   if (!Array.isArray(value) || value.length > MAX_SESSION_REFERENCES || value.length !== (refs?.length ?? 0)) {
     throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference snapshot count is invalid');
   }
   let totalMessages = 0;
   let totalTokens = 0;
+  const alignedRefs = [];
   const sanitized = [];
+  const seen = new Set();
   for (let i = 0; i < value.length; i += 1) {
     const context = value[i];
     const ref = refs?.[i];
@@ -95,11 +97,16 @@ function requireTrustedReferenceContexts(refs, value) {
     ) {
       throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference snapshot is invalid');
     }
+    const legacyControllerLocalMatch =
+      context.source === 'local' &&
+      context.deviceId === undefined &&
+      typeof controllerDeviceId === 'string' &&
+      ref?.deviceId === controllerDeviceId;
     if (
       !ref ||
       ref.sessionId !== context.sessionId ||
       ref.messageClientId !== context.messageClientId ||
-      ref.deviceId !== context.deviceId ||
+      (!legacyControllerLocalMatch && ref.deviceId !== context.deviceId) ||
       (context.source !== 'local' && context.source !== 'device-link') ||
       (context.source === 'local' && context.deviceId !== undefined) ||
       (context.source === 'device-link' && typeof context.deviceId !== 'string') ||
@@ -125,18 +132,25 @@ function requireTrustedReferenceContexts(refs, value) {
       }
       totalTokens += estimateReferenceTokens(message.content);
     }
+    const normalizedRef = legacyControllerLocalMatch
+      ? { sessionId: ref.sessionId, ...(ref.messageClientId !== undefined ? { messageClientId: ref.messageClientId } : {}) }
+      : ref;
+    const key = `${normalizedRef.deviceId ?? ''} ${normalizedRef.sessionId} ${normalizedRef.messageClientId ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    alignedRefs.push(normalizedRef);
     sanitized.push(terminal !== undefined ? { ...context, terminal } : context);
   }
   const serializedTokens = estimateReferenceTokens(serializeSessionReferencePayload(sanitized));
   if (totalMessages > MAX_REFERENCE_MESSAGES || totalTokens > MAX_REFERENCE_TOKENS || serializedTokens > MAX_REFERENCE_TOKENS - 128) {
     throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference snapshot exceeds the shared budget');
   }
-  return sanitized;
+  return { refs: alignedRefs, contexts: sanitized };
 }
 
 /** Only composition fields cross the browser trust boundary. Host receipts,
  * scheduler origins, hook bypasses and remote-device identity never do. */
-function composeInput(item, stored, handoff) {
+function composeInput(item, stored, handoff, opts) {
   if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
   const text = typeof item.text === 'string' ? item.text : item.content;
   const hasFiles = Array.isArray(item.files) && item.files.length > 0;
@@ -189,13 +203,16 @@ function composeInput(item, stored, handoff) {
   // AsyncLocalStorage belongs to authenticated dispatch, never the wire item.
   const remote = isDeviceLinkInvoke();
   if (remote) {
-    const trustedContexts = requireTrustedReferenceContexts(refs, item.trustedSessionReferenceContexts);
+    const controllerDeviceId = getDeviceLinkInvokeContext()?.controllerDeviceId;
+    const validated = requireTrustedReferenceContexts(refs, item.trustedSessionReferenceContexts, controllerDeviceId);
     if ((refs?.length ?? 0) > 0) {
-      if (!trustedContexts) {
+      result.sessionReferencesRequireTrustedSnapshot = true;
+      if (validated) {
+        result.sessionRefs = validated.refs;
+        result.trustedSessionReferenceContexts = validated.contexts;
+      } else if (!opts?.allowMissingTrustedContexts) {
         throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session references were not resolved by the controller');
       }
-      result.sessionReferencesRequireTrustedSnapshot = true;
-      result.trustedSessionReferenceContexts = trustedContexts;
     }
   }
   if (remote && isMobileControllerInvoke()) result.fromMobileClient = true;
@@ -557,12 +574,12 @@ export function createInputQueue(deps) {
         preCheck?.();
         coordinator.setExecutionPaused(id, true);
         try {
-          const result = fn();
+          fn();
           await flushed(id);
-          return project(result);
         } finally {
           if (!state.persistenceError) unpause(id);
         }
+        return api.projection(id);
       });
     }
     async function stop(id, options = { keepQueue: true, pauseQueue: true }) {
@@ -804,16 +821,25 @@ export function createInputQueue(deps) {
       },
       retryLastError: id => command(id, () => { refuseWhileHeld(); return coordinator.retryLastError(id); }),
       clearError: id => command(id, () => coordinator.clearError(id)),
-      steer(id, item) {
+      steer(id, item, opts) {
         return command(id, async (state, admission) => {
           refuseWhileHeld();
-          const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
+          const removeFromQueue = Boolean(opts && typeof opts === 'object' && opts.removeFromQueue === true);
+          const allowMissingTrustedContexts = removeFromQueue &&
+            typeof item?.clientId === 'string' &&
+            coordinator.hasPendingQueueItem(id, item.clientId) &&
+            item.trustedSessionReferenceContexts == null;
+          const prepared = await prepareAttachments(
+            id,
+            composeInput(item, await deps.readSession(id), undefined, { allowMissingTrustedContexts }),
+            admission,
+          );
           const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
           const previous = prepared.ownerId
             ? attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId) : null;
           let accepted = false;
           try {
-            accepted = await coordinator.steer(id, prepared.item);
+            accepted = await coordinator.steer(id, prepared.item, removeFromQueue ? { removeFromQueue: true } : undefined);
             if (accepted) {
               await flushed(id);
               await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
@@ -840,15 +866,16 @@ export function createInputQueue(deps) {
         const normalizedRefs = requireSessionRefs(sessionRefs);
         const remote = isDeviceLinkInvoke();
         const editor = readEditorProvenance();
-        const normalizedContexts = remote ? requireTrustedReferenceContexts(normalizedRefs, trustedContexts) : undefined;
-        if (remote && (normalizedRefs?.length ?? 0) > 0 && !normalizedContexts) {
+        const controllerDeviceId = remote ? getDeviceLinkInvokeContext()?.controllerDeviceId : undefined;
+        const validated = remote ? requireTrustedReferenceContexts(normalizedRefs, trustedContexts, controllerDeviceId) : undefined;
+        if (remote && (normalizedRefs?.length ?? 0) > 0 && !validated) {
           throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session references were not resolved by the controller');
         }
         const check = parseControlBoundary(id, opts);
         return mutate(
           id,
           () => coordinator.updateText(
-            id, clientId, text, normalizedRefs, normalizedContexts, remote,
+            id, clientId, text, validated ? validated.refs : normalizedRefs, validated?.contexts, remote,
             updated => stampEditedProvenance(updated, remote, editor),
           ),
           () => assertControlBoundary(id, check),
@@ -901,11 +928,11 @@ export function createInputQueue(deps) {
             }
             await flushed(id);
             await attachmentOwnership.markDurable(id, clientId);
-            return api.projection(id);
           } finally {
             if (paused && !state.persistenceError) unpause(id);
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, clientId, prepared.ownerId);
           }
+          return api.projection(id);
         });
       },
       async move(id, clientId, index, opts) {

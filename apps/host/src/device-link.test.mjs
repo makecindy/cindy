@@ -2199,4 +2199,25 @@ test('Host device-link serves remote queued input edit, lock, expand, and move c
   const c2Item = c2Edit.result.pendingQueue.find(x => x.clientId === 'c1');
   assert.equal(c2Item.sourceDevice?.deviceId, 'ctrl-2');
   assert.equal(c2Item.fromMobileClient, true);
+
+  const legacyLocalSnap = { sessionId: 'on-ctrl', source: 'local', range: 'recent', messageCount: 1, truncated: false, messages: [{ role: 'user', content: 'from old ctrl' }] };
+  const legacyEnqueue = await c1.invoke('host', {
+    channel: 'maker:input:enqueue',
+    args: ['task-qe', { clientId: 'c-legacy', text: 'legacy ref', sessionRefs: [{ sessionId: 'on-ctrl', deviceId: 'ctrl-1' }], trustedSessionReferenceContexts: [legacyLocalSnap] }],
+  });
+  assert.equal(legacyEnqueue.ok, true, JSON.stringify(legacyEnqueue));
+  assert.deepEqual(legacyEnqueue.result.pendingQueue.find(x => x.clientId === 'c-legacy')?.sessionRefs, [{ sessionId: 'on-ctrl' }]);
+
+  const spoofedLocal = await c1.invoke('host', {
+    channel: 'maker:input:enqueue',
+    args: ['task-qe', { clientId: 'c-spoof', text: 'spoof ref', sessionRefs: [{ sessionId: 'on-ctrl', deviceId: 'other-device' }], trustedSessionReferenceContexts: [legacyLocalSnap] }],
+  });
+  assert.equal(spoofedLocal.ok, false);
+  assert.match(spoofedLocal.error?.message ?? '', /SESSION_REFERENCE_UNAVAILABLE/);
+
+  const storedSteer = await c1.invoke('host', {
+    channel: 'maker:input:steer',
+    args: ['task-qe', { clientId: 'c-legacy', text: 'legacy ref', sessionRefs: [{ sessionId: 'on-ctrl' }] }, { removeFromQueue: true }],
+  });
+  assert.equal(storedSteer.ok, true, JSON.stringify(storedSteer));
 });

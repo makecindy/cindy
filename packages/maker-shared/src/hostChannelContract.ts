@@ -325,7 +325,7 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     desktopChannel: 'maker:input:steer',
     webPath: 'maker.input.steer',
     hostPath: '/api/input/steer',
-    body: ([sessionId, item]) => ({ sessionId, item }),
+    body: ([sessionId, item, opts]) => ({ sessionId, item, ...(opts !== undefined ? { opts } : {}) }),
     map: (response) => {
       const result = response as { ok?: boolean; projection?: unknown } | null;
       return result?.projection ?? (result?.ok === true);

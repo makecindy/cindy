@@ -2198,6 +2198,12 @@ test('queue edit operations validate inputs, refresh display content, and enforc
   const updated = await h.queue.updateContent('task-qe', 'b', { clientId: 'b', text: 'new text' }, { expectedClearBoundaryMs: 500 });
   assert.equal(updated.pendingQueue[0].text, 'new text');
   assert.equal(updated.pendingQueue[0].chatMessage.content, 'new text');
+  assert.equal(updated.queueInteractionLocks.includes('execution-pause'), false);
+
+  const textUpdated = await h.queue.updateText('task-qe', 'b', 'newer text', undefined, undefined, { expectedClearBoundaryMs: 500 });
+  assert.equal(textUpdated.queueInteractionLocks.includes('execution-pause'), false);
+  const movedProj = await h.queue.move('task-qe', 'b', 2, { expectedClearBoundaryMs: 500 });
+  assert.equal(movedProj.queueInteractionLocks.includes('execution-pause'), false);
 
   await assert.rejects(() => h.queue.updateText('task-qe', 'b', 123), /INVALID_PARAMS/);
   await assert.rejects(() => h.queue.updateContent('task-qe', 'b', { clientId: 'other', text: 'x' }), /INVALID_PARAMS/);

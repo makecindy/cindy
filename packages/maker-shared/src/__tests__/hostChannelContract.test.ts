@@ -54,6 +54,10 @@ it('preserves the steer projection while accepting legacy Host replies', () => {
   expect(entry.map?.({ ok: true, projection })).toEqual(projection);
   expect(entry.map?.({ ok: true })).toBe(true);
   expect(entry.map?.({ ok: false })).toBe(false);
+  expect(entry.body?.(['s', { clientId: 'c1' }])).toEqual({ sessionId: 's', item: { clientId: 'c1' } });
+  expect(entry.body?.(['s', { clientId: 'c1' }, { removeFromQueue: true }])).toEqual({
+    sessionId: 's', item: { clientId: 'c1' }, opts: { removeFromQueue: true },
+  });
 });
 
 // Trusted Desktop settings must not silently become privileged Web shim calls.

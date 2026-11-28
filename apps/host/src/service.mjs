@@ -366,7 +366,7 @@ export function createHostService(deps) {
         return { status: 200, body: await deps.input.stop(String(body.sessionId ?? '')) };
     }
     if (url.pathname === '/api/input/steer') {
-        const result = await deps.input.steer(String(body.sessionId ?? ''), body.item ?? {});
+        const result = await deps.input.steer(String(body.sessionId ?? ''), body.item ?? {}, body.opts);
         return { status: 200, body: await (typeof result === 'boolean' ? { ok: result } : { ok: true, projection: result }) };
     }
     if (url.pathname === '/api/input/remove') {
