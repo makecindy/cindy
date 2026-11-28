@@ -330,18 +330,37 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     const seconds = Math.max(0, Math.round(input.durationMs / 1000));
     const duration =
       seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`;
+    // 退出码只说明进程怎么结束,不代表命令达到了预期(exit 0 也可能带着错误走完,
+    // 非 0 也可能是预期结果):如实报码,不替读的人下「成功/失败」结论。
     const status = input.exit.hostTerminated
       ? '宿主失去观察（应用退出/重启/崩溃），结果未知——命令可能仍在运行、已完成或已终止'
       : input.exit.spawnError
         ? `启动失败（${input.exit.spawnError}）`
         : input.exit.timedOut
           ? '超过时限被强制终止（结果未知；若命令有副作用请先核实）'
-          : input.exit.code === 0
-            ? '成功（exit 0）'
-            : input.exit.code !== null
-              ? `失败（exit ${input.exit.code}）`
-              : `被信号终止（${input.exit.signal ?? 'unknown'}）`;
+          : input.exit.code !== null
+            ? `exit ${input.exit.code}`
+            : `被信号终止（${input.exit.signal ?? 'unknown'}）`;
     const head = input.command.length > 160 ? `${input.command.slice(0, 160)}…` : input.command;
+    // 摘要行只放一行:终端最后一行就是最像结果的那一行(报错/汇总),命令本身
+    // 主人刚写过,排后面且截短——队列行/通知只有一两行可见宽度。
+    // 按 \r 也切:进度条用回车原地刷,终端最后看到的是最后一段。
+    const lastLine =
+      input.tail
+        .split(/[\r\n]+/)
+        .map((line) => line.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').trim())
+        .filter(Boolean)
+        .pop() ?? '';
+    const digest = lastLine
+      ? `末尾「${lastLine.length > 120 ? `${lastLine.slice(0, 120)}…` : lastLine}」`
+      : '无输出';
+    const shortHead = input.command.length > 60 ? `${input.command.slice(0, 60)}…` : input.command;
+    // 「以日志判断成败」只在确实报了退出码时说得通:被杀/启动失败/超时都没码。
+    const plainExit =
+      !input.exit.hostTerminated &&
+      !input.exit.spawnError &&
+      !input.exit.timedOut &&
+      input.exit.code !== null;
     const logLine = input.logTruncated
       ? `输出超过 ${BACKGROUND_COMMAND_LOG_CAP_BYTES} 字节上限，进程树已被终止。日志文件（终止前的记录）：${input.logPath}`
       : `完整日志：${input.logPath}`;
@@ -353,10 +372,13 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       `命令：${head}\n状态：${status}\n耗时：${duration}\n` +
       (input.tail.trim() ? `日志尾部：\n---\n${input.tail}\n---\n` : '') +
       `${logLine}\n` +
+      (plainExit
+        ? `请以日志尾部判断成败：exit ${input.exit.code} 只说明进程怎么结束——0 也可能带着错误走完，非 0 也可能是预期结果。\n`
+        : '') +
       `请根据结果继续推进任务；不需要主人决策时向主人简短汇报即可。`;
     return {
       text,
-      persistedContent: `${input.exit.hostTerminated ? '后台命令观察中断' : '后台命令完成'} · ${status} · ${head}`,
+      persistedContent: `${input.exit.hostTerminated ? '后台命令观察中断' : '后台命令完成'} · ${status} · ${duration} · ${digest} · ${shortHead}`,
     };
   }
 

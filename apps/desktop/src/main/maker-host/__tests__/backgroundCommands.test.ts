@@ -97,7 +97,7 @@ it('命令退出后回注一次完成报告:退出码、日志尾部、scheduler
   const result = await service.start({
     sessionId: 'sess-1',
     // 活过宽限窗（buildService 默认 60ms）：走后台路径，报告照旧回注。
-    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => { console.log('gate-output-line'); process.exit(3) }, 500)"`,
+    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => { console.log('gate-output-line'); console.log('\\u001b[32mgate-tail-line\\u001b[0m'); process.exit(3) }, 500)"`,
     cwd: logDir,
   });
   expect(result.ok).toBe(true);
@@ -107,10 +107,15 @@ it('命令退出后回注一次完成报告:退出码、日志尾部、scheduler
   await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 10_000 });
   const report = firstReport(capture);
   expect(report.sessionId).toBe('sess-1');
-  expect(report.text).toContain('失败（exit 3）');
+  expect(report.text).toContain('状态：exit 3');
   expect(report.text).toContain('gate-output-line');
   expect(report.text).toContain('完整日志：');
   expect(report.persistedContent).toContain('后台命令完成');
+  // 摘要行要把「结果」先亮出来：退出码 + 末尾输出行（命令本身排后面）。
+  expect(report.persistedContent).toContain('exit 3');
+  // 末尾行取最后一条输出，且剥掉颜色转义（否则卡片上是一串 ^[[32m）。
+  expect(report.persistedContent).toContain('末尾「gate-tail-line」');
+  expect(report.persistedContent).not.toContain('\u001b');
   expect(report.origin).toMatchObject({ kind: 'scheduler', scheduleName: '后台命令' });
   expect(report.origin.scheduleId).toMatch(/^bgcmd:bg-/);
   expect(report.inheritTargetPlanMode).toBe(true);
@@ -330,7 +335,9 @@ it('名额让出后治理仍在：win32 硬顶到点留痕，POSIX 组探测等�
     sessionId: 'sess-1',
     command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
     cwd: logDir,
-    timeoutMs: 1_000,
+    // 硬顶给到 3s：子进程立即退出，但整机负载（同文件其它用例在并发 spawn）
+    // 会把 node 启动推到 1s 以上，窄窗口会让断言落到「硬顶时仍存活」那条分支。
+    timeoutMs: 3_000,
   });
   await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 10_000 });
   // 名额已让出；治理条目仍在：win32 到硬顶留痕（杀树对已退出命令是空操作，
@@ -371,7 +378,7 @@ it('队列暂停 retry 不按次数丢弃:退避轮询直到投递成功', async
   expect((last.value as { clientId?: string }).clientId).toBe('c1');
 });
 
-it('exit 0 报成功;空命令直接拒绝且不回注', async () => {
+it('exit 0 如实报码;空命令直接拒绝且不回注', async () => {
   const capture = vi.fn();
   const service = buildService(capture);
 
@@ -382,7 +389,7 @@ it('exit 0 报成功;空命令直接拒绝且不回注', async () => {
   });
   expect(okRun.ok).toBe(true);
   await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 10_000 });
-  expect(firstReport(capture).text).toContain('成功（exit 0）');
+  expect(firstReport(capture).text).toContain('状态：exit 0');
 
   await expect(service.start({ sessionId: 's', command: '   ', cwd: logDir })).resolves.toMatchObject({
     ok: false,
@@ -422,7 +429,7 @@ it('超上限的输出:体量巡检杀树,文件有界,报告标记超限(fd 直
   // 杀树不是成功退出:报告必须说明超限被终止。
   expect(report.text).toContain('输出超过');
   expect(report.text).toContain('终止');
-  expect(report.text).not.toContain('成功（exit 0）');
+  expect(report.text).not.toContain('状态：exit 0');
   const logPath = (result as { ok: true; logPath: string }).logPath;
   const { stat: statFile } = await import('node:fs/promises');
   const info = await statFile(logPath);
@@ -565,7 +572,7 @@ const isWindows = process.platform === 'win32';
   expect(result.ok).toBe(true);
 
   await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 10_000 });
-  expect(firstReport(capture).text).toContain('失败（exit 3）');
+  expect(firstReport(capture).text).toContain('状态：exit 3');
   const logText = await readFile((result as { ok: true; logPath: string }).logPath, 'utf8');
   expect(logText).toContain('ps-shell-line');
 });
