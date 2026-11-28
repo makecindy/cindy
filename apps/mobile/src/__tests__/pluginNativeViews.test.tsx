@@ -2246,6 +2246,48 @@ describe("pinned high-risk permission", () => {
         expect(answer).toHaveBeenCalledTimes(1);
         expect(answer).toHaveBeenCalledWith(true);
       });
+  /* 测试价值（维护者 07:30：Android 初开尺寸未齐时按常规档「允许」只切到紧凑档；之后尺寸补齐到能通过常规判定，迟到的旧常规档
+   * 回调仍带着创建时的 compact=false，读到最新尺寸就 answer(true)；请求和操作号都没变，共用守卫拦不住）
+   * - 生产入口与可观察结果：Android 真实确认面板组件；调用保存下来的初开「允许」回调后是否写出 answer(true)。
+   * - 依据：能作答的按下一律在按下时按面板当前状态判定（`useConsentAnswerGate`），回调创建时的档位、是否查看、尺寸都不算；
+   *   切档、换布局、换请求都让之前的回调失效。
+   * - 最小失败输入：保存初开的「允许」回调 → 按下（切到紧凑档）→ 补齐身份块 100、可视 2000、内容 400 → 调旧回调；3f53dde2f5 上
+   *   写出允许。另：初开回调在转屏、新布局尺寸补齐后再调用，3f53dde2f5 上同样写出。tier: unit。
+   */
+  it("Android: the first regular Allow's callback, called after the sheet went compact and the sizes arrived, answers nothing; Allow answers once after the review", () => {
+    bridge.fontScale = 1;
+    const state = consentState(allFive);
+    const answer = vi.fn(() => { state.answerHeld = state.receipt.consent.requestId; });
+    const p = { state, controller: { getState: () => state, answer } as any, active: true, deviceName: "Mac" };
+    const { container } = mount(AndroidManagementConfirmation, p);
+    const firstAllow = bridge.props.get("plugins.management.allow").onPress;
+    act(() => firstAllow());
+    expect(answer, "before the sizes: the sheet goes compact").not.toHaveBeenCalled();
+    layOutSheet({ identity: 100, visible: 2000, content: 400 });
+    act(() => firstAllow());
+    expect(answer, "the old regular callback, with sizes that would confirm the regular layout").not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="plugins.management.review"]'), "still review first").not.toBeNull();
+    act(() => bridge.props.get("plugins.management.review").onPress());
+    act(() => firstAllow());
+    expect(answer, "the old regular callback after the review").not.toHaveBeenCalled();
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(answer).toHaveBeenCalledWith(true);
+  });
+  it("Android: a regular Allow's callback from before a rotation, called once the new layout's sizes confirm it, answers nothing; the new layout's own Allow answers", () => {
+    bridge.fontScale = 1;
+    const p = props(allFive);
+    const { rerender } = mount(AndroidManagementConfirmation, p);
+    const before = bridge.props.get("plugins.management.allow").onPress;
+    bridge.width = 844; bridge.height = 390;
+    rerender({ ...p });
+    layOutSheet({ identity: 100, visible: 2000, content: 400 });
+    act(() => before());
+    expect(p.controller.answer, "a tap from the layout before the rotation").not.toHaveBeenCalled();
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    expect(p.controller.answer).toHaveBeenCalledWith(true);
+  });
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
     "%s: a consent that can only be rejected keeps Allow unavailable before and after the review; Reject answers", (platform, Sheet) => {
       bridge.fontScale = 2; bridge.width = 375; bridge.height = 667;

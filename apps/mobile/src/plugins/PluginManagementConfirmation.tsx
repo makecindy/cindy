@@ -19,6 +19,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
 import { useConsentSheetSizes } from "./useConsentSheetSizes";
+import { useConsentAnswerGate } from "./consentAnswerGate";
 import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentLayoutKey, consentRegularConfirmed, consentSheetMeasured,
   consentSummaryFadeAllowed, planConsentSheet,
   pluginConsentPresentation } from "./pluginConsentPresentation";
@@ -70,12 +71,15 @@ export function PluginManagementConfirmation(
   // Compact: review and Allow are separate controls that never share a place (maintainer review 06:44, by layout alone,
   // the same as iOS). The buttons are the same before and after the review step, at the bottom of a sheet of fixed
   // height (its maximum, which a compact sheet fills anyway), so the step moves nothing: the bottom row is Reject and
-  // "Review source and permissions" (stacked: Review above Reject), "Allow and continue" its own full-width row above
-  // them, unavailable until this consent is reviewed; reviewed, the review button stays where it was, unavailable, with
-  // the same label. Regular keeps Reject and Allow in one row; an Allow pressed before the layout confirms the regular
+  // "Review source and permissions" (stacked: Review above Reject), "Allow and continue" its own row above them,
+  // unavailable until this consent is reviewed; reviewed, the review button stays where it was, unavailable, with the
+  // same label. Regular keeps Reject and Allow in one row; an Allow pressed before the layout confirms the regular
   // layout turns the sheet compact, where that place becomes "Review" (a review, never an answer).
-  const reviewedRef = useRef<string | null>(null);
+  // Whether a press may answer is judged when it is pressed, from the sheet's current state (`useConsentAnswerGate`, the
+  // same for both sheets: maintainer review 07:30), never from what the callback captured: a regular Allow from before
+  // the sheet went compact (or before another consent or layout) answers nothing, even once the sizes would confirm it.
   const requestId = consent?.requestId ?? null;
+  const gate = useConsentAnswerGate({ requestId, mode: compact ? "review" : "regular", layoutKey, allowBlocked: info?.allowBlocked === true });
   const allowReadyCompact = reviewed && info?.allowBlocked !== true;
   const list = useScrollOverflow(), summary = useScrollOverflow();
   const measuredAll = consentSheetMeasured(sizes, lineCount);
@@ -122,14 +126,16 @@ export function PluginManagementConfirmation(
         onPress={() => {
           if (kind === "reject") { answer(false); return; }
           if (kind === "review") {
-            if (!requestId || reviewedRef.current === requestId) return;
-            reviewedRef.current = requestId;
-            setReviewedFor(requestId);
+            if (gate.review()) setReviewedFor(requestId);
             return;
           }
-          if (kind !== "allow" || info?.allowBlocked === true) return;
-          if (compact) { if (requestId && reviewedRef.current === requestId) answer(true); return; }
-          if (!confirmedNow()) { if (fitKey) setCrampedFor(fitKey); return; }
+          if (kind !== "allow") return;
+          // Judged now, from the current state: compact answers only once reviewed; regular only with the current
+          // layout's measured sizes confirming it, otherwise the sheet leaves the regular layout at once (review first).
+          const verdict = gate.allow();
+          if (verdict === "answer") { answer(true); return; }
+          if (verdict !== "regular") return;
+          if (!confirmedNow()) { gate.leaveRegular(); if (fitKey) setCrampedFor(fitKey); return; }
           answer(true);
         }}
         style={[styles.button, (stacked || (compact && kind === "allow")) && styles.stackedButton, prominent && styles.primary,

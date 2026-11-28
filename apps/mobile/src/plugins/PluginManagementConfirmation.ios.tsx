@@ -23,8 +23,9 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useConsentSheetSizes } from "./useConsentSheetSizes";
+import { useConsentAnswerGate } from "./consentAnswerGate";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentLayoutKey, consentSummaryFadeAllowed, planConsentSheet,
@@ -91,18 +92,20 @@ export function PluginManagementConfirmation(
   // offset to the same layout pass, and a correction can come at any later time. Without a consistent sample the
   // measured layout cannot show the source was on screen, so it never lets Allow answer: from the first display, in
   // every orientation, text size and iOS version, the main button is "Review source and permissions".
-  // Recorded at the press, read at the press (a ref, not the render): Allow answers only for the consent reviewed.
+  // Whether a press may answer is judged when it is pressed, from the sheet's current state (`useConsentAnswerGate`, the
+  // same for both sheets: maintainer review 07:30), never from what the callback captured: Allow answers only for the
+  // consent reviewed, and a callback from before another consent or another layout answers nothing.
   // Reviewed stays with the requestId: turning the phone or changing the text size afterwards keeps it reviewed (the
   // reviewed list is drawn anew for the new size, from its top: the source first); another consent starts again from the
   // review step.
   // Review and Allow are separate controls that never share a place (maintainer review 06:44, by layout alone): the
   // buttons are the same before and after the review step, in a footer at the bottom of a sheet whose height the step
   // does not change. The bottom row is Reject and "Review source and permissions" (stacked: Review above Reject);
-  // "Allow and continue" is its own full-width row above them, unavailable until this consent is reviewed. Reviewed, the
+  // "Allow and continue" is its own row above them (a centered button), unavailable until this consent is reviewed. Reviewed, the
   // review button stays where it was, unavailable, with the same label (so the same size), so a second tap there, however
   // soon, does nothing; Reject never moves.
   const requestId = consent?.requestId ?? null;
-  const reviewedRef = useRef<string | null>(null);
+  const gate = useConsentAnswerGate({ requestId, mode: "review", layoutKey, allowBlocked: info?.allowBlocked === true });
   const [reviewedFor, setReviewedFor] = useState<string | null>(null);
   const reviewed = requestId !== null && reviewedFor === requestId;
   // Layout only: reviewed, the list is reordered (source and summary first, the whole summary in it); in landscape the
@@ -139,14 +142,11 @@ export function PluginManagementConfirmation(
         onPress={() => {
           if (kind === "reject") { answer(false); return; }
           if (kind === "review") {
-            // This render's consent; a second press of this consent's review does nothing more.
-            if (!requestId || reviewedRef.current === requestId) return;
-            reviewedRef.current = requestId;
-            setReviewedFor(requestId);
+            if (gate.review()) setReviewedFor(requestId);
             return;
           }
-          // Allow: only for the consent reviewed (read at the press), never for one that can only be rejected.
-          if (kind === "allow" && requestId && reviewedRef.current === requestId && info?.allowBlocked !== true) answer(true);
+          // Allow: judged now, from the current state (this consent reviewed, never one that can only be rejected).
+          if (kind === "allow" && gate.allow() === "answer") answer(true);
         }}
         modifiers={[
           buttonStyle(prominent ? "borderedProminent" : "bordered"),
