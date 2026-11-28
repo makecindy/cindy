@@ -27,6 +27,7 @@ import {
   Ellipsis,
   Eye,
   Folder,
+  FolderPlus,
   History,
   LayoutGrid,
   List as ListIcon,
@@ -75,6 +76,7 @@ import {
 import { mergePathIntoComposerDraft, shareMimeForFileName } from '@/session/fileBrowserActions';
 import { exportRemoteFileToUrl } from '@/session/fileBrowserExport';
 import { FileTransferBusyNotice } from '@/session/FileTransferBusyNotice';
+import { CreateFolderModal } from '@/session/CreateFolderModal';
 import {
   getCachedListingSync,
   loadAllFilesIndex,
@@ -184,6 +186,10 @@ function RemoteFileBrowserContent() {
   const [viewMode, setViewMode] = useState<FileBrowserViewMode>(() => readFileBrowserPrefsSync(workdir).view);
   const [sortMode, setSortMode] = useState<FileBrowserSortMode>(() => readFileBrowserPrefsSync(workdir).sort);
   const [titleMenuOpen, setTitleMenuOpen] = useState(false);
+  const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [createFolderDraft, setCreateFolderDraft] = useState('');
+  const [createFolderError, setCreateFolderError] = useState<string | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
   const [contextItem, setContextItem] = useState<FileBrowserGridItem | null>(null);
 
   const [lightbox, setLightbox] = useState<{
@@ -689,6 +695,46 @@ function RemoteFileBrowserContent() {
     if (workdir) saveFileBrowserPrefs(workdir, { view: viewMode, sort });
   }, [viewMode, workdir]);
 
+  const openCreateFolder = useCallback(() => {
+    setTitleMenuOpen(false);
+    setCreateFolderDraft('');
+    setCreateFolderError(null);
+    setCreateFolderOpen(true);
+  }, []);
+
+  const closeCreateFolder = useCallback(() => {
+    if (creatingFolder) return;
+    setCreateFolderOpen(false);
+    setCreateFolderError(null);
+  }, [creatingFolder]);
+
+  const createFolder = useCallback(async () => {
+    const name = createFolderDraft.trim();
+    if (!name) return;
+    if (name === '.' || name === '..' || /[\\/]/.test(name)) {
+      setCreateFolderError(t('files.browser.createFolderInvalidName'));
+      return;
+    }
+    if (!deviceId || !workdir) return;
+    setCreatingFolder(true);
+    setCreateFolderError(null);
+    try {
+      const targetRelPath = relPath ? relPath + '/' + name : name;
+      const result = await withTransientRemoteRetry(async () => {
+        await openLink(deviceId);
+        return maker.fileBrowser.createFolder(workdir, targetRelPath);
+      });
+      if (!result.ok) throw new Error(result.message ?? 'CREATE_FOLDER_FAILED');
+      setCreateFolderOpen(false);
+      showNotice(t('files.browser.createFolderSuccess'));
+      await loadDirectory({ refreshing: true });
+    } catch (err) {
+      setCreateFolderError(formatRemoteError(err));
+    } finally {
+      setCreatingFolder(false);
+    }
+  }, [createFolderDraft, deviceId, formatRemoteError, loadDirectory, maker, openLink, relPath, showNotice, t, workdir]);
+
   // —— 搜索(listAllFiles 全量文件名:模块级按 workdir 缓存 + 本地过滤)——
   // 组件 state 只是过滤用的工作副本,不做长期缓存:新鲜度完全交给模块层
   // (60s TTL + storeCachedListing 时失效),否则首次装载后 fs-watch 刷新
@@ -1069,6 +1115,7 @@ function RemoteFileBrowserContent() {
         levels={pathLevels}
         onClose={() => setTitleMenuOpen(false)}
         onCopyCurrentPath={copyCurrentDirPath}
+        onCreateFolder={openCreateFolder}
         onJump={(target) => {
           setTitleMenuOpen(false);
           if (target !== relPath) openDirectory(target);
@@ -1079,6 +1126,16 @@ function RemoteFileBrowserContent() {
         open={titleMenuOpen}
         sortMode={sortMode}
         viewMode={viewMode}
+      />
+
+      <CreateFolderModal
+        draft={createFolderDraft}
+        error={createFolderError}
+        onCancel={closeCreateFolder}
+        onChangeDraft={setCreateFolderDraft}
+        onConfirm={() => void createFolder()}
+        saving={creatingFolder}
+        visible={createFolderOpen}
       />
 
       <ContextMenu
@@ -1421,6 +1478,7 @@ function TitleMenu({
   levels,
   onClose,
   onCopyCurrentPath,
+  onCreateFolder,
   onJump,
   onSendCurrentToSession,
   onSetSort,
@@ -1432,6 +1490,7 @@ function TitleMenu({
   levels: Array<{ label: string; relPath: string; current: boolean }>;
   onClose(): void;
   onCopyCurrentPath(): void;
+  onCreateFolder(): void;
   onJump(relPath: string): void;
   onSendCurrentToSession: (() => void) | null;
   onSetSort(sort: FileBrowserSortMode): void;
@@ -1487,6 +1546,9 @@ function TitleMenu({
               )}
             </View>
           ))}
+          <View style={styles.menuGroupSep} />
+          {row('folder.create', t('files.browser.createFolder'), false, onCreateFolder,
+            <FolderPlus color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
           <View style={styles.menuGroupSep} />
           {row('view.grid', t('files.browser.viewGrid'), viewMode === 'grid', () => onSetView('grid'),
             <LayoutGrid color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
