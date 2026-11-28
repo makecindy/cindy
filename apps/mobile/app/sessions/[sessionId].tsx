@@ -315,7 +315,7 @@ import {
   applyHostModelGroupResult,
   resolveHostModelGroup,
   useHostModelGroupPickerOptions,
-  useHostModelGroupsPayload,
+  useHostModelGroupsState,
   useHostModelGroupSwitchOffer,
   type HostModelGroupSwitchOffer,
 } from '@/session/hostModelGroups';
@@ -9826,7 +9826,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const activeSessionModelGroupBinding = sessionModelGroupsEligible
     ? (currentSession?.modelGroupBinding ?? null)
     : null;
-  const sessionHostModelGroupsPayload = useHostModelGroupsPayload(deviceId, maker, sessionModelGroupsEligible && modelSheetOpen);
+  const { payload: sessionHostModelGroupsPayload, unsupported: sessionHostModelGroupsUnsupported } =
+    useHostModelGroupsState(deviceId, maker, sessionModelGroupsEligible && modelSheetOpen);
   const sessionHostModelGroups = sessionHostModelGroupsPayload?.groups ?? null;
   const switchSessionByModelGroup = useCallback(async (
     id: string,
@@ -9895,10 +9896,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : null,
     onDetach: activeSessionModelGroupBinding ? detachSessionModelGroup : undefined,
     sourceRoutesPayload: sessionHostModelGroupsPayload,
+    unsupported: sessionHostModelGroupsUnsupported,
     activeRouteId: activeSessionModelGroupBinding?.selection.id ?? null,
     onPickMerged: (routeId: string, config: MobileModelConfiguration) =>
       switchSessionByModelGroup(routeId, { effort: config.effort, fast: config.fast }),
-  }), [activeSessionModelGroupBinding, detachSessionModelGroup, sessionHostModelGroupsPayload, switchSessionByModelGroup]);
+  }), [activeSessionModelGroupBinding, detachSessionModelGroup, sessionHostModelGroupsPayload, sessionHostModelGroupsUnsupported, switchSessionByModelGroup]);
   const composerModelGroupOptions = useHostModelGroupPickerOptions(
     sessionModelGroupsEligible ? sessionHostModelGroups : null,
     activeSessionModelGroupBinding?.isSourceRoute ? null : (activeSessionModelGroupBinding?.selection.id ?? null),

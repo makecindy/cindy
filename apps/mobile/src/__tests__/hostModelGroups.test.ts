@@ -56,9 +56,17 @@ const routed = {
 describe('the host computer\'s model groups over device-link', () => {
   it('treats an older computer without the channel as having no model groups', async () => {
     const invoke = vi.fn(async () => {
-      throw Object.assign(new Error('[CHANNEL_NOT_ALLOWED] model-groups:get'), { code: 'CHANNEL_NOT_ALLOWED' });
+      throw Object.assign(new Error("channel 'model-groups:get' not allowed remotely"), { code: 'CHANNEL_NOT_ALLOWED' });
     }) as unknown as RemoteInvoke;
     await expect(createMobileMakerTransport({ deviceId: 'old-desk', invoke }).listModelGroups()).resolves.toBeNull();
+  });
+
+  // Cloud status gap 7 / unit: a local policy refusal must not become an
+  // unsupported section. Exercise the same read as the model picker.
+  it('does not treat a transport refusal as a missing model groups capability', async () => {
+    const error = Object.assign(new Error('Encrypted transport is required'), { code: 'CHANNEL_NOT_ALLOWED' });
+    const invoke = vi.fn().mockRejectedValue(error) as unknown as RemoteInvoke;
+    await expect(createMobileMakerTransport({ deviceId: 'desk', invoke }).listModelGroups()).rejects.toBe(error);
   });
 
   it('asks an older computer again after a while, so an upgrade shows its modes without reopening the app', async () => {

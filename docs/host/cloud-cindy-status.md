@@ -85,13 +85,17 @@ Linux 验收发现，旧后台已保存首条消息，却不支持手机按原�
    「结果未知」，应先查原任务的历史和队列。桌面接收端也会结算任务重启期间、获得发送锁前的明确拒绝。
    见[云端投递判定](../../apps/host/src/agent/session-handoff.ts)
    和[回执结算](../../apps/desktop/src/main/maker-ipc/sessionHandoffCore.ts)。
-6. **缺引擎的提示。** 当前手机沿用「电脑端组件尚未就绪」提示。完全没装引擎时，等待或重启无法解决；
-   桌面从远程电脑新建任务时仍显示原始英文。见 [#12829 的后续项](https://github.com/makecindy/cindy/pull/12829)。
-7. **远控降级提示。** 真实桌面和手机上的「不支持」提示仍待实机验收。云端不支持模型组时，
-   手机选择器隐藏该分段，没有显示「不支持」。桌面从远程任务的输入框打开「新建目标」时，
-   对话框会直接显示远端英文错误原文（据代码判断，尚未实机确认）。见
-   [手机模型组读取](../../apps/mobile/src/session/hostModelGroups.ts)和
+6. **缺引擎的提示（已补）。** 被控端明确拒绝创建任务且没有可用引擎时，手机和桌面
+   都提示先在那台电脑上安装引擎并重启 Cindy。手机在恢复未发送的任务时也显示同样的说明。
+   其它原因导致引擎暂时未就绪时，继续按各自的恢复指引处理。见
+   [被控端拒绝](../../apps/host/src/agent/create-runtime-session.ts)和
+   [#12829 的后续项](https://github.com/makecindy/cindy/pull/12829)。
+7. **远控降级提示（已补）。** 被控电脑明确不支持模型组时，手机在模型选择器里保留该分段并说明
+   暂不支持。读取超时、离线或没有配置模型组本身不会被判为不支持。桌面从远程任务里新建目标，
+   收到明确的不支持结果时显示同一条本地化说明，其它失败显示「新建目标失败」。
+   见[手机模型组读取](../../apps/mobile/src/session/hostModelGroups.ts)和
    [桌面新建目标](../../apps/desktop/src/renderer/components/new-chat/NewGoalDialog.tsx)。
+   用合成被控端回执和真实界面验证提示，尚未连接真实云端复测这两个拒绝路径。
 8. **默认设备名。** 后台默认使用主机名加「Cindy Host」。当前可用 `CINDY_HOST_DEVICE_NAME`
    覆盖，见[设备信息采集](../../apps/host/src/platform/machine-status.ts)。
 9. **个人账号 CLI 登录。** 个人登录只支持可用的浏览器登录方式。服务器提供多个方式时须显式传

@@ -93,12 +93,16 @@ export function readHostModelGroups(deviceId: string, maker: ModelGroupsTranspor
   return run;
 }
 
-/** 被控电脑的完整路由载荷(含可选合并供应商路由)；null = 还没读到、读不到，或那台不支持模型组。 */
-export function useHostModelGroupsPayload(
+type HostModelGroupsState = Pick<CacheEntry, 'payload' | 'unsupported'>;
+
+const UNREAD_MODEL_GROUPS: HostModelGroupsState = Object.freeze({ payload: null, unsupported: false });
+
+/** Keep a confirmed unsupported read separate from a pending or failed read. */
+export function useHostModelGroupsState(
   deviceId: string | null | undefined,
   maker: ModelGroupsTransport | null | undefined,
   enabled: boolean,
-): HostModelGroupsPayload | null {
+): HostModelGroupsState {
   const [, setVersion] = useState(0);
   // 换账号：缓存已清空，重新渲染为「还没读到」，再按新账号读。
   const [ownerGeneration, setOwnerGeneration] = useState(() => getMobileAuthOwner().generation);
@@ -111,7 +115,16 @@ export function useHostModelGroupsPayload(
     });
     return () => { cancelled = true; };
   }, [enabled, deviceId, maker, ownerGeneration]);
-  return enabled && deviceId ? cachedHostModelGroupsPayload(deviceId) : null;
+  const key = enabled && deviceId ? cacheKey(deviceId) : null;
+  return (key ? cache.get(key) : undefined) ?? UNREAD_MODEL_GROUPS;
+}
+
+export function useHostModelGroupsPayload(
+  deviceId: string | null | undefined,
+  maker: ModelGroupsTransport | null | undefined,
+  enabled: boolean,
+): HostModelGroupsPayload | null {
+  return useHostModelGroupsState(deviceId, maker, enabled).payload;
 }
 
 /** 被控电脑的模式列表；null = 还没读到、读不到，或那台不支持模型组。 */
@@ -157,7 +170,8 @@ export function useHostModelGroupPickerOptions(
       selected: group.id === activeId,
     }));
     const hasExtra = Boolean(
-      extra?.managedMeta
+      extra?.unsupported
+      || extra?.managedMeta
       || (extra?.sourceRoutesPayload && extra.sourceRoutesPayload.sourceRoutes.length > 0),
     );
     if (rows.length === 0 && !hasExtra) return undefined;

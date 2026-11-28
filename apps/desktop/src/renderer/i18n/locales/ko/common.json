@@ -20881,6 +20881,8 @@
     },
     "errors": {
       "piStartupCloudFile": "클라우드에만 있는 지침 파일 때문에 Pi 시작이 지연될 수 있습니다: {{path}}. Finder에서 이 파일을 다운로드하고 로컬에서 사용할 수 있는지 확인한 후 다시 시도하세요. 시간 초과의 원인이 다를 수도 있습니다.",
+      "remoteEngineMissing": "원격 컴퓨터에 사용할 수 있는 엔진이 없습니다. 해당 컴퓨터에 엔진을 설치하고 Cindy를 다시 시작한 뒤 다시 시도하세요.",
+      "remoteCapabilityUnavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
       "hostProfileInUseByDesktop": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있습니다. 앱을 종료한 후 다시 보내세요.",
       "hostProfileInUseByDesktopAtStart": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있어 Cindy 백그라운드 서비스가 시작되지 않았습니다. 그 앱을 종료하고 Cindy 백그라운드 서비스를 다시 시작한 후 지금 이 Cindy 창을 다시 여세요.",
       "hostProfileInUseByDesktopRetry": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있어 지금은 변경할 수 없습니다. 앱을 종료한 후 다시 시도하세요.",

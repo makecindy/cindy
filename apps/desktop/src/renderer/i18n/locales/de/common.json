@@ -20969,6 +20969,8 @@
     },
     "errors": {
       "piStartupCloudFile": "Eine nur in der Cloud verfügbare Anweisungsdatei verzögert möglicherweise den Start von Pi: {{path}}. Lade diese Datei im Finder herunter, warte, bis sie lokal verfügbar ist, und versuche es erneut. Die Zeitüberschreitung kann eine andere Ursache haben.",
+      "remoteEngineMissing": "Auf dem entfernten Computer ist keine Engine verfügbar. Installiere dort eine Engine, starte Cindy neu und versuche es erneut.",
+      "remoteCapabilityUnavailable": "Der aktuelle Server oder Computer unterstützt diese Aktion noch nicht.",
       "hostProfileInUseByDesktop": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet. Beende sie und sende dann erneut.",
       "hostProfileInUseByDesktopAtStart": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet, daher wurde der Cindy-Hintergrunddienst nicht gestartet. Beende sie, starte den Cindy-Hintergrunddienst neu und öffne dann dieses Cindy-Fenster erneut.",
       "hostProfileInUseByDesktopRetry": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet, daher ist das gerade nicht möglich. Beende sie und versuche es dann erneut.",

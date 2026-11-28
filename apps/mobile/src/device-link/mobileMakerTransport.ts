@@ -38,6 +38,7 @@ import {
   DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL,
   DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL,
   MOBILE_REMOTE_INVOKE_CHANNELS,
+  formatRemoteError,
 } from "@cindy/maker-shared/device-link-contract";
 import {
   providerPickerListArgs,
@@ -1290,7 +1291,11 @@ export function createMobileMakerTransport({
     listModelGroups: () =>
       call<unknown>("model-groups:get", [{ includeSourceRoutes: true }])
         .catch((error: unknown) => {
-          if (isPluginCatalogUnsupportedError(error)) return null;
+          const reason = formatRemoteError(error).replace(/^\[IPC_ERROR\]\s*/, '').trim();
+          // A local transport or shared-scope refusal doesn't prove the computer lacks model groups.
+          if (/^\[UNSUPPORTED_CAPABILITY\](?:\s|$)/.test(reason)
+            || /^\[(?:DEVICE_LINK_)?CHANNEL_NOT_ALLOWED\] channel 'model-groups:get' not allowed remotely$/.test(reason)
+            || reason === "[NOT_FOUND] no local IPC handler for channel 'model-groups:get'") return null;
           throw error;
         }),
     resolveModelGroup: (request) => call<unknown>("model-groups:resolve", [request]),
