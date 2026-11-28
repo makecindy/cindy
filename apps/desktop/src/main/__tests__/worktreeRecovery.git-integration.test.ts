@@ -6,13 +6,17 @@ vi.mock('../worktree/recoveryArchiveWorkerClient', async () => {
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import syncFs from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { piSubagentRunRoot } from '@cindy/maker-core/pi-subagent-runs';
+import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../../../../../packages/maker-core/src/agents/pi/cindy-subagent-runner-source';
 
 import type { WorktreeMeta } from '../worktree/types';
 
-const state = vi.hoisted(() => ({ root: '', refs: [] as unknown[], registry: new Map<string, WorktreeMeta>() }));
+const state = vi.hoisted(() => ({ root: '', refs: [] as unknown[], runtimePaths: new Set<string>(), registry: new Map<string, WorktreeMeta>() }));
 const managerMocks = vi.hoisted(() => ({ copy: vi.fn(), create: vi.fn() }));
 vi.mock('../userDataPath', () => ({ getUserDataDir: () => state.root, getAppDataDir: () => state.root }));
 vi.mock('../worktree/WorktreeManager', () => ({
@@ -34,7 +38,7 @@ vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ readLocalWor
 vi.mock('../worktree/runtimeLeases', async (original) => ({
   ...await original<typeof import('../worktree/runtimeLeases')>(),
   // Model an old owner profile that cannot see the borrower's shared leases.
-  readWorktreeRuntimePaths: async () => new Set(),
+  readWorktreeRuntimePaths: async () => state.runtimePaths,
 }));
 vi.mock('../worktree/gitExec', async (original) => {
   const actual = await original<typeof import('../worktree/gitExec')>();
@@ -66,7 +70,8 @@ vi.mock('../worktree/gitExec', async (original) => {
 import { checkpointWorktreeForReuse, recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
 import { restoreRecordedWorktree } from '../worktree/restoreRecovery';
 import { newRecycleRecord, readRecycleRecord, writeRecycleRecord } from '../worktree/recycleJournal';
-import { releaseObsoleteRecoverySnapshots } from '../worktree/recycleMaintenance';
+import { auditRegisteredWorktrees, releaseObsoleteRecoverySnapshots } from '../worktree/recycleMaintenance';
+import { listWorktreeRecycleStatus } from '../worktree/recycleControls';
 import { captureWorktreeContent, worktreeContentMatches } from '../worktree/contentSnapshot';
 import { GitExecError, gitExec } from '../worktree/gitExec';
 import { acquireWorktree, releaseWorktree, parkAll } from '../worktree/WorktreePool';
@@ -104,6 +109,157 @@ describe('worktree recovery with real Git', () => {
     state.refs.push({ id: name, status: 'archived', source: 'desktop', currentDatabase: true, workingDir: worktree, worktreePath: worktree });
     return meta;
   };
+
+  // #6625: existing recovery cases do not bridge a durable runner record to the
+  // audit and storage status. Real Git and an offline RPC peer require git-integration.
+  it.each(['direct', 'registration', 'database'] as const)('explains worktree retention from Pi records via %s', async (source) => {
+    const name = `pi-recycle-${source}`;
+    const meta = await createFixture(name);
+    const parent = source === 'database' ? await createFixture('pi-recycle-parent') : meta;
+    const cwd = source === 'direct' ? meta.path : await fs.mkdtemp(path.join(state.root, 'pi-cwd-'));
+    const databasePath = source === 'registration' ? cwd : meta.path;
+    state.refs[state.refs.length - 1] = {
+      id: parent.sessionId, status: 'archived', source: 'desktop', currentDatabase: true,
+      workingDir: databasePath, worktreePath: databasePath,
+    };
+    const runs = piSubagentRunRoot(path.join(state.root, 'pi-agent-home'), parent.sessionId);
+    const runId = randomUUID();
+    const runDir = path.join(runs, runId);
+    const childConfigHome = path.join(runDir, 'pi-home');
+    const sessionDir = path.join(runDir, 'sessions');
+    const sessionId = runId + '-1';
+    const runnerFile = path.join(runDir, 'runner.cjs');
+    const configFile = path.join(runDir, 'config.json');
+    const bridgeExtension = path.join(runDir, 'cindy-bridge.ts');
+    const peer = path.join(runDir, 'peer.cjs');
+    const ready = path.join(runDir, 'peer-ready');
+    const release = path.join(runDir, 'peer-release');
+    await fs.mkdir(childConfigHome, { recursive: true });
+    await fs.mkdir(sessionDir);
+    await fs.writeFile(path.join(childConfigHome, 'models.json'), '{"providers":{}}\n');
+    await fs.writeFile(bridgeExtension, 'export default function bridge() {}\n');
+    await fs.writeFile(runnerFile, CINDY_SUBAGENT_RUNNER_SOURCE);
+    await fs.writeFile(peer, String.raw`
+const fs = require('node:fs');
+const events = require('node:readline').createInterface({ input: process.stdin });
+const [ready, release] = process.argv.slice(2, 4);
+events.on('line', line => {
+  if (JSON.parse(line).type !== 'prompt') return;
+  fs.writeFileSync(ready, '');
+  const gate = setInterval(() => {
+    if (!fs.existsSync(release)) return;
+    clearInterval(gate);
+    const emit = event => process.stdout.write(JSON.stringify(event) + '\n');
+    emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } });
+    emit({ type: 'agent_end' });
+    emit({ type: 'agent_settled' });
+  }, 10);
+});
+process.stdin.on('end', () => process.exit(0));
+`);
+    await fs.writeFile(configFile, JSON.stringify({
+      version: 1, runId, taskId: 'fixture-task', parentSessionId: parent.sessionId, runDir,
+      cwd, binary: process.execPath, binaryPrefixArgs: [peer, ready, release],
+      childConfigHome, bridgeExtension, permissionFile: path.join(runDir, 'permission.json'),
+      mode: 'single', context: 'fresh', timeoutMs: 8_000,
+      tasks: [{ childId: sessionId, stepId: 'step-1', sessionId, sessionDir,
+        agent: 'scout', task: 'read the fixture file', tools: 'read', profilePrompt: 'fixture',
+        provider: 'fixture', model: 'fixture-model', cwd }],
+    }));
+    const runner = exec(process.execPath, [runnerFile, configFile], {
+      cwd, env: { PATH: process.env.PATH }, timeout: 10_000,
+    });
+    void runner.catch(() => {}); // Surfaced by the await below; allow time for the readiness probe.
+    const recycle = () => recycleManagedWorktree(meta, { canRemove: async () => true });
+    let retained: Awaited<ReturnType<typeof readRecycleRecord>>;
+    const checkRetention = async () => {
+      expect(await recycle()).toBe(false);
+      retained = await readRecycleRecord(meta.path);
+      expect(retained).toMatchObject({ phase: 'pending', reason: 'referenced-or-runtime-unavailable' });
+    };
+
+    const checkDiagnostic = async (reason: string, referenced: true | null | 'active') => {
+      // #12640: the Host reads must preserve the reason without synchronously
+      // resolving the same real worktree in either the list or the audit.
+      const syncRealpath = vi.spyOn(syncFs, 'realpathSync');
+      const asyncRealpath = vi.spyOn(fs, 'realpath');
+      try {
+        const rows = await listWorktreeRecycleStatus();
+        expect.soft(rows).toContainEqual(expect.objectContaining({ path: meta.path, state: 'waiting', reason }));
+        expect.soft(syncRealpath.mock.calls.filter(([value]) => value === meta.path)).toHaveLength(0);
+        if (referenced === true) {
+          expect(asyncRealpath.mock.calls.filter(([value]) => value === meta.path)).toHaveLength(1);
+        }
+        syncRealpath.mockClear();
+        asyncRealpath.mockClear();
+        await auditRegisteredWorktrees();
+        expect.soft(syncRealpath.mock.calls.filter(([value]) => value === meta.path)).toHaveLength(0);
+        if (referenced === true) {
+          // One for the reference/metadata view, plus the existing journal lookup.
+          expect(asyncRealpath.mock.calls.filter(([value]) => value === meta.path)).toHaveLength(2);
+        }
+      } finally {
+        asyncRealpath.mockRestore();
+        syncRealpath.mockRestore();
+      }
+      const audit = JSON.parse(await fs.readFile(path.join(state.root, 'worktree-audit.json'), 'utf8'));
+      const entry = audit.entries.find((item: { path: string }) => item.path === meta.path);
+      expect(entry).toMatchObject({ directory: 'present' });
+      // The live runner can update its durable directory during a scan.
+      if (referenced === 'active') expect([true, null]).toContain(entry.referenced);
+      else expect(entry.referenced).toBe(referenced);
+      expect.soft(entry.retentionReason).toBe(reason === 'pi-subagent-reference' ? reason : undefined);
+      expect(await readRecycleRecord(meta.path)).toEqual(retained);
+      expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe(`${name} contents\n`);
+    };
+
+    try {
+      await vi.waitFor(() => fs.access(ready), { timeout: 2_500 });
+      state.runtimePaths.add(meta.path);
+      await checkRetention();
+      await checkDiagnostic('in-use', 'active');
+      await fs.writeFile(release, '');
+      await runner;
+      expect(JSON.parse(await fs.readFile(path.join(runDir, 'result.json'), 'utf8'))).toMatchObject({
+        state: 'completed',
+      });
+      state.runtimePaths.delete(meta.path);
+      await checkRetention();
+      await checkDiagnostic('pi-subagent-reference', true);
+      for (const status of ['active', null]) {
+        state.refs.push({ id: 'pi-diagnostic-borrower', status, source: 'desktop',
+          currentDatabase: false, workingDir: meta.path });
+        await checkDiagnostic('in-use', true);
+        state.refs.pop();
+      }
+      if (source === 'direct' && process.platform !== 'win32') {
+        // A fresh scan must observe a previously absent alias, then an unreadable
+        // alias. The other reference reaches the worktree via its resolved target.
+        const alias = path.join(state.root, 'pi-quarantine-alias');
+        const target = await fs.mkdtemp(path.join(state.root, 'pi-quarantine-'));
+        meta.quarantinePath = alias;
+        retained!.meta.quarantinePath = alias;
+        await writeRecycleRecord(retained!);
+        await checkDiagnostic('pi-subagent-reference', true);
+        await fs.symlink(target, alias, 'dir');
+        state.refs.push({ id: 'pi-diagnostic-borrower', status: 'active', source: 'desktop',
+          currentDatabase: false, workingDir: target });
+        await checkDiagnostic('in-use', true);
+        state.refs.pop();
+        await fs.unlink(alias);
+        await fs.symlink(alias, alias, 'dir');
+        await checkDiagnostic('in-use', true);
+      }
+      await fs.writeFile(configFile, '{');
+      await checkDiagnostic('in-use', null);
+    } finally {
+      await fs.writeFile(release, '');
+      await runner.catch(() => {});
+      state.runtimePaths.delete(meta.path);
+      state.refs = state.refs.filter((row) => ![meta.sessionId, parent.sessionId, 'pi-diagnostic-borrower'].includes((row as { id: string }).id));
+      await fs.rm(runs, { recursive: true, force: true });
+    }
+  });
 
   // A discard choice covers only the confirmed checkout contents. Existing recovery
   // tests exercise automatic snapshots, not the discard journal flag or later edits.

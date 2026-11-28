@@ -15,7 +15,7 @@ import {
 import { listSnapshotRefs, releaseSnapshotRef, SNAPSHOT_REF_PREFIX } from './contentSnapshot';
 import type { LocalWorktreeReference } from '../localDb/worker/worktreeReferences';
 import { recycleManagedWorktree } from './managedRecycle';
-import { hasLiveSessionReference, loadLiveSessionPathKeys, pathKey } from './liveSessionRefs';
+import { loadWorktreeReferenceDiagnostics, pathKey } from './liveSessionRefs';
 import * as store from './worktreeStore';
 import { physicalWorktreeKey, withWorktreeResourceLock, withWorktreeResourceLocks } from './resourceLock';
 import { subscribeWorktreeRecycleEvents } from './recycleEvents';
@@ -678,14 +678,14 @@ export function stopWorktreeRecycleMaintenance(): void {
 
 /** Read-only classification: upgrading never turns historical registrations into deletion requests. */
 export async function auditRegisteredWorktrees(): Promise<void> {
-  const refs = await loadLiveSessionPathKeys();
+  const diagnostics = await loadWorktreeReferenceDiagnostics();
   const entries = [];
   for (const meta of store.getAll()) {
     let directory: 'present' | 'missing' | 'unreadable' | 'residual' = 'present';
     let physicalPath = pathKey(meta.path);
     try {
       await fs.lstat(meta.path);
-      physicalPath = await physicalWorktreeKey(meta.path);
+      physicalPath = await diagnostics.physicalPath(meta.path);
       try { await fs.lstat(path.join(meta.path, '.git')); } catch (error) {
         directory = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'residual' : 'unreadable';
       }
@@ -693,9 +693,10 @@ export async function auditRegisteredWorktrees(): Promise<void> {
       directory = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable';
     }
     const record = await readRecycleRecord(meta.path);
+    const reference = await diagnostics.inspect(meta, record?.reason === 'referenced-or-runtime-unavailable'
+      && record.generation === worktreeGeneration(meta));
     entries.push({ sessionId: meta.sessionId, path: meta.path, physicalPath, directory,
-      referenced: refs === null ? null : hasLiveSessionReference(meta, refs),
-      recycle: record?.phase ?? 'historical-review', reason: record?.reason,
+      ...reference, recycle: record?.phase ?? 'historical-review', reason: record?.reason,
     });
   }
   const summary = {

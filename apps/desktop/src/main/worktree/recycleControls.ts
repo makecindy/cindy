@@ -3,6 +3,7 @@ import { createLogger } from '../logger';
 import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../../shared/worktreeRecycle';
 import { listRecycleRecords, readRecycleRecord, writeRecycleRecord, worktreeGeneration } from './recycleJournal';
 import { isWorktreeRecycleRetrySuspended } from './recycleMaintenance';
+import { loadWorktreeReferenceDiagnostics } from './liveSessionRefs';
 import { recyclePolicy } from './recyclePolicy';
 import { withWorktreeResourceLock, physicalWorktreeKey } from './resourceLock';
 import { notifyWorktreeRecycleOpportunity } from './recycleEvents';
@@ -21,15 +22,26 @@ function visibleReason(reason?: string): WorktreeRecycleStatus['reason'] {
 }
 
 async function listWorktreeRecycleStatusInner(): Promise<WorktreeRecycleStatus[]> {
-  return (await listRecycleRecords()).filter((record) => {
+  const records = (await listRecycleRecords()).filter((record) => {
     if (['removed', 'restoring', 'restored'].includes(record.phase) || record.meta.ephemeral) return false;
     const current = store.get(record.meta.sessionId);
     return !current || worktreeGeneration(current) === record.generation;
-  }).map((record) => ({
-    id: record.id, generation: record.generation, name: record.meta.name, path: record.meta.path,
-    state: recyclePolicy(record).state === 'retrying' && isWorktreeRecycleRetrySuspended(record) ? 'paused' : recyclePolicy(record).state, failures: recyclePolicy(record).failures,
-    reason: isWorktreeRecycleRetrySuspended(record) && !record.reason ? 'failed' : visibleReason(record.reason),
-  }));
+  });
+  const diagnostics = records.some((record) => record.reason === 'referenced-or-runtime-unavailable')
+    ? await loadWorktreeReferenceDiagnostics() : null;
+  const statuses: WorktreeRecycleStatus[] = [];
+  for (const record of records) {
+    const reason = record.reason === 'referenced-or-runtime-unavailable' && diagnostics?.hasPiReferences
+      ? (await diagnostics.inspect(record.meta, true)).retentionReason ?? 'in-use'
+      : isWorktreeRecycleRetrySuspended(record) && !record.reason ? 'failed' : visibleReason(record.reason);
+    const policy = recyclePolicy(record);
+    statuses.push({
+      id: record.id, generation: record.generation, name: record.meta.name, path: record.meta.path,
+      state: policy.state === 'retrying' && isWorktreeRecycleRetrySuspended(record) ? 'paused' : policy.state,
+      failures: policy.failures, reason,
+    });
+  }
+  return statuses;
 }
 
 /** Changes scheduling only. Actual recycling still revalidates live references and recovery evidence. */
