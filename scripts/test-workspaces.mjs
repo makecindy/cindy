@@ -1098,14 +1098,18 @@ export function selectionNeedsElectron(
  * Variables an Agent's shell may carry that change test results without being part of the code
  * under test. Each caused a false failure when the suite ran inside an agent session:
  * NODE_ENV / NODE_DEBUG (production or debug branches), CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL
- * (maker-core harness tests) and CINDY_INPUT_HANDOFF_ROUTE (a remotely controlled Cindy task's
- * route token; device-hosted guest tests assert it is absent). CI never sets them.
+ * (maker-core harness tests), CINDY_INPUT_HANDOFF_ROUTE (a remotely controlled Cindy task's
+ * route token; device-hosted guest tests assert it is absent) and
+ * CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP (the Claude Code harness sets it; buildClaudeEnv
+ * inherits process.env and can only override, not delete, so maker-core's Claude-family model
+ * cases saw the cap disabled and failed). CI never sets them.
  */
 export const AGENT_ENV_TEST_POLLUTANTS = Object.freeze([
 	"NODE_ENV",
 	"NODE_DEBUG",
 	"CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL",
 	"CINDY_INPUT_HANDOFF_ROUTE",
+	"CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP",
 ]);
 
 /** Remove those variables before any test child starts; returns the names that were removed. */
