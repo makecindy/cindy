@@ -1288,6 +1288,7 @@ import { applyDockIcon } from './app-icon.js';
 import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
+  noteModelAccessAgentBinariesReady,
   noteManualXdKeySaved,
   noteManualXdKeyRemoved,
   refreshXdGatewayModels,
@@ -7789,6 +7790,7 @@ const registerIpcHandlers = () => {
     startBinaryBackgroundUpdates();
 
     instanceBinariesReady = true;
+    noteModelAccessAgentBinariesReady();
 
     return {
       claudeCode: { status: claudeRes.ready ? 'passed' as const : 'failed' as const, path: claudeRes.path },
