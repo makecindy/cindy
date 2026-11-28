@@ -16,7 +16,7 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
 import { useConsentSheetSizes } from "./useConsentSheetSizes";
 import { useConsentAnswerGate } from "./consentAnswerGate";
@@ -42,8 +42,33 @@ export function PluginManagementConfirmation(
   const layoutKey = consentLayoutKey(consent?.requestId, { width: windowWidth, height: windowHeight, fontScale });
   const layout = useConsentSheetSizes(layoutKey);
   const sizes = layout.sizes;
-  const measure = (key: "identity" | "heading" | "actions") => (event: { nativeEvent: { layout: { height: number } } }) =>
+  // Laid out anew while this consent is open (dispatcher 2026-11-28, closing the rotation gap): once the window size or
+  // text size changes, or the list or the button area (their widths follow the window only: not the scroll thumb's room,
+  // which narrows the list's content) reports another width than it first did for this consent (the native relayout
+  // can arrive before the window size does), this consent is "review first" for as long as it is open
+  // (`moved`): the generation moves on at once and the regular Allow does not come back, so no reading from around the
+  // change can answer. A consent already reviewed stays reviewed.
+  const requestId = consent?.requestId ?? null;
+  const windowSize = `${windowWidth}x${windowHeight}@${fontScale}`;
+  const relaid = useRef<{ requestId: string | null; window: string; widths: Record<string, number>; moved: boolean }>({ requestId: null, window: windowSize, widths: {}, moved: false });
+  if (relaid.current.requestId !== requestId) relaid.current = { requestId, window: windowSize, widths: {}, moved: false };
+  else if (relaid.current.window !== windowSize) { relaid.current.window = windowSize; relaid.current.moved = true; }
+  const moved = relaid.current.moved;
+  const [, relayout] = useReducer((count: number) => count + 1, 0);
+  const noteWidth = (view: string, width: number | undefined) => {
+    const current = relaid.current;
+    if (width === undefined || width <= 0 || current.requestId !== requestId) return;
+    const first = current.widths[view];
+    if (first === undefined) { current.widths[view] = width; return; }
+    if (Math.abs(first - width) <= 0.5 || current.moved) return;
+    current.moved = true;
+    gate.leaveRegular();
+    relayout();
+  };
+  const measure = (key: "identity" | "heading" | "actions") => (event: { nativeEvent: { layout: { height: number; width?: number } } }) => {
+    if (key === "actions") noteWidth(key, event.nativeEvent.layout.width);
     layout.report(key, event.nativeEvent.layout.height);
+  };
   const measureLine = (index: number) => (event: { nativeEvent: { layout: { height: number } } }) =>
     layout.reportLine(index, event.nativeEvent.layout.height);
   const sheetPadding = spacing.lg + spacing.xs;
@@ -67,7 +92,7 @@ export function PluginManagementConfirmation(
   const fitKey = layoutKey;
   const [crampedFor, setCrampedFor] = useState<string | null>(null);
   const cramped = fitKey !== null && crampedFor === fitKey;
-  const compact = plan.mode === "compact" || reviewed || cramped;
+  const compact = plan.mode === "compact" || reviewed || cramped || moved;
   // Compact: review and Allow are separate controls that never share a place (maintainer review 06:44, by layout alone,
   // the same as iOS). The buttons are the same before and after the review step, at the bottom of a sheet of fixed
   // height (its maximum, which a compact sheet fills anyway), so the step moves nothing: the bottom row is Reject and
@@ -78,7 +103,6 @@ export function PluginManagementConfirmation(
   // Whether a press may answer is judged when it is pressed, from the sheet's current state (`useConsentAnswerGate`, the
   // same for both sheets: maintainer review 07:30), never from what the callback captured: a regular Allow from before
   // the sheet went compact (or before another consent or layout) answers nothing, even once the sizes would confirm it.
-  const requestId = consent?.requestId ?? null;
   const gate = useConsentAnswerGate({ requestId, mode: compact ? "review" : "regular", layoutKey, allowBlocked: info?.allowBlocked === true });
   const allowReadyCompact = reviewed && info?.allowBlocked !== true;
   const list = useScrollOverflow(), summary = useScrollOverflow();
@@ -164,7 +188,7 @@ export function PluginManagementConfirmation(
         <View testID="plugins.management.listArea" style={[styles.listArea, compact && styles.compactListArea]}>
           <ScrollView ref={listRef} contentContainerStyle={[styles.content, list.thumbGutter]} testID="plugins.management.list" showsVerticalScrollIndicator={false}
             accessibilityHint={t("plugins.management.scrollHint")}
-            onLayout={(event) => { layout.report("visible", event.nativeEvent.layout.height); list.onLayout(event); }}
+            onLayout={(event) => { noteWidth("list", event.nativeEvent.layout.width); layout.report("visible", event.nativeEvent.layout.height); list.onLayout(event); }}
             onContentSizeChange={(width, height) => { layout.report("content", height); list.onContentSizeChange(width, height); }}
             onScroll={list.onScroll}
             scrollEventThrottle={64}>

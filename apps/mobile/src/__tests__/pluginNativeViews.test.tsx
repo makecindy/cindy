@@ -2291,16 +2291,54 @@ describe("pinned high-risk permission", () => {
     act(() => bridge.props.get("plugins.management.review").onPress());
     expect(p.controller.answer, "pressing the review button's place reviews, never answers").not.toHaveBeenCalled();
   });
-  it("Android: a regular Allow's callback from before a rotation, called once the new layout's sizes confirm it, answers nothing; the new layout's own Allow answers", () => {
-    bridge.fontScale = 1;
+  /* 测试价值（调度 2026-11-28：转屏时序缺口。布局键取自 JS 的窗口尺寸，Android 转屏时新几何的 onLayout 可能先于窗口尺寸到达、
+   * 记在旧键下，那一两帧里按常规档「允许」会用混合读数确认常规档）
+   * - 生产入口与可观察结果：Android 真实确认面板组件；旧回调与新的常规入口是否写出 answer(true)、主按钮。
+   * - 依据：同一确认打开期间，窗口尺寸、字号变过，或整宽视图报出与这份确认首次不同的宽度，就对这个 requestId 改为「须先查看」，
+   *   代次立即前移、锁定紧凑档；已查看的仍算已查看。不判断那一两帧的读数属于哪个布局。
+   * - 最小失败输入：常规档初开并按全部能确认常规档的尺寸到齐 → 保存「允许」回调 → 窗口改为横屏（或列表先报出横屏宽度、窗口尺寸
+   *   还没变）→ 报一组混合读数 → 调旧回调与当时的常规入口；e4f8514ffd 上写出允许。tier: unit。
+   */
+  const layoutWithWidth = (id: string, height: number, width: number) =>
+    act(() => bridge.props.get(id).onLayout({ nativeEvent: { layout: { height, width } } }));
+  it.each([["the window size changes", "window"], ["the list reports another width before the window size changes", "native"]] as const)(
+    "Android: once %s while a consent is open, it is review first: old and new regular Allow answer nothing; Allow answers once after the review", (_name, how) => {
+      bridge.fontScale = 1;
+      const state = consentState(allFive);
+      const answer = vi.fn(() => { state.answerHeld = state.receipt.consent.requestId; });
+      const p = { state, controller: { getState: () => state, answer } as any, active: true, deviceName: "Mac" };
+      const { container, rerender } = mount(AndroidManagementConfirmation, p);
+      layOutSheet({ identity: 100, visible: 2000, content: 400 });
+      layoutWithWidth("plugins.management.list", 2000, 390);
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect({ review: shown("plugins.management.review"), allow: allowAvailable() }, "regular before the change").toEqual({ review: false, allow: true });
+      const before = bridge.props.get("plugins.management.allow").onPress;
+      if (how === "window") { bridge.width = 844; bridge.height = 390; rerender({ ...p }); }
+      else layoutWithWidth("plugins.management.list", 300, 844);
+      // A mix of readings that would confirm the regular layout.
+      layOutSheet({ identity: 100, visible: 2000, content: 400 });
+      act(() => before());
+      expect(answer, "the callback from before the change").not.toHaveBeenCalled();
+      const now = bridge.props.get("plugins.management.allow").onPress;
+      act(() => now());
+      expect(answer, "the Allow drawn after the change, before the review").not.toHaveBeenCalled();
+      expect(shown("plugins.management.review"), "the main button is review").toBe(true);
+      act(() => bridge.props.get("plugins.management.review").onPress());
+      act(() => before());
+      act(() => bridge.props.get("plugins.management.allow").onPress());
+      act(() => bridge.props.get("plugins.management.allow").onPress());
+      expect(answer).toHaveBeenCalledTimes(1);
+      expect(answer).toHaveBeenCalledWith(true);
+    });
+  it("Android: reviewed, then the window size changes: still reviewed, Allow answers", () => {
+    bridge.fontScale = 2;
     const p = props(allFive);
     const { rerender } = mount(AndroidManagementConfirmation, p);
-    const before = bridge.props.get("plugins.management.allow").onPress;
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    act(() => bridge.props.get("plugins.management.review").onPress());
     bridge.width = 844; bridge.height = 390;
     rerender({ ...p });
-    layOutSheet({ identity: 100, visible: 2000, content: 400 });
-    act(() => before());
-    expect(p.controller.answer, "a tap from the layout before the rotation").not.toHaveBeenCalled();
+    expect(allowAvailable()).toBe(true);
     act(() => bridge.props.get("plugins.management.allow").onPress());
     expect(p.controller.answer).toHaveBeenCalledWith(true);
   });
