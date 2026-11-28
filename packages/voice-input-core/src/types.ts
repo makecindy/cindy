@@ -73,6 +73,8 @@ export type AudioTrace = {
   chunkIndex: number;
   sampleRate: number;
   durationMs: number;
+  /** True while the client start-cue beep (or its short acoustic tail) may bleed into the mic. */
+  startCueEchoWindow?: boolean;
 };
 
 export interface AsrProvider {
@@ -99,6 +101,13 @@ export interface AsrProvider {
    * undefined, in which case transport failures surface to the user.
    */
   recover?(): Promise<void>;
+  /**
+   * Proactive seamless session rotation before an upstream duration limit
+   * (e.g. voice-server maxSessionMs=180s). Providers should preserve accumulated
+   * transcripts and rotate make-before-break when possible without counting as
+   * an error recovery attempt.
+   */
+  rotateSession?(): Promise<void>;
   /**
    * One-shot end-of-life hook. Lets providers flush session-scoped
    * artifacts (e.g. dev audio + WS recordings written for offline replay
@@ -276,6 +285,29 @@ export type VoiceTimelineEvent =
     }
   | { type: 'asr_recovery_succeeded'; runId: string; at: number; elapsedMs: number }
   | { type: 'asr_recovery_failed'; runId: string; at: number; elapsedMs: number; reason: string }
+  | {
+      type: 'asr_session_rotation_attempted';
+      runId: string;
+      at: number;
+      reason: 'pause' | 'deadline';
+      sessionElapsedMs: number;
+      rotationCount: number;
+    }
+  | {
+      type: 'asr_session_rotation_succeeded';
+      runId: string;
+      at: number;
+      elapsedMs: number;
+      rotationCount: number;
+    }
+  | {
+      type: 'asr_session_rotation_failed';
+      runId: string;
+      at: number;
+      elapsedMs: number;
+      reason: string;
+      rotationCount: number;
+    }
   | { type: 'asr_stop_error_ignored'; runId: string; at: number; message: string; textChars: number }
   // No failure message here: fail() records the 'error' event with the same
   // runId immediately before salvaging, so the cause is already in the timeline
