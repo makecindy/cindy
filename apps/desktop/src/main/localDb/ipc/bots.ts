@@ -16,6 +16,7 @@ import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../sh
 import { companionHomes, inactiveCompanionCopyIds } from '../../companion-cloud/homes.js';
 import fs from 'node:fs/promises';
 import { chooseAvatarSource } from '../../profileEdit.js';
+import { assistantSamplingSettlements } from '../../assistantSamplingSettlement.js';
 import { toSdrAvatarImage } from '../../hdrAvatarToSdr.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -25,7 +26,7 @@ import type { OpenDialogOptions } from 'electron';
 import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../client/current';
-import { flushAssistantSamplingMetadata } from '../../messagePersistBroadcaster.desktop.js';
+import { flushAssistantSamplingMetadata, getAssistantSamplingRuntimeId } from '../../messagePersistBroadcaster.desktop.js';
 import { notifyAgentIslandCompanionChanged } from '../agentIslandSessionPatch.js';
 import type {
   BotsReplaceCanonicalSessionResult,
@@ -1162,8 +1163,14 @@ async function countCanonicalUnread(
 async function readProfile(
   client: ReturnType<typeof getDbClient>,
   botId: string,
-  /** Renderer-owned read position for this Bot; omitted ⇒ no unread accounting. */
-  lastReadAt: number | null = null,
+  {
+    lastReadAt = null,
+    pendingSamplingOnly = false,
+  }: {
+    /** Renderer-owned read position; omitted means no unread accounting. */
+    lastReadAt?: number | null;
+    pendingSamplingOnly?: boolean;
+  } = {},
 ) {
   const owner = captureBotOperationOwner();
   const db = client.drizzle;
@@ -1226,7 +1233,26 @@ async function readProfile(
     .limit(1);
   const canonicalClearedAt = byId.get(canonicalSessionId ?? '')?.clearedAt ?? null;
   owner.assertCurrent();
-  if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
+  if (canonicalSessionId) {
+    let needsSettlement = !pendingSamplingOnly || assistantSamplingSettlements.hasPendingWrite(canonicalSessionId);
+    if (!needsSettlement) {
+      // Outcomes left by a prior process can affect this preview only if its
+      // pending assistant row is already on disk. Detect that case through the
+      // session's message index and keep the existing durable replay barrier.
+      const runtimeId = getAssistantSamplingRuntimeId(canonicalSessionId);
+      const [pendingReply] = await db.select({ id: messages.id }).from(messages).where(and(
+        eq(messages.sessionId, canonicalSessionId),
+        eq(messages.role, 'assistant'),
+        isNull(messages.rewindAt),
+        ...(canonicalClearedAt !== null ? [gt(messages.createdAt, canonicalClearedAt)] : []),
+        sql`COALESCE(json_extract(${messages.agentMeta}, '$.samplingAttemptPending'), 0) != 0`,
+        ...(runtimeId ? [sql`json_extract(${messages.agentMeta}, '$.samplingAttemptPending.runtimeId') IS NOT ${runtimeId}`] : []),
+      )).limit(1);
+      owner.assertCurrent();
+      needsSettlement = !!pendingReply || assistantSamplingSettlements.hasPendingWrite(canonicalSessionId);
+    }
+    if (needsSettlement) await flushAssistantSamplingMetadata(canonicalSessionId);
+  }
   owner.assertCurrent();
   const latestMessage = await readCanonicalChatPreview(db, canonicalSessionId, canonicalClearedAt);
   const unreadCount = await countCanonicalUnread(
@@ -2110,7 +2136,8 @@ export async function prepareImportedBotInvitation(botId: string, requestId: str
 
 /** Shared profile mutation for trusted settings and owner-bound capability selection. */
 export async function updateBotProfile(raw: unknown, expectedVersion?: number,
-  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>, restored?: RestoredBotOrigin) {
+  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>, restored?: RestoredBotOrigin,
+  receipt?: 'local-settings') {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const id = readText(body.id, 'botId', 128, true);
@@ -2444,7 +2471,9 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId,
       acceptsModelSelection ? 'model' : 'profile');
   }
-  const profile = await readProfile(client, id);
+  const profile = await readProfile(client, id, {
+    pendingSamplingOnly: receipt === 'local-settings' && acceptsSavedModel,
+  });
   owner.assertCurrent();
   broadcastBotProfileChanged({ botId: id, change: 'updated' });
   return profile;
@@ -2582,7 +2611,7 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
       owner.assertCurrent();
       results.push(await (remote
         ? readRemoteBotProfile(client, id)
-        : readProfile(client, id, lastReadAtByBotId.get(id) ?? null)));
+        : readProfile(client, id, { lastReadAt: lastReadAtByBotId.get(id) })));
     }
     owner.assertCurrent();
     return results.filter((profile) => profile !== null);
@@ -2705,7 +2734,7 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
 
   ipcMain.handle('local-db:bots:update', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
-    return updateBotProfile(raw, undefined, validateBotCapabilityAdditions);
+    return updateBotProfile(raw, undefined, validateBotCapabilityAdditions, undefined, 'local-settings');
   });
 
   const createBotCanonicalSessionUnlocked = async (
