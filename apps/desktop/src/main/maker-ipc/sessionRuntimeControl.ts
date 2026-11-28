@@ -14,6 +14,59 @@ import {
 
 export type SessionRuntimeMutationSource = 'agent' | 'fallback';
 
+export type SessionRuntimeRouteChangeActor =
+  | 'user'
+  | 'agent'
+  | 'fallback'
+  | 'model-group'
+  | 'provider-group'
+  | 'config-sync'
+  | 'scheduler'
+  | 'unknown';
+
+export interface SessionRuntimeRouteEndpoint {
+  agentKind: EngineKind;
+  model: string | null;
+  providerId: string | null;
+  agentDeviceId: string | null;
+}
+
+export interface SessionRuntimeRouteChange {
+  /** ISO-8601 UTC timestamp when the route change committed. */
+  at: string;
+  by: SessionRuntimeRouteChangeActor;
+  /** Bounded machine-readable reason code (never raw prompt, error text, or credentials). */
+  reason: string | null;
+  from: SessionRuntimeRouteEndpoint;
+  to: SessionRuntimeRouteEndpoint;
+}
+
+export interface SessionRuntimeRouteChangeAttribution {
+  by?: SessionRuntimeRouteChangeActor;
+  reason?: string | null;
+}
+
+const SAFE_ROUTE_CHANGE_REASON = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/** Only allow bounded machine-readable reason tokens; never leak raw error text, paths, or credentials. */
+export function sanitizeRouteChangeReason(reason: string | null | undefined): string | null {
+  if (typeof reason !== 'string') return null;
+  const trimmed = reason.trim();
+  return SAFE_ROUTE_CHANGE_REASON.test(trimmed) ? trimmed : null;
+}
+
+export function runtimeRouteEndpointsEqual(
+  a: SessionRuntimeRouteEndpoint,
+  b: SessionRuntimeRouteEndpoint,
+): boolean {
+  return (
+    a.agentKind === b.agentKind &&
+    (a.model ?? null) === (b.model ?? null) &&
+    (a.providerId ?? null) === (b.providerId ?? null) &&
+    (a.agentDeviceId ?? null) === (b.agentDeviceId ?? null)
+  );
+}
+
 export interface SessionRuntimeProfile {
   agentDeviceId?: string | null;
   agentKind: AgentKind;
@@ -35,6 +88,8 @@ export interface PendingSessionRuntimeMutation {
    * selection 一并应用；不落 DB（会随 runtimePending 投影带出，renderer 不消费）。
    */
   thinking?: boolean;
+  /** Preserved through turn-end deferral so settlement records accurate route attribution. */
+  routeChangeAttribution?: SessionRuntimeRouteChangeAttribution;
 }
 
 export interface SessionRuntimeControlSnapshot {
@@ -43,6 +98,7 @@ export interface SessionRuntimeControlSnapshot {
   pending: PendingSessionRuntimeMutation | null;
   fallbackHop: number;
   visitedRoutes: string[];
+  lastRouteChange: SessionRuntimeRouteChange | null;
 }
 
 function runtimeOverrideForDevice(profile: SessionRuntimeProfile | null, agentDeviceId?: string | null) {
@@ -83,6 +139,7 @@ export function projectSessionRuntimeControl(
     runtimeEffective: effective,
     runtimePending: control.pending,
     runtimeBaselineRecoveryPending: false,
+    ...(control.lastRouteChange ? { runtimeLastRouteChange: control.lastRouteChange } : {}),
   };
 }
 
@@ -115,6 +172,7 @@ interface SessionRuntimeControlState {
   pendingRouteExplicit: boolean;
   fallbackHop: number;
   visitedRoutes: Set<string>;
+  lastRouteChange: SessionRuntimeRouteChange | null;
 }
 
 const states = new Map<string, SessionRuntimeControlState>();
@@ -136,10 +194,52 @@ function stateFor(sessionId: string): SessionRuntimeControlState {
       pendingRouteExplicit: true,
       fallbackHop: 0,
       visitedRoutes: new Set(),
+      lastRouteChange: null,
     };
     states.set(sessionId, state);
   }
   return state;
+}
+
+/**
+ * Record the latest committed route change for observability (`get_session_runtime`,
+ * `get_task_digest`, and remote `local-db:sessions:get` projection). Axis-only or
+ * no-op updates leave the previous route-change attribution intact unless `force` is set
+ * (e.g., forced relocation behind a shared logical provider ID).
+ */
+export function recordSessionRuntimeRouteChange(
+  sessionId: string,
+  change: {
+    at?: string;
+    by: SessionRuntimeRouteChangeActor;
+    reason?: string | null;
+    from: SessionRuntimeRouteEndpoint;
+    to: SessionRuntimeRouteEndpoint;
+  },
+  options?: { force?: boolean },
+): SessionRuntimeRouteChange | null {
+  const from: SessionRuntimeRouteEndpoint = {
+    agentKind: change.from.agentKind,
+    model: change.from.model ?? null,
+    providerId: change.from.providerId ?? null,
+    agentDeviceId: change.from.agentDeviceId ?? null,
+  };
+  const to: SessionRuntimeRouteEndpoint = {
+    agentKind: change.to.agentKind,
+    model: change.to.model ?? null,
+    providerId: change.to.providerId ?? null,
+    agentDeviceId: change.to.agentDeviceId ?? null,
+  };
+  if (!options?.force && runtimeRouteEndpointsEqual(from, to)) return null;
+  const recorded: SessionRuntimeRouteChange = {
+    at: change.at ?? new Date().toISOString(),
+    by: change.by,
+    reason: sanitizeRouteChangeReason(change.reason),
+    from,
+    to,
+  };
+  stateFor(sessionId).lastRouteChange = recorded;
+  return recorded;
 }
 
 export function sessionRuntimeGenerationMatches(
@@ -170,6 +270,11 @@ export function remapSessionRuntimeProvider(params: {
   toProviderId: string;
   expectedOwnerEpoch: string;
   expectedGeneration: number;
+  recordRouteChange?: {
+    agentKind: EngineKind;
+    model: string | null;
+    agentDeviceId: string | null;
+  };
 }): number | null {
   if (!sessionRuntimeControlOwnerEpochMatches(params.expectedOwnerEpoch)) return null;
   const existing = states.get(params.sessionId);
@@ -185,6 +290,24 @@ export function remapSessionRuntimeProvider(params: {
     state.pending = { ...state.pending, generation: state.generation,
       profile: effective?.providerId === params.fromProviderId && routeKey(state.pending.profile) === routeKey(effective)
         ? { ...state.pending.profile, providerId: params.toProviderId } : state.pending.profile };
+  }
+  if (params.recordRouteChange && params.fromProviderId !== params.toProviderId) {
+    recordSessionRuntimeRouteChange(params.sessionId, {
+      by: 'provider-group',
+      reason: 'provider-remap',
+      from: {
+        agentKind: params.recordRouteChange.agentKind,
+        model: params.recordRouteChange.model,
+        providerId: params.fromProviderId,
+        agentDeviceId: params.recordRouteChange.agentDeviceId,
+      },
+      to: {
+        agentKind: params.recordRouteChange.agentKind,
+        model: params.recordRouteChange.model,
+        providerId: params.toProviderId,
+        agentDeviceId: params.recordRouteChange.agentDeviceId,
+      },
+    });
   }
   return state.generation;
 }
@@ -339,6 +462,7 @@ export function acceptSessionRuntimeMutation(params: {
   sessionId: string;
   previousProfile?: FallbackRouteProfile;
   thinking?: boolean;
+  routeChangeAttribution?: SessionRuntimeRouteChangeAttribution;
 } & (
   | { source: SessionRuntimeMutationSource; profile: SessionRuntimeProfile; deferred: boolean }
   | { source: 'fallback'; profile: FallbackRouteProfile; deferred: false }
@@ -362,6 +486,9 @@ export function acceptSessionRuntimeMutation(params: {
     source: params.source,
     profile: params.profile,
     ...(acceptedThinking !== undefined ? { thinking: acceptedThinking } : {}),
+    ...(params.deferred && params.routeChangeAttribution
+      ? { routeChangeAttribution: params.routeChangeAttribution }
+      : {}),
   };
   state.pending = params.deferred ? accepted : null;
   state.pendingRouteExplicit = true;
@@ -472,6 +599,7 @@ export function getSessionRuntimeControlSnapshot(sessionId: string): SessionRunt
       pending: null,
       fallbackHop: 0,
       visitedRoutes: [],
+      lastRouteChange: null,
     };
   }
   return {
@@ -480,6 +608,7 @@ export function getSessionRuntimeControlSnapshot(sessionId: string): SessionRunt
     pending: state.pending,
     fallbackHop: state.fallbackHop,
     visitedRoutes: [...state.visitedRoutes],
+    lastRouteChange: state.lastRouteChange,
   };
 }
 

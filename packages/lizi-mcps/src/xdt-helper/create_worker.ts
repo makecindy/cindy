@@ -43,6 +43,30 @@ export function toHostAgentDeviceId(value: string | undefined): { agentDeviceId?
   return { agentDeviceId: value === LOCAL_AGENT_DEVICE ? null : value };
 }
 
+/**
+ * Resolve `provider_device_id` + compat alias `agent_device_id` into host `agentDeviceId`
+ * (`"local"` → `null`; omitted → `undefined`). Rejects blank strings or conflicting values.
+ */
+export function resolveProviderDevicePatch(
+  providerDeviceId: string | undefined,
+  agentDeviceId: string | undefined,
+): { ok: true; agentDeviceId?: string | null } | { ok: false; message: string } {
+  const p = providerDeviceId?.trim();
+  const a = agentDeviceId?.trim();
+  if (providerDeviceId !== undefined && !p) {
+    return { ok: false, message: 'provider_device_id 不能为空。' };
+  }
+  if (agentDeviceId !== undefined && !a) {
+    return { ok: false, message: 'agent_device_id 不能为空。' };
+  }
+  if (p !== undefined && a !== undefined && p !== a) {
+    return { ok: false, message: 'provider_device_id 与 agent_device_id 同时提供时必须一致。' };
+  }
+  const chosen = p ?? a;
+  if (chosen === undefined) return { ok: true };
+  return { ok: true, agentDeviceId: chosen === LOCAL_AGENT_DEVICE ? null : chosen };
+}
+
 export interface WorkerCreationResolved {
   agent: ControlWorkerEngine;
   model: string;

@@ -167,18 +167,20 @@ export function redactInputProjectionForSharedGuest<T>(projection: T): T {
   return changed ? (next as T) : projection;
 }
 
-/** Strip private session-level provenance (originating task / remote Orca Lead / smart routing) for shared-task guests. */
+/** Strip private session-level provenance (originating task / remote Orca Lead / smart routing / route history) for shared-task guests. */
 export function redactSessionRowForSharedGuest<T>(session: T): T {
   if (!session || typeof session !== 'object' || Array.isArray(session)) return session;
   const record = session as Record<string, unknown>;
   const hasOrigin = record.createdBySession != null;
   const hasOrcaLead = record.orcaRemoteLead != null;
   const hasModelGroupBinding = 'modelGroupBinding' in record;
-  if (!hasOrigin && !hasOrcaLead && !hasModelGroupBinding) return session;
+  const hasLastRouteChange = 'runtimeLastRouteChange' in record;
+  if (!hasOrigin && !hasOrcaLead && !hasModelGroupBinding && !hasLastRouteChange) return session;
   const next: Record<string, unknown> = { ...record };
   if (hasOrigin) next.createdBySession = null;
   if (hasOrcaLead) next.orcaRemoteLead = null;
   if (hasModelGroupBinding) delete next.modelGroupBinding;
+  if (hasLastRouteChange) delete next.runtimeLastRouteChange;
   return next as T;
 }
 

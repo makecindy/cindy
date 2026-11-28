@@ -1,11 +1,12 @@
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind, PermissionMode } from '@cindy/maker-core';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult, LiziMcpSessionContext } from '../types.js';
 import { errorPayload, okPayload } from './_payload.js';
+import { LOCAL_AGENT_DEVICE, resolveProviderDevicePatch } from './create_worker.js';
 
 export type SessionQueueControlErrorCode =
   | 'NOT_FOUND'
@@ -32,11 +33,45 @@ export type SessionSteerErrorCode =
 export type SessionStopErrorCode = 'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY';
 
 export interface SessionRuntimeProfile {
+  agentDeviceId?: string | null;
   agentKind: AgentKind;
   model: string;
   providerId: string | null;
   effort: Effort | null;
   fastMode: boolean | 'ultrafast';
+}
+
+export type SessionRuntimeRouteChangeActor =
+  | 'user'
+  | 'agent'
+  | 'fallback'
+  | 'model-group'
+  | 'provider-group'
+  | 'config-sync'
+  | 'scheduler'
+  | 'unknown';
+
+export interface SessionRuntimeRouteEndpoint {
+  agentKind: EngineKind;
+  model: string | null;
+  providerId: string | null;
+  agentDeviceId: string | null;
+}
+
+export interface SessionRuntimeRouteChange {
+  at: string;
+  by: SessionRuntimeRouteChangeActor;
+  reason: string | null;
+  from: SessionRuntimeRouteEndpoint;
+  to: SessionRuntimeRouteEndpoint;
+}
+
+export interface SessionRuntimeRouteSource {
+  kind: 'local' | 'device' | 'share';
+  providerDeviceId: string;
+  providerDeviceName: string | null;
+  accountId?: string | null;
+  managedBy?: 'model-group' | 'provider-group' | null;
 }
 
 export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
@@ -51,6 +86,8 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
     profile: SessionRuntimeProfile;
   } | null;
   fallbackEnabled?: boolean;
+  routeSource?: SessionRuntimeRouteSource;
+  lastRouteChange?: SessionRuntimeRouteChange | null;
 }
 
 export interface SessionControlDeps {
@@ -120,6 +157,7 @@ export interface SessionControlDeps {
     expectedGeneration?: number;
     patch: {
       harness?: AgentKind;
+      agentDeviceId?: string | null;
       model?: string;
       providerId?: string | null;
       effort?: Effort;
@@ -398,8 +436,10 @@ export function registerGetSessionRuntimeTool(
     category: 'control',
     description:
       '只读查询本机 session 的统一状态：记录生命周期、运行/等待/正常结束/出错结束、标题工作流语义、' +
-      '开始时间、最后活动时间、动作摘要、优雅停止状态，以及运行时模型组合、待生效修改和 generation；' +
-      'pending.source=user 表示用户在面板里登记、下一条消息发送时才生效的选择。不返回提示词正文、工具参数或凭证。',
+      '开始时间、最后活动时间、动作摘要、优雅停止状态，以及运行时模型组合（含 provider_device_id 供应电脑）、' +
+      '脱敏来源投影（route_source：local/device/share、设备名、本机订阅账号槽位与路由托管方）、' +
+      '最近一次路由切换归因（last_route_change：时间/发起方/原因码/from→to）、待生效修改和 generation；' +
+      'pending.source=user 表示用户在面板里登记、下一条消息发送时才生效的选择。不返回提示词正文、工具参数、邮箱或凭证。',
     inputShape: {
       session_id: z.string().min(1).optional().describe('目标 session id；省略时查询当前任务。'),
     },
@@ -437,6 +477,10 @@ export function registerGetSessionRuntimeTool(
             }
           : null,
         fallback_enabled: runtime.fallbackEnabled ?? false,
+        ...(runtime.routeSource !== undefined ? { route_source: routeSourcePayload(runtime.routeSource) } : {}),
+        ...(runtime.lastRouteChange !== undefined
+          ? { last_route_change: runtime.lastRouteChange ? routeChangePayload(runtime.lastRouteChange) : null }
+          : {}),
       });
     },
   });
@@ -444,13 +488,47 @@ export function registerGetSessionRuntimeTool(
 
 const EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 
+function formatProviderDeviceId(agentDeviceId: string | null | undefined): string {
+  return agentDeviceId ?? LOCAL_AGENT_DEVICE;
+}
+
 function runtimeProfilePayload(profile: SessionRuntimeProfile) {
   return {
     harness: profile.agentKind,
     model: profile.model,
     provider_id: profile.providerId,
+    provider_device_id: formatProviderDeviceId(profile.agentDeviceId),
     effort: profile.effort,
     fast: profile.fastMode,
+  };
+}
+
+function routeSourcePayload(source: SessionRuntimeRouteSource) {
+  return {
+    kind: source.kind,
+    provider_device_id: source.providerDeviceId,
+    provider_device_name: source.providerDeviceName,
+    ...(source.accountId !== undefined ? { account_id: source.accountId } : {}),
+    ...(source.managedBy !== undefined ? { managed_by: source.managedBy } : {}),
+  };
+}
+
+function routeEndpointPayload(endpoint: SessionRuntimeRouteEndpoint) {
+  return {
+    harness: endpoint.agentKind,
+    model: endpoint.model,
+    provider_id: endpoint.providerId,
+    provider_device_id: formatProviderDeviceId(endpoint.agentDeviceId),
+  };
+}
+
+function routeChangePayload(change: SessionRuntimeRouteChange) {
+  return {
+    at: change.at,
+    by: change.by,
+    reason: change.reason,
+    from: routeEndpointPayload(change.from),
+    to: routeEndpointPayload(change.to),
   };
 }
 
@@ -462,14 +540,25 @@ export function registerSetSessionRuntimeTool(
     name: 'set_session_runtime',
     category: 'control',
     description:
-      '原子调整当前或指定本机任务的模型来源、模型、推理强度与 Fast。省略 session_id 时作用于当前任务；' +
-      '临时调整在忙碌任务的当前 turn 结束后生效。先用 get_session_runtime 读取 generation，再用 expected_generation 防止覆盖并发修改。' +
-      '提供 harness 时必须同时指定 model：完整选择会保存到目标任务，并在下一条消息发送时切换（返回 next_send）；' +
-      '省略 harness 保持临时调整语义；但目标任务已有等待下一条消息生效的选择时，省略 harness 改为修改那次选择（未提供的字段沿用它），同样返回 next_send。' +
+      '原子调整当前或指定本机任务的模型供应电脑（provider_device_id）、引擎（harness）、来源（provider_id）、模型、推理强度与 Fast。' +
+      '省略 session_id 时作用于当前任务；临时调整在忙碌任务的当前 turn 结束后生效。先用 get_session_runtime 读取 generation，再用 expected_generation 防止覆盖并发修改。' +
+      '提供 harness 时必须同时指定 model；提供 provider_device_id（或兼容别名 agent_device_id）时可单独切供应电脑（省略 harness/model 即保持当前引擎与模型、不沿用旧电脑的 provider_id），' +
+      '也可搭配 harness/model/provider_id 一起切换。完整引擎选择或跨供应电脑切换会保存到目标任务并在下一条消息发送时切换（返回 next_send）；' +
+      '省略 harness 与 provider_device_id 保持临时调整语义；但目标任务已有等待下一条消息生效的选择时，省略它们改为修改那次选择（未提供的字段沿用它），同样返回 next_send。' +
       '协同 Worker 出错或撞用量上限时，登记新选择后用 send_to_worker 发下一条消息：宿主先换到新路线再启动，不会先用旧路线。不修改全局默认选择。',
     inputShape: {
       harness: z.enum(['claude-code', 'codex', 'pi']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
       session_id: z.string().min(1).optional().describe('目标 session id；省略时使用当前任务。'),
+      provider_device_id: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('模型供应电脑："local" 表示任务所在本机，或取 list_available_models 的 locations[].agent_device_id（同账号电脑或 share:...）。提供后在下一条消息发送时生效（next_send）。'),
+      agent_device_id: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('provider_device_id 的兼容别名；两者同时提供且不一致时返回 INVALID_ARGS。'),
       provider_id: z
         .string()
         .min(1)
@@ -489,22 +578,27 @@ export function registerSetSessionRuntimeTool(
           '必填:先调用 get_session_runtime 读取当前 generation 并原样传回,用于防止覆盖并发修改。',
         ),
     },
-    handler: async ({ session_id, harness, provider_id, model, effort, fast, permission_mode, expected_generation }) => {
+    handler: async ({ session_id, harness, provider_device_id, agent_device_id, provider_id, model, effort, fast, permission_mode, expected_generation }) => {
       const targetSessionId = session_id ?? requireCallerSession(deps);
       if (!targetSessionId) {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，请显式提供 session_id。');
+      }
+      const devicePatch = resolveProviderDevicePatch(provider_device_id, agent_device_id);
+      if (!devicePatch.ok) {
+        return errorPayload('INVALID_ARGS', devicePatch.message);
       }
       if (harness !== undefined && !model?.trim()) {
         return errorPayload('INVALID_ARGS', '提供 harness 时必须同时指定目标 model。');
       }
       if (
+        devicePatch.agentDeviceId === undefined &&
         provider_id === undefined &&
         model === undefined &&
         effort === undefined &&
         fast === undefined &&
         permission_mode === undefined
       ) {
-        return errorPayload('INVALID_ARGS', '至少提供 provider_id、model、effort、fast 或 permission_mode 之一。');
+        return errorPayload('INVALID_ARGS', '至少提供 provider_device_id、provider_id、model、effort、fast 或 permission_mode 之一。');
       }
       if (expected_generation === undefined) {
         // schema 已必填,此分支为纵深防御:任何绕过 zod 的调用路径仍拿到同一引导。
@@ -515,6 +609,7 @@ export function registerSetSessionRuntimeTool(
         expectedGeneration: expected_generation,
         patch: {
           ...(harness !== undefined ? { harness } : {}),
+          ...(devicePatch.agentDeviceId !== undefined ? { agentDeviceId: devicePatch.agentDeviceId } : {}),
           ...(provider_id !== undefined ? { providerId: provider_id } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(effort !== undefined ? { effort } : {}),

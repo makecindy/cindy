@@ -30,10 +30,31 @@ export interface TaskDigestRoute {
   model: string;
   effort: string | null;
   fast: boolean | 'ultrafast';
+  /** 供应来源所在位置："local"（任务所在本机）| "<deviceId>" | "share:<id>"。 */
+  provider_device_id?: string;
+  /** 供应来源类别：local=任务本机，device=同账号另一台电脑，share=分享供应商。 */
+  source_kind?: 'local' | 'device' | 'share';
+  /** 供应电脑名称（脱敏：分享来源为 null，共享任务省略）。 */
+  provider_device_name?: string | null;
 }
 
 /** Observed routes may include plugin engines outside the runtime selection contract. */
 export type TaskDigestCurrentRoute = TaskDigestRoute | (Omit<TaskDigestRoute, 'harness'> & { harness: 'acp' });
+
+export interface TaskDigestRouteEndpoint {
+  harness: 'claude-code' | 'codex' | 'pi' | 'acp';
+  model: string | null;
+  provider_id: string | null;
+  provider_device_id: string;
+}
+
+export interface TaskDigestRouteChange {
+  at: string;
+  by: 'user' | 'agent' | 'fallback' | 'model-group' | 'provider-group' | 'config-sync' | 'scheduler' | 'unknown';
+  reason: string | null;
+  from: TaskDigestRouteEndpoint;
+  to: TaskDigestRouteEndpoint;
+}
 
 export interface TaskDigestWire {
   session_id: string;
@@ -54,6 +75,8 @@ export interface TaskDigestWire {
   pending_question: string | null;
   error: string | null;
   current_route: TaskDigestCurrentRoute | null;
+  /** 最近一次已提交的路由切换归因（时间/发起方/原因码/from→to）；未切换过或共享任务省略。 */
+  last_route_change?: TaskDigestRouteChange;
   /** set_session_runtime 的 expected_generation;另一台电脑上的任务为 null。 */
   runtime_generation: number | null;
   /** 调用方伙伴候选链里的下一条可用路线;没有则 null。 */
@@ -95,6 +118,7 @@ const payloadBytes = (digest: TaskDigestWire) =>
 export function boundTaskDigest(raw: TaskDigestWire): TaskDigestWire {
   const digest: TaskDigestWire = {
     ...raw,
+    current_route: raw.current_route ? { ...raw.current_route } : null,
     title: clip(raw.title, TITLE_MAX) ?? '',
     last_user_ask: clip(raw.last_user_ask, TASK_DIGEST_TEXT_MAX),
     last_assistant_line: clip(raw.last_assistant_line, TASK_DIGEST_TEXT_MAX, true),
@@ -108,10 +132,16 @@ export function boundTaskDigest(raw: TaskDigestWire): TaskDigestWire {
     for (const key of SHRINKABLE) digest[key] = clip(digest[key], max, key === 'last_assistant_line');
     digest.title = clip(digest.title, Math.min(TITLE_MAX, max)) ?? '';
   }
-  // 极端情况(超长 id / 模型名):继续去掉可选文字,不破坏任务身份。
+  // 极端情况(超长 id / 模型名):继续去掉可选文字与可选路由归因/设备名,不破坏任务身份。
   for (const key of SHRINKABLE) {
     if (payloadBytes(digest) <= TASK_DIGEST_MAX_BYTES) break;
     digest[key] = null;
+  }
+  if (payloadBytes(digest) > TASK_DIGEST_MAX_BYTES) {
+    delete digest.last_route_change;
+    if (digest.current_route) {
+      delete digest.current_route.provider_device_name;
+    }
   }
   if (payloadBytes(digest) > TASK_DIGEST_MAX_BYTES) {
     digest.suggested_route = null;
@@ -128,7 +158,7 @@ export function boundTaskDigest(raw: TaskDigestWire): TaskDigestWire {
 const DESCRIPTION = [
   'pinned 表示侧栏置顶状态。',
   '已知任务 id、需要给用户任务链接时也用本工具；sessionUrl 可直接写成 [任务标题](sessionUrl)。',
-  '读一件任务的短摘要(≤2KB):状态 phase、已持续分钟数、最近用户消息(排除隐藏协调/续跑输入)、最新助手回复首尾片段、待回答的问题、错误、当前模型路线、',
+  '读一件任务的短摘要(≤2KB):状态 phase、已持续分钟数、最近用户消息(排除隐藏协调/续跑输入)、最新助手回复首尾片段、待回答的问题、错误、当前模型路线(含 provider_device_id 供应电脑、source_kind 与脱敏设备名)、最近一次路由切换归因 last_route_change(何时/谁/为何从旧路线切到新路线)、',
   '建议换到的下一条路线(只在出错或撞用量上限、换模型确实有用且装得下当前上下文时,给你候选链里还没试过的那条;否则 null,此时提醒主人)、PR 状态、排队消息数、谁开的 / 谁在跟。',
   'idle_minutes 距最后一次动静的分钟数;tool_in_flight 为 true 表示有工具调用(如长时间构建、测试)正在执行,宿主不知道时不出现。',
   '被程序叫醒跟进任务时先读这一份再决定;要看原文再用 get_chat_history。',
@@ -136,7 +166,7 @@ const DESCRIPTION = [
   'phase:running 运行中 / waiting-permission 等权限 / waiting-answer 等回答 / errored 出错 / usage-limit 撞用量上限 / finished 本轮已结束 / idle 空闲。',
   'finished 只描述所查任务的本轮，不代表它新建的其它任务或用户目标已完成。下一条消息的派发仍由该任务的实时运行状态和输入队列决定。',
   'queue_paused 为 true 且 queued_count 大于 0 时，提醒用户在任务页继续发送。未提供 queue_paused 时，队列是否暂停未知。',
-  'suggested_route 只供判断，不是换模型授权。获得目标和变更的明确授权后才用 set_session_runtime(expected_generation 填 runtime_generation;只支持本机任务)。',
+  'suggested_route 只供判断，不是换模型授权。获得目标和变更的明确授权后才用 set_session_runtime(expected_generation 填 runtime_generation;只支持本机任务,可用 provider_device_id 切换供应电脑)。',
 ].join('\n');
 
 export interface GetTaskDigestToolDeps {

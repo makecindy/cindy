@@ -10,12 +10,14 @@ import { z } from 'zod';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult } from '../lizi_xdtHelperMcpServer.js';
 import { okPayload, errorPayload } from './_payload.js';
+import { LOCAL_AGENT_DEVICE, resolveProviderDevicePatch } from './create_worker.js';
 
 const EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 type WorkerRuntimeAgent = 'claude-code' | 'codex' | 'pi';
 type WorkerRuntimeEffort = (typeof EFFORT_VALUES)[number];
 
 export interface WorkerRuntimeProfile {
+  agentDeviceId?: string | null;
   agentKind: WorkerRuntimeAgent;
   model: string;
   providerId: string | null;
@@ -31,6 +33,7 @@ export interface SetWorkerRuntimeDeps {
     expectedGeneration?: number;
     patch: {
       harness?: WorkerRuntimeAgent;
+      agentDeviceId?: string | null;
       model?: string;
       providerId?: string | null;
       effort?: WorkerRuntimeEffort;
@@ -59,11 +62,12 @@ export interface SetWorkerRuntimeDeps {
 }
 
 const DESCRIPTION =
-  '给你团队里已开始的 Worker 换引擎(agent)、模型、来源、推理强度或 Fast，与用户在该 Worker 任务的模型面板里重新选择效果相同；' +
-  '对话、工作目录与未提交改动都保留。Worker 撞用量上限、模型不可用或要换更合适的模型时用它，不要归档重建。' +
-  '先用 list_available_models 确认 model 与 provider_id。提供 agent 时必须同时给 model；' +
+  '给你团队里已开始的 Worker 换模型供应电脑（provider_device_id）、引擎(agent)、模型、来源、推理强度或 Fast，与用户在该 Worker 任务的模型面板里重新选择效果相同；' +
+  '对话、工作目录与未提交改动都保留。Worker 撞用量上限、模型不可用或要换另一台电脑上的供应额度时用它，不要归档重建。' +
+  '先用 list_available_models 确认 locations[].agent_device_id、model 与 provider_id。提供 agent 时必须同时给 model；' +
+  '单独传 provider_device_id（或兼容别名 agent_device_id）可保持当前引擎与模型、只切换供应电脑（"local" 表示本机）；' +
   '选择在下一条 send_to_worker 时生效(effective_boundary=next_send)，宿主先换到新路线再启动 Worker；' +
-  'Worker 已有待生效的选择时，省略 agent 即修改那次选择(未给的字段沿用它)，否则省略 agent 的调整在 Worker 当前轮结束后生效。' +
+  'Worker 已有待生效的选择时，省略 agent 与 provider_device_id 即修改那次选择(未给的字段沿用它)，否则省略它们的调整在 Worker 当前轮结束后生效。' +
   '运行在另一台电脑上的 Worker 不支持(REMOTE_WORKER_NOT_SUPPORTED)。' +
   'expected_generation 可选：传 get_session_runtime 读到的 generation 可防止覆盖并发修改，省略则以调用时的状态为准。' +
   '失败码: LEAD_NOT_SUPPORTED / WORKER_NOT_FOUND / REMOTE_WORKER_NOT_SUPPORTED / INVALID_ARGS / CONFLICT(状态已变，重读后再试) / ' +
@@ -74,6 +78,7 @@ function profilePayload(profile: WorkerRuntimeProfile) {
     agent: profile.agentKind,
     model: profile.model,
     provider_id: profile.providerId,
+    provider_device_id: profile.agentDeviceId ?? LOCAL_AGENT_DEVICE,
     effort: profile.effort,
     fast: profile.fastMode,
   };
@@ -90,6 +95,10 @@ export function registerSetWorkerRuntimeTool(
     inputShape: {
       worker_id: z.string().min(1).describe('目标 worker 的 worker_id 或 session_id 任一'),
       agent: z.enum(['claude-code', 'codex', 'pi']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
+      provider_device_id: z.string().min(1).optional()
+        .describe('模型供应电脑："local" 表示本机，或取 list_available_models 的 locations[].agent_device_id（同账号电脑或 share:...）。'),
+      agent_device_id: z.string().min(1).optional()
+        .describe('provider_device_id 的兼容别名；两者同时提供且不一致时返回 INVALID_ARGS。'),
       model: z.string().min(1).optional().describe('目标模型 id(取 list_available_models 的 id)。'),
       provider_id: z
         .string()
@@ -103,16 +112,26 @@ export function registerSetWorkerRuntimeTool(
       expected_generation: z.number().int().nonnegative().optional()
         .describe('可选：get_session_runtime 读到的 generation，用于防止覆盖并发修改。'),
     },
-    handler: async ({ worker_id, agent, model, provider_id, effort, fast, expected_generation }) => {
+    handler: async ({ worker_id, agent, provider_device_id, agent_device_id, model, provider_id, effort, fast, expected_generation }) => {
       const ctx = deps.getSessionContext?.();
       if (!ctx?.sessionId) {
         return errorPayload('LEAD_NOT_SUPPORTED', '当前 session 类型不支持作为 Lead, 已拒绝 worker 控制操作。');
       }
+      const devicePatch = resolveProviderDevicePatch(provider_device_id, agent_device_id);
+      if (!devicePatch.ok) {
+        return errorPayload('INVALID_ARGS', devicePatch.message);
+      }
       if (agent !== undefined && !model) {
         return errorPayload('INVALID_ARGS', '提供 agent 时必须同时指定目标 model。');
       }
-      if (model === undefined && provider_id === undefined && effort === undefined && fast === undefined) {
-        return errorPayload('INVALID_ARGS', '至少提供 model、provider_id、effort 或 fast 之一。');
+      if (
+        devicePatch.agentDeviceId === undefined &&
+        model === undefined &&
+        provider_id === undefined &&
+        effort === undefined &&
+        fast === undefined
+      ) {
+        return errorPayload('INVALID_ARGS', '至少提供 provider_device_id、model、provider_id、effort 或 fast 之一。');
       }
       const result = await deps.setWorkerRuntime({
         callerLeadSessionId: ctx.sessionId,
@@ -120,6 +139,7 @@ export function registerSetWorkerRuntimeTool(
         ...(expected_generation !== undefined ? { expectedGeneration: expected_generation } : {}),
         patch: {
           ...(agent !== undefined ? { harness: agent } : {}),
+          ...(devicePatch.agentDeviceId !== undefined ? { agentDeviceId: devicePatch.agentDeviceId } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(provider_id !== undefined ? { providerId: provider_id } : {}),
           ...(effort !== undefined ? { effort } : {}),

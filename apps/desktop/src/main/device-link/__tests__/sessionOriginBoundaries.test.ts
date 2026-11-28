@@ -113,6 +113,13 @@ describe('session-level origin persistence and privacy boundaries', () => {
         routeName: 'Private Pool',
         autoSwitch: true,
       },
+      runtimeLastRouteChange: {
+        at: '2026-11-28T10:00:00.000Z',
+        by: 'model-group',
+        reason: 'provider_safety_refusal',
+        from: { agentKind: 'claude-code', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null },
+        to: { agentKind: 'codex', model: 'gpt-5.6', providerId: 'openai', agentDeviceId: 'mac-studio' },
+      },
     };
     const redactedRow = redactSessionRowForSharedGuest(row);
     expect(redactedRow).toMatchObject({
@@ -121,12 +128,13 @@ describe('session-level origin persistence and privacy boundaries', () => {
       orcaRemoteLead: null,
     });
     expect(redactedRow).not.toHaveProperty('modelGroupBinding');
+    expect(redactedRow).not.toHaveProperty('runtimeLastRouteChange');
     expect(redactSharedGuestPush('local-db:sessions:created', { session: row })).toEqual({
       session: { id: 'shared-1', title: 'Shared task', createdBySession: null, orcaRemoteLead: null },
     });
     expect(redactSharedGuestPush('local-db:sessions:patched', {
       sessionId: 'shared-1',
-      patch: { createdBySession: row.createdBySession, modelGroupBinding: row.modelGroupBinding },
+      patch: { createdBySession: row.createdBySession, modelGroupBinding: row.modelGroupBinding, runtimeLastRouteChange: row.runtimeLastRouteChange },
     })).toEqual({ sessionId: 'shared-1', patch: { createdBySession: null } });
   });
 

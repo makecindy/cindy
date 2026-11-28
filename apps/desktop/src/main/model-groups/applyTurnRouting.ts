@@ -81,6 +81,7 @@ export interface RunModelGroupBeforeSendPorts {
     providerId: string;
     effort: string | null;
     fastMode: boolean | 'ultrafast';
+    cause?: ModelGroupTurnDecisionSwitch['cause'];
   }): Promise<{
     deferred?: boolean;
     superseded?: boolean;
@@ -98,6 +99,7 @@ export interface RunModelGroupBeforeSendPorts {
     effort?: string;
     fastMode?: boolean | 'ultrafast';
     skipBootstrap: boolean;
+    cause?: ModelGroupTurnDecisionSwitch['cause'];
   }): Promise<{ switched: boolean }>;
   writeSwitchNote?(sessionId: string, note: ModelGroupRouteNote, clientId: string): Promise<void>;
   describeCause?(cause: ModelGroupTurnDecisionSwitch['cause']): string;
@@ -182,6 +184,7 @@ export async function runModelGroupBeforeSend(
         providerId: decision.target.providerId,
         effort: decision.target.effort ?? row.effort ?? null,
         fastMode: nextFastMode,
+        cause: decision.cause,
       });
       if (sameRes.contextWindowConfirmationRequired) {
         // 触发窗口缩容确认时自动升级为有界交接，避免阻塞任务发送。
@@ -194,6 +197,7 @@ export async function runModelGroupBeforeSend(
           effort: decision.target.effort,
           fastMode: decision.target.agentKind === 'acp' ? false : decision.target.fastMode,
           skipBootstrap: !options.bootstrapAfterSwitch,
+          cause: decision.cause,
         });
         switched = crossRes.switched;
       } else if (!sameRes.deferred && !sameRes.superseded) {
@@ -211,6 +215,7 @@ export async function runModelGroupBeforeSend(
         effort: decision.target.effort,
         fastMode: decision.target.agentKind === 'acp' ? false : decision.target.fastMode,
         skipBootstrap: !options.bootstrapAfterSwitch,
+        cause: decision.cause,
       });
       switched = crossRes.switched;
     }

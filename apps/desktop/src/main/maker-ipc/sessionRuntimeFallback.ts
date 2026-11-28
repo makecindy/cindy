@@ -22,6 +22,7 @@ import {
   sessionRuntimeControlOwnerEpochMatches,
   type FallbackRouteProfile,
   type SessionRuntimeProfile,
+  type SessionRuntimeRouteChangeAttribution,
 } from './sessionRuntimeControl.js';
 
 type FallbackPick = Parameters<typeof pickSessionRuntimeFallback>[0];
@@ -41,6 +42,7 @@ export type FallbackRuntimeSelection = (
     effortExplicit: boolean;
     fastExplicit: boolean;
     persistRoute?: boolean;
+    routeChangeAttribution?: SessionRuntimeRouteChangeAttribution;
   },
 ) => Promise<{
   deferred: boolean;
@@ -113,6 +115,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
     requireRouteChange = false,
     isCurrent: () => boolean = () => true,
     groupRecovery?: ModelGroupRecovery,
+    fallbackReason?: string,
   ): Promise<RuntimeFallbackResult<RuntimeSession>> => {
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     let runtimeSession: RuntimeSession | null = null;
@@ -278,6 +281,10 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       while (candidate) {
         if (!isCurrent()) return { session: runtimeSession, outcome: 'superseded' };
         const selected = candidate;
+        const routeChangeAttribution: SessionRuntimeRouteChangeAttribution = {
+          by: group ? 'model-group' : 'fallback',
+          reason: fallbackReason ?? (group ? 'unavailable' : 'fallback'),
+        };
         const applyCandidate = () => withSendToSessionLock(sessionId, async () => {
           if (!isCurrent() || !sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch) ||
               !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) {
@@ -295,6 +302,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
               previousProfile: currentForFallback,
               effortExplicit: false,
               fastExplicit: false,
+              routeChangeAttribution,
               ...(group ? { persistRoute: true } : {}),
             },
           );
@@ -337,6 +345,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
                 applyNow: true,
                 configStaged: true,
                 preserveModelGroupBinding: true,
+                routeChangeAttribution,
               });
               if (switched.switched && sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
                 group?.bindCommittedRoute?.(selected);

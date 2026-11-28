@@ -434,4 +434,139 @@ describe('cindy_helper session control tools', () => {
       session_id: 'target',
     }))).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
   });
+
+  // Value: production MCP contract for provider_device_id switching (plus agent_device_id alias),
+  // privacy-safe route_source projection, and last_route_change attribution.
+  // Gap: prior tests only exercised local model/harness switches without device or attribution fields.
+  // Minimal input: location-only patch, local normalization, alias conflict, share source + route change.
+  // Tier: unit.
+  it('supports provider_device_id switching and projects route_source and last_route_change', async () => {
+    const { deps, registry } = setup();
+    const baseProfile = {
+      agentDeviceId: null,
+      agentKind: 'claude-code' as const,
+      model: 'claude-opus-4-6',
+      providerId: 'anthropic',
+      effort: 'high' as const,
+      fastMode: false,
+    };
+    const remoteProfile = {
+      ...baseProfile,
+      agentDeviceId: 'mac-studio',
+      providerId: 'anthropic',
+    };
+    vi.mocked(deps.setSessionRuntime).mockResolvedValueOnce({
+      ok: true,
+      status: 'deferred',
+      effectiveBoundary: 'next_send',
+      generation: 3,
+      effectiveProfile: baseProfile,
+      pendingMutation: { generation: 3, source: 'agent', profile: remoteProfile },
+    });
+
+    const moved = parse(await registry.call('set_session_runtime', {
+      session_id: 'target',
+      provider_device_id: 'mac-studio',
+      expected_generation: 2,
+    }));
+    expect(moved).toMatchObject({
+      ok: true,
+      effective_boundary: 'next_send',
+      effective: { provider_device_id: 'local' },
+      pending: { profile: { provider_device_id: 'mac-studio', harness: 'claude-code' } },
+    });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith({
+      targetSessionId: 'target',
+      expectedGeneration: 2,
+      patch: { agentDeviceId: 'mac-studio' },
+    });
+
+    // Compat alias `agent_device_id: "local"` normalizes to null.
+    vi.mocked(deps.setSessionRuntime).mockResolvedValueOnce({
+      ok: true,
+      status: 'deferred',
+      effectiveBoundary: 'next_send',
+      generation: 4,
+      effectiveProfile: remoteProfile,
+      pendingMutation: { generation: 4, source: 'agent', profile: baseProfile },
+    });
+    const backLocal = parse(await registry.call('set_session_runtime', {
+      session_id: 'target',
+      agent_device_id: 'local',
+      expected_generation: 3,
+    }));
+    expect(backLocal).toMatchObject({
+      ok: true,
+      effective: { provider_device_id: 'mac-studio' },
+      pending: { profile: { provider_device_id: 'local' } },
+    });
+    expect(deps.setSessionRuntime).toHaveBeenLastCalledWith({
+      targetSessionId: 'target',
+      expectedGeneration: 3,
+      patch: { agentDeviceId: null },
+    });
+
+    // Conflicting aliases fail closed before reaching host.
+    expect(parse(await registry.call('set_session_runtime', {
+      session_id: 'target',
+      provider_device_id: 'mac-studio',
+      agent_device_id: 'mac-mini',
+      expected_generation: 4,
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(deps.setSessionRuntime).toHaveBeenCalledTimes(2);
+
+    // get_session_runtime exposes provider_device_id, privacy-safe route_source, and last_route_change.
+    vi.mocked(deps.getSessionRuntime).mockResolvedValueOnce({
+      ok: true,
+      runtime: {
+        sessionId: 'target',
+        phase: 'idle',
+        recordStatus: 'active',
+        attention: false,
+        workflow: null,
+        source: 'persisted',
+        turnGeneration: null,
+        startedAtMs: null,
+        lastActivityAtMs: null,
+        currentActionSummary: null,
+        gracefulStopState: 'none',
+        runtimeGeneration: 4,
+        baselineProfile: remoteProfile,
+        effectiveProfile: { ...baseProfile, agentDeviceId: 'share:team-1', agentKind: 'codex', model: 'gpt-5.6', providerId: 'openai' },
+        pendingMutation: null,
+        fallbackEnabled: true,
+        routeSource: {
+          kind: 'share',
+          providerDeviceId: 'share:team-1',
+          providerDeviceName: null,
+          managedBy: 'model-group',
+        },
+        lastRouteChange: {
+          at: '2026-11-28T10:00:00.000Z',
+          by: 'model-group',
+          reason: 'provider_safety_refusal',
+          from: { agentKind: 'claude-code', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null },
+          to: { agentKind: 'codex', model: 'gpt-5.6', providerId: 'openai', agentDeviceId: 'share:team-1' },
+        },
+      },
+    });
+    expect(parse(await registry.call('get_session_runtime', { session_id: 'target' }))).toMatchObject({
+      ok: true,
+      baseline: { provider_device_id: 'mac-studio' },
+      effective: { harness: 'codex', model: 'gpt-5.6', provider_device_id: 'share:team-1' },
+      route_source: {
+        kind: 'share',
+        provider_device_id: 'share:team-1',
+        provider_device_name: null,
+        managed_by: 'model-group',
+      },
+      last_route_change: {
+        at: '2026-11-28T10:00:00.000Z',
+        by: 'model-group',
+        reason: 'provider_safety_refusal',
+        from: { harness: 'claude-code', model: 'claude-opus-4-6', provider_id: 'anthropic', provider_device_id: 'local' },
+        to: { harness: 'codex', model: 'gpt-5.6', provider_id: 'openai', provider_device_id: 'share:team-1' },
+      },
+    });
+  });
 });

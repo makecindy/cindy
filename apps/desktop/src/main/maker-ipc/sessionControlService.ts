@@ -15,6 +15,7 @@ import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activi
 import type {
   PendingSessionRuntimeMutation,
   SessionRuntimeProfile,
+  SessionRuntimeRouteChange,
 } from './sessionRuntimeControl.js';
 
 import {
@@ -63,6 +64,14 @@ export type SessionRuntimePendingProjection =
   | PendingSessionRuntimeMutation
   | { generation: number; source: 'user'; profile: SessionRuntimeProfile };
 
+export interface SessionRuntimeRouteSource {
+  kind: 'local' | 'device' | 'share';
+  providerDeviceId: string;
+  providerDeviceName: string | null;
+  accountId?: string | null;
+  managedBy?: 'model-group' | 'provider-group' | null;
+}
+
 export interface SessionRuntimeDetails extends SessionActivitySnapshot {
   permissionMode?: PermissionMode;
   runtimeGeneration: number;
@@ -70,6 +79,8 @@ export interface SessionRuntimeDetails extends SessionActivitySnapshot {
   effectiveProfile: SessionRuntimeProfile;
   pendingMutation: SessionRuntimePendingProjection | null;
   fallbackEnabled: boolean;
+  routeSource?: SessionRuntimeRouteSource;
+  lastRouteChange?: SessionRuntimeRouteChange | null;
 }
 
 export type SessionRuntimeResult =

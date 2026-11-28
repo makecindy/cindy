@@ -21,12 +21,14 @@ import { readLatestWorkerTurnError } from '../maker-ipc/orcaTurnErrorQuery.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
 import { lastExchange, readSessionLastExchange } from '../maker-ipc/sessionLastExchange.js';
 import type { BotHarness } from '../../shared/botModelChain.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { deriveFollowUpUsage, suggestFollowUpRoute } from './followUpRoute.js';
 import { readChatHistoryMessages } from './remoteChatHistory.js';
 import { parseActiveSessionList } from './taskPhase.js';
 import {
   formatPrStatuses,
   historyContentText,
+  parseTaskDigestRouteChange,
   sessionFactsFromRow,
   type TaskDigestActivity,
   type TaskDigestDeps,
@@ -41,12 +43,29 @@ interface RuntimeLike {
   startedAtMs?: unknown;
   lastActivityAtMs?: unknown;
   runtimeGeneration?: unknown;
-  effectiveProfile?: { agentKind?: unknown; model?: unknown; providerId?: unknown; effort?: unknown; fastMode?: unknown };
+  effectiveProfile?: {
+    agentDeviceId?: unknown;
+    agentKind?: unknown;
+    model?: unknown;
+    providerId?: unknown;
+    effort?: unknown;
+    fastMode?: unknown;
+  };
+  routeSource?: {
+    kind?: unknown;
+    providerDeviceId?: unknown;
+    providerDeviceName?: unknown;
+  };
+  lastRouteChange?: unknown;
 }
 
 export interface DesktopTaskDigestHost {
   invokeRemote: Invoke;
   listDevices?: () => Promise<HistoryDevice[]>;
+  /** Privacy-safe display name for a local/own-device provider location; strictly null for share:. */
+  describeAgentDevice?: (deviceId: string | null) => string | null;
+  /** Fallback persisted route-change reader (used when runtime details are unavailable, e.g. ACP tasks). */
+  readPersistedRouteChange?: (sessionId: string) => Promise<unknown>;
   getSessionRuntime(sessionId: string): Promise<{ ok: true; runtime: RuntimeLike } | { ok: false }>;
   listSessionQueuedCounts(sessionIds: string[]): Promise<{ ok: true; counts: Record<string, number> } | { ok: false }>;
   readLocalQueuePaused?(sessionId: string): boolean | undefined;
@@ -65,15 +84,54 @@ export interface DesktopTaskDigestHost {
 
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
-function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestCurrentRoute | null {
+function routeFromProfile(
+  profile: RuntimeLike['effectiveProfile'],
+  routeSource?: RuntimeLike['routeSource'],
+  describeAgentDevice?: DesktopTaskDigestHost['describeAgentDevice'],
+): TaskDigestCurrentRoute | null {
   if (!profile || typeof profile.model !== 'string' || !profile.model) return null;
   const kind = profile.agentKind;
+  const hasDeviceInfo =
+    ('agentDeviceId' in profile && profile.agentDeviceId !== undefined) || routeSource !== undefined;
+  const rawDeviceId =
+    typeof profile.agentDeviceId === 'string' && profile.agentDeviceId.trim()
+      ? profile.agentDeviceId.trim()
+      : null;
+  const providerDeviceId =
+    typeof routeSource?.providerDeviceId === 'string' && routeSource.providerDeviceId.trim()
+      ? routeSource.providerDeviceId.trim()
+      : (rawDeviceId ?? 'local');
+  const sourceKind: 'local' | 'device' | 'share' =
+    routeSource?.kind === 'local' || routeSource?.kind === 'device' || routeSource?.kind === 'share'
+      ? routeSource.kind
+      : !rawDeviceId
+        ? 'local'
+        : isProviderShareAgentDeviceId(rawDeviceId)
+          ? 'share'
+          : 'device';
+  const providerDeviceName =
+    sourceKind === 'share'
+      ? null
+      : typeof routeSource?.providerDeviceName === 'string'
+        ? routeSource.providerDeviceName
+        : routeSource?.providerDeviceName === null
+          ? null
+          : describeAgentDevice
+            ? describeAgentDevice(rawDeviceId)
+            : undefined;
   return {
     harness: kind === 'codex' || kind === 'pi' || kind === 'acp' ? kind : 'claude-code',
     model: profile.model,
     provider_id: typeof profile.providerId === 'string' ? profile.providerId : null,
     effort: typeof profile.effort === 'string' ? profile.effort : null,
     fast: (profile.fastMode === 'ultrafast' ? 'ultrafast' : profile.fastMode === true),
+    ...(hasDeviceInfo
+      ? {
+          provider_device_id: providerDeviceId,
+          source_kind: sourceKind,
+          ...(providerDeviceName !== undefined ? { provider_device_name: providerDeviceName } : {}),
+        }
+      : {}),
   };
 }
 
@@ -177,6 +235,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
             status: sessions.status,
             source: sessions.source,
             agentKind: sessions.agentKind,
+            agentDeviceId: sessions.agentDeviceId,
             model: sessions.model,
             providerId: sessions.providerId,
             effort: sessions.effort,
@@ -185,12 +244,33 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           .from(sessions)
           .where(eq(sessions.id, sessionId))
           .limit(1);
-        return row ? sessionFactsFromRow(row) : null;
+        if (!row) return null;
+        const facts = sessionFactsFromRow(row);
+        if (!facts) return null;
+        if (!facts.shared && facts.route?.provider_device_id && facts.route.provider_device_name === undefined) {
+          if (facts.route.source_kind === 'share') {
+            facts.route = { ...facts.route, provider_device_name: null };
+          } else if (host.describeAgentDevice) {
+            const rawId = facts.route.provider_device_id === 'local' ? null : facts.route.provider_device_id;
+            facts.route = { ...facts.route, provider_device_name: host.describeAgentDevice(rawId) };
+          }
+        }
+        if (!facts.shared && !facts.lastRouteChange) {
+          const inMemory = parseTaskDigestRouteChange(getSessionRuntimeControlSnapshot(sessionId).lastRouteChange);
+          const persisted = inMemory ?? (host.readPersistedRouteChange
+            ? parseTaskDigestRouteChange(await host.readPersistedRouteChange(sessionId).catch(() => null))
+            : null);
+          if (persisted) facts.lastRouteChange = persisted;
+        }
+        return facts;
       },
       readActivity: async (sessionId): Promise<TaskDigestActivity | null> => {
         const result = await host.getSessionRuntime(sessionId);
         if (!result.ok) return null;
         const runtime = result.runtime;
+        const lastRouteChange = parseTaskDigestRouteChange(
+          runtime.lastRouteChange ?? getSessionRuntimeControlSnapshot(sessionId).lastRouteChange,
+        );
         return {
           phase: typeof runtime.phase === 'string' ? runtime.phase : 'idle',
           source: typeof runtime.source === 'string' ? runtime.source : undefined,
@@ -198,7 +278,8 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           startedAtMs: num(runtime.startedAtMs),
           lastActivityAtMs: num(runtime.lastActivityAtMs),
           runtimeGeneration: num(runtime.runtimeGeneration),
-          route: routeFromProfile(runtime.effectiveProfile),
+          route: routeFromProfile(runtime.effectiveProfile, runtime.routeSource, host.describeAgentDevice),
+          ...(lastRouteChange ? { lastRouteChange } : {}),
         };
       },
       readError: async (sessionId, activity, facts) => {

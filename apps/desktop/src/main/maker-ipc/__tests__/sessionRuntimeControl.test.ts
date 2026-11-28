@@ -18,15 +18,18 @@ import {
   isPendingSessionRuntimeRouteExplicit,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
+  projectSessionRuntimeControl,
   recordFailedSessionRuntimeFallbackCandidate,
   recordRecoveredSessionRuntimeMutation,
   recordRecoveredSessionRuntimeAxisMutation,
+  recordSessionRuntimeRouteChange,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
   remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeAxisPatch,
   resolveSessionRuntimeAxes,
   resolveSessionRuntimeRefreshEffort,
+  sanitizeRouteChangeReason,
   sessionRuntimeControlOwnerEpochMatches,
   sessionRuntimeGenerationMatches,
   settlePendingSessionRuntimeMutation,
@@ -1149,5 +1152,61 @@ describe('session runtime fallback selection', () => {
         maxHops: 2,
       }),
     ).toBeNull();
+  });
+
+  // Value: recordSessionRuntimeRouteChange tracks route switches with sanitized reasons,
+  // preserves prior attribution across axis-only no-ops, projects runtimeLastRouteChange
+  // onto session snapshots, and clears on terminal/owner reset.
+  // Gap: new attribution state and projection; prior tests did not cover lastRouteChange.
+  // Minimal input: route switch, no-op axis check, forced relocation, unsafe reason, clear; tier: unit.
+  it('records, sanitizes, projects, and clears lastRouteChange attribution', () => {
+    const sessionId = 'runtime-attribution';
+    expect(projectSessionRuntimeControl(sessionId, current)).not.toHaveProperty('runtimeLastRouteChange');
+
+    const recorded = recordSessionRuntimeRouteChange(sessionId, {
+      at: '2026-11-28T10:00:00.000Z',
+      by: 'model-group',
+      reason: 'provider_safety_refusal',
+      from: { agentKind: 'claude-code', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null },
+      to: { agentKind: 'codex', model: 'gpt-main', providerId: 'openai', agentDeviceId: 'studio-2' },
+    });
+    expect(recorded).toEqual({
+      at: '2026-11-28T10:00:00.000Z',
+      by: 'model-group',
+      reason: 'provider_safety_refusal',
+      from: { agentKind: 'claude-code', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null },
+      to: { agentKind: 'codex', model: 'gpt-main', providerId: 'openai', agentDeviceId: 'studio-2' },
+    });
+    expect(projectSessionRuntimeControl(sessionId, { ...current, agentDeviceId: 'studio-2' })).toMatchObject({
+      runtimeLastRouteChange: recorded,
+    });
+
+    // Axis-only / identical-endpoint updates must not overwrite previous route attribution.
+    expect(recordSessionRuntimeRouteChange(sessionId, {
+      by: 'agent',
+      reason: 'explicit',
+      from: { agentKind: 'codex', model: 'gpt-main', providerId: 'openai', agentDeviceId: 'studio-2' },
+      to: { agentKind: 'codex', model: 'gpt-main', providerId: 'openai', agentDeviceId: 'studio-2' },
+    })).toBeNull();
+    expect(getSessionRuntimeControlSnapshot(sessionId).lastRouteChange).toEqual(recorded);
+
+    // Forced relocation behind a logical share ID records even when logical IDs match, and sanitizes unsafe reasons.
+    const forced = recordSessionRuntimeRouteChange(
+      sessionId,
+      {
+        by: 'provider-group',
+        reason: 'Bearer sk-secret /Users/private',
+        from: { agentKind: 'codex', model: 'gpt-main', providerId: 'openai', agentDeviceId: 'share:1' },
+        to: { agentKind: 'codex', model: 'gpt-main', providerId: 'openai', agentDeviceId: 'share:1' },
+      },
+      { force: true },
+    );
+    expect(forced).toMatchObject({ by: 'provider-group', reason: null });
+    expect(sanitizeRouteChangeReason('quota-rebalance')).toBe('quota-rebalance');
+    expect(sanitizeRouteChangeReason('raw error with spaces')).toBeNull();
+
+    // Terminal clear removes attribution cleanly.
+    clearSessionRuntimeControlState(sessionId);
+    expect(getSessionRuntimeControlSnapshot(sessionId).lastRouteChange).toBeNull();
   });
 });
