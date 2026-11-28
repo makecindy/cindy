@@ -3,6 +3,7 @@ import type { CodexModelListItem } from '@cindy/maker-core';
 vi.mock('electron', () => ({ app: {} }));
 import { remoteCodexProvider } from '../../maker-host/ssh-codex-models.js';
 import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } from '../codex-model-list.js';
+import { createIpcError } from '../../../shared/ipc-errors.js';
 
 describe('SSH Codex model projection and admission', () => {
   it('allows the persisted remote route to resume without requiring current catalog membership', () => {
@@ -32,15 +33,27 @@ describe('SSH Codex model projection and admission', () => {
     expect(() => assertSshCodexModel([provider], 'local-only', 'openai')).toThrow('[INVALID_PARAMS]');
     expect(() => assertSshCodexModel([provider], 'remote-default', 'xd')).toThrow('[REMOTE_CODEX_SOURCE_UNSUPPORTED]');
   });
-  it('validates input before reading and never exposes an RPC secret in an error', async () => {
-    const read = vi.fn().mockRejectedValue(new Error('test-secret-not-for-renderer'));
+  it('validates input before reading', async () => {
+    const read = vi.fn();
     await expect(readSshCodexModelList({ id: 123 }, read)).rejects.toThrow('[INVALID_PARAMS]');
     await expect(readSshCodexModelList({ id: 'x'.repeat(257) }, read)).rejects.toThrow('[INVALID_PARAMS]');
     expect(read).not.toHaveBeenCalled();
-    await expect(readSshCodexModelList({ id: 'builder' }, read)).rejects.toThrow('[SSH_EXEC_FAILED] Unable to read remote Codex models; reconnect and retry');
+  });
+  // The renderer explains each category differently, so a reconnect prompt must not hide
+  // an install or runtime failure (#11445). Remote text may hold credentials and never passes.
+  it.each([
+    ['an unconnected host', createIpcError('SSH_NOT_CONNECTED', 'ssh host builder not connected test-secret'), 'SSH_NOT_CONNECTED'],
+    ['a removed host', createIpcError('SSH_HOST_NOT_FOUND', 'unknown ssh host: test-secret'), 'SSH_NOT_CONNECTED'],
+    ['a failed install', createIpcError('SSH_INSTALL_FAILED', 'curl: (56) test-secret'), 'SSH_INSTALL_FAILED'],
+    ['an unexpected install error', createIpcError('INTERNAL', 'test-secret'), 'SSH_EXEC_FAILED'],
+    ['an app-server RPC failure', new Error('File exists (os error 17) test-secret'), 'SSH_EXEC_FAILED'],
+  ])('reports %s by category without the remote message', async (_case, failure, code) => {
+    const error = await readSshCodexModelList({ id: 'builder' }, vi.fn().mockRejectedValue(failure)).catch((err: unknown) => err);
+    expect(error).toMatchObject({ code });
+    expect(String((error as Error).message)).not.toContain('test-secret');
   });
   it('treats an empty remote snapshot as a retryable failure rather than a local connection prompt', async () => {
     await expect(readSshCodexModelList({ id: 'builder' }, async () => [remoteCodexProvider([])]))
-      .rejects.toThrow('[SSH_EXEC_FAILED]');
+      .rejects.toMatchObject({ code: 'SSH_CODEX_MODELS_EMPTY' });
   });
 });

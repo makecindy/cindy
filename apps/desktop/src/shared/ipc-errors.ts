@@ -246,6 +246,8 @@ export type IpcErrorCode =
   | 'SSH_INSTALL_FAILED'
   | 'SSH_EXEC_FAILED'
   | 'SSH_AGENT_NOT_INSTALLED'
+  // remote-ssh：远端 Codex 已启动，但模型列表里没有可选模型
+  | 'SSH_CODEX_MODELS_EMPTY'
   // remote-ssh：项目选择器远端目录列表
   | 'SSH_REMOTE_LS_FAILED'
   // remote-ssh:file-service(SSH 远程会话的文件浏览 daemon)不可用——
@@ -509,6 +511,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SSH_INSTALL_FAILED',
   'SSH_EXEC_FAILED',
   'SSH_AGENT_NOT_INSTALLED',
+  'SSH_CODEX_MODELS_EMPTY',
   'SSH_REMOTE_LS_FAILED',
   'REMOTE_FS_UNAVAILABLE',
   'HOOK_NOT_CONNECTED',

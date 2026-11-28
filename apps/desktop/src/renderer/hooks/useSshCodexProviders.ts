@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderView } from '@cindy/model-providers';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { sshCodexLoadFailureOf, type SshCodexLoadFailure } from '@/lib/sshCodexCatalog';
 
 const EMPTY: ProviderView[] = [];
 export function useSshCodexProviders(hostId?: string | null) {
   const owner = getDataOwnerGeneration();
   const key = JSON.stringify([hostId, owner.dataOwnerId, owner.generation]);
   const sequence = useRef(0);
-  const [state, setState] = useState<{ key: string; providers: ProviderView[]; status: 'loading' | 'error' | 'ready' }>({
+  const [state, setState] = useState<{
+    key: string;
+    providers: ProviderView[];
+    status: 'loading' | 'error' | 'ready';
+    failure?: SshCodexLoadFailure;
+  }>({
     key: '', providers: EMPTY, status: 'loading',
   });
   const refresh = useCallback(async () => {
@@ -20,9 +26,9 @@ export function useSshCodexProviders(hostId?: string | null) {
         setState({ key, providers, status: 'ready' });
       }
       return true;
-    }).catch(() => {
+    }).catch((error: unknown) => {
       if (sequence.current === request && isDataOwnerGenerationCurrent(requestOwner)) {
-        setState({ key, providers: EMPTY, status: 'error' });
+        setState({ key, providers: EMPTY, status: 'error', failure: sshCodexLoadFailureOf(error) });
       }
       return false;
     });
@@ -48,7 +54,7 @@ export function useSshCodexProviders(hostId?: string | null) {
       else {
         wasReady = false;
         ++sequence.current;
-        setState({ key, providers: EMPTY, status: 'error' });
+        setState({ key, providers: EMPTY, status: 'error', failure: 'not-connected' });
       }
     });
     return () => { disposed = true; ++sequence.current; stop(); };
@@ -57,6 +63,7 @@ export function useSshCodexProviders(hostId?: string | null) {
   return {
     providers: state.key === key ? state.providers : EMPTY,
     status: state.key === key ? state.status : 'loading' as const,
+    failure: state.key === key && state.status === 'error' ? state.failure : undefined,
     refresh: retry,
   };
 }

@@ -3097,7 +3097,7 @@ export function getMakerIfReady(): Maker | null {
 export async function listSshCodexProviders(hostId: string) {
   const owner = getActiveAppSession().generation;
   const remote = getRemoteSshPool().get(hostId);
-  if (!remote || remote.getStatus() !== 'ready') throw new Error('SSH host is not connected');
+  if (!remote || remote.getStatus() !== 'ready') throwIpcError('SSH_NOT_CONNECTED', 'SSH host is not connected');
   let changed = false;
   const stop = remote.onStatus((snapshot) => {
     if (snapshot.status !== 'ready') changed = true;
@@ -3105,7 +3105,8 @@ export async function listSshCodexProviders(hostId: string) {
   const assertCurrent = () => {
     if (changed || getActiveAppSession().generation !== owner ||
         getRemoteSshPool().get(hostId) !== remote || remote.getStatus() !== 'ready') {
-      throw new Error('SSH model request is stale');
+      // The connection or app owner changed during the read; the caller should reconnect and retry.
+      throwIpcError('SSH_NOT_CONNECTED', 'SSH model request is stale');
     }
   };
   try {
@@ -3118,6 +3119,11 @@ export async function listSshCodexProviders(hostId: string) {
     assertCurrent();
     if (_codexAgent !== agent) throw new Error('Codex runtime changed');
     return [remoteCodexProvider(models)];
+  } catch (err) {
+    // A closed transport rejects pending install or RPC work with a plain Error. Report a
+    // connection or owner change as such; otherwise keep the original failure.
+    assertCurrent();
+    throw err;
   } finally {
     stop();
   }
