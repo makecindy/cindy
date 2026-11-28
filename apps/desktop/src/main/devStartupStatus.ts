@@ -157,7 +157,7 @@ function updateTrackedInstance(
 }
 
 /**
- * Register this Electron main process before single-instance arbitration.
+ * Register an admitted desktop process before it accesses the local database.
  * The returned cleanup only removes the record when its random instanceId still owns it.
  */
 export async function beginDesktopDevInstance(
