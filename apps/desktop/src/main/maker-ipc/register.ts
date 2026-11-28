@@ -250,6 +250,7 @@ import { readCodexContextWindowInfo, readCodexTaskContextWindowInfo } from '../m
 import { readSshCodexModelList } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { resolveConnectedDefaultProviderIdForModel } from '../maker-host/provider-route.js';
+import { readPinnedSessionModelInterface } from '../maker-host/session-model-interface.js';
 import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
 import { resolveConfiguredContextWindow, resolveDesktopHandoffWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts } from '../maker-host/model-context-settings.js';
 import { isSessionContextWindowBudgetCustomized, readSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
@@ -395,6 +396,7 @@ import { notifyRelayAccountPreferenceChanged } from '../device-link/selfHostedRe
 import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
+  getAgentInputAttachmentBlockType,
   isAutomaticInputOriginKind,
   normalizeAgentInputClearBoundaryMs,
   serializeSessionReferencePayload,
@@ -406,6 +408,7 @@ import {
   type AgentInputSessionRef,
   type AgentInputSessionReferenceContext,
 } from '../../shared/agentInputQueue.js';
+import { CODEX_IMAGE_INPUT_UNSUPPORTED } from '../../shared/ipcError.js';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
 import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.js';
 
@@ -18677,6 +18680,53 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   }
 
+  async function assertLocalCodexImageInput(
+    sessionId: string,
+    row: Awaited<ReturnType<typeof getSessionRowSnapshot>> | undefined,
+    requestedRoute: unknown,
+  ) {
+    if (row?.source !== 'desktop' || row.status !== 'active' || row.agentKind !== 'codex' || row.remoteHostId ||
+        row.agentDeviceId || row.orcaRole || row.orcaRemoteLead || isSessionSharedTaskActive(sessionId)) return;
+    const control = getSessionRuntimeControlSnapshot(sessionId);
+    if (control.pending || agentSwitchPending.get(sessionId)) return;
+    const live = maker.getSession(sessionId);
+    const route = control.effectiveOverride ?? {
+      agentKind: live?.agentKind ?? row.agentKind,
+      model: live?.model ?? row.model,
+      providerId: hasSessionProvider(sessionId) ? getSessionProvider(sessionId) : row.providerId,
+      agentDeviceId: row.agentDeviceId,
+    };
+    if (route.agentKind !== 'codex' || route.agentDeviceId || !route.model || !route.providerId) return;
+    // A pending or explicitly different route is decided by the normal send transaction.
+    if (requestedRoute && typeof requestedRoute === 'object' &&
+        (('agentKind' in requestedRoute && requestedRoute.agentKind !== route.agentKind) ||
+         ('model' in requestedRoute && requestedRoute.model !== route.model) ||
+         ('providerId' in requestedRoute && requestedRoute.providerId !== route.providerId) ||
+         ('remoteHostId' in requestedRoute && requestedRoute.remoteHostId))) return;
+    const catalog = getActiveCatalog();
+    const provider = catalog.providers.find(entry => entry.id === route.providerId);
+    const model = findCatalogModel(provider, route.model, 'codex', { exact: true });
+    if (!model) return;
+    let pinned: Awaited<ReturnType<typeof readPinnedSessionModelInterface>>;
+    try {
+      pinned = await readPinnedSessionModelInterface(sessionId, route.providerId, 'codex', model, catalog.modelRegistry);
+    } catch {
+      // The send transaction reports an unavailable or invalid pin.
+      return;
+    }
+    const imageMetadata = pinned?.defaults ?? model;
+    const imageInput = imageMetadata.supportsImageInput ?? imageMetadata.modalities?.input.includes('image');
+    if (imageInput !== false) return;
+    // Without a pin, the send transaction can still select another interface.
+    if (!pinned && model.availableInterfaces?.some(({ defaults, profileId }) =>
+      profileId !== model.selectedInterface?.profileId &&
+      (defaults.supportsImageInput ?? defaults.modalities?.input.includes('image')) !== false)) return;
+    if (await activeModelGroupBinding(sessionId, row) ||
+        getSessionRuntimeControlSnapshot(sessionId).generation !== control.generation ||
+        agentSwitchPending.get(sessionId)) return;
+    throwIpcError('PRECONDITION_FAILED', CODEX_IMAGE_INPUT_UNSUPPORTED);
+  }
+
   async function activeModelGroupBinding(sessionId: string, row: {
     source?: string | null; agentKind?: string | null; model?: string | null; providerId?: string | null; agentDeviceId?: string | null;
   }) {
@@ -20577,6 +20627,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const owner = getCurrentDbClientSnapshot();
         await withSessionPermissionChange(sessionId, async () => undefined);
         if (!owner || owner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
+        if (!isDeviceLinkInvoke() && message && typeof message === 'object' &&
+            'type' in message && message.type === 'user' && 'content' in message &&
+            Array.isArray(message.content) && message.content.some(block => block?.type === 'image')) {
+          await assertLocalCodexImageInput(sessionId, await getSessionRowSnapshot(sessionId), createOpts);
+          if (owner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
+        }
         return sendToAgentAccepted(
           sessionId,
           message,
@@ -22469,8 +22525,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const retryPendingInputClearBoundary = async (
     sid: string,
     remote: boolean,
-    row: { clearedAt?: unknown } | null,
-  ): Promise<{ clearedAt?: unknown } | null> => {
+    row: Awaited<ReturnType<typeof getSessionRowSnapshot>>,
+  ): Promise<Awaited<ReturnType<typeof getSessionRowSnapshot>>> => {
     const inMemory = inputCoordinator.getClearBoundaryMs(sid);
     const persisted = normalizeAgentInputClearBoundaryMs(row?.clearedAt);
     if (typeof inMemory !== 'number' || (typeof persisted === 'number' && persisted >= inMemory)) {
@@ -22490,10 +22546,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
 
-  const observeLocalInputClearBoundary = async (sid: string): Promise<void> => {
+  const observeLocalInputClearBoundary = async (sid: string) => {
     const row = await getSessionRowSnapshot(sid);
     const durableRow = await retryPendingInputClearBoundary(sid, false, row);
     inputCoordinator.observeClearBoundary(sid, durableRow?.clearedAt);
+    return durableRow;
   };
 
   const remoteInputClientIdWasPersisted = async (
@@ -22612,7 +22669,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
       assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
       const clearBoundaryPrecondition = readRemoteInputClearBoundaryPrecondition(opts);
-      if (!deviceLinkInvoke) await observeLocalInputClearBoundary(sid);
+      const localInputSession = deviceLinkInvoke ? undefined : await observeLocalInputClearBoundary(sid);
       const inputGeneration = inputCoordinator.getGeneration(sid);
       const isCurrentInputGeneration = () =>
         inputCoordinator.isGenerationCurrent(sid, inputGeneration);
@@ -22663,6 +22720,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
         sendTrace?.finish('known');
         return inputCoordinator.getProjection(sid);
+      }
+      if (!deviceLinkInvoke && !isAutomaticInputOriginKind(parsed.origin?.kind) &&
+          Array.isArray(parsed.files) && parsed.files.some(file => file?.category === 'image' &&
+            typeof file.ext === 'string' && getAgentInputAttachmentBlockType(file.category, file.ext) === 'image')) {
+        await assertLocalCodexImageInput(sid, localInputSession, parsed.createOpts);
+        assertCurrentInputGeneration();
       }
       const materialized = await materializeQueuedOssAttachmentsDeferred(sid, parsed);
       const attachmentOwnerId = registerQueuedAttachmentOwnership(

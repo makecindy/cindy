@@ -662,6 +662,60 @@ describe('MCP App queued message grants', () => {
   });
 });
 
+describe('INPUT_ENQUEUE local Codex image validation', () => {
+  // #593, unit: the existing bridge tests start after acceptance. Run the
+  // production admission handler with one new PNG and explicit route metadata.
+  // A fixed text-only interface with a model-group binding must still reach
+  // group routing. The unbound PNG case checks that the same input stays out
+  // of the queue when the task has no group.
+  it.each([
+    { supportsImageInput: false, ext: '.png', blocked: true },
+    { supportsImageInput: true, ext: '.png', blocked: false },
+    { supportsImageInput: undefined, ext: '.png', blocked: false },
+    { supportsImageInput: false, ext: '.gif', blocked: false },
+    { supportsImageInput: false, ext: '.png', alternate: true, pinned: false, blocked: true },
+    { supportsImageInput: false, ext: '.png', alternate: true, pinned: true, blocked: false },
+    { supportsImageInput: false, ext: '.png', alternate: true, blocked: false },
+    { supportsImageInput: false, ext: '.png', pinned: false, modelGroupBound: true, blocked: false },
+  ])('only rejects an image block on an explicitly text-only route (%j)', async ({ supportsImageInput, ext, alternate, pinned, modelGroupBound, blocked }) => {
+    const h = createHarness();
+    const sid = 'local-codex';
+    const { enqueue } = createInputEnqueueHarness(h.coordinator, {
+      remote: false,
+      pinnedCodexImageInput: pinned,
+      modelGroupBound,
+      codexModel: {
+        id: 'fixture-model',
+        supportsImageInput,
+        ...(alternate && {
+          selectedInterface: { profileId: 'chat' },
+          availableInterfaces: [
+            { profileId: 'chat', defaults: { supportsImageInput: false } },
+            { profileId: 'responses', defaults: {} },
+          ],
+        }),
+      },
+    });
+    const item = makeItem('fresh-input', 'Look at this');
+    item.createOpts = { ...item.createOpts, agentKind: 'codex', providerId: 'fixture-codex', model: 'fixture-model' };
+    item.files = [{ id: 'fixture', name: 'test' + ext, category: 'image', ext,
+      path: 'clipboard://fixture', mimeType: ext === '.png' ? 'image/png' : 'image/gif',
+      size: 3, base64: 'AAAA' }];
+    const submitted = enqueue({}, sid, item);
+    if (blocked) {
+      await expect(submitted).rejects.toMatchObject({
+        code: 'PRECONDITION_FAILED', message: 'CODEX_IMAGE_INPUT_UNSUPPORTED',
+      });
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    } else {
+      await submitted;
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+    }
+  });
+});
+
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
   function hostInput(
     h: ReturnType<typeof createHarness>, remote = true, mobile = false,

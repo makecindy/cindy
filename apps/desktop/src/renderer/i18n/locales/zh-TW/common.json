@@ -15424,6 +15424,7 @@
       },
       "credentialSwitchDeferred": "模型來源已切換，將在當前任務結束後生效。",
       "effortRuntimeDirty": "推理強度還在更新，稍等一下再傳送",
+      "codexImageInputUnsupported": "目前的模型不支援圖片。請切換到支援圖片的模型，或移除圖片附件",
       "tooManyTaskReferences": "一則訊息最多可包含 {{max}} 個任務引用，請移除多餘的任務連結",
       "steerNotSent": "未傳送，暫時無法插話，草稿已保留",
       "credentialSwitchApplied": "模型來源切換已生效。",
