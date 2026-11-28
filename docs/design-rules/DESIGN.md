@@ -9,6 +9,8 @@
 
 本文件是 Cindy 视觉规则的入口，不需要通读。本节只指路，不写参数；每个参数只在对应章节保留一份。
 
+本文件超过 2000 行。Read 工具不带 offset 时只读前 2000 行，单行超过 2000 字符的部分也会被截掉，所以不要整份读：先用 `grep -n "^## \|^### " docs/design-rules/DESIGN.md` 找到要读的章节和行号，再带 offset / limit 只读那一段。
+
 所有界面改动先读本节、§1 和 §7，再按下表读与任务相关的部分。
 
 | 要做的事 | 优先复用 | 规则位置 |
@@ -97,24 +99,22 @@ The decision and review correction are recorded in
 
 ## 2. Color Palette & Roles
 
-MCP App 卡片来源例外（2026-11-16）：第三方来源、本地安装、来源未知使用 warning 语义前景色（Desktop `--warning-fg`，Mobile `warningFg`）；市场来源不标色，自定义 MCP 使用普通文字色。只表达安装来源，不替代权限或签名判断。
-
-> **Multi-theme note**: the values in this section are the concrete **Classic Light / Classic Dark** palette (theme family `default`, shown as Classic in Settings), kept as the visual-spec reference sample. New users start on the CINDY family (`DEFAULT_FAMILY_ID = 'cindy'`), whose values are in §15.16 and the §9 quick reference. At runtime **every color is consumed through a token** (see §10 Theme System & Token Reference), so the same component automatically renders each theme's own colors under other themes (Eclipse / One Dark Pro / Monokai Pro, …). **When implementing components, always write tokens, never hex** — rules in §10.
+> **Multi-theme note**: this section names roles and their tokens, not color values. Every theme family resolves the same tokens to its own colors: the Classic values (theme family `default`, shown as Classic in Settings) are in the §10 generated table, and the CINDY values — the family new users start on (`DEFAULT_FAMILY_ID = 'cindy'`) — are in §15.16. At runtime **every color is consumed through a token** (see §10 Theme System & Token Reference), so the same component automatically renders each theme's own colors under other themes (Eclipse / One Dark Pro / Monokai Pro, …). **When implementing components, always write tokens, never hex** — rules in §10.
 
 ### Primary Text
 
-- **Near Black** (`#262626` Light / `#d4d4d4` Dark, token `--text-primary`): primary headlines, body text, primary links and button text on light-colored surfaces — the strongest ordinary text tier; only the registered emphasis tier (§15.16) goes further. In the CINDY themes the same token resolves to translucent ink (§15.16).
-- **Pure Black** (`#000000`) is not part of the ordinary text tiers: body and heading text use `--text-primary`. It remains only where a section registers it — the Light fill of the maximum-emphasis Black Pill CTA (`--accent-cta-bg-pure`) and the inverse CTA foreground (`--accent-pure-cta-fg`, Dark `#000000`, §4 Buttons) — and in local text tokens that keep their own value (for example `--chat-input-text` in the default Light theme).
+- **Near Black** (token `--text-primary`): primary headlines, body text, primary links and button text on light-colored surfaces — the strongest ordinary text tier; only the registered emphasis tier (§15.16) goes further. In the CINDY themes the same token resolves to translucent ink (§15.16).
+- **Pure Black** is not part of the ordinary text tiers: body and heading text use `--text-primary`. It remains only where a section registers it — the Light fill of the maximum-emphasis Black Pill CTA (`--accent-cta-bg-pure`) and the Dark inverse CTA foreground (`--accent-pure-cta-fg`, §4 Buttons) — and in local text tokens that keep their own value (for example `--chat-input-text` in the default Light theme).
 
 ### Layer System (Light & Dark)
 
 The interface is built from a three-tier layer system that applies symmetrically to both modes — **Surface** as the base, **Card** as the elevated layer, and **Board** as the hairline divider. This is the foundation of every page in every mode.
 
-| Role        | Light Mode | Dark Mode | Usage                                                                                                                                                                              |
-| ----------- | ---------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Surface** | `#f8f8f6`  | `#1f1f1e` | The primary page background — every page starts here. In full-window app layouts, this is the single flat background. In centered-card layouts, this is the page beneath the card. |
-| **Card**    | `#ffffff`  | `#2c2c2a` | The elevated layer sitting on top of Surface — login cards, modals, panels, raised containers, and any element that needs to visually lift off the page.                           |
-| **Board**   | `#d7d7d4`  | `#3c3c3a` | The hairline divider color — 1px borders between sections, card outlines, and any separator line within the same layer.                                                            |
+| Role | Token | Usage |
+| --- | --- | --- |
+| **Surface** | `--surface` | The primary page background — every page starts here. In full-window app layouts, this is the single flat background. In centered-card layouts, this is the page beneath the card. |
+| **Card** | `--surface-elevated` | The elevated layer sitting on top of Surface — login cards, modals, panels, raised containers, and any element that needs to visually lift off the page.                           |
+| **Board** | `--border-default` | The hairline divider color — 1px borders between sections, card outlines, and any separator line within the same layer.                                                            |
 
 **Layer rule — flat vs. elevated:**
 
@@ -139,21 +139,17 @@ The interface is built from a three-tier layer system that applies symmetrically
 
 Small interactive chips (button backgrounds, tag pills, avatar fills, selected-nav pills) sit outside the layer system — they're foreground elements, not background layers.
 
-- **Light Gray** (`#e5e5e5`): Chip/button backgrounds in Light Mode — the workhorse neutral for pressed states, filled pills, tag backgrounds, and avatar fills.
-- **Dark Chip** (`#3c3c3a`, token `--surface-chip`): the primary chip/button background in Dark Mode — one step lifted above a Card or Surface context.
-- **Dark Chip Alt** (`#2c2c2a`, token `--surface-chip-alt`): the variant that collapses to the Dark Card value — used where a chip sits directly on Surface and only needs the Card-level lift. When in doubt, use `--surface-chip`; see §10 for both slots.
-
-> ~~**Border Light** (`#d4d4d4`)~~ — deprecated (2026-06, G2). Once labeled the "white-button border color", but no real component ever used it (only bare hardcodes in the experimental view). White Pill secondary borders uniformly use **Board** (`--border-default` `#d7d7d4`).
+- **Light Gray** (token `--surface-chip`, Light): Chip/button backgrounds in Light Mode — the workhorse neutral for pressed states, filled pills, tag backgrounds, and avatar fills.
+- **Dark Chip** (token `--surface-chip`, Dark): the primary chip/button background in Dark Mode — one step lifted above a Card or Surface context.
+- **Dark Chip Alt** (token `--surface-chip-alt`): the variant that collapses to the Dark Card value — used where a chip sits directly on Surface and only needs the Card-level lift. When in doubt, use `--surface-chip`; see §10 for both slots.
 
 ### Neutrals & Text
 
-**Text tiers (user decision, 2026-10-22).** Neutral text follows one ordered ladder: primary > description > secondary > tertiary > placeholder/disabled. The CINDY family keeps every step distinct; other built-in themes never invert the order, though some share one value for description and secondary. In the CINDY family every tier is the same ink at decreasing alpha — black in Light, white in Dark (values in §15.16) — the way Apple's label colors work: a translucent tier keeps its step on glass, wallpaper, hover fills and cards, and picks up the warmth of the surface beneath it. Don't recreate a tier with a solid gray picked by eye, and don't fake a tier by fading an element with `opacity`. Text on inverse surfaces (selected pills, tooltips, CTAs) uses its dedicated foreground token, never a translucent ink tier. The same ink at low alpha draws the CINDY hover, chip, selected and pressed fills and its borders and dividers (§15.16). The hex values below are the Classic (default) theme's reference sample.
+**Text tiers (user decision, 2026-10-22).** Neutral text follows one ordered ladder: primary > description > secondary > tertiary > placeholder/disabled. The CINDY family keeps every step distinct; other built-in themes never invert the order, though some share one value for description and secondary. In the CINDY family every tier is the same ink at decreasing alpha — black in Light, white in Dark (values in §15.16) — the way Apple's label colors work: a translucent tier keeps its step on glass, wallpaper, hover fills and cards, and picks up the warmth of the surface beneath it. Don't recreate a tier with a solid gray picked by eye, and don't fake a tier by fading an element with `opacity`. Text on inverse surfaces (selected pills, tooltips, CTAs) uses its dedicated foreground token, never a translucent ink tier. The same ink at low alpha draws the CINDY hover, chip, selected and pressed fills and its borders and dividers (§15.16).
 
-- **Stone** (`#737373`): Secondary body text, footer links, and de-emphasized content. The primary "muted" tone.
-- **Mid Gray** (`#525252`): Emphasized secondary text, slightly darker than Stone.
-- **Silver** (`#a3a3a3`): Tertiary text and deeply de-emphasized metadata. **Never use it as a placeholder** — too prominent, reads as filled-in (see §4 Inputs; the G3 erratum is archived in [`design-decision-log.md`](./design-decision-log.md); placeholders use `--text-placeholder` `#c4c4c4`).
-
-> ~~**Button Text Dark** (`#404040`)~~ — deprecated (2026-06, G1). Once labeled the "white-surface button text color", but no real button ever used it (only bare hardcodes in the experimental view). White Pill secondary text uniformly uses **Near Black** (`--text-primary` `#262626`).
+- **Stone** (token `--text-secondary`): Secondary body text, footer links, and de-emphasized content. The primary "muted" tone.
+- **Mid Gray** (token `--text-secondary-mid`): Emphasized secondary text, slightly darker than Stone.
+- **Silver** (token `--text-tertiary`): Tertiary text and deeply de-emphasized metadata. **Never use it as a placeholder** — too prominent, reads as filled-in (see §4 Inputs; the G3 erratum is archived in [`design-decision-log.md`](./design-decision-log.md); placeholders use `--text-placeholder`).
 
 ### Project icon identity colors (user request, 2026-11-13)
 
@@ -230,7 +226,9 @@ Idle tasks use a neutral grey mark. When the plugin supplies no icon, the generi
 the usual task status colours. This exception covers only the image pixels of a plugin engine's
 running task mark.
 
-_Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4d4d4`) for primary text, **Silver** (`#a3a3a3`) for secondary, **Stone** (`#737373`) for tertiary (per `--text-secondary` / `--text-tertiary` in `colors.ts` — the two swap between modes). Pure White (`#ffffff`) is reserved for button labels and high-contrast UI elements on dark backgrounds._
+MCP App 卡片来源例外（2026-11-16）：第三方来源、本地安装、来源未知使用 warning 语义前景色（Desktop `--warning-fg`，Mobile `warningFg`）；市场来源不标色，自定义 MCP 使用普通文字色。只表达安装来源，不替代权限或签名判断。
+
+_Dark Mode text uses softened neutrals to reduce eye strain. In Classic, `--text-secondary` and `--text-tertiary` swap values between Light and Dark (see the §10 generated table); in the CINDY family every tier is translucent ink (§15.16). Pure white is reserved for button labels and high-contrast UI elements on dark backgrounds._
 
 ### Gradient System
 
@@ -289,12 +287,12 @@ Desktop roles (rewritten 2026-11-11, audit B-02 / B-03 / B-11). Sizes are `text-
 | Code, compact | code stack, `calc(var(--app-code-font-size) - 1px)` and the other registered derivatives | 400 | — | Compact chat cards; only the derivatives registered in the guard's EXEMPTIONS |
 | Code in UI chrome | code stack, 11–12px from the UI ladder | 400 / 500 | — | Paths, IDs and tags shown inside ordinary UI (they follow the UI size setting, not `codeSize`) |
 
-Brand canvases (§16 login / Splash family and its self-contained pages) keep their own design-px titles — conceptually Display 48px, Section Heading 36px, Sub-heading 30px. Their values live in the canvas constants and §16 tables, not in app code, and they are the only place titles may differ from 500: a title there follows its own §16 / [login-flow.md](./login-flow.md) specification — the Bold 700 registered in the 「排版豁免登记表」 below (scope limited to the files listed in that row), or a weight the login spec states explicitly, such as the account-deletion bubble's Regular 400. A login-related surface without such a specification (for example the captcha overlay) uses 500. Mobile has its own role table (`apps/mobile/docs/mobile-design-guide.md` §3). This table describes roles; the whitelist constrains values.
+Brand canvases (§16 login / Splash family and its self-contained pages) keep their own design-px titles — conceptually Display 48px, Section Heading 36px, Sub-heading 30px. Their values live in the canvas constants and §16 tables, not in app code. They are the only place a title may use a weight other than 500; which weight applies is set in 「字重阶梯」 below. Mobile has its own role table (`apps/mobile/docs/mobile-design-guide.md` §3). This table describes roles; the whitelist constrains values.
 
 ### Principles
 
 - **Single sans family**: Inter carries both display headlines and body text — no typeface switching between hierarchy levels. Size and weight alone create hierarchy, keeping the typographic system maximally simple.
-- **Weight restraint**: Everyday chrome defaults to 400 (regular) and 500 (medium); every desktop title is 500; 600 is a rationed emphasis tier that is not used for titles, and 700 lives exclusively inside registered exemption domains. No light, no black weight, no in-between values. The full ladder and its rules are in 「字重阶梯」 below (2026-08 revision, issue #1505 — this supersedes the former "400/500 only" wording).
+- **Weight restraint**: Everyday chrome defaults to 400 (regular) and 500 (medium); every desktop title is 500; 600 is a rationed emphasis tier that is not used for titles, and 700 lives exclusively inside registered exemption domains. No light, no black weight, no in-between values. The full ladder and its rules are in 「字重阶梯」 below.
 - **Tight display, comfortable body**: Titles use tight line heights (1.2–1.3 on desktop, 1.0 on brand canvases), while reading text relaxes to 1.5–1.6. The contrast creates clear hierarchy without needing weight contrast.
 - **Monospace for code only**: the code font (system monospace stack by default; JetBrains Mono is an optional preset, see Font Family above) is reserved for inline code, terminal commands, and code blocks — never used for UI chrome.
 
@@ -392,8 +390,8 @@ Brand canvases (§16 login / Splash family and its self-contained pages) keep th
 
 ```
 button/primary  (Gray Pill)
-  fill      --surface-chip        #e5e5e5 / #3c3c3a
-  text      --text-primary        #262626 / #d4d4d4
+  fill      --surface-chip
+  text      --text-primary
   border    1px solid --surface-chip   (same as fill)
   radius    9999px (pill)
   padding   horizontal 24px; vertical content centered within the fixed height
@@ -406,9 +404,9 @@ button/primary  (Gray Pill)
   impl      components/ui/button.tsx variant="primary"
 
 button/secondary  (White Pill)
-  fill      --surface-elevated    #ffffff / #2c2c2a
-  text      --text-primary        #262626 / #d4d4d4
-  border    --border-default      #d7d7d4 / #3c3c3a
+  fill      --surface-elevated
+  text      --text-primary
+  border    --border-default
   radius    9999px (pill)
   padding   horizontal 24px; vertical content centered within the fixed height
   height    same sizes as button/primary
@@ -420,8 +418,8 @@ button/secondary  (White Pill)
   impl      components/ui/button.tsx variant="secondary"
 
 button/cta  (Black Pill — maximum emphasis)
-  fill      --accent-cta-bg-pure  #000000 / #ffffff
-  text      --accent-pure-cta-fg  #ffffff / #000000
+  fill      --accent-cta-bg-pure
+  text      --accent-pure-cta-fg
   radius    9999px (pill)
   padding   horizontal 24px; vertical content centered within the fixed height
   height    same sizes as button/primary
@@ -462,12 +460,12 @@ The same paint layer is shared with ChromeIconButton (28px) and SidebarIconButto
 
 ```
 card/container
-  fill      --surface-elevated    #ffffff / #2c2c2a   (page-level flat layouts use --surface instead — §2 layer rule)
-  border    1px solid --border-default   #d7d7d4 / #3c3c3a   (only when separation is needed)
+  fill      --surface-elevated    (page-level flat layouts use --surface instead — §2 layer rule)
+  border    1px solid --border-default   (only when separation is needed)
   radius    12px (container tier; Tailwind rounded-xl literal)
             ⚠ do NOT use §10's --radius — that is shadcn's 0.5rem (8px) primitive, unrelated to this 12px container radius
   shadow    none
-  hover     --surface-hover       #e5e5e5 / #3c3c3a
+  hover     --surface-hover
 ```
 
 ### Desktop settings rows
@@ -635,15 +633,15 @@ Its motion is registered in §14.4 (get-started guide entrance).
 
 ```
 input/text
-  fill        --surface-elevated  #ffffff / #2c2c2a
-  text        --text-primary      #262626 / #d4d4d4
-  border      --border-default    #d7d7d4 / #3c3c3a
+  fill        --surface-elevated
+  text        --text-primary
+  border      --border-default
   radius      9999px (pill — single-line inputs)
   height      32px (sm) / 36px (md) / 40px (lg)  (DS-4 G1; three sizes, shared 4px step with buttons)
   default     md (36px), the same height as the default Select and Button lg (owner decision C-08, 2026-11-11); pass lg only for a spacious field
   focus       --focus-ring-soft   rgba(65,124,221,0.5)   (50% of #417CDD; opaque border variant = --focus-ring)
               DS-6: approved soft ring; settings retain their local focus-border alias; error styling takes priority. Light/Dark and legacy-theme readability must be verified.
-  placeholder --text-placeholder  #c4c4c4 / #525252
+  placeholder --text-placeholder
   error       --error-border / --error-fg
   impl        components/ui/input.tsx
   disabled    60% opacity + ordinary pointer  (new in DS-4; the pre-DS-4 SettingsTextInput had no disabled styling and none of its 6 consumers passed it)
@@ -675,7 +673,7 @@ Question navigation, close/skip, validation, voice finalization and approval sem
 
 ### Typography roles and control pairing (DS-11)
 
-- Title weights: every dialog and prompt title is 500 — ConfirmDialog and provider/MCP form titles 18/500, compact prompt titles 15/500 (2026-11-11 maintainer ruling, audit B-03; the former 600 form and prompt titles were moved to 500). Sizes come from the §3 Hierarchy roles; different roles are not interchangeable merely because their font size matches.
+- Title weights: every dialog and prompt title is 500 (§3 「字重阶梯」) — ConfirmDialog and provider/MCP form titles 18/500, compact prompt titles 15/500. Sizes come from the §3 Hierarchy roles; different roles are not interchangeable merely because their font size matches.
 - Pair Button md with Input sm and Button lg with Input md (the Input default) — equal heights. Input lg is for spacious fields and must be passed explicitly; Button has no matching size. Size names are local component APIs, not a shared ordinal scale.
 - Font aliases may share default numbers while retaining separate line-height/role contracts. Preserve public aliases; do not globally round historical unitless line heights or optical spacing. On affected surfaces, UI text consumes `--text-*`, and line boxes must grow with font settings.
 - FormField reading hints use `--form-field-hint` (defaults to `--text-secondary-mid`; One Dark Pro / Solarized Light override this help role only): in Cindy Light/Dark this is the description ink tier (70% / 66%, §15.16), and other built-in themes get stronger reading contrast. Preserve `text-tertiary` metadata and `text-placeholder` roles.
@@ -765,7 +763,7 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 **Cindy Make preflight exception (owner decision, 2026-09-20):** this progress dialog uses a top-right × instead of a footer Cancel. The header stays visible while the report scrolls. The ×, Esc and scrim all open the same confirmation, with live copy distinguishing environment preparation, source preparation, upstream search and finished checks. Explain that stopping shared preparation also stops its Settings projection and that prepared resources are kept. Creating the build session temporarily disables dismissal. This exception supersedes the general closing-affordance rule below only for `CindyMakePreflightDialog`; the request form keeps its existing footer.
 
 - **Overlay** (blur added 2026-10-04): every modal scrim — Radix `Dialog.Overlay` / `AlertDialog.Overlay`, hand-built scrims and the Radix side drawers — uses the shared `.modal-scrim` class (`styles/globals.css`): `--overlay-modal` (Light `rgba(0,0,0,0.5)` / Dark `rgba(0,0,0,0.7)`) plus a 4px `backdrop-filter` blur of whatever is behind; on Windows (`html[data-platform='win32']`) there is no blur, the same reason as the opaque Windows menus (§15.12). Desktop attachment previews float over the same `.modal-scrim` (2026-11-03, see [attachment-preview.md](attachment-preview.md)); unlike dialogs, a click on their scrim closes the preview. Never write a scrim colour, `bg-black/…`, `backdrop-blur-*` or an inline background at the call site; to change depth or blur, change the token or the class, never one component. Not dialogs and therefore not covered: the lighter whole-window closing dim in `WindowControls.tsx`, the tap-to-close drawer scrims in `DiffPanelShell.tsx`, the login brand canvas (§16) and the transparent click blocker behind anchored plugin-card prompts.
-- **Tooltips, menus and popovers opened inside the modal** (2026-09-08 DS-6 review fix; superseded 2026-11-22 by the §6 z-index layers): the shared `Tip` used to portal on `z-[60]` and the shared menus/popovers on `z-50`, both **below** the `z-[10000]` overlay, so every call site inside a dialog had to raise them by hand. Their defaults now sit above all dialogs — `Tip` on `tooltip` (10011), `DropdownMenu` / `Popover` / `MorphPopover` / `Select` on `dropdown` (10010) — so do not pass `contentClassName`, `secretTipContentClassName` or a `z-*` class to lift them. Dialog layers (`modal` / `modal-raised` / `modal-nested`) and the rules for nested dialogs are in §6.
+- **Tooltips, menus and popovers opened inside the modal**: their shared defaults sit above all dialogs — `Tip` on `tooltip` (10011), `DropdownMenu` / `Popover` / `MorphPopover` / `Select` on `dropdown` (10010) — so do not pass `contentClassName`, `secretTipContentClassName` or a `z-*` class to lift them. Dialog layers (`modal` / `modal-raised` / `modal-nested`) and the rules for nested dialogs are in §6.
 - **Container**: every centered modal panel uses the shared `.modal-panel` class — 12px radius, `--confirm-bg` Card fill, 1px Board (`--border-default`) outline and the registered floating-layer shadow `--shadow-menu` — the same shadow as menu panels (2026-10-04 unification; user ruling the same day). Bot dialogs share this panel; the Bot zero-shadow rule covers in-page Bot surfaces, not modal panels. Call sites never add their own radius, background, border colour or shadow, nor glass `--cmd-palette-bg`; they set only width, position, padding (16px `p-4` by default) and layout. Radix side drawers keep their own edge-anchored panel and share only the scrim. Guard: `__tests__/modalSurfaceContract.test.ts`. Width: confirm/notice dialogs ≈ 400px (`max-w-[400px]`); dialogs with inputs/forms may widen to ≈ 460px and shrink with the viewport (`min(460px, 100vw-32px)`). The DS-6 multi-runtime provider and MCP forms use 600px with the same 16px viewport gutters and a scrollable body capped within 88vh.
 - **Title / description**: `--confirm-title` / `--confirm-desc`; title medium (500), description regular (400).
 - **Buttons**: pill (9999px); primary = inverse neutral (`--confirm-btn-primary-*`, not an automatic CTA assignment), secondary/cancel = outlined (`--confirm-btn-secondary-*`, transparent fill + Board border); footer `justify-end`.
@@ -1114,16 +1112,16 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 
 ## 6. Depth & Elevation
 
-**Mobile home navigation drawer exception (owner request, 2026-09-27):** The left-edge main menu uses an elevated surface, right-side container corners, and a soft outward shadow from mobile's `homeDrawerShadow` theme token. This exception is confined to `HomeChromeDrawer` (including its companion entry), not in-page cards or the task-list sidebar. The account header puts the user's name first, with the same personal avatar as Settings (falling back to a letter when no photo is available), optional email, and a small organization logo beside the organization name; do not show an account ID. Opening waits for native layout, then translates the panel and fades the backdrop together; drag, cancellation and close share one UI-thread progress value and respect reduced motion. Numeric values remain in mobile tokens and component styles.
-
 | Level              | Treatment                                                                 | Use                                            |
 | ------------------ | ------------------------------------------------------------------------- | ---------------------------------------------- |
 | Flat (Level 0)     | No shadow, no border                                                      | Surface background, most content               |
-| Bordered (Level 1) | `1px solid` Board (`#d7d7d4` Light / `#3c3c3a` Dark)                      | Cards, code blocks, dividers, section outlines |
-| Lifted (Card)      | Card fill (`#ffffff` Light / `#2c2c2a` Dark) + optional 1px Board outline | Login cards, raised panels                     |
+| Bordered (Level 1) | `1px solid` Board (`--border-default`)                                    | Cards, code blocks, dividers, section outlines |
+| Lifted (Card)      | Card fill (`--surface-elevated`) + optional 1px Board outline             | Login cards, raised panels                     |
 | Floating           | Card fill + 1px Board outline + `--shadow-menu`                           | Menus, popovers, modal dialogs (every dialog, confirm or not) |
 
-**Shadow Philosophy**: Cindy's base visual language uses **zero shadows**. This is not an oversight — it's a deliberate design decision. The flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and typography weight**, not visual layering. (The only shadows in the system are the mobile home drawer exception above, the PDF page in the document preview, whose white page would otherwise merge with a light surface, the stick cap of the WorkLouder device illustration, the `ThemeBrandLockup` icon, and the token-gated floating-layer exceptions and the Slider thumb (§15.18) / Segmented selected-pill (§4) exceptions registered in §10 — `--shadow-menu` (menus, popovers, modal panels and every other layer floating above content: tooltips, jump and new-message chips, find bars, toasts and floating notices, owner decision 2026-11-07) / `--cmd-palette-shadow` / `--segmented-selected-shadow` (`--confirm-shadow` stays registered for theme compatibility but is no longer consumed by dialogs); never add ad-hoc shadows to in-page elements. Two single-use shadows are also registered (owner decision 2026-11-22): the inset shadow of the Windows tray quota card's glass well (`styles/quota-tray.css` `.tube`, the same well as the §2 gradient exception) and the live-device glow in the remote connection topology (`remote-connection-v2.css` `.rcv2-tile[data-live]`, 1px ring at 30% plus `0 4px 18px` at 22%, as specified in §4 Remote connection V2 topology); neither becomes a token. A Switch-knob shadow was trialed and explicitly rejected — user ruling 2026-08-05: the legacy `shadow-lg` on the 16px thumb was invisible in practice, and a visible replacement read as noise; the knob is flat by decision, don't re-add it.)
+**Shadow Philosophy**: Cindy's base visual language uses **zero shadows**. This is not an oversight — it's a deliberate design decision. The flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and type size**, not visual layering. (The only shadows in the system are the mobile home drawer exception below, the PDF page in the document preview, whose white page would otherwise merge with a light surface, the stick cap of the WorkLouder device illustration, the `ThemeBrandLockup` icon, and the token-gated floating-layer exceptions and the Slider thumb (§15.18) / Segmented selected-pill (§4) exceptions registered in §10 — `--shadow-menu` (menus, popovers, modal panels and every other layer floating above content: tooltips, jump and new-message chips, find bars, toasts and floating notices, owner decision 2026-11-07) / `--cmd-palette-shadow` / `--segmented-selected-shadow` (`--confirm-shadow` stays registered for theme compatibility but is no longer consumed by dialogs; `--shadow-soft-panel`, the base value of `--cmd-palette-shadow` and `--confirm-shadow`, and `--shadow-chip-raised`, kept only for compatibility, are registered in §10 and are not for direct use by new UI); never add ad-hoc shadows to in-page elements. Two single-use shadows are also registered (owner decision 2026-11-22): the inset shadow of the Windows tray quota card's glass well (`styles/quota-tray.css` `.tube`, the same well as the §2 gradient exception) and the live-device glow in the remote connection topology (`remote-connection-v2.css` `.rcv2-tile[data-live]`, 1px ring at 30% plus `0 4px 18px` at 22%, as specified in §4 Remote connection V2 topology); neither becomes a token. A Switch-knob shadow was trialed and explicitly rejected — user ruling 2026-08-05: the legacy `shadow-lg` on the 16px thumb was invisible in practice, and a visible replacement read as noise; the knob is flat by decision, don't re-add it.)
+
+**Mobile home navigation drawer exception (owner request, 2026-09-27):** The left-edge main menu uses an elevated surface, right-side container corners, and a soft outward shadow from mobile's `homeDrawerShadow` theme token. This exception is confined to `HomeChromeDrawer` (including its companion entry), not in-page cards or the task-list sidebar. The account header puts the user's name first, with the same personal avatar as Settings (falling back to a letter when no photo is available), optional email, and a small organization logo beside the organization name; do not show an account ID. Opening waits for native layout, then translates the panel and fades the backdrop together; drag, cancellation and close share one UI-thread progress value and respect reduced motion. Numeric values remain in mobile tokens and component styles.
 
 **Transparent window shadow margins (owner decision 2026-11-22).** A floating card that lives in its own transparent window keeps an empty margin around the card so its shadow is not clipped by the window edge. The margin is shared with the main process, which sizes and places the window from it: `VoiceInputOverlay` `p-[52px]` ↔ `OVERLAY_SHADOW_PADDING = 52` and `VoiceInputDictionaryToast` `p-[34px]` ↔ `DICTIONARY_TOAST_SHADOW_PADDING = 34` in `apps/desktop/src/main/voice-input/global.ts`. Change each pair together; changing only the renderer moves the card off its anchor.
 
@@ -1196,7 +1194,7 @@ tailwind-merge，调用方传入的 `z-<层名>` 会覆盖组件的默认层。
 
 ### Do
 
-- Use Surface (`#f8f8f6` Light / `#1f1f1e` Dark) as the page background — every page starts here
+- Use Surface (`--surface`) as the page background — every page starts here
 - Assign each visible layer's corner radius through §5 (Step 1 registered shapes first, then the Step 2 tiers).
 - Keep the palette strictly grayscale — chromatic color only via the sanctioned semantic set in §2, always through tokens
 - Use Inter at weight 500 for every title (§3 「字重阶梯」; brand-canvas 700 only as registered in §3) — hierarchy comes from size, not typeface switching or heavier weights
@@ -1212,7 +1210,7 @@ tailwind-merge，调用方传入的 `z-<层名>` 会覆盖组件的默认层。
 - Don't add shadows outside the §6 registry (§6 Shadow Philosophy is the single list; floating layers use `shadow-[shadow:var(--shadow-menu)]`) — never ad-hoc shadows on in-page elements, no preset `shadow-sm` … `shadow-2xl`; the flat aesthetic is intentional. `designEffectsDiscipline.test.ts` enforces this
 - Don't use font weights above 600 in UI chrome — 700 only inside the §3 「排版豁免登记表」 domains. No 800+, no in-between values, anywhere
 - Don't add decorative illustrations — Cindy's working UI carries no mascots or artwork; brand imagery appears only on the explicitly enumerated sanctioned brand surfaces in §15.7 / §16; the only other artwork is the user-selected [application wallpaper](./wallpaper.md)
-- Don't introduce gradients — flat blocks and borders only; the registered exceptions are the session-loading wordmark sheen and functional edge fades (§2 Gradient System), the Computer Use cursor bloom (§15.7), the model-budget spectrum on discount-routed model names, the neutral GhostTool shimmer (§2 Gradient System, §15.4), the composer Stop working glow (§2, §14.4) the Windows tray quota card's glass well and background and the glass well of Mobile's usage-overview quota tubes (§2 Gradient System)
+- Don't introduce gradients — flat blocks and borders only; the registered exceptions are listed in §2 Gradient System, and `designEffectsDiscipline.test.ts` keeps that list closed
 - Don't hard-code a solid gray for neutral text or fake a text tier with element `opacity` — use the text tier tokens (§2); in the CINDY family they are translucent ink and stay correct on glass and wallpaper
 - Don't overcomplicate the layout — stick to the region structure in §5; no complex nested grids
 - Don't give containers or dividers a border heavier than 1px — containment is always the lightest possible touch. The rule covers containers (cards, panels, dialogs, list frames) and dividers, not control strokes (owner decision B-10, 2026-11-11): checkboxes use the shared `Checkbox` (§4 Desktop settings controls) instead of a hand-drawn box; hand-drawn radio dots, edit / focus frames, avatar and status-dot cut-out rings and spinners may use 1.5–2px; the EffortSlider thumb's 2.5px border is a registered exception (§15.18). **Selection indicator exception (maintainer ruling, 2026-11-12):** the outline that marks the selected item in a picker may be 1.5–2px — currently the scheduler `TemplateCard` (1.5px) and the Appearance theme and wallpaper previews (2px); ordinary containers stay 1px
@@ -1238,18 +1236,7 @@ Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait
 
 ### Quick Color Reference
 
-CINDY Light / Dark values — the default family for new users (§15.16). Ink tiers are translucent: black at the given alpha in Light, white in Dark, so they shift with whatever surface sits beneath. Always write the token, never the value.
-
-- **Surface** (page bg) `--surface`: #F2F2ED / #181818
-- **Card** (elevated layer) `--surface-elevated`: #FDFDF8 / #1F1F1F
-- **Board** (1px dividers/borders) `--border-default`: black 8% / white 10%
-- Primary text `--text-primary`: black 88% / white 82%
-- Secondary text `--text-secondary`: black 56% / white 55%
-- Tertiary text `--text-tertiary`: black 44% / white 40%
-- Placeholder `--text-placeholder`: black 32% / white 30%
-- Chip / hover fill `--surface-chip`, `--surface-hover`: black 5% / white 6%
-
-Classic (§2 reference sample): Surface #f8f8f6 / #1f1f1e, Card #ffffff / #2c2c2a, Board #d7d7d4 / #3c3c3a, primary text #262626 / #d4d4d4, secondary #737373 / #a3a3a3, tertiary #a3a3a3 / #737373, chip #e5e5e5 / #3c3c3a.
+Always write the token, never the value. The values per theme family are in the §10 generated table (Classic) and §15.16 (CINDY).
 
 ### Example Component Prompts
 
@@ -1264,18 +1251,13 @@ Classic (§2 reference sample): Surface #f8f8f6 / #1f1f1e, Card #ffffff / #2c2c2
 ### Iteration Guide
 
 1. Focus on ONE component at a time
-2. Keep all values grayscale — name the token (`--text-secondary`), not "use a light color" or a literal gray
-3. Assign the specific visible layer through §5: check Step 1 registered shapes first (keycaps or an approved data-mark member), then use Step 2 for ordinary control frames, containers and inner-control surfaces. Keep contained content, hit testing and focus / selection indicators separate as §5 requires; submit unresolved shapes for adjudication.
-4. No new shadows — only the §6 registered exceptions carry one
-5. Weight is 400/500 for everyday chrome and 500 for every title, 600 for rationed emphasis — 700 never appears in new UI (registered exemption domains in §3 only)
+2. Name the token, never a value — colors per §10 Token Selection Rules for New UI
+3. Radii and visible layers: §5 Border Radius Scale (Step 1, then Step 2)
+4. Shadows: §6 Shadow Philosophy
+5. Weights: §3 「字重阶梯」
 6. If something feels too decorated, remove it — less is always more
 
 ## 10. Theme System & Token Reference
-
-Legacy local-theme compatibility: `--shadow-chip-raised` remains registered with
-its original Light / Dark defaults (see the generated `colors.ts` values), so
-existing themes can reference it from other shadow tokens. It is retained only
-for compatibility under design-governance §4; new UI must not consume it directly.
 
 ### Light / Dark Dual-Mode Delivery Gate(双模式交付门槛)
 
@@ -1306,7 +1288,7 @@ Settings → Appearance opens with the settings page title (see “Desktop setti
 **Tier 1 — Semantic slots**: the core cross-context slots; when adding a theme, this tier is the main override battleground. The exact-value summary below is generated from the Desktop DTCG source. Registry IDs and usages remain the compatibility contract.
 
 <!-- BEGIN GENERATED DS-8: semantic-colors -->
-| Category | Slot | Default Light | Default Dark | Primary use |
+| Category | Slot | Classic Light | Classic Dark | Primary use |
 | --- | --- | --- | --- | --- |
 | **Surface** | `--surface` | `#f8f8f6` | `#1f1f1e` | Page Surface (hex form) |
 |  | `--surface-hsl` | `60 12.5% 97%` | `60 2% 12%` | Same, HSL triplet — consume via `hsl(var(--xxx))` |
@@ -1584,38 +1566,6 @@ Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc
 
 > Expanded 2026-07. Cindy's motion character extends the paper-like restraint of §1 / §7: **ordinary UI fades, nudges, and resizes smoothly; overshoot is limited to the explicitly registered Done, Usage History chart and mobile new-task morph responses below**. Functional state transitions are allowed; decorative motion is forbidden. This section pins "functional" into executable tiers and prototypes so components stop inventing their own durations and curves.
 
-**Desktop companion composer action (owner-approved prototype, 2026-10-22).** An idle
-one-to-one companion composer shows dictation and a call action. A visible prompt
-recommendation keeps the call action available (owner correction, 2026-10-29); its
-Tab/click acceptance and Enter send remain available. An accepted or typed draft,
-attachments or browser comments replace the call with Send in the same 30px circular
-target. Crossfade the icon layers and scale 55% ↔ 100% on
-`--motion-enter` (250ms) / `--motion-ease-move`; keep the shell, hit target and dictation
-position fixed, with no bounce. CSS transitions retarget from their current values.
-Respect reduced motion, retain keyboard focus, and reject a press whose action changes
-before activation. Recording/refinement, Stop, Queue and queue editing retain their
-existing actions. Other composers keep their existing behavior.
-
-**Desktop composer send / stop (owner-approved 2026-11-18, Design Lab send-button v2–v5).**
-`SendButton` (every composer, plan feedback and group chat) is a 30px circle like the dictation
-button beside it; with nothing to send it keeps the neutral-inverse fill at 40% opacity and fades
-to full over `--motion-fast` when the draft becomes sendable. Press retracts only the fill by 1px
-(§4 Button feedback). Send → Stop: the paper plane flies out up-right (`--motion-fast`,
-ease-in) and the 10px square lands from 55% after `--motion-instant` (`--motion-enter`,
-ease-move); the working glow then fades in. When the turn ends or Stop is pressed, the square
-leaves first, the plane glides back from the lower left after `--motion-instant`
-(`--motion-enter`, ease-out), the glow keeps turning while it fades out, and only then does an
-empty composer dim back to 40% (delayed by `--motion-enter`). The main slot keeps one mounted
-button for send, stop and call so these transitions can play and focus survives. A secondary
-Stop opens from zero width (`--motion-base`) without moving dictation or Send. While a
-dictation long-press hovers Send as its release target, Send scales to 106% with a 1.5px
-`--text-secondary` ring. The dictation button records with three `--settings-badge-error` level
-bars and a timer. On recording start the bars ripple once (except in reduced motion), then settle
-at the quiet baseline. Live microphone levels (40 ms windows) take over as soon as sound arrives; its width uses `--motion-base` / ease-move and the
-mic, bars and refining spinner cross-fade (`--motion-fast`); busy states are not dimmed.
-All motion lives in `globals.css` (`.composer-send*`) on motion tokens; reduced motion switches
-instantly and keeps the glow still.
-
 #### Motion tokens (the only tier source)
 
 Global tokens are generated from `packages/design-tokens` into `:root` of `apps/desktop/src/renderer/styles/generated/tokens.css`; `styles/globals.css` only holds the reduced-motion overrides. Mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (`motionDuration` / `motionEasing`; dual-platform isomorphism, same policy as color tokens). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 radius scale. Values outside the tiers require design review first. Narrow semantic exceptions are recorded directly below.
@@ -1770,6 +1720,38 @@ The two registered chart members (§5) enlarge their non-hit-testing visible lay
 - **Application wallpaper (maintainer ruling D-11, 2026-11-11)** — wallpaper fades are plain opacity changes on the `fast` tier: the previous still fades out and the selected preview/original crossfades in on `--motion-fast` / `--motion-ease-move`, and the Static ↔ Dynamic video crossfade uses the same pair (was base, 200ms). Narrow exception: the download progress track inside the selected thumbnail interpolates its `transform` over `--motion-base` with `linear` easing, because an ease-in/out would restart on every progress sample. Reduced motion jumps directly. Details in [wallpaper.md](./wallpaper.md).
 - **Retired: mobile-download QR brand edge** — a rotating app-icon edge on the `MobileDownloadDialog` QR card was briefly registered here as a fourth (persistent) motion class on 2026-07-25 and **removed the same day** at the user's request: read as a strange ring turning behind the code. There is **no sanctioned persistent decorative motion** — the red lines above hold without exception. The card is now a bare QR (no edge, no border, no shadow, no tilt); its only motion is the linked ↔ onboarding size tween. Do not re-add. Contract test: `mobileDownloadDialog.test.tsx` → `keeps the QR card flat with no brand edge`.
 
+**Desktop companion composer action (owner-approved prototype, 2026-10-22).** An idle
+one-to-one companion composer shows dictation and a call action. A visible prompt
+recommendation keeps the call action available (owner correction, 2026-10-29); its
+Tab/click acceptance and Enter send remain available. An accepted or typed draft,
+attachments or browser comments replace the call with Send in the same 30px circular
+target. Crossfade the icon layers and scale 55% ↔ 100% on
+`--motion-enter` (250ms) / `--motion-ease-move`; keep the shell, hit target and dictation
+position fixed, with no bounce. CSS transitions retarget from their current values.
+Respect reduced motion, retain keyboard focus, and reject a press whose action changes
+before activation. Recording/refinement, Stop, Queue and queue editing retain their
+existing actions. Other composers keep their existing behavior.
+
+**Desktop composer send / stop (owner-approved 2026-11-18, Design Lab send-button v2–v5).**
+`SendButton` (every composer, plan feedback and group chat) is a 30px circle like the dictation
+button beside it; with nothing to send it keeps the neutral-inverse fill at 40% opacity and fades
+to full over `--motion-fast` when the draft becomes sendable. Press retracts only the fill by 1px
+(§4 Button feedback). Send → Stop: the paper plane flies out up-right (`--motion-fast`,
+ease-in) and the 10px square lands from 55% after `--motion-instant` (`--motion-enter`,
+ease-move); the working glow then fades in. When the turn ends or Stop is pressed, the square
+leaves first, the plane glides back from the lower left after `--motion-instant`
+(`--motion-enter`, ease-out), the glow keeps turning while it fades out, and only then does an
+empty composer dim back to 40% (delayed by `--motion-enter`). The main slot keeps one mounted
+button for send, stop and call so these transitions can play and focus survives. A secondary
+Stop opens from zero width (`--motion-base`) without moving dictation or Send. While a
+dictation long-press hovers Send as its release target, Send scales to 106% with a 1.5px
+`--text-secondary` ring. The dictation button records with three `--settings-badge-error` level
+bars and a timer. On recording start the bars ripple once (except in reduced motion), then settle
+at the quiet baseline. Live microphone levels (40 ms windows) take over as soon as sound arrives; its width uses `--motion-base` / ease-move and the
+mic, bars and refining spinner cross-fade (`--motion-fast`); busy states are not dimmed.
+All motion lives in `globals.css` (`.composer-send*`) on motion tokens; reduced motion switches
+instantly and keeps the glow still.
+
 ### 14.5 聊天正文的可点性信号(Clickability in message bodies)
 
 正文已移至 [message-link-clickability.md](./message-link-clickability.md)，规范效力不变。
@@ -1833,7 +1815,7 @@ The two registered chart members (§5) enlarge their non-hit-testing visible lay
 
 ## 15. CINDY Skin Family(品牌化 family,新用户默认)
 
-> This section records the CINDY skin family, the default for new users; it does **not** rewrite the §1–7 rules, whose concrete values are the Classic reference sample. Values were finalized from design-stage working files (`skin-docs/10-specs/` desktop, `skin-docs/30-mobile/` mobile errata — **not in this repo**, same status as the §16 login working files) plus the user's final sign-off of 2026-07-18. Zero discretion at implementation time: within the repo, the authoritative encodings are the DTCG sources in `packages/design-tokens` (generated into `cindy-light.ts` / `cindy-dark.ts`), `cindyDecisionData.ts`, and the frozen tests — this section is their prose summary.
+> This section records the CINDY skin family, the default for new users; it does **not** rewrite the §1–7 rules, which name roles and tokens rather than values; the Classic values are in the §10 generated table. Values were finalized from design-stage working files (`skin-docs/10-specs/` desktop, `skin-docs/30-mobile/` mobile errata — **not in this repo**, same status as the §16 login working files) plus the user's final sign-off of 2026-07-18. Zero discretion at implementation time: within the repo, the authoritative encodings are the DTCG sources in `packages/design-tokens` (generated into `cindy-light.ts` / `cindy-dark.ts`), `cindyDecisionData.ts`, and the frozen tests — this section is their prose summary.
 >
 > Subsection numbers are **stable identifiers** (referenced by §16, code comments, frozen tests, and other documents; 15.9 was never assigned) — do not renumber. Decision history for this section is archived in [`design-decision-log.md`](./design-decision-log.md).
 
@@ -1846,7 +1828,7 @@ The two registered chart members (§5) enlarge their non-hit-testing visible lay
 | Background                     | `#F2F2ED` (warm ivory — 2026-08 revision, see 15.16)                                                               | `#181818` (pure neutral — 2026-08 revision) |
 | Card / input                   | `#FDFDF8`                                                                                                          | `#1F1F1F`                                   |
 | Border                         | black ink 8% (desktop, since 2026-10-22 — see 15.16; mobile owns its own ramp since 2026-09-26 — see 15.13)       | white ink 10%                               |
-| Secondary info                 | black ink 56% (2026-10-22 ink ladder, supersedes `#888883` and U2; full ladder in 15.16)                           | white ink 55%                               |
+| Secondary info                 | black ink 56% (full ladder in 15.16)                                                                               | white ink 55%                               |
 | Body text                      | black ink 88% (emphasis 95%)                                                                                       | white ink 82% (emphasis 100%)               |
 | Pure white                     | `#FFFFFF`                                                                                                          | `#FFFFFF`                                   |
 
@@ -1854,7 +1836,6 @@ The two registered chart members (§5) enlarge their non-hit-testing visible lay
 
 - Current authority (post-E1D, see 15.10): `NEUTRAL_PRIMARY_EXPECTED_BY_ID` / `NEUTRAL_PRIMARY_FOREGROUND_BY_ID` (exact neutral values for primary actions) + `RED_EXCEPTION_ALLOWED_IDS` (the complete set of tokens allowed to contain red), all in `apps/desktop/src/renderer/themes/__tests__/cindyDecisionData.ts`.
 - One-way ban: any token outside `RED_EXCEPTION_ALLOWED_IDS` containing `#DF0C27` / `#A61629` fails the suite.
-- The pre-E1D `BRAND_RED_*` maps are retained in `cindyDecisionData.ts` only for D2T migration and are marked for deletion; their contents are archived in the decision log — do not treat them as current rules.
 
 ### 15.3 Interpolation Table (sRGB per-channel `round(A+(B-A)*t)`)
 
@@ -2013,35 +1994,9 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - Focus ring, Auto Approval, and info blue share the `#417CDD` family. Figma's older blue `#426BF2` is not adopted.
 - Red-family carets are forbidden.
 
-#### Cross-platform color semantics (mobile owns its ramp — ruling 2026-09-26)
+#### Cross-platform color semantics (mobile owns its ramp)
 
-- Mobile shares Cindy's brand identity and semantic roles with desktop — the same meanings for background, card, body, secondary / tertiary text, borders, neutral-inverse CTA, brand red, status colors, caret and focus blue — but **owns its own ramp values, contrast and warmth** (user ruling 2026-09-25: mobile design may decouple from desktop and should be higher contrast; values finalized 2026-09-26). Do not copy desktop hex values into mobile, and do not sync them back to desktop; semantics stay mirrored, values do not. This supersedes the 2026-07-18 "isomorphism" baseline and the 2026-08 pending mobile follow-up.
-- **Mobile light = bright ivory**: page `#F9F9F6` (user-specified: brighter than desktop `#F2F2ED`, warmth B = R−3 — a lighter ivory than desktop's R−5), card / list row / popover `#FFFFFC`, chip / selected `#EAEAE6`, border `#CCCCC8`. Body text stays neutral `#0F0F0F`; secondary `#4D4D4A`, tertiary `#686864`.
-- **Consequence of the brighter page — mobile light cards separate by hairline, not by fill.** Against `#F9F9F6` the near-white ceiling leaves only a 1.05 card lift (desktop 1.12, iOS grouped background 1.12). Every new raised mobile-light surface (card, list row, popover, input container) therefore **must carry the 1px `border`**; do not rely on the `surfaceElevated` fill alone. Surfaces that must read as recessed (chip / selected, expanded block, code card) sit **below** the page instead.
-- **Mobile dark = pure neutral near-black**: page `#121212`, card `#1E1E1E`, chip `#2A2A2A`, border `#383838`; body `#EDEDED`, secondary `#BDBDBD`, tertiary `#999999`. No warmth.
-- **Text tiers are ordered and legible**: body → secondary → tertiary go from strongest to weakest, and all three are ≥ 4.5:1 on every surface they sit on (page, card, chip, code card, sheet action group). This replaces the inverted pre-2026-09 mobile order where secondary (`#8C8E94` / `#6F6F6F`, 2.8 / 2.9:1) was lighter than tertiary; the U2 exception (15.5) no longer applies to mobile. Guarded by `themeTokens.test.ts` and the frozen `theme-colors-snapshot.json`.
-- **Mobile text colors are five neutral tiers** (ruling 2026-09-27): body, secondary, tertiary, placeholder, neutral-inverse (`ctaText`). `textPlaceholder` (light `#858581` / dark `#757575`, ≥ 3:1 on page, card and chip) is a registered exception to the 4.5:1 tier rule and may be used only for input placeholders and the voice-listening prompt that mirrors them. Sheet action labels use `textPrimary` (the former `sheetActionText` alias was removed); text on a `textPrimary` / `cta` fill uses `ctaText`, never `surface`; the shared-task danger button label uses `#FFFFFF` / `#121212`. The login skin (§16) keeps its own registered grays for now.
-- **Neutral-inverse CTA on mobile**: light `#0F0F0F` / `#FFFFFF`, dark `#EDEDED` / `#121212` (19.17 / 16.00:1).
-- The appearance mode is a user setting (Settings → Appearance: follow system / light / dark, default follow system; only an explicit light / dark choice is persisted). It forces native system surfaces to the same mode; the first-launch light login gate (§16.5) still applies inside the login stage.
-- Values live only in `apps/mobile/src/theme/tokens.ts`; the proposal record and before / after comparison are in Design Lab (`colors` study, platform iPhone / Android). Login skin tokens (§16), brand splash, status four, task tags and syntax colors are outside this ramp and keep their own registered values.
-- Mobile-only tokens carry only mobile-specific layers or geometry:
-
-| Mobile token          | Light                    | Dark                  | Use                             |
-| --------------------- | ------------------------ | --------------------- | ------------------------------- |
-| `surfaceListRow`      | `#FFFFFC`                | `#1E1E1E`             | List project/task rows          |
-| `surfaceTranslucent`  | `rgba(249,249,246,0.78)` | `rgba(18,18,18,0.78)` | Sticky chrome (page at opacity) |
-| `edgeBlurShade`       | `transparent`            | `rgba(0,0,0,0.18)`    | Shade on the single-layer edge blur (composer), so an empty page stays `surface` |
-| `edgeBlurShadeLayered`| `transparent`            | `rgba(0,0,0,0.08)`    | Same shade on each of the three header blur layers |
-| `surfaceListExpanded` | `#EAEAE6`                | `#121212`             | Expanded list block             |
-| `activeGlyph`         | `#DF0C27`                | `#A61629`             | Leading active glyph in lists   |
-| `chatCodeSurface`     | `#F1F1EC` (recessed)     | `#1A1A1A`             | Chat / task code card           |
-| `chatCodeBorder`      | `#CCCCC8`                | `#383838`             | Chat / task code card border    |
-| `inputCaret`          | `#417CDD`                | `#417CDD`             | All input carets                |
-| `sheetSurface`        | `rgba(249,249,246,0.96)` | `rgba(28,28,28,0.96)` | Bottom-sheet root               |
-| `sheetActionSurface`  | `#FFFFFC`                | `#262626`             | Sheet action group / row        |
-| `sheetActionBorder`   | `#CCCCC8`                | `#383838`             | Sheet action group / row border |
-| `sheetGrabber`        | `#C2C2BE`                | `#5C5C5C`             | Sheet / composer grabber        |
-| `textPlaceholder`     | `#858581`                | `#757575`             | Input placeholder only (≈3.5:1) |
+正文已移至 [手机设计指南 §2](../../apps/mobile/docs/mobile-design-guide.md#2-颜色-token)，规范效力不变。
 
 #### Iconography
 
