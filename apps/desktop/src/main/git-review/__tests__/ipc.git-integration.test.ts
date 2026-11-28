@@ -1,5 +1,9 @@
 import { promises as fs, symlinkSync, unlinkSync } from 'node:fs';
 import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+import { withSessionReviewRowSnapshot } from '../scopeResolver';
 import path from 'node:path';
 
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
@@ -29,6 +33,10 @@ import {
   parseOpenFilePayload,
   parseTarget,
   openReviewFile,
+  panelReadDeps,
+  readReviewData,
+  readReviewFileDiff,
+  readReviewSummary,
   runReviewFileStageOperation,
   runReviewHunkStageOperation,
 } from '../ipc';
@@ -434,5 +442,57 @@ describe('git-review hunk IPC roundtrip', () => {
     expect(cachedNameStatus).toContain('seed.txt');
     expect(cachedNameStatus).toContain('renamed.txt');
     expect((await runGit(['status', '--porcelain', '--renames'], { cwd: repoPath })).stdout).not.toContain('?? renamed.txt');
+  });
+});
+
+// SVN support request: the Git fixtures cannot represent a mixed-revision
+// working copy. Exercise the panel reads with an actual BASE and a nested cwd
+// in the isolated VCS integration tier. No repository server is needed.
+it('reviews SVN BASE edits in the selected subtree through panel and single-file reads', async ctx => {
+  const exec = promisify(execFile);
+  try {
+    await Promise.all(['svn', 'svnadmin'].map(bin => exec(bin, ['--version', '--quiet'])));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    ctx.skip('Subversion CLI unavailable');
+    return;
+  }
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-review-svn-'));
+  repos.push(temp);
+  const repo = path.join(temp, 'repo');
+  const wc = path.join(temp, 'wc');
+  const sub = path.join(wc, 'assets');
+  const svn = (...args: string[]) => exec('svn', ['--non-interactive', '--config-dir', path.join(temp, 'config'), ...args], { cwd: wc });
+  await exec('svnadmin', ['create', repo]);
+  await fs.mkdir(wc);
+  await svn('checkout', pathToFileURL(repo).href, '.');
+  await fs.mkdir(sub);
+  const file = '场景 @1.txt';
+  await fs.writeFile(path.join(sub, file), 'v1\n');
+  await fs.writeFile(path.join(wc, 'outside'), 'outside\n');
+  await svn('add', 'assets', 'outside');
+  await svn('commit', '-m', 'seed');
+  await fs.writeFile(path.join(sub, file), 'diff --git inside content\n');
+  await fs.writeFile(path.join(wc, 'outside'), 'changed\n');
+  await withSessionReviewRowSnapshot({ id: 'svn-task', workingDir: sub, worktreePath: null, remoteHostId: null }, async () => {
+    const data = await readReviewData('svn-task', {}, panelReadDeps);
+    expect(data.scope.vcs).toBe('svn');
+    expect(data.diffs.unstaged.map(diff => diff.path)).toEqual([file]);
+    expect(data.diffs.unstaged[0].hunks[0].lines.map(line => line.raw)).toEqual(['-v1', '+diff --git inside content']);
+    expect(await readReviewSummary('svn-task')).toMatchObject({ dirty: true, totalFiles: 1, stagedFiles: 0 });
+    expect((await readReviewFileDiff('svn-task', { source: 'unstaged', path: file })).diff).toEqual(data.diffs.unstaged[0]);
+    expect((await readReviewFileDiff('svn-task', { source: 'unstaged', path: '../outside' })).diff).toBeNull();
+    await fs.writeFile(path.join(sub, 'texture.bin'), Buffer.from([0, 1, 2]));
+    await svn('add', 'assets/texture.bin');
+    await svn('propset', 'svn:mime-type', 'application/octet-stream', 'assets/texture.bin');
+    await svn('propset', 'category', 'scene', 'assets/' + file + '@');
+    const assets = await readReviewData('svn-task', {}, panelReadDeps);
+    expect(assets.diffs.unstaged.find(item => item.path === 'texture.bin')).toMatchObject({ kind: 'binary', status: 'added' });
+    expect(assets.diffs.unstaged.find(item => item.path === file)?.hunks.at(-1)?.section).toContain('category');
+    await fs.writeFile(path.join(sub, file), 'line\n'.repeat(9_500));
+    const large = await readReviewData('svn-task', {}, panelReadDeps);
+    expect(large.diffs.capped?.unstaged?.files.map(item => item.path)).toContain(file);
+    expect((await readReviewFileDiff('svn-task', { source: 'unstaged', path: file })).diff?.additions).toBeGreaterThanOrEqual(9_500);
+    await expect(runReviewFileStageOperation('svn-task', 'discard', [{ source: 'unstaged', path: file, oldPath: null }])).rejects.toThrow(/PRECONDITION_FAILED/);
   });
 });

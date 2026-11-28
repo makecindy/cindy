@@ -11043,12 +11043,14 @@
       "fileCount_other": "{{count}} Dateien",
       "emptyTitle": "Noch keine Änderungen",
       "emptyDesc": "In dieser Sitzung wurden noch keine Dateien bearbeitet. Änderungen des Agents erscheinen hier.",
+      "emptyDescSvn": "Die versionierten Dateien entsprechen ihrer SVN-Basisrevision.",
+      "svnSelectFile": "Wähle eine Datei aus, um ihre Änderungen zu sehen.",
       "emptyDescGit": "Der aktuelle Git-Worktree enthält weder gestagte noch ungestagte Änderungen.",
       "filterEmptyTitle": "Keine Änderungen mit diesem Filter",
-      "filterEmptyDesc": "Mit dem aktuellen Filter oder den aktuellen Einstellungen sind keine Git-Änderungen sichtbar.",
+      "filterEmptyDesc": "Mit dem aktuellen Filter oder den aktuellen Einstellungen sind keine Änderungen sichtbar.",
       "noSessionTitle": "Keine Sitzung",
       "noSessionDesc": "Wähle eine lokale Sitzung aus, um die Änderungen in ihrem Git-Worktree zu prüfen.",
-      "loadingTitle": "Git-Änderungen werden gelesen",
+      "loadingTitle": "Änderungen werden gelesen",
       "loadingDesc": "Das Panel zeigt die bisherigen Inhalte, bis die Aktualisierung abgeschlossen ist.",
       "errorTitle": "Änderungen konnten nicht gelesen werden",
       "refresh": "Aktualisieren",
@@ -11313,6 +11315,10 @@
         "non-git": {
           "title": "Kein Git-Repository",
           "desc": "Das aktuelle Arbeitsverzeichnis enthält kein nutzbares Git-Repository."
+        },
+        "svn-unavailable": {
+          "title": "SVN nicht verfügbar",
+          "desc": "Installiere den Subversion-Kommandozeilenclient, um die Arbeitskopie zu prüfen."
         },
         "git-unavailable": {
           "title": "Git nicht verfügbar",

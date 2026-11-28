@@ -11121,12 +11121,14 @@
       "fileCount_other": "{{count}} fichiers",
       "emptyTitle": "Aucune modification",
       "emptyDesc": "Cette session n'a encore modifié aucun fichier. Les modifications de l'Agent apparaîtront ici.",
+      "emptyDescSvn": "Les fichiers versionnés correspondent à leur révision de base SVN.",
+      "svnSelectFile": "Sélectionnez un fichier pour afficher ses modifications.",
       "emptyDescGit": "Le worktree git actuel ne contient aucune modification indexée ou non indexée.",
       "filterEmptyTitle": "Aucune modification pour ce filtre",
-      "filterEmptyDesc": "Aucune modification git n'est visible avec le filtre ou les paramètres actuels.",
+      "filterEmptyDesc": "Aucune modification n'est visible avec le filtre ou les paramètres actuels.",
       "noSessionTitle": "Aucune session",
       "noSessionDesc": "Sélectionnez une session locale pour passer en revue les modifications de son worktree git.",
-      "loadingTitle": "Lecture des modifications git",
+      "loadingTitle": "Lecture des modifications",
       "loadingDesc": "Le panneau conserve le contenu précédent jusqu'à la fin de l'actualisation.",
       "errorTitle": "Impossible de lire les modifications",
       "refresh": "Actualiser",
@@ -11395,6 +11397,10 @@
         "non-git": {
           "title": "Pas un dépôt git",
           "desc": "Le répertoire de travail actuel ne contient pas de dépôt git utilisable."
+        },
+        "svn-unavailable": {
+          "title": "SVN indisponible",
+          "desc": "Installez le client en ligne de commande Subversion pour examiner cette copie de travail."
         },
         "git-unavailable": {
           "title": "Git indisponible",

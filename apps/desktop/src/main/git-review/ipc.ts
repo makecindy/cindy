@@ -22,6 +22,7 @@ import { readMarkdownPreview } from './markdownReader.js';
 import { GitReviewPushError, pushBranch } from './pushOps.js';
 import { resolveReviewScope } from './scopeResolver.js';
 import { createSshPreviewReaderDeps, withSessionReviewExecution } from './sshReviewBackend.js';
+import { findSvnReviewScope, readSvnStatus, readSvnDiffs, readSvnFileDiff } from './svnReader.js';
 import { readStatus } from './statusReader.js';
 import { applyFileBatch, applyHunkSelection, GitReviewStageError } from './stageOps.js';
 import type {
@@ -105,6 +106,15 @@ const defaultGitReviewDeps: GitReviewDeps = {
   readDiffs,
 };
 
+// Only panel reads opt into SVN. Git writes and Reviewer evidence keep their
+// original Git-only resolver, even if an older controller requests a write.
+export const panelReadDeps: GitReviewDeps = {
+  resolveScope: async id => findSvnReviewScope(await resolveReviewScope(id)),
+  readStatus: scope => scope.vcs === 'svn' ? readSvnStatus(scope) : readStatus(scope),
+  readDiffs: (scope, status, options) => scope.vcs === 'svn'
+    ? readSvnDiffs(scope, status, options) : readDiffs(scope, status, options),
+};
+
 type GitReviewIpcOptions = Pick<GitReviewDeps, 'isSessionRunning'>;
 
 function isGitReviewDeps(value: unknown): value is GitReviewDeps {
@@ -147,10 +157,7 @@ export async function readReviewData(
   };
 }
 
-export async function readReviewSummary(sessionId: string, deps: Pick<GitReviewDeps, 'resolveScope' | 'readStatus'> = {
-  resolveScope: resolveReviewScope,
-  readStatus,
-}): Promise<ReviewDirtySummary> {
+export async function readReviewSummary(sessionId: string, deps: Pick<GitReviewDeps, 'resolveScope' | 'readStatus'> = panelReadDeps): Promise<ReviewDirtySummary> {
   const scope = await deps.resolveScope(sessionId);
   if (scope.disabledReason || !scope.repoRoot) return buildDirtySummary(sessionId, scope, null);
   const status = await deps.readStatus(scope);
@@ -206,10 +213,16 @@ export async function readReviewBranchDiff(
 export async function readReviewFileDiff(
   sessionId: string,
   request: ReviewFileDiffRequest,
-  deps: GitReviewDeps = { resolveScope: resolveReviewScope, readStatus, readDiffs },
+  deps: GitReviewDeps = panelReadDeps,
 ): Promise<ReviewFileDiffData> {
   const scope = await deps.resolveScope(sessionId);
   if (scope.disabledReason || !scope.repoRoot) return { scope, diff: null };
+  if (scope.vcs === 'svn') {
+    if (request.source !== 'unstaged') return { scope, diff: null };
+    const status = await deps.readStatus(scope);
+    const file = status.files.find(item => item.path === request.path);
+    return { scope, diff: file ? await readSvnFileDiff(scope, file, request) : null };
+  }
   if (request.source === 'staged' || request.source === 'unstaged') {
     const status = await deps.readStatus(scope);
     const diff = await readCappedFileDiff(status.scope, status, request.source, {
@@ -700,7 +713,7 @@ export function registerGitReviewIpc(options: GitReviewIpcOptions = {}): void {
   ipcMain.handle(GIT_REVIEW_INVOKE.GET, async (_event, payload: unknown) => {
     try {
       const { sessionId, options } = parseReviewDataPayload(payload);
-      return await withSessionReviewExecution(sessionId, () => readReviewData(sessionId, options));
+      return await withSessionReviewExecution(sessionId, () => readReviewData(sessionId, options, panelReadDeps));
     } catch (err) {
       rethrowReviewIpcError(err);
     }

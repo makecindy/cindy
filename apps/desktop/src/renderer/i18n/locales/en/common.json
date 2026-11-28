@@ -11043,12 +11043,14 @@
       "fileCount_other": "{{count}} files",
       "emptyTitle": "No changes yet",
       "emptyDesc": "This session hasn't edited any files yet. Changes by the agent will appear here.",
+      "emptyDescSvn": "Versioned files match their SVN BASE revisions.",
+      "svnSelectFile": "Select a file to read its changes.",
       "emptyDescGit": "The current git worktree has no staged or unstaged changes.",
       "filterEmptyTitle": "No changes in this filter",
-      "filterEmptyDesc": "No git changes are visible with the current filter or settings.",
+      "filterEmptyDesc": "No changes are visible with the current filter or settings.",
       "noSessionTitle": "No session",
       "noSessionDesc": "Select a local session to review its git worktree changes.",
-      "loadingTitle": "Reading git changes",
+      "loadingTitle": "Reading changes",
       "loadingDesc": "The panel keeps the previous content until the refresh completes.",
       "errorTitle": "Failed to read changes",
       "refresh": "Refresh",
@@ -11313,6 +11315,10 @@
         "non-git": {
           "title": "Not a git repository",
           "desc": "The current working directory does not contain a usable git repository."
+        },
+        "svn-unavailable": {
+          "title": "SVN unavailable",
+          "desc": "Install the Subversion command-line client to review this working copy."
         },
         "git-unavailable": {
           "title": "Git unavailable",
