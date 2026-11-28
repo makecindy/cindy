@@ -11714,6 +11714,7 @@
     }
   },
   "bots": {
+    "nameHistoryHint": "改名只影響之後的新訊息。",
     "rosterLoadFailed": "未能讀取夥伴列表",
     "rosterReload": "重新讀取夥伴",
     "avatarStatus": {

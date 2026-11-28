@@ -11853,6 +11853,7 @@
     }
   },
   "bots": {
+    "nameHistoryHint": "Renommer ne concerne que les nouveaux messages.",
     "rosterLoadFailed": "Impossible de charger les amis",
     "rosterReload": "Recharger les amis",
     "avatarStatus": {

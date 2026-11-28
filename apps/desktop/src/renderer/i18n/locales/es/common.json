@@ -11853,6 +11853,7 @@
     }
   },
   "bots": {
+    "nameHistoryHint": "Cambiar el nombre solo afecta a los mensajes nuevos.",
     "rosterLoadFailed": "No se pudieron cargar los amigos",
     "rosterReload": "Volver a cargar amigos",
     "avatarStatus": {

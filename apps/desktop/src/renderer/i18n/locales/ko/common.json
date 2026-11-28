@@ -11714,6 +11714,7 @@
     }
   },
   "bots": {
+    "nameHistoryHint": "이름 변경은 새 메시지에만 적용됩니다.",
     "rosterLoadFailed": "동반자 목록을 불러오지 못했어요",
     "rosterReload": "동반자 다시 불러오기",
     "avatarStatus": {

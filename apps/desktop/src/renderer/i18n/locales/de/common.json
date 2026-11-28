@@ -11762,6 +11762,7 @@
     }
   },
   "bots": {
+    "nameHistoryHint": "Umbenennen betrifft nur neue Nachrichten.",
     "rosterLoadFailed": "Freunde konnten nicht geladen werden",
     "rosterReload": "Freunde neu laden",
     "avatarStatus": {

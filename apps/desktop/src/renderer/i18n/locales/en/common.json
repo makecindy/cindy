@@ -11762,6 +11762,7 @@
     }
   },
   "bots": {
+    "nameHistoryHint": "Renaming affects new messages only.",
     "rosterLoadFailed": "Could not load buddies",
     "rosterReload": "Reload buddies",
     "avatarStatus": {
