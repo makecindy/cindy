@@ -446,14 +446,18 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
     }
   });
 
-  it('does not reuse a prewarmed socket across credential cache identities', async () => {
+  it.each([
+    ['credential change', undefined, undefined, 'new-key'],
+    ['switch to Azure', undefined, 'azure-api-key', 'old-key'],
+    ['switch from Azure', 'azure-api-key', undefined, 'old-key'],
+  ] as const)('isolates cold and prewarmed handshake credentials: %s', async (_case, warmAuth, coldAuth, nextKey) => {
     const server = new WebSocketServer({ port: 0 });
-    const authorizations: Array<string | undefined> = [];
+    const credentials: Array<[string | undefined, string | string[] | undefined]> = [];
     const sockets: WebSocket[] = [];
     let provider: RealtimeAsrWebSocketProvider | undefined;
     server.on('connection', (socket, request) => {
       sockets.push(socket);
-      authorizations.push(request.headers.authorization);
+      credentials.push([request.headers.authorization, request.headers['api-key']]);
       socket.on('message', (data) => {
         const message = JSON.parse(data.toString()) as { type?: string };
         if (message.type === 'session.update') {
@@ -470,22 +474,27 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
 
       await prewarmRealtimeAsrWebSocketSession({
         accessTokenProvider: async () => 'old-key',
-        credentialCacheKey: 'old-key-hash',
+        credentialCacheKey: 'first-credential',
+        authMode: warmAuth,
         realtimeUrl,
         model: 'gpt-realtime-whisper',
       });
-      await waitFor(() => authorizations.length === 1);
+      await waitFor(() => credentials.length === 1);
 
       provider = new RealtimeAsrWebSocketProvider({
-        accessTokenProvider: async () => 'new-key',
-        credentialCacheKey: 'new-key-hash',
+        accessTokenProvider: async () => nextKey,
+        credentialCacheKey: nextKey === 'old-key' ? 'first-credential' : 'second-credential',
+        authMode: coldAuth,
         realtimeUrl,
         model: 'gpt-realtime-whisper',
       });
       provider.onEvent(() => {});
       await provider.start();
 
-      expect(authorizations).toEqual(['Bearer old-key', 'Bearer new-key']);
+      expect(credentials).toEqual([
+        warmAuth ? [undefined, 'old-key'] : ['Bearer old-key', undefined],
+        coldAuth ? [undefined, nextKey] : ['Bearer ' + nextKey, undefined],
+      ]);
     } finally {
       await provider?.stop();
       for (const socket of sockets) socket.terminate();

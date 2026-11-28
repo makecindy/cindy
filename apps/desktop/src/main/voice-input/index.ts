@@ -1188,7 +1188,7 @@ function buildCustomRealtimeAsrProviderOptions(
   sourceLanguage: string | undefined,
 ): RealtimeAsrWebSocketProviderOptions {
   const profile = getVoiceInputAsrProfile('custom-realtime-asr');
-  const openAiProtocol = config.protocol === 'openai-realtime';
+  const openAiProtocol = config.protocol !== 'qwen-realtime';
   const apiKey = getProviderSecretStore().get('voice-asr');
   const ownerIdentity = getActiveAppSession().dataOwnerId ?? 'local';
   return {
@@ -1198,6 +1198,7 @@ function buildCustomRealtimeAsrProviderOptions(
       : '',
     model: config.model,
     realtimeUrl: resolveVoiceInputCustomAsrWebsocketUrl(config),
+    authMode: config.protocol === 'azure-openai-realtime' ? 'azure-api-key' : 'bearer',
     sourceLanguage,
     pcmSampleRate: openAiProtocol ? 24_000 : 16_000,
     protocolProfile: openAiProtocol ? 'openai-transcription-manual' : 'qwen-asr-server-vad',

@@ -111,7 +111,12 @@ void mountPage({
       getSystemPermissions: read({ microphone: { ok: true }, accessibility: { ok: true } }),
       onDataChanged: subscription('voice-data'),
       getSystemPermissionsCached: () => ({ microphone: { ok: true }, accessibility: { ok: true } }),
-      getModelSelection: read({ selection: { serviceMode: 'byok', asrProvider: '', refinerProvider: '' }, asrProfiles: [], refinerProfiles: [], readiness: { ok: true, provider: 'openai' }, customAsrApiKeyConfigured: false }),
+      getModelSelection: read({
+        selection: { serviceMode: 'byok', asrProvider: ctx.data.customAsr ? 'custom-realtime-asr' : '', refinerProvider: '',
+          ...(ctx.data.customAsr ? { customAsr: { protocol: 'openai-realtime', websocketUrl: 'wss://example.openai.azure.com/openai/v1/realtime?intent=transcription', model: 'transcription-deployment' } } : {}) },
+        asrProfiles: ctx.data.customAsr ? [{ id: 'custom-realtime-asr', mode: 'realtime', auth: 'api-key' }] : [],
+        refinerProfiles: [], readiness: { ok: true, provider: 'openai' }, customAsrApiKeyConfigured: false,
+      }),
       getReadinessCached: read({ ok: true }), getMicrophonePermissionCached: read({ ok: true, status: 'granted' }),
     },
     openExternal: forbid('openExternal'),

@@ -17,6 +17,7 @@ Voice input lets you dictate instead of typing. The recognized text goes into th
 **Settings > Voice Input:**
 
 - **Service source → Voice service** — **Cindy official service** (default; uses your Cindy sign-in) or **Custom voice service** (choose a recognition model that uses its own credentials, or **Custom realtime ASR** with your own WebSocket URL, model, and API key; **Test connection** checks it). When you're not signed in, use a custom service.
+  - **Azure OpenAI:** Under **Custom realtime ASR**, select **Azure OpenAI (api-key)**. Use the full realtime transcription URL, for example `wss://<resource>.openai.azure.com/openai/v1/realtime?intent=transcription`. Enter the Azure deployment name as the model and the resource key in the API key field, not in the URL. The HTTPS file transcription endpoint does not accept realtime connections.
 - **Basics:**
   - **Language** — **Auto** (default) / Simplified Chinese / Traditional Chinese / English / Japanese / Korean / Spanish. The China edition defaults to Simplified Chinese. There's no free-form locale field.
   - **Microphone** — **Auto** (system default) or a specific device.

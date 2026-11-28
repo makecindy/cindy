@@ -73,6 +73,7 @@ import {
 } from '@/voice-input/shortcut';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import {
+  type VoiceInputCustomAsrProtocol,
   canReuseVoiceInputCustomAsrCredential,
   MAX_CUSTOM_ASR_API_KEY_CHARS,
   MAX_CUSTOM_ASR_MODEL_CHARS,
@@ -306,7 +307,7 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
     clearCustomAsrApiKey,
     resetToDefault,
   } = modelSelection;
-  const [customAsrProtocol, setCustomAsrProtocol] = useState<'openai-realtime' | 'qwen-realtime'>('openai-realtime');
+  const [customAsrProtocol, setCustomAsrProtocol] = useState<VoiceInputCustomAsrProtocol>('openai-realtime');
   const [customAsrWebsocketUrl, setCustomAsrWebsocketUrl] = useState('');
   const [customAsrModel, setCustomAsrModel] = useState('');
   const [customAsrApiKey, setCustomAsrApiKey] = useState('');

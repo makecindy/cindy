@@ -1,4 +1,4 @@
-export type VoiceInputCustomAsrProtocol = 'openai-realtime' | 'qwen-realtime';
+export type VoiceInputCustomAsrProtocol = 'openai-realtime' | 'azure-openai-realtime' | 'qwen-realtime';
 
 export type VoiceInputCustomAsrConfig = {
   protocol: VoiceInputCustomAsrProtocol;
@@ -108,8 +108,8 @@ export function validateVoiceInputCustomAsrConfig(
   if (!isPlainObject(value)) return { ok: false, error: 'customAsr must be an object' };
 
   const protocol = typeof value.protocol === 'string' ? value.protocol.trim().toLowerCase() : '';
-  if (protocol !== 'openai-realtime' && protocol !== 'qwen-realtime') {
-    return { ok: false, error: 'customAsr.protocol must be openai-realtime or qwen-realtime' };
+  if (protocol !== 'openai-realtime' && protocol !== 'azure-openai-realtime' && protocol !== 'qwen-realtime') {
+    return { ok: false, error: 'customAsr.protocol must be openai-realtime, azure-openai-realtime or qwen-realtime' };
   }
 
   const websocketUrl = typeof value.websocketUrl === 'string' ? value.websocketUrl.trim() : '';
