@@ -1149,7 +1149,7 @@
     "permissionMissing": "未授權",
     "openPermissionSettings": "去授權",
     "recheckPermissions": "重新檢測",
-    "permissionActionFailed": "無法開啟授權引導。請在電腦端的遠端控制設定中重試。",
+    "permissionActionFailed": "無法開啟授權引導。請在電腦端的「設定 → 遠端連線」中重試。",
     "permissionCheckFailed": "暫時無法檢測權限，請確認電腦在線後重試。",
     "openGuideOnComputer": "在電腦上開啟授權引導",
     "permissionGuideOpened": "已在電腦上顯示授權引導，請在電腦上繼續。",
@@ -10999,12 +10999,14 @@
       "fileCount_other": "{{count}} 個檔案",
       "emptyTitle": "暫無改動",
       "emptyDesc": "本任務還沒有任何檔案改動。讓 Agent 編輯或建立檔案後，會在這裡出現。",
+      "emptyDescSvn": "版本控制下的檔案與 SVN 基準版本一致。",
+      "svnSelectFile": "選擇檔案以檢視差異。",
       "emptyDescGit": "當前 git worktree 沒有 staged 或 unstaged 改動。",
       "filterEmptyTitle": "當前過濾下暫無改動",
-      "filterEmptyDesc": "當前篩選或設定下沒有可顯示的 git 改動。",
+      "filterEmptyDesc": "當前篩選或設定下沒有可顯示的改動。",
       "noSessionTitle": "暫無任務",
       "noSessionDesc": "選擇一個本機任務後可檢視 git worktree 改動。",
-      "loadingTitle": "正在讀取 git 改動",
+      "loadingTitle": "正在讀取改動",
       "loadingDesc": "面板會保留上一次內容，讀取完成後重新整理。",
       "errorTitle": "讀取失敗",
       "refresh": "重新整理",
@@ -11278,6 +11280,10 @@
         "non-git": {
           "title": "不是 git 倉庫",
           "desc": "當前工作目錄下沒有可用的 git 倉庫。"
+        },
+        "svn-unavailable": {
+          "title": "找不到 SVN",
+          "desc": "安裝 Subversion 命令列用戶端即可檢視工作副本的差異。"
         },
         "git-unavailable": {
           "title": "git 不可用",
@@ -15249,6 +15255,24 @@
       "retryRemoteProjects": "重新讀取專案",
       "removeFromList": "從列表中移除",
       "missingDir": "目錄不存在"
+    },
+    "remoteOutbox": {
+      "notSent": "未傳送",
+      "retry": "重試",
+      "delete": "刪除",
+      "deliveryUnconfirmed": "傳送結果未確認",
+      "recheckDelivery": "重新確認",
+      "waitingForPrevious": "等待前一則訊息",
+      "taskInactive": "這個任務目前無法接收訊息。",
+      "inputNotSupported": "這部電腦暫不支援向這個任務傳送這類訊息。",
+      "taskClearedBeforeSend": "任務已清空或正在清空，訊息仍儲存在這部裝置上。",
+      "invalidInput": "這則訊息包含無效內容，電腦未接收。",
+      "profileInUseByDesktop": "這份資料正被單獨執行的 Cindy 電腦端使用。請先結束它，再傳送。",
+      "other": "這個操作沒有完成。請稍後重試。",
+      "deleteConfirmTitle": "刪除這則訊息？",
+      "deleteConfirmBody": "這則訊息未能成功傳送，刪除後無法復原。",
+      "deleteUnconfirmedBody": "電腦可能已經收到這則訊息。刪除只會移除這部裝置上的待傳訊息。若電腦已收到，這則訊息仍會出現在對話記錄中。",
+      "cancel": "取消"
     },
     "pendingQueue": {
       "waitingForDevice": "尚未傳送，待另一台電腦重新連線後傳送",
@@ -23802,7 +23826,15 @@
       "exceptionImage": "訊息裡有圖片，只在能看圖的來源裡選",
       "exceptionImageFallback": "訊息裡有圖片，但沒有能看圖的來源，照常選",
       "exceptionHours": "這個時段改走「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "根據你平時的用量優先選它",
+      "usageHabitQuota": "根據你平時的用量優先選它（還剩 {{left}}% 配額）",
+      "autoBalance": "其他來源配額偏緊或已有任務，優先用它分擔",
+      "autoBalanceQuota": "綜合餘量與負載優先選它（還剩 {{left}}% 配額）",
+      "lessBusy": "其他來源正在執行任務，先用空閒的它",
+      "paygFallback": "訂閱與共享暫不可用，改用按量付費來源兜底",
+      "paygReserve": "按量付費來源，其餘來源不可用時再兜底",
+      "standbyQuotaNeutral": "還剩 {{left}}% 配額，{{reset}} 重設，這次沒輪到"
     },
     "settings": {
       "autoSwitch": {

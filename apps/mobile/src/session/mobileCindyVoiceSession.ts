@@ -24,6 +24,24 @@ import { resolveMobileVoiceAsrLanguage } from '@/session/mobileVoiceLanguage';
 
 const VOICE_SESSION_REQUEST_TIMEOUT_MS = 10_000;
 const VOICE_REFINE_WARMUP_TIMEOUT_MS = 10_000;
+export const DEFAULT_MOBILE_VOICE_MAX_SESSION_MS = 180_000;
+
+export type MobileCindyVoiceAsrHandshakeMode = 'ticket' | 'direct-upgrade';
+
+/**
+ * Data-plane connection descriptor returned by MobileCindyVoiceRunContext.
+ *
+ * Defaults to the live 2-step `ticket` handshake while reserving optional
+ * `headers`, `maxSessionMs`, and `handshakeMode` so a future voice-server
+ * single-step WS Upgrade endpoint can drop straight in without provider rewrites.
+ */
+export type MobileCindyVoiceAsrConnection = {
+  websocketUrl: string;
+  authorizationToken: string;
+  headers?: Record<string, string>;
+  maxSessionMs?: number;
+  handshakeMode?: MobileCindyVoiceAsrHandshakeMode;
+};
 
 /**
  * 润色模型选择与 failover 交给 voice-server:会话用这个标记创建,refine 目标也
@@ -42,6 +60,8 @@ type VoiceSessionResponse = {
   sessionId: string;
   ticket: string;
   expiresAt: string;
+  /** Optional server-reported session ceiling in milliseconds (live default 180_000). */
+  maxSessionMs?: number;
   asr: {
     provider: string;
     websocketUrl: string;
@@ -62,6 +82,7 @@ export class MobileCindyVoiceRunContext {
    */
   private refinerUnavailableOnServer = false;
   private latestRefineRequestLimit = LEGACY_MANAGED_REFINE_REQUEST_LIMIT;
+  private latestMaxSessionMs = DEFAULT_MOBILE_VOICE_MAX_SESSION_MS;
 
   constructor(
     private readonly getAccessToken: AccessTokenProvider,
@@ -73,10 +94,7 @@ export class MobileCindyVoiceRunContext {
     this.sourceLanguage = resolveMobileVoiceAsrLanguage(sourceLanguage);
   }
 
-  async createAsrConnection(asrProvider: string): Promise<{
-    websocketUrl: string;
-    authorizationToken: string;
-  }> {
+  async createAsrConnection(asrProvider: string): Promise<MobileCindyVoiceAsrConnection> {
     let session: VoiceSessionResponse;
     try {
       session = await this.createVoiceSession(
@@ -103,7 +121,18 @@ export class MobileCindyVoiceRunContext {
     }
     this.latestSessionId = session.sessionId;
     this.latestRefineRequestLimit = resolveManagedRefineRequestLimit(session.refiner?.maxRefineRequests);
+    if (typeof session.maxSessionMs === 'number' && Number.isFinite(session.maxSessionMs) && session.maxSessionMs > 0) {
+      this.latestMaxSessionMs = Math.round(session.maxSessionMs);
+    }
     return { websocketUrl: session.asr.websocketUrl, authorizationToken: session.ticket };
+  }
+
+  /**
+   * Maximum ASR session duration reported by the voice service (default 180s).
+   * Used by VoiceInputController to schedule proactive seamless session rotation.
+   */
+  maxSessionMs(): number {
+    return this.latestMaxSessionMs;
   }
 
   private async createVoiceSession(

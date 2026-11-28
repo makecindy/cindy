@@ -1149,7 +1149,7 @@
     "permissionMissing": "허용되지 않음",
     "openPermissionSettings": "권한 허용",
     "recheckPermissions": "다시 확인",
-    "permissionActionFailed": "권한 안내를 열지 못했습니다. 컴퓨터의 원격 제어 설정에서 다시 시도하세요.",
+    "permissionActionFailed": "권한 안내를 열지 못했습니다. 컴퓨터의 「설정 → 원격 연결」에서 다시 시도하세요.",
     "permissionCheckFailed": "권한을 확인하지 못했습니다. 컴퓨터가 온라인인지 확인하고 다시 시도하세요.",
     "openGuideOnComputer": "컴퓨터에서 권한 안내 열기",
     "permissionGuideOpened": "컴퓨터에 권한 안내를 표시했습니다. 컴퓨터에서 계속하세요.",
@@ -10999,12 +10999,14 @@
       "fileCount_other": "{{count}}개 파일",
       "emptyTitle": "아직 변경 사항이 없습니다",
       "emptyDesc": "이 세션에서는 아직 파일이 편집되지 않았습니다. Agent의 변경 사항이 여기에 표시됩니다.",
+      "emptyDescSvn": "버전 관리 중인 파일이 SVN 기준 리비전과 일치합니다.",
+      "svnSelectFile": "파일을 선택해 변경 사항을 확인하세요.",
       "emptyDescGit": "현재 git worktree에 staged 또는 unstaged 변경 사항이 없습니다.",
       "filterEmptyTitle": "이 필터에 변경 사항이 없습니다",
-      "filterEmptyDesc": "현재 필터 또는 설정에서 표시할 git 변경 사항이 없습니다.",
+      "filterEmptyDesc": "현재 필터 또는 설정에서 표시할 변경 사항이 없습니다.",
       "noSessionTitle": "세션 없음",
       "noSessionDesc": "로컬 세션을 선택하면 git worktree 변경 사항을 검토할 수 있습니다.",
-      "loadingTitle": "git 변경 사항을 읽는 중",
+      "loadingTitle": "변경 사항을 읽는 중",
       "loadingDesc": "새로고침이 끝날 때까지 이전 내용을 유지합니다.",
       "errorTitle": "변경 사항 읽기 실패",
       "refresh": "새로고침",
@@ -11278,6 +11280,10 @@
         "non-git": {
           "title": "git 저장소가 아님",
           "desc": "현재 작업 디렉터리에 사용할 수 있는 git 저장소가 없습니다."
+        },
+        "svn-unavailable": {
+          "title": "SVN을 찾을 수 없음",
+          "desc": "작업 사본의 변경 사항을 보려면 Subversion 명령줄 클라이언트를 설치하세요."
         },
         "git-unavailable": {
           "title": "git 사용 불가",
@@ -15249,6 +15255,24 @@
       "retryRemoteProjects": "프로젝트 다시 불러오기",
       "removeFromList": "목록에서 제거",
       "missingDir": "폴더를 찾을 수 없음"
+    },
+    "remoteOutbox": {
+      "notSent": "전송 안 됨",
+      "retry": "재시도",
+      "delete": "삭제",
+      "deliveryUnconfirmed": "전송 결과 미확인",
+      "recheckDelivery": "다시 확인",
+      "waitingForPrevious": "이전 메시지 대기 중",
+      "taskInactive": "이 작업은 현재 메시지를 받을 수 없습니다.",
+      "inputNotSupported": "이 컴퓨터는 이 작업에 이런 유형의 메시지를 보내는 기능을 지원하지 않습니다.",
+      "taskClearedBeforeSend": "작업이 비워졌거나 비워지는 중입니다. 메시지는 이 기기에 저장되어 있습니다.",
+      "invalidInput": "내용이 올바르지 않아 컴퓨터에서 메시지를 거부했습니다.",
+      "profileInUseByDesktop": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있습니다. 앱을 종료한 후 다시 보내세요.",
+      "other": "이 작업이 끝나지 않았습니다. 잠시 후 다시 시도해 주세요.",
+      "deleteConfirmTitle": "이 메시지를 삭제할까요?",
+      "deleteConfirmBody": "이 메시지는 전송되지 않았습니다. 삭제하면 되돌릴 수 없습니다.",
+      "deleteUnconfirmedBody": "컴퓨터가 이미 이 메시지를 받았을 수 있습니다. 삭제하면 이 기기에서 대기 중인 메시지만 사라집니다. 컴퓨터가 이미 받았다면 대화 기록에 계속 표시됩니다.",
+      "cancel": "취소"
     },
     "pendingQueue": {
       "waitingForDevice": "미전송 · 다른 컴퓨터가 다시 연결되면 보냅니다",
@@ -23803,7 +23827,15 @@
       "exceptionImage": "메시지에 이미지가 있어 이미지를 볼 수 있는 소스 중에서 선택",
       "exceptionImageFallback": "메시지에 이미지가 있지만 이미지를 볼 수 있는 소스가 없어 평소대로 선택",
       "exceptionHours": "이 시간대에는 '{{name}}' 사용",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "평소 사용 패턴에 따라 우선 선택",
+      "usageHabitQuota": "평소 사용 패턴에 따라 우선 선택(할당량 {{left}}% 남음)",
+      "autoBalance": "다른 소스의 여유가 부족하거나 사용 중이어서 분산 선택",
+      "autoBalanceQuota": "여유 할당량과 부하를 고려해 우선 선택({{left}}% 남음)",
+      "lessBusy": "다른 소스가 작업 실행 중이어서 여유 있는 이 소스를 먼저 사용",
+      "paygFallback": "구독 및 공유 소스를 사용할 수 없어 종량제 소스로 대체",
+      "paygReserve": "종량제 예비 소스(다른 소스를 사용할 수 없을 때만 사용)",
+      "standbyQuotaNeutral": "할당량 {{left}}% 남음({{reset}} 초기화 예정), 이번에는 미선택"
     },
     "settings": {
       "autoSwitch": {

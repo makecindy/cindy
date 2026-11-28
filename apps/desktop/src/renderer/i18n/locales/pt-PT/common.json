@@ -1178,7 +1178,7 @@
     "permissionMissing": "Não concedida",
     "openPermissionSettings": "Conceder permissão",
     "recheckPermissions": "Verificar novamente",
-    "permissionActionFailed": "Não foi possível abrir o guia de permissões. Tente novamente nas definições de Controlo remoto no computador.",
+    "permissionActionFailed": "Não foi possível abrir o guia de permissões. Tente novamente em Definições → Ligação remota no computador.",
     "permissionCheckFailed": "Não foi possível verificar as permissões. Certifique-se de que o computador está online e tente novamente.",
     "openGuideOnComputer": "Abrir guia no computador",
     "permissionGuideOpened": "O guia de permissões está aberto no computador. Continue aí.",
@@ -11121,12 +11121,14 @@
       "fileCount_other": "{{count}} ficheiros",
       "emptyTitle": "Ainda sem alterações",
       "emptyDesc": "Esta sessão ainda não editou ficheiros. As alterações do Agent aparecerão aqui.",
+      "emptyDescSvn": "Os ficheiros versionados correspondem à revisão base do SVN.",
+      "svnSelectFile": "Selecione um ficheiro para ver as alterações.",
       "emptyDescGit": "O worktree git atual não tem alterações preparadas ou não preparadas.",
       "filterEmptyTitle": "Sem alterações neste filtro",
-      "filterEmptyDesc": "Não há alterações git visíveis com o filtro ou as definições atuais.",
+      "filterEmptyDesc": "Não há alterações visíveis com o filtro ou as definições atuais.",
       "noSessionTitle": "Sem sessão",
       "noSessionDesc": "Selecione uma sessão local para rever as alterações do respetivo worktree git.",
-      "loadingTitle": "A ler alterações git",
+      "loadingTitle": "A ler alterações",
       "loadingDesc": "O painel mantém o conteúdo anterior até a atualização estar concluída.",
       "errorTitle": "Falha ao ler alterações",
       "refresh": "Atualizar",
@@ -11412,6 +11414,10 @@
         "non-git": {
           "title": "Não é um repositório git",
           "desc": "O diretório de trabalho atual não contém um repositório git utilizável."
+        },
+        "svn-unavailable": {
+          "title": "SVN indisponível",
+          "desc": "Instale o cliente de linha de comandos do Subversion para rever esta cópia de trabalho."
         },
         "git-unavailable": {
           "title": "Git indisponível",
@@ -15433,6 +15439,24 @@
       "retryRemoteProjects": "Recarregar projetos",
       "removeFromList": "Remover da lista",
       "missingDir": "Pasta não encontrada"
+    },
+    "remoteOutbox": {
+      "notSent": "Não enviado",
+      "retry": "Tentar novamente",
+      "delete": "Eliminar",
+      "deliveryUnconfirmed": "Envio não confirmado",
+      "recheckDelivery": "Verificar novamente",
+      "waitingForPrevious": "A aguardar a mensagem anterior",
+      "taskInactive": "Esta tarefa não pode receber mensagens de momento.",
+      "inputNotSupported": "Este computador não permite enviar este tipo de mensagem para a tarefa.",
+      "taskClearedBeforeSend": "A tarefa foi limpa ou está a ser limpa. A mensagem continua guardada neste dispositivo.",
+      "invalidInput": "O computador rejeitou a mensagem porque o conteúdo é inválido.",
+      "profileInUseByDesktop": "Estes dados estão a ser usados pela aplicação de computador da Cindy, que está a ser executada sozinha. Fecha-a e envia novamente.",
+      "other": "Esta ação não foi concluída. Tente novamente dentro de momentos.",
+      "deleteConfirmTitle": "Eliminar esta mensagem?",
+      "deleteConfirmBody": "Esta mensagem não foi enviada. A sua eliminação não pode ser anulada.",
+      "deleteUnconfirmedBody": "O computador pode já ter recebido esta mensagem. Eliminá-la remove apenas a mensagem pendente deste dispositivo. Se o computador a recebeu, a mensagem continuará a aparecer no histórico da conversa.",
+      "cancel": "Cancelar"
     },
     "pendingQueue": {
       "waitingForDevice": "Por enviar · Será enviada quando o outro computador voltar a ligar-se",
@@ -24146,7 +24170,15 @@
       "exceptionImage": "A mensagem tem imagens, por isso só foram consideradas as fontes que as conseguem ver",
       "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte as consegue ver, por isso escolheu como habitualmente",
       "exceptionHours": "Neste horário, usa «{{name}}» em vez disso",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Escolhida primeiro com base na sua utilização habitual",
+      "usageHabitQuota": "Escolhida primeiro com base na sua utilização habitual ({{left}}% de quota restante)",
+      "autoBalance": "Assume a carga enquanto outras fontes estão apertadas ou ocupadas",
+      "autoBalanceQuota": "Equilibrada por folga de quota e carga ({{left}}% de quota restante)",
+      "lessBusy": "Outras fontes estão a executar tarefas, pelo que esta livre vai primeiro",
+      "paygFallback": "Subscrições e fontes partilhadas indisponíveis; a recorrer a pagamento por utilização",
+      "paygReserve": "Reserva de pagamento por utilização; usada apenas quando as restantes fontes estiverem indisponíveis",
+      "standbyQuotaNeutral": "Restam {{left}}% da quota, reposta {{reset}}; não escolhida desta vez"
     },
     "settings": {
       "autoSwitch": {

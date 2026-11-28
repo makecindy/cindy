@@ -184,6 +184,15 @@ describe('host model group strategies', () => {
       modelName: 'GPT', sourceName: 'A', why: 'order', pickWhy: 'drainNext', quota: null, trace: [],
     });
     expect(buildHostModelGroupRouteNote(fromNewHost, 'Kept', t, 'en', () => '')?.reason).toBe('models.modelGroups.why.drainNext');
+    const usageHabitFromHost = parseHostModelGroupResult({
+      outcome: 'routed', groupName: 'G', route: { agentKind: 'codex', providerId: 'a', model: 'gpt' },
+      modelName: 'GPT', sourceName: 'A', why: 'expiring', pickWhy: 'usageHabit', quota: { usedPercent: 30, resetAtMs: null }, trace: [],
+    });
+    expect(buildHostModelGroupRouteNote(usageHabitFromHost, 'Kept', t, 'en', () => '')?.reason).toBe('models.modelGroups.why.usageHabitQuota:70');
+    expect(reason('usageHabit')).toBe('models.modelGroups.why.usageHabit');
+    expect(reason('autoBalance')).toBe('models.modelGroups.why.autoBalance');
+    expect(reason('lessBusy')).toBe('models.modelGroups.why.lessBusy');
+    expect(reason('paygFallback')).toBe('models.modelGroups.why.paygFallback');
   });
 
   it('preserves route fastMode, parses sourceRoutes + expandedRoutes, and parses binding / switchOffer', async () => {

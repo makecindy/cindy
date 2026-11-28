@@ -17,6 +17,8 @@
 
 ## 2026-11
 
+- **11-28 DESIGN.md 正文只写 Token 名，历史说明移入本文件（主人裁决，DESIGN.md 瘦身 4a）**——主人裁决：DESIGN.md 正文写角色和 Token 名，不再写具体色值；Classic 的值只留在 §10 生成表，CINDY 的值只留在 §15.16（§15.1 表仍保留 CINDY 色值记录）。§10 生成表的表头由「Default Light / Default Dark」改为「Classic Light / Classic Dark」，避免被误读成新用户默认皮肤。§9 删去颜色速查，Iteration Guide 改为指向原章节。§15.13 的手机色值一节并入手机设计指南 §2，DESIGN.md 原位置留指针。同时修正几处措辞矛盾：§6 的层次改为「靠字号」，与 §3、§7 一致；§6 阴影清单补上 `--shadow-soft-panel` 与 `--shadow-chip-raised`。正文里的历史说明逐字移入本文件，见文末「2026-11-28 · DESIGN.md 瘦身 4a」。
+
 - **11-28 分段控件定为 4 档，下划线标签的黑线必须贴着分割线（主人裁决）**——组件入库 B 加了 `density` 四档后，还有 20 个调用点写着对不上四档的高度。主人逐处看过真实位置的候选图（现在和候选档、浅色和深色）后全部按建议定档：设置、表单和弹窗里的 15 处并到 md；dense 的 Agent 切换用 sm，远程连接页的「设备 / 供应商」标签原本就是 28/24，改写成 sm；自定义供应商的 Runtime 切换和飞书「服务」用 lg；代码审查工具栏的「统一 / 分栏」保留 xs，因为同行的按钮都是 24px，换 sm 会高出 4px。由此 4 档定稿，xs 只给两种场景：和 24px 控件同行的紧凑工具栏，以及和 12px 图标同行的紧凑菜单行（侧边栏「显示设置」菜单的分段行，2026-11-28 主人确认，尺寸沿用 #13544）。看图时主人另定一条通则：下划线标签的黑线必须贴着下面的分割线（黑线底边与分割线底边重合，盖住那条线）。技能页「公开 / 本地技能」原来与分割线空 1px，改为保留原组件、只修贴线；插件页「已安装 / 插件市场」原本就贴线，不动。这两处是改成下划线样式的分段控件，保留显式尺寸：套档位只会让标签变矮、黑线离开分割线；也不换成 `UnderlineTabs`，因为插件页标题级标签要 15px 字、市场总数加载前占位、窄窗横向滚动，换过去还会和标题栏原有分割线叠成两层。被取代：11-23「显式尺寸只留给尚未归档的旧调用点」。候选图见该批 PR 的 review 目录 candidates.html。现行落点：DESIGN.md §4 Tabs「Underline on the divider」、Desktop segmented controls「Density presets」、`skillhub-home.css`。
 
 - **11-27 经中转的两段各写各的：本机那段写在本机到中转的线上，通往对方的线写对方那段**——用户对照两台分别通过 WS 和 UDP 经中转的电脑，发现拓扑上的协议标注对不上。原因是经中转的线一直跟着本机到中转那段写，本机并不知道对方那段怎么走。看过原型后用户要求：中转在中间，两段各自写在自己那段线上，中转点上方不再写走法。现行：本机到中转的「UDP / WS · 往返」写在这台电脑到中转站的线上（中转点往外挪、设备列跟着往外让，扇出的线只让出设备标签富余的宽度；名字列不足 100px 或线上标签会盖住本机名称或协议时，写回中转点旁）；空间不足时标签可上下叠放，两行标签用 4px 圆角防止文字被裁。通往对方的线写对方到中转那段，由对方经加密连接的控制流告诉本机，旧版对方不说时只写往返。设备卡片「连接方式」写「本机 UDP · 对方 WS」。线上往返仍是两台之间的总往返（用户先按此体验）。被取代：11-19「经中转随本机中转走法写」及 11-18 中转点上方第三行的位置。落点：DESIGN.md §4「Remote connection V2 topology」、`topologyGeometry` 的 `trunkLabel`、`RemoteConnectionTopology` 的 `TrunkPill`；回归 `pnpm ui:check --page remote-connection-v2`。
@@ -1364,3 +1366,69 @@ Toast 仍在它之上：Toast 不拦截操作、只占角落，盖住阻断提�
 - 未合并：Telegram 原有的「群聊里什么时候回复」（仅 @ / 全响应）仍是单独一行，与官方机器人共用组件，合并另做。
 
 回归见 `ImChatSettingsSection.test.tsx`、`scripts/fixtures/im-bot-pages`。
+
+## 2026-11-28 · DESIGN.md 瘦身 4a：从正文移出的历史说明
+
+DESIGN.md 瘦身 4a 把下列历史说明从正文移到这里，原文逐字保留。它们记录的是被取代的做法或裁决经过，现行规则以 `DESIGN.md` 为准。
+
+- **§2 Chip & Button Neutrals：已废弃的 Border Light**
+
+  > > ~~**Border Light** (`#d4d4d4`)~~ — deprecated (2026-06, G2). Once labeled the "white-button border color", but no real component ever used it (only bare hardcodes in the experimental view). White Pill secondary borders uniformly use **Board** (`--border-default` `#d7d7d4`).
+
+- **§2 Neutrals & Text：已废弃的 Button Text Dark**
+
+  > > ~~**Button Text Dark** (`#404040`)~~ — deprecated (2026-06, G1). Once labeled the "white-surface button text color", but no real button ever used it (only bare hardcodes in the experimental view). White Pill secondary text uniformly uses **Near Black** (`--text-primary` `#262626`).
+
+- **§3 Principles · Weight restraint 末尾的历史说明**
+
+  > (2026-08 revision, issue #1505 — this supersedes the former "400/500 only" wording)
+
+- **§4 Typography roles · Title weights 的来源说明**
+
+  > (2026-11-11 maintainer ruling, audit B-03; the former 600 form and prompt titles were moved to 500)
+
+- **§4 Dialog & Modal · 弹窗内浮层的旧做法**
+
+  > (2026-09-08 DS-6 review fix; superseded 2026-11-22 by the §6 z-index layers): the shared `Tip` used to portal on `z-[60]` and the shared menus/popovers on `z-50`, both **below** the `z-[10000]` overlay, so every call site inside a dialog had to raise them by hand.
+
+- **§15.1 Palette · Secondary info 一格的历史说明**
+
+  > (2026-10-22 ink ladder, supersedes `#888883` and U2; full ladder in 15.16)
+
+- **§15.2 Red-Boundary Test Maps · 旧 `BRAND_RED_*` 表的保留状态**
+
+  > - The pre-E1D `BRAND_RED_*` maps are retained in `cindyDecisionData.ts` only for D2T migration and are marked for deletion; their contents are archived in the decision log — do not treat them as current rules.
+
+- **§15.13 Cross-platform color semantics 全文（现行正本已并入手机设计指南 §2）**
+
+  > #### Cross-platform color semantics (mobile owns its ramp — ruling 2026-09-26)
+  >
+  > - Mobile shares Cindy's brand identity and semantic roles with desktop — the same meanings for background, card, body, secondary / tertiary text, borders, neutral-inverse CTA, brand red, status colors, caret and focus blue — but **owns its own ramp values, contrast and warmth** (user ruling 2026-09-25: mobile design may decouple from desktop and should be higher contrast; values finalized 2026-09-26). Do not copy desktop hex values into mobile, and do not sync them back to desktop; semantics stay mirrored, values do not. This supersedes the 2026-07-18 "isomorphism" baseline and the 2026-08 pending mobile follow-up.
+  > - **Mobile light = bright ivory**: page `#F9F9F6` (user-specified: brighter than desktop `#F2F2ED`, warmth B = R−3 — a lighter ivory than desktop's R−5), card / list row / popover `#FFFFFC`, chip / selected `#EAEAE6`, border `#CCCCC8`. Body text stays neutral `#0F0F0F`; secondary `#4D4D4A`, tertiary `#686864`.
+  > - **Consequence of the brighter page — mobile light cards separate by hairline, not by fill.** Against `#F9F9F6` the near-white ceiling leaves only a 1.05 card lift (desktop 1.12, iOS grouped background 1.12). Every new raised mobile-light surface (card, list row, popover, input container) therefore **must carry the 1px `border`**; do not rely on the `surfaceElevated` fill alone. Surfaces that must read as recessed (chip / selected, expanded block, code card) sit **below** the page instead.
+  > - **Mobile dark = pure neutral near-black**: page `#121212`, card `#1E1E1E`, chip `#2A2A2A`, border `#383838`; body `#EDEDED`, secondary `#BDBDBD`, tertiary `#999999`. No warmth.
+  > - **Text tiers are ordered and legible**: body → secondary → tertiary go from strongest to weakest, and all three are ≥ 4.5:1 on every surface they sit on (page, card, chip, code card, sheet action group). This replaces the inverted pre-2026-09 mobile order where secondary (`#8C8E94` / `#6F6F6F`, 2.8 / 2.9:1) was lighter than tertiary; the U2 exception (15.5) no longer applies to mobile. Guarded by `themeTokens.test.ts` and the frozen `theme-colors-snapshot.json`.
+  > - **Mobile text colors are five neutral tiers** (ruling 2026-09-27): body, secondary, tertiary, placeholder, neutral-inverse (`ctaText`). `textPlaceholder` (light `#858581` / dark `#757575`, ≥ 3:1 on page, card and chip) is a registered exception to the 4.5:1 tier rule and may be used only for input placeholders and the voice-listening prompt that mirrors them. Sheet action labels use `textPrimary` (the former `sheetActionText` alias was removed); text on a `textPrimary` / `cta` fill uses `ctaText`, never `surface`; the shared-task danger button label uses `#FFFFFF` / `#121212`. The login skin (§16) keeps its own registered grays for now.
+  > - **Neutral-inverse CTA on mobile**: light `#0F0F0F` / `#FFFFFF`, dark `#EDEDED` / `#121212` (19.17 / 16.00:1).
+  > - The appearance mode is a user setting (Settings → Appearance: follow system / light / dark, default follow system; only an explicit light / dark choice is persisted). It forces native system surfaces to the same mode; the first-launch light login gate (§16.5) still applies inside the login stage.
+  > - Values live only in `apps/mobile/src/theme/tokens.ts`; the proposal record and before / after comparison are in Design Lab (`colors` study, platform iPhone / Android). Login skin tokens (§16), brand splash, status four, task tags and syntax colors are outside this ramp and keep their own registered values.
+  > - Mobile-only tokens carry only mobile-specific layers or geometry:
+  >
+  > | Mobile token          | Light                    | Dark                  | Use                             |
+  > | --------------------- | ------------------------ | --------------------- | ------------------------------- |
+  > | `surfaceListRow`      | `#FFFFFC`                | `#1E1E1E`             | List project/task rows          |
+  > | `surfaceTranslucent`  | `rgba(249,249,246,0.78)` | `rgba(18,18,18,0.78)` | Sticky chrome (page at opacity) |
+  > | `edgeBlurShade`       | `transparent`            | `rgba(0,0,0,0.18)`    | Shade on the single-layer edge blur (composer), so an empty page stays `surface` |
+  > | `edgeBlurShadeLayered`| `transparent`            | `rgba(0,0,0,0.08)`    | Same shade on each of the three header blur layers |
+  > | `surfaceListExpanded` | `#EAEAE6`                | `#121212`             | Expanded list block             |
+  > | `activeGlyph`         | `#DF0C27`                | `#A61629`             | Leading active glyph in lists   |
+  > | `chatCodeSurface`     | `#F1F1EC` (recessed)     | `#1A1A1A`             | Chat / task code card           |
+  > | `chatCodeBorder`      | `#CCCCC8`                | `#383838`             | Chat / task code card border    |
+  > | `inputCaret`          | `#417CDD`                | `#417CDD`             | All input carets                |
+  > | `sheetSurface`        | `rgba(249,249,246,0.96)` | `rgba(28,28,28,0.96)` | Bottom-sheet root               |
+  > | `sheetActionSurface`  | `#FFFFFC`                | `#262626`             | Sheet action group / row        |
+  > | `sheetActionBorder`   | `#CCCCC8`                | `#383838`             | Sheet action group / row border |
+  > | `sheetGrabber`        | `#C2C2BE`                | `#5C5C5C`             | Sheet / composer grabber        |
+  > | `textPlaceholder`     | `#858581`                | `#757575`             | Input placeholder only (≈3.5:1) |
+
+现行规则见 `DESIGN.md` §2、§3、§4 Dialog & Modal、§15.1、§15.2，以及手机设计指南 §2。

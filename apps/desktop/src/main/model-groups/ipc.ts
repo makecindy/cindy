@@ -14,7 +14,7 @@ import { markProviderGroupReleased } from '../provider-group/bindings.desktop.js
 import { readProviderGroup } from '../provider-group/store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { bindSessionSubscriptionAccount } from '../subscription-accounts/runtime.js';
-import { desktopModelGroupRuntime } from './desktopResolver.js';
+import { desktopModelGroupRuntime, warmDesktopAutoUsageProfile } from './desktopResolver.js';
 import { createModelGroupHandlers, type ModelGroupHandlersPorts } from './handlersCore.js';
 import type { ModelGroupRouteNotePorts } from './routeNote.js';
 
@@ -69,6 +69,8 @@ export const desktopModelGroupHandlers = createModelGroupHandlers({
 export function registerModelGroupsIpc(): void {
   // 启动后先读一次目录：重启前就在用供应商路由的任务，第一条消息之前就要认得它的路由。
   void desktopModelGroupRuntime.refreshAutoModelGroupRoutes();
+  // 后台异步预热近 14 天本机用量画像，不阻塞启动和首次选模型。
+  setTimeout(() => warmDesktopAutoUsageProfile(), 1_500).unref();
   ipcMain.handle(MODEL_GROUPS_IPC.GET, (event, rawOptions?: unknown) =>
     desktopModelGroupHandlers.get(rawOptions, () => assertTrustedAppRendererEvent(event)));
   ipcMain.handle(MODEL_GROUPS_IPC.SET, (event, raw: unknown) =>

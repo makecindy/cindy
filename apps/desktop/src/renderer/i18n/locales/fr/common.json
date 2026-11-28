@@ -1178,7 +1178,7 @@
     "permissionMissing": "Non accordée",
     "openPermissionSettings": "Accorder l'autorisation",
     "recheckPermissions": "Vérifier à nouveau",
-    "permissionActionFailed": "Impossible d'ouvrir le guide des autorisations. Réessayez depuis les paramètres Contrôle à distance sur l'ordinateur.",
+    "permissionActionFailed": "Impossible d'ouvrir le guide des autorisations. Réessayez dans Paramètres → Connexion à distance sur l'ordinateur.",
     "permissionCheckFailed": "Impossible de vérifier les autorisations. Assurez-vous que l'ordinateur est en ligne et réessayez.",
     "openGuideOnComputer": "Ouvrir le guide sur l'ordinateur",
     "permissionGuideOpened": "Le guide des autorisations est ouvert sur l'ordinateur. Poursuivez là-bas.",
@@ -11121,12 +11121,14 @@
       "fileCount_other": "{{count}} fichiers",
       "emptyTitle": "Aucune modification",
       "emptyDesc": "Cette session n'a encore modifié aucun fichier. Les modifications de l'Agent apparaîtront ici.",
+      "emptyDescSvn": "Les fichiers versionnés correspondent à leur révision de base SVN.",
+      "svnSelectFile": "Sélectionnez un fichier pour afficher ses modifications.",
       "emptyDescGit": "Le worktree git actuel ne contient aucune modification indexée ou non indexée.",
       "filterEmptyTitle": "Aucune modification pour ce filtre",
-      "filterEmptyDesc": "Aucune modification git n'est visible avec le filtre ou les paramètres actuels.",
+      "filterEmptyDesc": "Aucune modification n'est visible avec le filtre ou les paramètres actuels.",
       "noSessionTitle": "Aucune session",
       "noSessionDesc": "Sélectionnez une session locale pour passer en revue les modifications de son worktree git.",
-      "loadingTitle": "Lecture des modifications git",
+      "loadingTitle": "Lecture des modifications",
       "loadingDesc": "Le panneau conserve le contenu précédent jusqu'à la fin de l'actualisation.",
       "errorTitle": "Impossible de lire les modifications",
       "refresh": "Actualiser",
@@ -11412,6 +11414,10 @@
         "non-git": {
           "title": "Pas un dépôt git",
           "desc": "Le répertoire de travail actuel ne contient pas de dépôt git utilisable."
+        },
+        "svn-unavailable": {
+          "title": "SVN indisponible",
+          "desc": "Installez le client en ligne de commande Subversion pour examiner cette copie de travail."
         },
         "git-unavailable": {
           "title": "Git indisponible",
@@ -15433,6 +15439,24 @@
       "retryRemoteProjects": "Recharger les projets",
       "removeFromList": "Retirer de la liste",
       "missingDir": "Dossier introuvable"
+    },
+    "remoteOutbox": {
+      "notSent": "Non envoyé",
+      "retry": "Réessayer",
+      "delete": "Supprimer",
+      "deliveryUnconfirmed": "Envoi non confirmé",
+      "recheckDelivery": "Vérifier à nouveau",
+      "waitingForPrevious": "En attente du message précédent",
+      "taskInactive": "Cette tâche ne peut pas recevoir de messages pour le moment.",
+      "inputNotSupported": "Cet ordinateur ne prend pas en charge l’envoi de ce type de message à cette tâche.",
+      "taskClearedBeforeSend": "La tâche a été vidée ou est en cours de nettoyage. Le message reste enregistré sur cet appareil.",
+      "invalidInput": "L’ordinateur a refusé le message, car son contenu est invalide.",
+      "profileInUseByDesktop": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule. Quittez-la, puis renvoyez le message.",
+      "other": "Cette action n'a pas abouti. Réessayez dans un instant.",
+      "deleteConfirmTitle": "Supprimer ce message ?",
+      "deleteConfirmBody": "Ce message n'a pas été envoyé. Sa suppression est irréversible.",
+      "deleteUnconfirmedBody": "L’ordinateur a peut-être déjà reçu ce message. La suppression retire uniquement le message en attente sur cet appareil. Si l’ordinateur l’a reçu, il apparaîtra toujours dans l’historique de la conversation.",
+      "cancel": "Annuler"
     },
     "pendingQueue": {
       "waitingForDevice": "Non envoyé · Envoi à la reconnexion de l’autre ordinateur",
@@ -24146,7 +24170,15 @@
       "exceptionImage": "Le message contient des images : seules les sources capables de les voir ont été prises en compte",
       "exceptionImageFallback": "Le message contient des images, mais aucune source ne peut les voir : choix habituel",
       "exceptionHours": "Sur cette plage horaire, utilise « {{name}} » à la place",
-      "separator": " ; "
+      "separator": " ; ",
+      "usageHabit": "Choisie en priorité selon vos habitudes d’utilisation",
+      "usageHabitQuota": "Choisie en priorité selon vos habitudes d’utilisation ({{left}} % de quota restant)",
+      "autoBalance": "Prend le relais pendant que les autres sources sont tendues ou occupées",
+      "autoBalanceQuota": "Équilibrée selon la marge de quota et la charge ({{left}} % de quota restant)",
+      "lessBusy": "Les autres sources exécutent des tâches, celle-ci est libre et passe en premier",
+      "paygFallback": "Abonnements et sources partagées indisponibles : bascule sur le paiement à l’usage",
+      "paygReserve": "Réserve en paiement à l’usage, utilisée seulement si les autres sources sont indisponibles",
+      "standbyQuotaNeutral": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} ; non retenue cette fois"
     },
     "settings": {
       "autoSwitch": {

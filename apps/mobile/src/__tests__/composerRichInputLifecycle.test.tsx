@@ -261,6 +261,7 @@ it.each([false, true])('restores queue-edit draft without losing later typing or
     composerDocumentRef, draftRef: { current: '' }, pendingSkillSelectionRef: { current: null },
     composerDocumentProjectedText, composerDraftSource: source, sessionId: 'task',
     voiceDictionaryLearningTrackerRef: { current: null }, saveComposerDocumentDraft, saveComposerDraft,
+    inspectVoiceRefinementUndoDraft: vi.fn(),
   });
   onChangeDocument.mockImplementation(pageCallback('applyRichComposerChange', { applyComposerDocument, queueEditingRef, messageEditingRef: { current: null } }));
   const exitQueueEdit = pageCallback('exitQueueEdit', {
@@ -658,6 +659,7 @@ it.each(['empty', 'follow-up', 'not-cleared', 'cancelled'] as const)('preserves 
     composerDocumentRef, draftRef: { current: '' }, pendingSkillSelectionRef: { current: null },
     composerDocumentProjectedText, composerDraftSource: source, sessionId: 'task',
     voiceDictionaryLearningTrackerRef: { current: null }, saveComposerDocumentDraft, saveComposerDraft: vi.fn(),
+    inspectVoiceRefinementUndoDraft: vi.fn(),
   });
   const editing = { clientId: 'queue-1' };
   const restore = pageCallback('restoreDraftAfterFailure', {

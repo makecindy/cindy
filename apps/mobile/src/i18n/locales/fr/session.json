@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "Réflexion…",
+    "replyStreaming": "Génération…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} jetons",
     "tokenRate": "{{rate}} tok/s",
@@ -702,9 +703,15 @@
   "outbox": {
     "deleteConfirmTitle": "Supprimer ce message ?",
     "deleteConfirmBody": "Ce message n'a pas été envoyé. Sa suppression est irréversible.",
+    "deleteUnconfirmedBody": "L’ordinateur a peut-être déjà reçu ce message. La suppression retire uniquement le message en attente sur cet appareil. Si l’ordinateur l’a reçu, il apparaîtra toujours dans l’historique de la conversation.",
     "legacyPlanRecovery": "Cet ordinateur ne peut pas restaurer les messages enregistrés en mode Plan. Désactivez le mode Plan ou mettez à jour Cindy sur l'ordinateur, puis réessayez.",
     "creationRecoveryRequired": "Relancez la création de cette tâche avant de supprimer son premier message. Ce message conserve les informations de récupération de vos messages suivants.",
     "confirmationRequired": "Cet ordinateur ne peut pas confirmer la réception du message. Vérifiez son historique ou mettez à jour Cindy avant de réessayer.",
+    "profileInUseByDesktop": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule. Quittez-la, puis renvoyez le message.",
+    "taskInactive": "Cette tâche ne peut pas recevoir de messages pour le moment.",
+    "inputNotSupported": "Cet ordinateur ne prend pas en charge l’envoi de ce type de message à cette tâche.",
+    "invalidInput": "L’ordinateur a refusé le message, car son contenu est invalide.",
+    "taskClearedBeforeSend": "La tâche a été vidée ou est en cours de nettoyage. Le message reste enregistré sur cet appareil.",
     "taskCleared": "Cette tâche a été effacée après l'envoi de votre message. Le message enregistré a été conservé pour que vous puissiez le consulter.",
     "restoreFailed": "Impossible de restaurer les messages enregistrés. Ils n'ont pas été supprimés. Redémarrez l'application et réessayez.",
     "recoveryTarget": "Gardez l'ordinateur d'origine pendant la récupération de cette tâche. Ses messages suivants sont toujours enregistrés.",

@@ -1149,7 +1149,7 @@
     "permissionMissing": "未許可",
     "openPermissionSettings": "権限を許可",
     "recheckPermissions": "再確認",
-    "permissionActionFailed": "権限ガイドを開けませんでした。コンピューターのリモート操作設定で再試行してください。",
+    "permissionActionFailed": "権限ガイドを開けませんでした。コンピューターの「設定 → リモート接続」で再試行してください。",
     "permissionCheckFailed": "権限を確認できません。コンピューターがオンラインか確認して再試行してください。",
     "openGuideOnComputer": "コンピューターでガイドを開く",
     "permissionGuideOpened": "コンピューターに権限ガイドを表示しました。そちらで続けてください。",
@@ -10999,12 +10999,14 @@
       "fileCount_other": "{{count}} ファイル",
       "emptyTitle": "変更はまだありません",
       "emptyDesc": "このセッションではまだファイルが編集されていません。Agent による変更がここに表示されます。",
+      "emptyDescSvn": "バージョン管理下のファイルは SVN の BASE リビジョンと一致しています。",
+      "svnSelectFile": "ファイルを選んで差分を表示します。",
       "emptyDescGit": "現在の git worktree には staged / unstaged の変更がありません。",
       "filterEmptyTitle": "このフィルターに変更はありません",
-      "filterEmptyDesc": "現在のフィルターまたは設定で表示できる git 変更はありません。",
+      "filterEmptyDesc": "現在のフィルターまたは設定で表示できる 変更はありません。",
       "noSessionTitle": "セッションがありません",
       "noSessionDesc": "ローカルセッションを選択すると git worktree の変更を確認できます。",
-      "loadingTitle": "git 変更を読み込み中",
+      "loadingTitle": "変更を読み込み中",
       "loadingDesc": "読み込みが完了するまで前回の内容を保持します。",
       "errorTitle": "変更の読み込みに失敗しました",
       "refresh": "更新",
@@ -11278,6 +11280,10 @@
         "non-git": {
           "title": "git リポジトリではありません",
           "desc": "現在の作業ディレクトリに利用可能な git リポジトリがありません。"
+        },
+        "svn-unavailable": {
+          "title": "SVN が見つかりません",
+          "desc": "作業コピーの差分を表示するには、Subversion のコマンドラインクライアントをインストールしてください。"
         },
         "git-unavailable": {
           "title": "git を利用できません",
@@ -15249,6 +15255,24 @@
       "retryRemoteProjects": "プロジェクトを再読み込み",
       "removeFromList": "リストから削除",
       "missingDir": "フォルダが見つかりません"
+    },
+    "remoteOutbox": {
+      "notSent": "未送信",
+      "retry": "再試行",
+      "delete": "削除",
+      "deliveryUnconfirmed": "送信結果は未確認です",
+      "recheckDelivery": "再確認",
+      "waitingForPrevious": "前のメッセージを待機中",
+      "taskInactive": "このタスクは現在メッセージを受信できません。",
+      "inputNotSupported": "このコンピューターでは、このタスクにこの種類のメッセージを送信できません。",
+      "taskClearedBeforeSend": "タスクはクリア済みか、クリア中です。メッセージはこの端末に保存されています。",
+      "invalidInput": "内容が無効なため、コンピューターはメッセージを受け付けませんでした。",
+      "profileInUseByDesktop": "このデータは単独で起動している Cindy デスクトップアプリが使用中です。アプリを終了してから、もう一度送信してください。",
+      "other": "この操作は完了しませんでした。しばらくしてからもう一度お試しください。",
+      "deleteConfirmTitle": "このメッセージを削除しますか？",
+      "deleteConfirmBody": "このメッセージは送信されていません。削除すると元に戻せません。",
+      "deleteUnconfirmedBody": "コンピューターがこのメッセージをすでに受信している可能性があります。削除すると、この端末の送信待ちメッセージだけが消えます。受信済みの場合は、会話履歴に引き続き表示されます。",
+      "cancel": "キャンセル"
     },
     "pendingQueue": {
       "waitingForDevice": "未送信 · もう一方のコンピュータが再接続したら送信します",
@@ -23803,7 +23827,15 @@
       "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
       "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
       "exceptionHours": "この時間帯は「{{name}}」を使用",
-      "separator": "、"
+      "separator": "、",
+      "usageHabit": "普段の利用傾向から優先して選択",
+      "usageHabitQuota": "普段の利用傾向から優先して選択（残り {{left}}%）",
+      "autoBalance": "他のソースの余裕が少ないため負荷分散で選択",
+      "autoBalanceQuota": "クォータの余裕と負荷を考慮して優先（残り {{left}}%）",
+      "lessBusy": "他のソースが実行中のため空いているこちらを先に使用",
+      "paygFallback": "サブスクリプションや共有ソースが使えないため従量課金へフォールバック",
+      "paygReserve": "従量課金ソース（他のソースが使えないときの予備）",
+      "standbyQuotaNeutral": "残り {{left}}%、{{reset}} にリセット予定（今回は見送り）"
     },
     "settings": {
       "autoSwitch": {

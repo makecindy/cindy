@@ -72,6 +72,7 @@ const h = vi.hoisted(() => {
     broadcastSubagentRunsInvalidated: vi.fn(),
     agentIslandService: {
       handleSessionClosed: vi.fn(),
+      handleSessionStatusChanged: vi.fn(),
       handleSessionMetadataPatch: vi.fn(),
     },
     updateSetCalls,
@@ -647,17 +648,17 @@ describe('notifyAgentIslandSessionPatch(归档/删除同步 Agent Island)', () =
     });
 
     await vi.waitFor(() => {
-      expect(h.agentIslandService.handleSessionClosed).toHaveBeenCalledWith('sess-archived');
+      expect(h.agentIslandService.handleSessionStatusChanged).toHaveBeenCalledWith('sess-archived', 'archived');
     });
     expect(h.agentIslandService.handleSessionMetadataPatch).not.toHaveBeenCalled();
 
     notifyAgentIslandSessionPatch('sess-deleted', { status: 'deleted' });
     await vi.waitFor(() => {
-      expect(h.agentIslandService.handleSessionClosed).toHaveBeenCalledWith('sess-deleted');
+      expect(h.agentIslandService.handleSessionStatusChanged).toHaveBeenCalledWith('sess-deleted', 'deleted');
     });
   });
 
-  it('active session 仍只同步 metadata', async () => {
+  it('active session 同步状态后仍会同步 metadata', async () => {
     notifyAgentIslandSessionPatch('sess-active', {
       status: 'active',
       title: 'Active session',
@@ -672,6 +673,7 @@ describe('notifyAgentIslandSessionPatch(归档/删除同步 Agent Island)', () =
         workspaceKind: 'project',
       });
     });
+    expect(h.agentIslandService.handleSessionStatusChanged).toHaveBeenCalledWith('sess-active', 'active');
     expect(h.agentIslandService.handleSessionClosed).not.toHaveBeenCalled();
   });
 });
