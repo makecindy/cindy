@@ -116,7 +116,7 @@ describe('LiteLlmTranscriptionProvider', () => {
     expect(form.get('prompt')).toBeNull();
   });
 
-  it('forwards bounded dictionary hotwords and recent context as batch prompt when provided', async () => {
+  it('forwards bounded dictionary hotwords only as batch prompt and excludes full recent context sentences', async () => {
     let requestInit: RequestInit | undefined;
     outboundFetchMock.mockImplementation(async (_url: string | URL | Request, init?: RequestInit) => {
       requestInit = init;
@@ -137,6 +137,6 @@ describe('LiteLlmTranscriptionProvider', () => {
     });
 
     const form = requestInit?.body as FormData;
-    expect(form.get('prompt')).toBe('PostgreSQL, LiteLLM. 排查数据库慢查询');
+    expect(form.get('prompt')).toBe('PostgreSQL, LiteLLM');
   });
 });

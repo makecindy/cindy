@@ -1968,8 +1968,18 @@ describe('mobileRealtimeAsrProvider', () => {
     ).toEqual({
       model: 'gpt-4o-transcribe',
       language: 'en',
-      prompt: 'PostgreSQL, Cindy. 排查线上数据库',
+      prompt: 'PostgreSQL, Cindy',
     });
+    const openAiHistoryOnly = buildSessionUpdateMessage(
+      'gpt-4o-transcribe',
+      'en',
+      24000,
+      'openai-transcription-manual',
+      { hotwords: [], recentContext: ['排查线上数据库'] },
+    );
+    expect(
+      (openAiHistoryOnly.session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+    ).toEqual({ model: 'gpt-4o-transcribe', language: 'en' });
     const whisperUpdate = buildSessionUpdateMessage(
       'gpt-realtime-whisper', 'en', 24000, 'openai-transcription-manual', hints,
     );
@@ -2011,5 +2021,135 @@ describe('mobileRealtimeAsrProvider', () => {
       context_data: [{ text: '排查线上数据库' }],
     });
     await provider.stop();
+  });
+
+  it('retries session.update once without prompt on mobile when upstream rejects prompt and keeps fallback on recover', async () => {
+    FakeSocket.instances = [];
+    const errors: string[] = [];
+    const provider = realtimeProvider({
+      credential: credential({
+        asr: {
+          provider: 'litellm-gpt-4o-transcribe',
+          model: 'gpt-4o-transcribe-custom',
+          auth: 'api-key',
+          mode: 'realtime-websocket',
+          pcmSampleRate: 24000,
+          protocolProfile: 'openai-transcription-manual',
+        },
+      }),
+      recognitionHints: {
+        hotwords: ['OpenClaw', 'TipTap'],
+        recentContext: ['今天重点看 OpenClaw 和 Claude Code 的接入。'],
+      },
+      websocketFactory: FakeSocket,
+      connectTimeoutMs: 5_000,
+    });
+    provider.onEvent((event) => {
+      if (event.type === 'error') errors.push(event.message);
+    });
+
+    const started = provider.start();
+    await waitForFakeSocketCount(1);
+    const firstSocket = FakeSocket.instances[0];
+    firstSocket.open();
+
+    expect(firstSocket.sent).toHaveLength(1);
+    expect(
+      ((firstSocket.sent[0] as { session: { audio: { input: { transcription: Record<string, unknown> } } } }).session.audio.input.transcription),
+    ).toEqual({
+      model: 'gpt-4o-transcribe-custom',
+      prompt: 'OpenClaw, TipTap',
+    });
+
+    firstSocket.message({
+      type: 'error',
+      error: { message: "The 'prompt' parameter is not supported for this model." },
+    });
+
+    expect(firstSocket.sent).toHaveLength(2);
+    expect(
+      ((firstSocket.sent[1] as { session: { audio: { input: { transcription: Record<string, unknown> } } } }).session.audio.input.transcription),
+    ).toEqual({ model: 'gpt-4o-transcribe-custom' });
+
+    firstSocket.message({ type: 'session.updated' });
+    await started;
+    expect(errors).toEqual([]);
+
+    const recovered = provider.recover();
+    await waitForFakeSocketCount(2);
+    const secondSocket = FakeSocket.instances[1];
+    secondSocket.open();
+    expect(secondSocket.sent).toHaveLength(1);
+    expect(
+      ((secondSocket.sent[0] as { session: { audio: { input: { transcription: Record<string, unknown> } } } }).session.audio.input.transcription),
+    ).toEqual({ model: 'gpt-4o-transcribe-custom' });
+    secondSocket.message({ type: 'session.updated' });
+    await recovered;
+    await provider.stop();
+  });
+
+  it('rejects mobile start immediately on an unrecoverable pre-ready error event instead of waiting for timeout', async () => {
+    FakeSocket.instances = [];
+    const provider = realtimeProvider({
+      credential: credential({
+        asr: {
+          provider: 'litellm-gpt-4o-transcribe',
+          model: 'gpt-4o-transcribe-custom',
+          auth: 'api-key',
+          mode: 'realtime-websocket',
+          pcmSampleRate: 24000,
+          protocolProfile: 'openai-transcription-manual',
+        },
+      }),
+      recognitionHints: { hotwords: ['OpenClaw'], recentContext: [] },
+      websocketFactory: FakeSocket,
+      connectTimeoutMs: 5_000,
+    });
+
+    const started = provider.start();
+    await waitForFakeSocketCount(1);
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    socket.message({
+      type: 'error',
+      error: { message: 'session rejected upstream' },
+    });
+
+    await expect(started).rejects.toThrow('session rejected upstream');
+    expect(socket.readyState).toBe(3);
+
+    // If a fallback retry without prompt also fails with an error, start rejects instead of looping.
+    FakeSocket.instances = [];
+    const retryFailsProvider = realtimeProvider({
+      credential: credential({
+        asr: {
+          provider: 'litellm-gpt-4o-transcribe',
+          model: 'gpt-4o-transcribe-custom',
+          auth: 'api-key',
+          mode: 'realtime-websocket',
+          pcmSampleRate: 24000,
+          protocolProfile: 'openai-transcription-manual',
+        },
+      }),
+      recognitionHints: { hotwords: ['OpenClaw'], recentContext: [] },
+      websocketFactory: FakeSocket,
+      connectTimeoutMs: 5_000,
+    });
+    const retryStarted = retryFailsProvider.start();
+    await waitForFakeSocketCount(1);
+    const retrySocket = FakeSocket.instances[0];
+    retrySocket.open();
+    retrySocket.message({
+      type: 'error',
+      error: { message: "The 'prompt' parameter is not supported for this model." },
+    });
+    expect(retrySocket.sent).toHaveLength(2);
+    retrySocket.message({
+      type: 'error',
+      error: { message: "The 'prompt' parameter is not supported for this model." },
+    });
+    await expect(retryStarted).rejects.toThrow("The 'prompt' parameter is not supported for this model.");
+    expect(retrySocket.sent).toHaveLength(2);
+    expect(retrySocket.readyState).toBe(3);
   });
 });

@@ -171,47 +171,27 @@ export function buildQwenAsrCorpusText(
  * Formats a concise transcription prompt for OpenAI Realtime transcription
  * (`session.audio.input.transcription.prompt`) and OpenAI Whisper / LiteLLM
  * batch `/v1/audio/transcriptions` (`prompt`).
+ *
+ * Uses compact dictionary hotwords only — never full `recentContext` sentences,
+ * because Whisper / Transcribe treat `prompt` as a decoder prefix bias and
+ * verbatim-repeat whole sentences during quiet or unclear audio.
  * Returns `undefined` when empty so callers omit `prompt` entirely.
  */
 export function buildOpenAiTranscriptionPrompt(
   hints: AsrRecognitionHints | undefined,
 ): string | undefined {
-  if (!hints) return undefined;
+  if (!hints || hints.hotwords.length === 0) return undefined;
   const selectedHotwords: string[] = [];
   let hotwordChars = 0;
-  const maxHotwordBudget = Math.floor(OPENAI_MAX_TOTAL_CHARS * 0.65);
   for (const term of hints.hotwords) {
     if (selectedHotwords.length >= OPENAI_MAX_HOTWORDS) break;
     const nextChars = hotwordChars + (selectedHotwords.length > 0 ? 2 : 0) + term.length;
-    if (nextChars > maxHotwordBudget) continue;
+    if (nextChars > OPENAI_MAX_TOTAL_CHARS) continue;
     selectedHotwords.push(term);
     hotwordChars = nextChars;
   }
 
-  const parts: string[] = [];
-  if (selectedHotwords.length > 0) {
-    parts.push(selectedHotwords.join(', '));
-  }
-  const usedBeforeContext = parts.join(' ').length;
-  const remainingBudget = OPENAI_MAX_TOTAL_CHARS - usedBeforeContext - (parts.length > 0 ? 2 : 0);
-  if (remainingBudget >= 16 && hints.recentContext.length > 0) {
-    const snippets: string[] = [];
-    let used = 0;
-    for (const item of hints.recentContext) {
-      const sep = snippets.length > 0 ? ' ' : '';
-      const left = remainingBudget - used - sep.length;
-      if (left < 8) break;
-      const bounded = item.length > left ? item.slice(0, left).trim() : item;
-      if (!bounded) continue;
-      snippets.push(bounded);
-      used += sep.length + bounded.length;
-    }
-    if (snippets.length > 0) {
-      parts.push(snippets.join(' '));
-    }
-  }
-
-  const prompt = parts.join('. ').trim();
+  const prompt = selectedHotwords.join(', ').trim();
   if (!prompt) return undefined;
   return prompt.length > OPENAI_MAX_TOTAL_CHARS
     ? prompt.slice(0, OPENAI_MAX_TOTAL_CHARS).trim()
@@ -220,7 +200,47 @@ export function buildOpenAiTranscriptionPrompt(
 
 /** The realtime whisper model rejects transcription.prompt during session.update. */
 export function supportsOpenAiRealtimeTranscriptionPrompt(model: string): boolean {
-  return model.trim().split('/').at(-1)?.toLowerCase() !== 'gpt-realtime-whisper';
+  const normalized = model.trim().split('/').at(-1)?.toLowerCase() ?? '';
+  return normalized !== 'gpt-realtime-whisper' && !normalized.startsWith('gpt-realtime-whisper-');
+}
+
+/**
+ * Detects upstream realtime ASR errors indicating that the `prompt`
+ * transcription parameter is unsupported for the target model so providers
+ * can fall back once and resend `session.update` without `prompt` on the same
+ * connection.
+ */
+export function isUnsupportedOpenAiRealtimePromptError(
+  error: { message?: unknown; param?: unknown } | string | null | undefined,
+): boolean {
+  const rawMessage = typeof error === 'string'
+    ? error
+    : (typeof error?.message === 'string' ? error.message : '');
+  const rawParam = typeof error === 'string'
+    ? ''
+    : (typeof error?.param === 'string' ? error.param : '');
+  const param = rawParam.trim().toLowerCase();
+  if (param === 'prompt' || param.endsWith('.prompt')) {
+    return true;
+  }
+  const message = rawMessage.toLowerCase();
+  if (!message) return false;
+  if (
+    message.includes("'prompt'")
+    || message.includes('"prompt"')
+    || message.includes('`prompt`')
+    || message.includes('transcription.prompt')
+  ) {
+    return true;
+  }
+  if (!message.includes('prompt')) return false;
+  return (
+    message.includes('not supported')
+    || message.includes('unsupported')
+    || message.includes('unknown parameter')
+    || message.includes('unrecognized')
+    || message.includes('not allowed')
+  );
 }
 
 /**

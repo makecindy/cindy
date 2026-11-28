@@ -1,5 +1,6 @@
 import { WebSocket, WebSocketServer } from 'ws';
 import { describe, expect, it, vi } from 'vitest';
+import type { AsrEvent } from '@cindy/voice-input-core';
 
 vi.mock('electron', () => ({
   app: {
@@ -798,14 +799,225 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
     ).toEqual({
       model: 'gpt-4o-transcribe',
       language: 'en',
-      prompt: 'PostgreSQL, Cindy. 检查数据库连接',
+      prompt: 'PostgreSQL, Cindy',
     });
+    const openAiHistoryOnly = buildSessionUpdateMessage(
+      'gpt-4o-transcribe',
+      'en',
+      24_000,
+      'openai-transcription-manual',
+      { hotwords: [], recentContext: ['今天重点看 OpenClaw 和 Claude Code 的接入。'] },
+    );
+    expect(
+      (openAiHistoryOnly.session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+    ).toEqual({ model: 'gpt-4o-transcribe', language: 'en' });
     const whisperWithHints = buildSessionUpdateMessage(
       'gpt-realtime-whisper', 'en', 24_000, 'openai-transcription-manual', hints,
     );
     expect(
       (whisperWithHints.session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
     ).toEqual({ model: 'gpt-realtime-whisper', language: 'en' });
+  });
+
+  it('retries session.update once without prompt on the same socket when upstream rejects prompt', async () => {
+    invalidatePrewarmedRealtimeAsrWebSocketSession();
+    const server = new WebSocketServer({ port: 0 });
+    const receivedUpdates: Array<Record<string, unknown>> = [];
+    const connections: WebSocket[] = [];
+    let provider: RealtimeAsrWebSocketProvider | undefined;
+    server.on('connection', (connected) => {
+      connections.push(connected);
+      connected.on('message', (data) => {
+        const parsed = JSON.parse(data.toString()) as {
+          type?: string;
+          session?: { audio?: { input?: { transcription?: { prompt?: string } } } };
+        };
+        if (parsed.type !== 'session.update') return;
+        receivedUpdates.push(parsed);
+        if (parsed.session?.audio?.input?.transcription?.prompt) {
+          connected.send(JSON.stringify({
+            type: 'error',
+            error: { message: "The 'prompt' parameter is not supported for this model." },
+          }));
+          return;
+        }
+        connected.send(JSON.stringify({ type: 'session.updated' }));
+      });
+    });
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      const realtimeUrl = `ws://127.0.0.1:${address.port}/v1/realtime`;
+      const events: AsrEvent[] = [];
+
+      provider = new RealtimeAsrWebSocketProvider({
+        accessTokenProvider: async () => 'test-key',
+        realtimeUrl,
+        model: 'gpt-4o-transcribe-custom',
+        sourceLanguage: 'zh-CN',
+        pcmSampleRate: 24_000,
+        protocolProfile: 'openai-transcription-manual',
+        redactUpstreamErrors: true,
+        recognitionHints: {
+          hotwords: ['OpenClaw', 'TipTap'],
+          recentContext: ['今天重点看 OpenClaw 和 Claude Code 的接入。'],
+        },
+      });
+      provider.onEvent((event) => events.push(event));
+      await provider.start();
+
+      expect(connections).toHaveLength(1);
+      expect(receivedUpdates).toHaveLength(2);
+      expect(
+        (receivedUpdates[0].session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+      ).toEqual({
+        model: 'gpt-4o-transcribe-custom',
+        language: 'zh',
+        prompt: 'OpenClaw, TipTap',
+      });
+      expect(
+        (receivedUpdates[1].session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+      ).toEqual({
+        model: 'gpt-4o-transcribe-custom',
+        language: 'zh',
+      });
+      expect(events.filter((event) => event.type === 'error')).toEqual([]);
+      expect(events.some((event) => event.type === 'connected')).toBe(true);
+
+      // Recovery reconnects without re-sending the rejected prompt.
+      await provider.recover();
+      expect(connections).toHaveLength(2);
+      expect(receivedUpdates).toHaveLength(3);
+      expect(
+        (receivedUpdates[2].session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+      ).toEqual({
+        model: 'gpt-4o-transcribe-custom',
+        language: 'zh',
+      });
+    } finally {
+      invalidatePrewarmedRealtimeAsrWebSocketSession();
+      await provider?.stop();
+      for (const socket of connections) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('does not loop when upstream rejects both prompted and unprompted session.update', async () => {
+    invalidatePrewarmedRealtimeAsrWebSocketSession();
+    const server = new WebSocketServer({ port: 0 });
+    const receivedUpdates: Array<Record<string, unknown>> = [];
+    const connections: WebSocket[] = [];
+    let provider: RealtimeAsrWebSocketProvider | undefined;
+    server.on('connection', (connected) => {
+      connections.push(connected);
+      connected.on('message', (data) => {
+        const parsed = JSON.parse(data.toString()) as { type?: string };
+        if (parsed.type !== 'session.update') return;
+        receivedUpdates.push(parsed);
+        connected.send(JSON.stringify({
+          type: 'error',
+          error: { message: "The 'prompt' parameter is not supported for this model." },
+        }));
+      });
+    });
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      provider = new RealtimeAsrWebSocketProvider({
+        accessTokenProvider: async () => 'test-key',
+        realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`,
+        model: 'gpt-4o-transcribe-custom',
+        sourceLanguage: 'zh-CN',
+        pcmSampleRate: 24_000,
+        protocolProfile: 'openai-transcription-manual',
+        recognitionHints: { hotwords: ['OpenClaw'], recentContext: [] },
+      });
+      provider.onEvent(() => {});
+      await expect(provider.start()).rejects.toThrow("The 'prompt' parameter is not supported for this model.");
+      expect(receivedUpdates).toHaveLength(2);
+    } finally {
+      invalidatePrewarmedRealtimeAsrWebSocketSession();
+      await provider?.stop();
+      for (const socket of connections) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('falls back without prompt during prewarm and remembers fallback when warm socket updates session', async () => {
+    invalidatePrewarmedRealtimeAsrWebSocketSession();
+    const server = new WebSocketServer({ port: 0 });
+    const receivedUpdates: Array<Record<string, unknown>> = [];
+    const connections: WebSocket[] = [];
+    let provider: RealtimeAsrWebSocketProvider | undefined;
+    server.on('connection', (connected) => {
+      connections.push(connected);
+      connected.on('message', (data) => {
+        const parsed = JSON.parse(data.toString()) as {
+          type?: string;
+          session?: { audio?: { input?: { transcription?: { prompt?: string } } } };
+        };
+        if (parsed.type !== 'session.update') return;
+        receivedUpdates.push(parsed);
+        if (parsed.session?.audio?.input?.transcription?.prompt) {
+          connected.send(JSON.stringify({
+            type: 'error',
+            error: { message: "The 'prompt' parameter is not supported for this model." },
+          }));
+          return;
+        }
+        connected.send(JSON.stringify({ type: 'session.updated' }));
+      });
+    });
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      const realtimeUrl = `ws://127.0.0.1:${address.port}/v1/realtime`;
+
+      await prewarmRealtimeAsrWebSocketSession({
+        accessTokenProvider: async () => 'test-key',
+        realtimeUrl,
+        model: 'gpt-4o-transcribe-custom',
+        sourceLanguage: 'zh-CN',
+        pcmSampleRate: 24_000,
+        protocolProfile: 'openai-transcription-manual',
+        recognitionHints: { hotwords: ['OpenClaw'], recentContext: [] },
+      });
+      expect(connections).toHaveLength(1);
+      expect(receivedUpdates).toHaveLength(2);
+      expect(
+        (receivedUpdates[1].session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+      ).not.toHaveProperty('prompt');
+
+      // Reusing the warm socket with a different language sends a session.update that already omits prompt.
+      provider = new RealtimeAsrWebSocketProvider({
+        accessTokenProvider: async () => 'test-key',
+        realtimeUrl,
+        model: 'gpt-4o-transcribe-custom',
+        sourceLanguage: 'en',
+        pcmSampleRate: 24_000,
+        protocolProfile: 'openai-transcription-manual',
+        recognitionHints: { hotwords: ['OpenClaw', 'TipTap'], recentContext: [] },
+      });
+      provider.onEvent(() => {});
+      await provider.start();
+
+      expect(connections).toHaveLength(1);
+      expect(receivedUpdates).toHaveLength(3);
+      expect(
+        (receivedUpdates[2].session as { audio: { input: { transcription: Record<string, unknown> } } }).audio.input.transcription,
+      ).toEqual({
+        model: 'gpt-4o-transcribe-custom',
+        language: 'en',
+      });
+    } finally {
+      invalidatePrewarmedRealtimeAsrWebSocketSession();
+      await provider?.stop();
+      for (const socket of connections) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('sends an updated session.update on a prewarmed socket when recognitionHints change', async () => {

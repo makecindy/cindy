@@ -7,6 +7,8 @@ import {
   buildOpenAiTranscriptionPrompt,
   buildQwenAsrCorpusText,
   buildVolcengineSaucCorpusContext,
+  isUnsupportedOpenAiRealtimePromptError,
+  supportsOpenAiRealtimeTranscriptionPrompt,
 } from '../asrHints.js';
 
 describe('asrHints', () => {
@@ -79,11 +81,58 @@ describe('asrHints', () => {
     const openai = buildOpenAiTranscriptionPrompt(hints)!;
     expect(openai.length).toBeLessThanOrEqual(600);
     expect(openai).toContain('CustomTerm_000');
+    expect(openai).not.toContain('历史记录');
 
     const keyterms = buildElevenLabsScribeKeyterms(hints);
     expect(keyterms.length).toBeLessThanOrEqual(50);
     expect(keyterms.reduce((sum, term) => sum + term.length, 0)).toBeLessThanOrEqual(800);
     expect(keyterms.every((term) => term.length <= 50)).toBe(true);
     expect(keyterms[0]).toBe('CustomTerm_000');
+  });
+
+  it('passes only dictionary hotwords to OpenAI prompt and excludes full recentContext sentences', () => {
+    const withBoth = buildAsrRecognitionHints({
+      dictionaryEntries: [
+        { text: 'OpenClaw', source: 'manual' },
+        { text: 'TipTap', source: 'manual' },
+      ],
+      recentHistory: ['今天重点看 OpenClaw 和 Claude Code 的接入。'],
+    });
+    expect(buildOpenAiTranscriptionPrompt(withBoth)).toBe('OpenClaw, TipTap');
+
+    const historyOnly = buildAsrRecognitionHints({
+      recentHistory: ['今天重点看 OpenClaw 和 Claude Code 的接入。'],
+    });
+    expect(buildOpenAiTranscriptionPrompt(historyOnly)).toBeUndefined();
+    // Volcengine SAUC keeps recentContext in its dedicated dialog_ctx channel.
+    expect(JSON.parse(buildVolcengineSaucCorpusContext(historyOnly)!)).toEqual({
+      context_type: 'dialog_ctx',
+      context_data: [{ text: '今天重点看 OpenClaw 和 Claude Code 的接入。' }],
+    });
+  });
+
+  it('identifies realtime whisper prompt incompatibility and unsupported-prompt upstream errors', () => {
+    expect(supportsOpenAiRealtimeTranscriptionPrompt('gpt-realtime-whisper')).toBe(false);
+    expect(supportsOpenAiRealtimeTranscriptionPrompt('openai/gpt-realtime-whisper')).toBe(false);
+    expect(supportsOpenAiRealtimeTranscriptionPrompt('gpt-realtime-whisper-2026-01-01')).toBe(false);
+    expect(supportsOpenAiRealtimeTranscriptionPrompt('gpt-4o-transcribe')).toBe(true);
+    expect(supportsOpenAiRealtimeTranscriptionPrompt('gpt-4o-mini-transcribe')).toBe(true);
+    expect(supportsOpenAiRealtimeTranscriptionPrompt('whisper-1')).toBe(true);
+
+    expect(
+      isUnsupportedOpenAiRealtimePromptError({
+        message: "The 'prompt' parameter is not supported for this model.",
+      }),
+    ).toBe(true);
+    expect(
+      isUnsupportedOpenAiRealtimePromptError({
+        message: 'Invalid session config',
+        param: 'session.audio.input.transcription.prompt',
+      }),
+    ).toBe(true);
+    expect(isUnsupportedOpenAiRealtimePromptError('prompt is not supported for this model')).toBe(true);
+    expect(isUnsupportedOpenAiRealtimePromptError({ message: 'session rejected' })).toBe(false);
+    expect(isUnsupportedOpenAiRealtimePromptError({ message: 'Rate limit exceeded on prompt tokens' })).toBe(false);
+    expect(isUnsupportedOpenAiRealtimePromptError(undefined)).toBe(false);
   });
 });

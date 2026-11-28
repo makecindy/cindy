@@ -3,6 +3,7 @@ import {
   buildOpenAiTranscriptionPrompt,
   buildQwenAsrCorpusText,
   buildVolcengineSaucCorpusContext,
+  isUnsupportedOpenAiRealtimePromptError,
   supportsOpenAiRealtimeTranscriptionPrompt,
   type AsrEvent,
   type AsrProvider,
@@ -261,6 +262,9 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
   private callback: (event: AsrEvent) => void = () => {};
   private socket: WebSocketLike | null = null;
   private sessionReady = false;
+  private promptFallbackActive = false;
+  private lastSessionUpdateIncludedPrompt = false;
+  private promptFallbackAttemptedForConnection = false;
   private bufferedMs = 0;
   private pendingCommitCount = 0;
   private nextAudioCommitId = 1;
@@ -326,13 +330,14 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
         { headers: { Authorization: `Bearer ${authorizationToken}` } },
       );
       this.socket = socket;
+      this.lastSessionUpdateIncludedPrompt = false;
+      this.promptFallbackAttemptedForConnection = false;
       let settled = false;
       let pendingConnect: PendingConnect | undefined;
       let pendingConnectError: Error | null = null;
       let pendingConnectErrorTimer: ReturnType<typeof setTimeout> | null = null;
       const timer = setTimeout(() => {
         fail(new Error(`Realtime ASR connection timed out after ${this.connectTimeoutMs}ms`));
-        socket.close();
       }, this.connectTimeoutMs);
       const cleanup = (): void => {
         clearTimeout(timer);
@@ -345,6 +350,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
         cleanup();
         this.socket = null;
         this.sessionReady = false;
+        if (socket.readyState !== CLOSED) socket.close();
         reject(error);
       };
       const ready = (): void => {
@@ -361,7 +367,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
       };
       socket.onmessage = (event) => {
         if (this.socket !== socket) return;
-        this.handleMessage(String(event.data), ready);
+        this.handleMessage(String(event.data), ready, fail);
       };
       socket.onerror = (event) => {
         if (this.socket !== socket) return;
@@ -463,12 +469,43 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
   }
 
   private sendSessionUpdate(): void {
-    this.sendWs(buildSessionUpdateMessage(
+    const hints = this.protocolProfile === 'openai-transcription-manual' && this.promptFallbackActive
+      ? undefined
+      : this.recognitionHints;
+    const message = buildSessionUpdateMessage(
       this.credential.asr.model,
       this.sourceLanguage,
       this.pcmSampleRate,
       this.protocolProfile,
-      this.recognitionHints,
+      hints,
+    );
+    this.lastSessionUpdateIncludedPrompt =
+      this.protocolProfile === 'openai-transcription-manual'
+      && sessionUpdateIncludesOpenAiPrompt(message);
+    this.sendWs(message);
+  }
+
+  private tryFallbackWithoutPrompt(event: Record<string, unknown>): boolean {
+    if (this.sessionReady) return false;
+    if (this.protocolProfile !== 'openai-transcription-manual') return false;
+    if (!this.lastSessionUpdateIncludedPrompt || this.promptFallbackAttemptedForConnection) return false;
+    const errorPayload = isRecord(event.error)
+      ? event.error
+      : (typeof event.message === 'string' ? event.message : undefined);
+    if (!isUnsupportedOpenAiRealtimePromptError(errorPayload)) return false;
+    this.promptFallbackActive = true;
+    this.promptFallbackAttemptedForConnection = true;
+    this.lastSessionUpdateIncludedPrompt = false;
+    logMobileVoice('warn', 'realtime asr rejected transcription prompt; retrying without prompt', {
+      provider: this.credential.asr.provider,
+      model: this.credential.asr.model,
+    });
+    return this.sendWs(buildSessionUpdateMessage(
+      this.credential.asr.model,
+      this.sourceLanguage,
+      this.pcmSampleRate,
+      this.protocolProfile,
+      undefined,
     ));
   }
 
@@ -494,7 +531,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
     }
   }
 
-  private handleMessage(raw: string, markReady?: () => void): void {
+  private handleMessage(raw: string, markReady?: () => void, markFailed?: (error: Error) => void): void {
     const event = parseJsonObject(raw);
     if (!isRecord(event) || typeof event.type !== 'string') return;
 
@@ -531,7 +568,14 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
           this.resolveFlushWaiters();
           break;
         }
-        this.callback({ type: 'error', message, at: Date.now() });
+        if (this.tryFallbackWithoutPrompt(event)) {
+          break;
+        }
+        if (!this.sessionReady && markFailed) {
+          markFailed(new Error(message));
+        } else {
+          this.callback({ type: 'error', message, at: Date.now() });
+        }
         this.resolveFlushWaiters();
         break;
       }
@@ -789,6 +833,9 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
 
   private resetTranscriptState(): void {
     this.sessionReady = false;
+    this.promptFallbackActive = false;
+    this.lastSessionUpdateIncludedPrompt = false;
+    this.promptFallbackAttemptedForConnection = false;
     this.bufferedMs = 0;
     this.pendingCommitCount = 0;
     this.nextAudioCommitId = 1;
@@ -1778,6 +1825,14 @@ function sendBinary(socket: WebSocketLike, bytes: Uint8Array): void {
 function toExactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const view = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   return view as ArrayBuffer;
+}
+
+function sessionUpdateIncludesOpenAiPrompt(message: Record<string, unknown>): boolean {
+  const session = isRecord(message.session) ? message.session : undefined;
+  const audio = isRecord(session?.audio) ? session.audio : undefined;
+  const input = isRecord(audio?.input) ? audio.input : undefined;
+  const transcription = isRecord(input?.transcription) ? input.transcription : undefined;
+  return typeof transcription?.prompt === 'string' && transcription.prompt.length > 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

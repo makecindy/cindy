@@ -4,6 +4,7 @@ import {
   asrRecognitionHintsFingerprint,
   buildOpenAiTranscriptionPrompt,
   buildQwenAsrCorpusText,
+  isUnsupportedOpenAiRealtimePromptError,
   supportsOpenAiRealtimeTranscriptionPrompt,
   type AsrEvent,
   type AsrProvider,
@@ -97,6 +98,7 @@ type WarmRealtimeSession = {
   protocolProfile: VoiceInputRealtimeProtocolProfile;
   createdAt: number;
   ready: boolean;
+  promptFallbackActive: boolean;
   // Resolves when session.updated has been received (so the socket is
   // actually usable for transcription), rejects on handshake error / close.
   // Stored so a second prewarm call with matching config awaits the existing
@@ -111,6 +113,7 @@ type WarmRealtimeSession = {
 type TakenWarmRealtimeSession = {
   socket: WebSocket;
   needsSessionUpdate: boolean;
+  promptFallbackActive: boolean;
   ageMs: number;
 };
 
@@ -336,7 +339,10 @@ function takeWarmRealtimeSession(
   const languageCode = openAiLanguageCode(sourceLanguage);
   return {
     socket: warm.socket,
-    needsSessionUpdate: warm.languageCode !== languageCode || warm.hintsFingerprint !== hintsFingerprint,
+    needsSessionUpdate:
+      warm.languageCode !== languageCode
+      || (!warm.promptFallbackActive && warm.hintsFingerprint !== hintsFingerprint),
+    promptFallbackActive: warm.promptFallbackActive,
     ageMs: Date.now() - warm.createdAt,
   };
 }
@@ -468,14 +474,29 @@ function createWarmRealtimeSession(
           }
         }, KEEPALIVE_PING_INTERVAL_MS);
       };
-      const onOpen = (): void => {
-        socket.send(JSON.stringify(buildSessionUpdateMessage(
+      let lastSessionUpdateIncludedPrompt = false;
+      let promptFallbackAttempted = false;
+      let promptFallbackActive = false;
+      const sendWarmSessionUpdate = (omitPrompt: boolean): boolean => {
+        if (socket.readyState !== WebSocket.OPEN) return false;
+        const hints = protocolProfile === 'openai-transcription-manual' && omitPrompt
+          ? undefined
+          : options.recognitionHints;
+        const message = buildSessionUpdateMessage(
           model,
           sourceLanguage,
           pcmSampleRate,
           protocolProfile,
-          options.recognitionHints,
-        )));
+          hints,
+        );
+        lastSessionUpdateIncludedPrompt =
+          protocolProfile === 'openai-transcription-manual'
+          && sessionUpdateIncludesOpenAiPrompt(message);
+        socket.send(JSON.stringify(message));
+        return true;
+      };
+      const onOpen = (): void => {
+        sendWarmSessionUpdate(false);
       };
       const onPong = (): void => {
         clearPongTimeout();
@@ -490,7 +511,10 @@ function createWarmRealtimeSession(
         if (!isRecord(event) || typeof event.type !== 'string') return;
         if (event.type === 'session.updated') {
           const warm = warmRealtimeSession;
-          if (warm?.socket === socket) warm.ready = true;
+          if (warm?.socket === socket) {
+            warm.ready = true;
+            warm.promptFallbackActive = promptFallbackActive;
+          }
           log.debug('prewarmed realtime session ready', {
             model,
             languageCode,
@@ -498,6 +522,26 @@ function createWarmRealtimeSession(
           });
           resolveOnce();
         } else if (event.type === 'error') {
+          const errorPayload = isRecord(event.error)
+            ? event.error
+            : (typeof event.message === 'string' ? event.message : undefined);
+          if (
+            !settled
+            && protocolProfile === 'openai-transcription-manual'
+            && lastSessionUpdateIncludedPrompt
+            && !promptFallbackAttempted
+            && isUnsupportedOpenAiRealtimePromptError(errorPayload)
+          ) {
+            promptFallbackAttempted = true;
+            promptFallbackActive = true;
+            lastSessionUpdateIncludedPrompt = false;
+            log.warn('prewarm realtime session rejected transcription prompt; retrying without prompt', {
+              model,
+            });
+            if (sendWarmSessionUpdate(true)) {
+              return;
+            }
+          }
           rejectOnce(new Error(realtimeErrorMessage(
             event,
             options.errorFallbackMessage ?? 'OpenAI realtime transcription failed.',
@@ -541,6 +585,7 @@ function createWarmRealtimeSession(
         protocolProfile,
         createdAt: Date.now(),
         ready: false,
+        promptFallbackActive: false,
         readyPromise,
         detach,
         close,
@@ -677,6 +722,9 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private callback: (event: AsrEvent) => void = () => {};
   private connected = false;
   private sessionReady = false;
+  private promptFallbackActive = false;
+  private lastSessionUpdateIncludedPrompt = false;
+  private promptFallbackAttemptedForConnection = false;
   private bufferedMs = 0;
   private pendingCommitCount = 0;
   private flushResolvers: Array<() => void> = [];
@@ -814,6 +862,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     if (warm) {
       const socket = warm.socket;
       this.socket = socket;
+      this.promptFallbackActive = warm.promptFallbackActive;
       this.attachSocketHandlers(socket);
       this.connected = true;
       this.startKeepAlive();
@@ -1187,12 +1236,43 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   }
 
   private sendSessionUpdate(): void {
-    this.sendWs(buildSessionUpdateMessage(
+    const hints = this.protocolProfile === 'openai-transcription-manual' && this.promptFallbackActive
+      ? undefined
+      : this.recognitionHints;
+    const message = buildSessionUpdateMessage(
       this.model,
       this.sourceLanguage,
       this.pcmSampleRate,
       this.protocolProfile,
-      this.recognitionHints,
+      hints,
+    );
+    this.lastSessionUpdateIncludedPrompt =
+      this.protocolProfile === 'openai-transcription-manual'
+      && sessionUpdateIncludesOpenAiPrompt(message);
+    this.sendWs(message);
+  }
+
+  private tryFallbackWithoutPrompt(event: Record<string, unknown>): boolean {
+    if (this.sessionReady) return false;
+    if (this.protocolProfile !== 'openai-transcription-manual') return false;
+    if (!this.lastSessionUpdateIncludedPrompt || this.promptFallbackAttemptedForConnection) return false;
+    const errorPayload = isRecord(event.error)
+      ? event.error
+      : (typeof event.message === 'string' ? event.message : undefined);
+    if (!isUnsupportedOpenAiRealtimePromptError(errorPayload)) return false;
+    this.promptFallbackActive = true;
+    this.promptFallbackAttemptedForConnection = true;
+    this.lastSessionUpdateIncludedPrompt = false;
+    log.warn('realtime asr rejected transcription prompt; retrying session.update without prompt', {
+      providerKind: this.providerKind,
+      model: this.model,
+    });
+    return this.sendWs(buildSessionUpdateMessage(
+      this.model,
+      this.sourceLanguage,
+      this.pcmSampleRate,
+      this.protocolProfile,
+      undefined,
     ));
   }
 
@@ -1307,6 +1387,9 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
               aggregateChars: this.aggregateTranscript().length,
             });
             this.resolveFlushWaiters();
+            break;
+          }
+          if (this.tryFallbackWithoutPrompt(event)) {
             break;
           }
           const message = this.redactUpstreamErrors
@@ -1427,6 +1510,9 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private resetTranscriptState(): void {
     this.connected = false;
     this.sessionReady = false;
+    this.lastSessionUpdateIncludedPrompt = false;
+    this.promptFallbackAttemptedForConnection = false;
+    if (!this.inRecovery) this.promptFallbackActive = false;
     this.bufferedMs = 0;
     this.pendingCommitCount = 0;
     this.flushResolvers = [];
@@ -1676,6 +1762,14 @@ export function realtimeErrorMessage(
   const error = event.error;
   if (isRecord(error) && typeof error.message === 'string') return error.message;
   return fallbackMessage;
+}
+
+function sessionUpdateIncludesOpenAiPrompt(message: Record<string, unknown>): boolean {
+  const session = isRecord(message.session) ? message.session : undefined;
+  const audio = isRecord(session?.audio) ? session.audio : undefined;
+  const input = isRecord(audio?.input) ? audio.input : undefined;
+  const transcription = isRecord(input?.transcription) ? input.transcription : undefined;
+  return typeof transcription?.prompt === 'string' && transcription.prompt.length > 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
