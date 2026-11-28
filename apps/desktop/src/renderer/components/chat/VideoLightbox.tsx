@@ -71,15 +71,14 @@ export function VideoLightbox(props: VideoLightboxProps) {
  * currentTime there, so callers that need the position must read it first).
  */
 function releaseMediaElement(el: HTMLMediaElement | null): void {
-  if (!el) return;
+  // The close handler or playback bus may already have released the source.
+  if (!el || (!el.hasAttribute('src') && !el.srcObject)) return;
   try {
     el.pause();
   } catch {
     /* 元素已 detach — 静默 */
   }
-  // The playback bus may have released this element first; a second load()
-  // would only run the load algorithm again on an already-empty element.
-  if (el.getAttribute('src') === null && el.srcObject === null) return;
+  if (el.srcObject) el.srcObject = null;
   el.removeAttribute('src');
   el.load();
 }

@@ -4,7 +4,7 @@
 // Markdown renderer tests mock this component, so they cannot catch these bugs.
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { ChatVideoView } from '../ChatVideoView';
 import { VideoLightbox } from '../VideoLightbox';
@@ -287,15 +287,41 @@ it('saves the inline media through the host without opening the viewer', async (
 // preview closed, so only the system mixer could stop it. Pausing is not
 // releasing — the element kept its source, and the pipeline outlived the DOM
 // node. Tier 1, minimum input: open one local video preview, click Close.
-it('releases the video source when the preview closes', () => {
-  const view = render(<VideoLightbox {...props} onClose={vi.fn()} />, {
-    wrapper: Tooltip.Provider,
+it('releases the video source once through close and unmount', () => {
+  // #11715/#11739, unit: the existing close assertions stop before disposal.
+  // Let the close fade finish and unmount the preview to catch a second load
+  // algorithm resetting the same player during bus cleanup.
+  vi.useFakeTimers();
+  try {
+    const view = render(<VideoLightbox {...props} onClose={() => view.unmount()} />, {
+      wrapper: Tooltip.Provider,
+    });
+    const video = document.querySelector('video')!;
+    fireEvent.click(view.getByRole('button', { name: 'chat.lightbox.close' }));
+    expect(pause.mock.contexts).toContain(video);
+    expect(video.getAttribute('src')).toBeNull();
+    expect(load.mock.contexts).toEqual([video]);
+    act(() => vi.advanceTimersByTime(200));
+    expect(video.isConnected).toBe(false);
+    expect(load.mock.contexts).toEqual([video]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// #11715, unit: visibility and retry tests leave a player mounted. Removing
+// one playing message must pause its video and release the detached source.
+it('stops and releases an inline video when its message unmounts', () => {
+  const view = render(<ChatVideoView {...props} />);
+  const video = view.container.querySelector('video')!;
+  Object.defineProperty(video, 'paused', { configurable: true, value: false });
+  pause.mockImplementation(function (this: HTMLMediaElement) {
+    Object.defineProperty(this, 'paused', { configurable: true, value: true });
   });
-  const video = document.querySelector('video')!;
-  fireEvent.click(view.getByRole('button', { name: 'chat.lightbox.close' }));
-  expect(pause.mock.contexts).toContain(video);
+  view.unmount();
+  expect(video.paused).toBe(true);
   expect(video.getAttribute('src')).toBeNull();
-  expect(load).toHaveBeenCalledOnce();
+  expect(load.mock.contexts).toEqual([video]);
 });
 
 // Tier 1, #12416: Chromium can autoplay a detached media element as soon as it
@@ -357,7 +383,7 @@ it('keeps the resume position when the source is released', () => {
       played.current = 0;
     });
     fireEvent.click(view.getByRole('button', { name: 'chat.lightbox.close' }));
-    vi.advanceTimersByTime(200);
+    act(() => vi.advanceTimersByTime(200));
     expect(onClose).toHaveBeenCalledWith(42);
   } finally {
     vi.useRealTimers();

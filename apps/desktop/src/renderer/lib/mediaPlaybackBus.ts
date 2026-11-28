@@ -49,11 +49,14 @@ function pauseOthers(active: HTMLMediaElement): void {
  */
 function releaseDetachedMedia(el: HTMLMediaElement): void {
   if (el.isConnected) return;
+  const sources = Array.from(el.querySelectorAll('source[src]'));
+  // A preview can release its source before the close animation unmounts it.
+  // Running load() again would reset the already-released player.
+  if (!el.srcObject && !el.hasAttribute('src') && sources.length === 0) return;
   try {
-    el.pause();
     el.srcObject = null;
     el.removeAttribute('src');
-    for (const source of el.querySelectorAll('source')) source.removeAttribute('src');
+    for (const source of sources) source.removeAttribute('src');
     el.load();
   } catch {
     /* 元素正在被页面销毁 — 静默 */
