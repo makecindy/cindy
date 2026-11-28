@@ -3529,6 +3529,18 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'human', authoredText: 'New direction', originKind: undefined });
   });
 
+  it('counts an attachment-only owner send for personalization without authorizing owner-only text actions', async () => {
+    const h = createHarness(), sid = 'owner-attachment-input';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, makeItem('attachment', '', { files: [{
+      id: 'picture', name: 'picture.png', path: '/fixture/picture.png',
+      ext: '.png', category: 'image', mimeType: 'image/png', size: 128,
+    }] }));
+    await flush();
+    expect(h.coordinator.isActiveInputOwnerSend(sid)).toBe(true);
+    expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+  });
+
   it.each([
     ['owner-typed text', {}, true],
     ['another task', { origin: { kind: 'session' as const, senderSessionId: 'other', displayText: 'update' } }, false],

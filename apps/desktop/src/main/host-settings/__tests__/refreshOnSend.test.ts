@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { LIBRARY_READ_ROOT } from '@cindy/maker-core';
 import { libraryExtraDirSlot } from '../../maker-ipc/extraDirsValidator.js';
 import { createPersonalizationRefresh } from '../refreshOnSend.js';
+import { HostSettingsError } from '../operations.js';
 
 function fixture(kind: 'pi' | 'claude-code' | 'codex' | 'acp' = 'pi', proxy = false) {
   const original = {
@@ -19,7 +20,7 @@ function fixture(kind: 'pi' | 'claude-code' | 'codex' | 'acp' = 'pi', proxy = fa
     getOwner: () => owner,
     getSession: () => active,
     readPrompt: vi.fn(async () => 'new'),
-    readCreateOpts: vi.fn(async () => ({
+    readCreateOpts: vi.fn(async (): Promise<{ agentKind: typeof kind; model: string; workingDir: string; resumeSessionId?: string }> => ({
       agentKind: kind, model: 'fixture-model', workingDir: '/fixture', resumeSessionId: original.sdkSessionId,
     })),
     readExtraDirs: vi.fn(async (): Promise<string[]> => []),
@@ -121,6 +122,27 @@ describe('personal instructions at the next user send', () => {
     deps.readPrompt.mockResolvedValueOnce('latest saved');
     expect((await send())?.hostStartupPreferences.userPrompt).toBe('latest saved');
     expect(deps.rebuild.mock.calls[1]?.[0].opts.resumeSessionId).toBe('native-history');
+  });
+
+  it('lets ordinary startup proceed after the user clears history following a failed refresh', async () => {
+    const { original, deps, send, close } = fixture();
+    deps.rebuild.mockImplementationOnce(async request => {
+      if (!await request.beforeClose()) return original;
+      close();
+      throw new Error('Native resume failed');
+    });
+    await expect(send()).rejects.toThrow('Native resume failed');
+    deps.readCreateOpts.mockResolvedValue({ agentKind: 'pi', model: 'fixture-model', workingDir: '/fixture' });
+    expect(await send(false)).toBeUndefined();
+    expect(await send()).toBeUndefined();
+    expect(deps.rebuild).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps sending on the live handle when the settings window is temporarily unavailable', async () => {
+    const { original, deps, send } = fixture();
+    deps.readPrompt.mockRejectedValueOnce(new HostSettingsError('UNREADABLE'));
+    expect(await send()).toBe(original);
+    expect(deps.rebuild).not.toHaveBeenCalled();
   });
 
   it('stops before closing the old handle if the account or turn changed during the preference read', async () => {

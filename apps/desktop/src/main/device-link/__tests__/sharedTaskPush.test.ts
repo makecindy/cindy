@@ -268,6 +268,7 @@ describe('shared task guests never see the owner private message sources', () =>
       clientId: 'q1',
       text: '[来自 Cindy 的补充]\n\nplease review',
       persistedContent: 'please review',
+      createOpts: { model: 'fixture', userPrompt: 'private preference', hostStartupPreferences: { userPrompt: 'private snapshot' } },
       origin: { ...privateOrigin, displayText: '[来自 Cindy 的补充]\n\nplease review' },
     };
     const projection = {
@@ -286,6 +287,8 @@ describe('shared task guests never see the owner private message sources', () =>
       ['please review', { kind: 'session', senderSessionId: '', displayText: 'please review' }],
       ['from lead', { kind: 'orca', senderLabel: 'Lead' }],
     ]);
+    expect(guestView.pendingQueue[0].createOpts).toEqual({ model: 'fixture' });
+    expect(guestView.recovery.item.createOpts).toEqual({ model: 'fixture' });
     expect(guestView.recovery.item.text).toBe('please review');
     expect(guestView.recovery.item.origin).toEqual({ kind: 'session', senderSessionId: '', displayText: 'please review' });
     expect(JSON.stringify(guestView)).not.toMatch(/Cindy|owner-private-task|Owner private plan|bot-1|lead-task/);
@@ -410,6 +413,29 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(results.get('r2').result[0].agentMeta.origin).toEqual(privateOrigin);
     expect(results.get('r3').result.pendingQueue[0].origin).toEqual({ kind: 'session', senderSessionId: '', displayText: 'please review' });
   });
+
+  it('strips owner instructions from guest input mutation replies and preserves same-account replies', () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    const item = { clientId: 'q1', createOpts: { model: 'fixture', userPrompt: 'private preference' } };
+    const projection = { sessionId: 'task-a', pendingQueue: [item], recovery: { item } };
+    const visibleItem = { clientId: 'q1', createOpts: { model: 'fixture' } };
+    const visible = { sessionId: 'task-a', pendingQueue: [visibleItem], recovery: { item: visibleItem } };
+    __testing.sendInvokeResultSafe(transport as never, guestA, 'guest-enqueue', {
+      ok: true, result: projection,
+    }, 'maker:input:enqueue', ['task-a']);
+    __testing.sendInvokeResultSafe(transport as never, guestA, 'guest-steer', {
+      ok: true, result: { projection, accepted: true },
+    }, 'maker:input:steer', ['task-a']);
+    __testing.sendInvokeResultSafe(transport as never, 'own-task', 'owner-enqueue', {
+      ok: true, result: projection,
+    }, 'maker:input:enqueue', ['task-a']);
+    const results = new Map(transport.sendInvokeResult.mock.calls.map((call) => [call[1], call[2]]));
+    expect(results.get('guest-enqueue').result).toEqual(visible);
+    expect(results.get('guest-steer').result).toEqual({ projection: visible, accepted: true });
+    expect(results.get('owner-enqueue').result).toEqual(projection);
+  });
+
 });
 
 describe('shared task MCP App data stays at the owner boundary', () => {

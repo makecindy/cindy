@@ -4059,9 +4059,13 @@ function sanitizeMessageInvokeResult(
     const redacted = redactSessionRowForSharedGuest(result.result);
     return redacted === result.result ? result : { ok: true, result: redacted };
   }
-  if (sharedTaskGuest && result.ok && channel === 'maker:input:get-projection') {
-    const projection = redactInputProjectionForSharedGuest(result.result);
-    return projection === result.result ? result : { ok: true, result: projection };
+  if (sharedTaskGuest && result.ok && channel?.startsWith('maker:input:')) {
+    const visible = redactInputProjectionForSharedGuest(result.result);
+    if (visible && typeof visible === 'object' && 'projection' in visible) {
+      const projection = redactInputProjectionForSharedGuest(visible.projection);
+      if (projection !== visible.projection) return { ok: true, result: { ...visible, projection } };
+    }
+    return visible === result.result ? result : { ok: true, result: visible };
   }
   if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')) {
     const page = result.result as { items?: Array<{ type: string; messages?: unknown[] }>; messages?: unknown[] };

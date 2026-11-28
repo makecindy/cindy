@@ -19605,6 +19605,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readExtraDirs: readSessionExtraDirsFromDb,
     rebuild: async ({ sessionId, opts, live, userPrompt, assertCurrent, beforeClose }) => {
       const co = buildCreateOptsWithStderr(opts);
+      const ready = await checkWorkDirExists(sessionId, co.workingDir, co.agentKind, co.remoteHostId);
+      assertCurrent();
+      if (!ready) {
+        if (live) return live;
+        throw new Error('The working directory is unavailable for restoring the original Agent history.');
+      }
+      co.workingDir = workingDirectoryRecovery.resolve(sessionId, co.workingDir);
       await synthesizeOrcaVendorOptionsFromDb(sessionId, co);
       const assertBeforeResume = () => {
         assertCurrent();
@@ -19680,7 +19687,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const active = maker.getSession(sessionId);
       const ownerInput = personalizationTaskScope.getStore() === sessionId &&
         !isSessionSharedTaskActive(sessionId) &&
-        (directPersonalizationInput.getStore() === sessionId || inputCoordinator.isActiveInputOwnerAuthored(sessionId));
+        (directPersonalizationInput.getStore() === sessionId || inputCoordinator.isActiveInputOwnerSend(sessionId));
       return refreshPersonalization(sessionId, live === active ? active : undefined, ownerInput, () => {
         sendOpts.signal?.throwIfAborted();
         if (isAppSessionBoundaryPending() || isSessionSharedTaskActive(sessionId)) {

@@ -1,6 +1,7 @@
 import type { Session } from '@cindy/maker-core';
 import { directoryGrantsForRuntime } from '../maker-ipc/extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
+import { HostSettingsError } from './operations.js';
 
 type LiveSession = Pick<Session, 'agentKind' | 'agentDeviceId' | 'remoteHostId' | 'sdkSessionId'
   | 'hostStartupPreferences' | 'getStatus' | 'isTurnRunning' | 'codexUsesProxyInstructions'
@@ -8,6 +9,7 @@ type LiveSession = Pick<Session, 'agentKind' | 'agentDeviceId' | 'remoteHostId' 
 
 interface PendingResume {
   nativeId: string;
+  agentKind: LiveSession['agentKind'];
   preferences: Session['hostStartupPreferences'];
 }
 
@@ -40,10 +42,7 @@ export function createPersonalizationRefresh<Owner extends object, Live extends 
     if (!owner) return live;
     const pending = pendingByOwner.get(owner);
     const previous = pending?.get(sessionId);
-    if (!ownerInput) {
-      if (previous && !live) throw new Error('Retry the user message to resume the original Agent history.');
-      return live;
-    }
+    if (!ownerInput && (!previous || live)) return live;
     // Preserve live sessions that cannot safely replace their startup instructions.
     // Normal reopening can pick up the saved value once their history is available.
     if (live && (live.agentKind === 'acp' ||
@@ -65,14 +64,31 @@ export function createPersonalizationRefresh<Owner extends object, Live extends 
     };
 
     assertCanReplace();
-    const latest = await deps.readPrompt();
+    const pendingHistory = previous ? await deps.readCreateOpts(sessionId) : undefined;
+    assertCanReplace();
+    if (previous && (pendingHistory?.resumeSessionId !== previous.nativeId ||
+        pendingHistory.agentKind !== previous.agentKind)) {
+      pending?.delete(sessionId);
+      return live;
+    }
+    if (!ownerInput) throw new Error('Retry the user message to resume the original Agent history.');
+
+    let latest: string;
+    try {
+      latest = await deps.readPrompt();
+    } catch (error) {
+      assertCanReplace();
+      if (live && live === active && live.getStatus() === 'active' &&
+          error instanceof HostSettingsError && error.code === 'UNREADABLE') return live;
+      throw error;
+    }
     assertCanReplace();
     if (live && (live.hostStartupPreferences?.userPrompt ?? '') === latest) {
       pending?.delete(sessionId);
       return live;
     }
     if (live?.hasPendingHostOperation()) return live;
-    const saved = await deps.readCreateOpts(sessionId);
+    const saved = pendingHistory ?? await deps.readCreateOpts(sessionId);
     assertCanReplace();
     const nativeId = previous?.nativeId ?? live?.sdkSessionId;
     if (!nativeId || saved.resumeSessionId !== nativeId || saved.remoteHostId || saved.agentDeviceId ||
@@ -98,7 +114,7 @@ export function createPersonalizationRefresh<Owner extends object, Live extends 
         // Keep strict resume on an in-process retry after the original handle closed.
         const resumes = pendingByOwner.get(owner) ?? new Map<string, PendingResume>();
         pendingByOwner.set(owner, resumes);
-        resumes.set(sessionId, { nativeId, preferences });
+        resumes.set(sessionId, { nativeId, agentKind: saved.agentKind, preferences });
         return true;
       },
     });
