@@ -127,6 +127,20 @@ describe('Bot named worker transactions', () => {
       changeOwner: () => { owner = 'account-b'; }, failApply: (fail: boolean) => { failApply = fail; } };
   }
 
+  // #13218: the profile transaction used to write a Claude baseline for a
+  // plugin chat. Cover both a fresh marker and one saved by an older client.
+  it.each([false, true])('preserves the plugin route across a profile save (legacy marker: %s)', legacy => {
+    const h = savedModelFixture();
+    const providerId = 'acp-plugin:example:engine';
+    db.prepare("UPDATE sessions SET agent_kind = 'acp', provider_id = ?, sdk_session_id = 'plugin-thread'")
+      .run(providerId);
+    h.writeBaseline(legacy ? JSON.stringify({ ...h.original, agentKind: 'claude-code', providerId,
+      scopeId: 'saved-session:profile:1', pendingBotProfileVersion: 1 }) : null);
+    h.save('new');
+    expect(JSON.parse(h.readBaseline()!)).toMatchObject({ agentKind: 'acp', providerId, pendingBotProfileVersion: 2 });
+    expect(db.prepare('SELECT sdk_session_id FROM sessions').pluck().get()).toBe('plugin-thread');
+  });
+
   // Permission-only saves can now create a Profile version without model input.
   // Exercise their intersection with the durable automation restore transaction.
   it.each([false, true])('preserves the fallback on a permission-only save (stale payload: %s)', async stalePayload => {

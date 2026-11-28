@@ -1,3 +1,4 @@
+import { isPluginEngineProviderIdShape } from './subscriptionAccounts';
 import type { MakerEngineKindWire } from './agentKindConversion';
 
 export const SCHEDULED_BASELINE_PERMISSION_MODES = [
@@ -40,7 +41,10 @@ export function parseScheduledModelBaseline(value: unknown): ScheduledModelBasel
       (effort !== null && !['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort)) ||
       (typeof parsed.fastMode !== 'boolean' && parsed.fastMode !== 'ultrafast') ||
       (parsed.permissionMode !== undefined && !isScheduledBaselinePermissionMode(parsed.permissionMode))) return null;
-    return { ...parsed, effort, fastMode: parsed.agentKind === 'acp' ? false : parsed.fastMode };
+    // Older profile saves recorded the Claude fallback alongside the plugin's provider.
+    const agentKind = parsed.agentKind === 'claude-code' && isPluginEngineProviderIdShape(parsed.providerId)
+      ? 'acp' : parsed.agentKind;
+    return { ...parsed, agentKind, effort, fastMode: agentKind === 'acp' ? false : parsed.fastMode };
   } catch {
     return null;
   }

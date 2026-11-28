@@ -3,7 +3,7 @@
  * Node `cindy-host`. The client is injected; this module imports no Electron.
  */
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 
 import type { EngineKind, SessionMeta, SessionStorage, WorkspaceKind } from '@cindy/maker-core';
 
@@ -25,6 +25,15 @@ function fromDbKind(k: string): EngineKind {
 
 function normalizeWorkspaceKind(value: unknown): WorkspaceKind {
   return value === 'dialogue' ? 'dialogue' : 'project';
+}
+
+type NativeSessionOwner = NonNullable<Parameters<SessionStorage['update']>[2]>;
+
+function nativeSessionOwnerMatches(owner: NativeSessionOwner | undefined) {
+  if (!owner) return undefined;
+  return and(eq(sessions.agentKind, toDbKind(owner.agentKind)),
+    owner.agentKind === 'acp' ? eq(sessions.providerId, owner.providerId ?? '') : undefined,
+    owner.sdkSessionId === undefined ? isNull(sessions.sdkSessionId) : eq(sessions.sdkSessionId, owner.sdkSessionId));
 }
 
 type SessionRow = typeof sessions.$inferSelect;
@@ -129,7 +138,7 @@ export class OwnerSessionStorage implements SessionStorage {
     return rows.map(rowToMeta);
   }
 
-  async update(id: string, patch: Partial<SessionMeta>): Promise<SessionMeta> {
+  async update(id: string, patch: Partial<SessionMeta>, expected?: NativeSessionOwner): Promise<SessionMeta> {
     const db = this.deps.db().drizzle;
     const updateFields: Record<string, unknown> = { updatedAt: Date.now() };
     if (patch.title !== undefined) updateFields.title = patch.title;
@@ -137,7 +146,9 @@ export class OwnerSessionStorage implements SessionStorage {
     if (patch.sdkSessionId !== undefined) updateFields.sdkSessionId = patch.sdkSessionId;
     // DB 的 status 列 ('active'|'archived'|'deleted') 是产品归档语义, 走 IPC local-db:sessions:update,
     // 不在这里写 —— maker-core 接口已经移除了 status 字段。
-    await db.update(sessions).set(updateFields).where(eq(sessions.id, id));
+    const result = await db.update(sessions).set(updateFields)
+      .where(and(eq(sessions.id, id), nativeSessionOwnerMatches(expected))).run();
+    if (expected && !result.changes) throw new Error('Native session ownership changed during persistence');
     // The write and its readback belong to the same captured database, even
     // when the active account changes while the write is settling.
     const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
@@ -148,12 +159,13 @@ export class OwnerSessionStorage implements SessionStorage {
   async compareAndClearSdkSessionId(
     id: string,
     expectedSdkSessionId: string,
+    expected?: NativeSessionOwner,
   ): Promise<boolean> {
     const db = this.deps.db().drizzle;
     const result = await db
       .update(sessions)
       .set({ sdkSessionId: null, updatedAt: Date.now() })
-      .where(and(eq(sessions.id, id), eq(sessions.sdkSessionId, expectedSdkSessionId)))
+      .where(and(eq(sessions.id, id), eq(sessions.sdkSessionId, expectedSdkSessionId), nativeSessionOwnerMatches(expected)))
       .run();
     return result.changes > 0;
   }

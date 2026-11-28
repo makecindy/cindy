@@ -50,12 +50,14 @@ export interface SessionMeta {
 //   - 运行态: 内存 (Maker.activeSessions / Session.status / chatStore.runningSnapshot)
 //   - 持久态: DB status 列, 由产品层 IPC 直接管, 与 maker-core 解耦
 
+export type NativeSessionOwner = Pick<SessionMeta, 'agentKind' | 'providerId' | 'sdkSessionId'>;
+
 export interface SessionStorage {
   create(meta: Omit<SessionMeta, 'createdAt' | 'updatedAt'>): Promise<SessionMeta>;
   get(id: string): Promise<SessionMeta | null>;
   list(): Promise<SessionMeta[]>;
-  update(id: string, patch: Partial<SessionMeta>): Promise<SessionMeta>;
+  update(id: string, patch: Partial<SessionMeta>, expected?: NativeSessionOwner): Promise<SessionMeta>;
   /** 仅当当前 vendor id 仍等于 expectedSdkSessionId 时原子清空，避免旧失败覆盖并发新值。 */
-  compareAndClearSdkSessionId(id: string, expectedSdkSessionId: string): Promise<boolean>;
+  compareAndClearSdkSessionId(id: string, expectedSdkSessionId: string, expected?: NativeSessionOwner): Promise<boolean>;
   delete(id: string): Promise<void>;
 }
