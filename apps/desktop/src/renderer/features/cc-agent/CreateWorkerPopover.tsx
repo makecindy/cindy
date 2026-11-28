@@ -415,7 +415,6 @@ export function CreateWorkerPopover({
             setModelGroup(selection.id);
           },
         }),
-        ...(workerHostDeviceId ? { readDevices: remoteModelGroups.read } : {}),
       }
     : undefined;
   const activeModels = useMemo(() => {
@@ -1596,6 +1595,7 @@ export function CreateWorkerPopover({
                 fastModeConfigurable={['codex', 'pi']}
                 unifiedAgents={pickerAgents}
                 modelGroups={workerModelGroups}
+                readModelGroupDevices={modelGroupsAllowed && workerHostDeviceId ? remoteModelGroups.read : undefined}
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
                   if (selection.agentDevice !== undefined && executionDeviceId && !agentLocationSelectable) return;
                   setPluginEngine(null);

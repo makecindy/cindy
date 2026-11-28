@@ -10,7 +10,7 @@
  * 4) 统一拦截草稿(`onAttach`)与进行中任务(`onPickMerged`)对合并模型行的点选、配置与跨引擎切换；
  * 5) 统一计算触发器（trigger）的路由名、托管徽标与断连抑制状态。
  */
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
 import type { TFunction } from 'i18next';
 
@@ -422,12 +422,6 @@ export function useModelSelectorSmartRouting<TUnifiedSelect extends {
   } = options;
 
   const remoteAgentDeviceId = remoteAgent?.selectedDeviceId ?? null;
-
-  // 面板打开时读一次其他电脑的模式(model-groups.md §6.3，15 秒内复用上次的答案)。
-  const readModelGroupDevices = modelGroupsProp?.readDevices;
-  useEffect(() => {
-    readModelGroupDevices?.();
-  }, [readModelGroupDevices]);
 
   const {
     mergedSourceRoutesEnabled,

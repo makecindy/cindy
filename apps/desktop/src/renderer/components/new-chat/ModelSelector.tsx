@@ -876,6 +876,7 @@ export interface ModelSelectorBaseProps {
   pluginModels?: PluginModelsPickerProps;
   /** 语义同 ModelSelectorContentProps.modelGroups。 */
   modelGroups?: ModelGroupsPickerProps;
+  readModelGroupDevices?: ModelSelectorContentBaseProps['readModelGroupDevices'];
   /** 语义同 ModelSelectorContentProps.pluginEngines。选中某个引擎时 trigger 显示该引擎与模型。 */
   pluginEngines?: PluginEnginesPickerProps;
   /**
@@ -1122,6 +1123,8 @@ export interface ModelSelectorContentBaseProps {
   pluginEngines?: PluginEnginesPickerProps;
   /** 新任务的模型组(用户建的模式与路线)；只有草稿传。 */
   modelGroups?: ModelGroupsPickerProps;
+  /** 打开面板时读取远程模型组，包括首次读取失败、还没有配置时。 */
+  readModelGroupDevices?(): void;
   providersOverride?: ProviderView[];
   providersOverrideState?: ModelSelectorProps['providersOverrideState'];
   taskSourceProvider?: ModelSelectorProps['taskSourceProvider'];
@@ -1415,6 +1418,7 @@ const NO_MODEL_SELECTION = { providerId: null, modelId: '' } as const;
 function ModelSelectorContentView({
   pluginModels,
   modelGroups: modelGroupsProp,
+  readModelGroupDevices,
   pluginEngines,
   providersOverride,
   providersOverrideState,
@@ -1672,6 +1676,9 @@ function ModelSelectorContentView({
     ? remoteCatalogProviders
     : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
   const homeBaseProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
+  useEffect(() => {
+    readModelGroupDevices?.();
+  }, [readModelGroupDevices]);
   const smartRouting = useModelSelectorSmartRouting({
     modelGroupsProp,
     routingMode,
@@ -4668,6 +4675,7 @@ export function ModelSelector({
   onOpenRequestConsumed,
   pluginModels,
   modelGroups,
+  readModelGroupDevices,
   pluginEngines,
   pluginEngineSession,
   pluginEnginePending,
@@ -5938,6 +5946,7 @@ export function ModelSelector({
       onUnifiedSelect={onUnifiedSelect}
       {...(pluginModels ? { pluginModels } : {})}
       {...(modelGroups ? { modelGroups } : {})}
+      readModelGroupDevices={readModelGroupDevices}
       {...(pluginEngines ? { pluginEngines } : {})}
       reselectEmitsChange={reselectEmitsChange}
       selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}

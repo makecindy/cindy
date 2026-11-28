@@ -509,6 +509,7 @@ export function WorkspacePrefsEditor({
                 }
               : undefined
           }
+          readModelGroupDevices={targetDeviceId ? remoteGroups.read : undefined}
           {...(groupsAvailable ? {
             modelGroups: {
               config: groupsConfig,
@@ -521,7 +522,7 @@ export function WorkspacePrefsEditor({
                 lastUnifiedSelectionRef.current = null;
                 if (last) void state.applyProviderSource(alias, last.providerId, last.agentDeviceId, selection.id);
               },
-              ...(targetDeviceId ? { readDevices: remoteGroups.read } : { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } }),
+              ...(targetDeviceId ? {} : { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } }),
             },
           } : {})}
           onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {

@@ -386,6 +386,7 @@ export function PluginModelPickerDialog({
             fastMode={isAcpRoute ? false : (route?.fastMode ?? false)}
             unifiedAgents={agents}
             pluginEngines={pluginEngines}
+            readModelGroupDevices={deviceId ? remoteGroups.read : undefined}
             {...(dialogGroupsAvailable ? {
               modelGroups: {
                 config: dialogGroupsConfig,
@@ -396,7 +397,6 @@ export function PluginModelPickerDialog({
                 onAttach: (selection: ModelGroupSelection) => {
                   setRoute((current) => (current && current.agentKind !== 'acp' ? { ...current, modelGroup: selection.id } : current));
                 },
-                ...(deviceId ? { readDevices: remoteGroups.read } : {}),
               },
             } : {})}
             onModelChange={() => false}

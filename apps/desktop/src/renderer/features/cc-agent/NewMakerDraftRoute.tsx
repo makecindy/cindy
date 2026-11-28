@@ -3016,15 +3016,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // 「管理模型组」只在本机：另一台电脑的模式在那台上改。
           ...(isDeviceLinkDraft ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
           ...(modelGroupDevices.length > 0 ? { devices: modelGroupDevices } : {}),
-          ...(isDeviceLinkDraft
-            ? { readDevices: deviceModelGroups.read }
-            : modelGroupDeviceIds.length > 0
-              ? { readDevices: readDevicesModelGroups }
-              : {}),
         }
       : undefined,
-    [modelGroupsAllowed, modelGroupsConfig, effectiveDisplayModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, modelGroupDeviceIds, deviceModelGroups.read, readDevicesModelGroups, setAlternateModel, forgetRemoteAlternateDraftModel],
+    [modelGroupsAllowed, modelGroupsConfig, effectiveDisplayModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, setAlternateModel, forgetRemoteAlternateDraftModel],
   );
+
+  const readModelGroupDevices = deviceLinkModelGroupsId
+    ? deviceModelGroups.read
+    : modelGroupDeviceIds.length > 0 ? readDevicesModelGroups : undefined;
 
   // 选中来源与型号之后的**档位**:按目标目录里该型号的档位表解析 —— 用户上次在这台设备
   // 为**这个型号**选的档 > 该型号自己记住的档 > 本机偏好(该模型支持才保留)> 模型默认档。
@@ -8596,6 +8595,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     onUnifiedDraftSelect={handleUnifiedDraftSelect}
                     {...(pluginModelsProps ? { pluginModels: pluginModelsProps } : {})}
                     {...(modelGroupsProps ? { modelGroups: modelGroupsProps } : {})}
+                    readModelGroupDevices={readModelGroupDevices}
                     {...(pluginEnginesProps ? { pluginEngines: pluginEnginesProps } : {})}
                     selectedFavoriteUid={selectedFavoriteUid}
                     // 「+」菜单协同模式项:普通 Lead 的项目/对话 draft 都可用 —— eligible 由

@@ -278,6 +278,7 @@ export function PluginTaskPrefs({
               disabled={saving || disabled}
               unifiedAgents={pickerAgents}
               pluginEngines={pluginEngines}
+              readModelGroupDevices={remote ? remoteGroups.read : undefined}
               {...(groupsAvailable ? {
                 modelGroups: {
                   config: groupsConfig,
@@ -290,7 +291,7 @@ export function PluginTaskPrefs({
                     lastUnifiedTaskRef.current = null;
                     if (last) void save({ ...last, modelGroup: selection.id });
                   },
-                  ...(remote ? { readDevices: remoteGroups.read } : { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } }),
+                  ...(remote ? {} : { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } }),
                 },
               } : {})}
               onUnifiedSelect={({ engine, providerId, modelId, effort, fast, agentDevice }) => {

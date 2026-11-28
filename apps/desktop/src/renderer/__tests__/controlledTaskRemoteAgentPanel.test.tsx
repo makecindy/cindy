@@ -741,7 +741,8 @@ describe('合并供应商路由的成员在分享上：选中行按草稿实际�
  * - 现有覆盖缺口：本文件既有测试仅覆盖本机草稿下分享成员的合并路由，未覆盖远控另一台电脑（`homeDeviceId` +
  *   `catalogHostDeviceId`）同时含本机多连接与跨机成员的合并供应商路由端到端解析与选择。
  * - 最小失败输入：被控端返回 `modelGroupsConfigForRemote(hostConfig, { includeSourceRoutes: true })` 后，
- *   3 个 OpenAI 连接仍分散成 3 格、点选未触发 `onAttach`，或打开面板未调用 `readDevices`。
+ *   3 个 OpenAI 连接仍分散成 3 格、点选未触发 `onAttach`，或首次读取失败（没有配置）后
+ *   重开面板不能继续读取路由。
  * - tier：unit/jsdom。
  */
 describe('远控另一台电脑时的供应商聚合路由（sourceRoutes）', () => {
@@ -821,14 +822,14 @@ describe('远控另一台电脑时的供应商聚合路由（sourceRoutes）', (
     delete catalogs.byDevice[peerCatalogKey];
   });
 
-  it('新版被控端返回 sourceRoutes 时将多连接与跨机成员聚合成一格，点击模型后以真实成员选中并挂载展开路由，同时打开面板触发刷新', async () => {
+  it('首次读取失败后重开面板可补读并选中合并供应商路由', async () => {
     const wire = modelGroupsConfigForRemote(hostFullConfig, { includeSourceRoutes: true });
     const received = modelGroupsConfigFromRemote(wire);
     const onUnifiedSelect = vi.fn(async () => true);
     const onAttach = vi.fn();
     const readDevices = vi.fn();
 
-    render(
+    const panel = (config?: ModelGroupsConfig) => (
       <ModelSelectorContent
         deviceId={hostId}
         modelId="gpt-6.2-astra"
@@ -845,17 +846,20 @@ describe('远控另一台电脑时的供应商聚合路由（sourceRoutes）', (
           devices: [{ deviceId: peerId, name: 'Mac Peer' }],
           selectedDeviceId: null,
         }}
-        modelGroups={{
-          config: received,
-          active: null,
-          onSelect: vi.fn(),
-          onAttach,
-          readDevices,
-        }}
-      />,
+        readModelGroupDevices={readDevices}
+        modelGroups={config ? { config, active: null, onSelect: vi.fn(), onAttach } : undefined}
+      />
     );
 
+    const firstOpen = render(panel());
     expect(readDevices).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-rail-item="provider:sroute:auto:openai"]')).toBeNull();
+    firstOpen.unmount();
+
+    const secondOpen = render(panel());
+    expect(readDevices).toHaveBeenCalledTimes(2);
+    secondOpen.rerender(panel(received));
+    expect(readDevices).toHaveBeenCalledTimes(2);
     const railKeys = Array.from(document.querySelectorAll('[data-rail-item]')).map((el) => el.getAttribute('data-rail-item'));
     expect(railKeys).toContain('model-groups');
     expect(railKeys).toContain('provider:sroute:auto:openai');
