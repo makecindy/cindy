@@ -195,6 +195,7 @@ export function createRemoteSessionHandoff(deps: {
       const capability = support.result as {
         taskActionVersion?: unknown; plainRequestBody?: unknown; ordinaryCreateVersion?: unknown;
         ordinaryCreatePluginEngine?: unknown; ordinaryCreateAutoTitle?: unknown; pluginCaller?: unknown;
+        ordinaryCreateBaseRef?: unknown;
       } | null;
       if (capability?.taskActionVersion !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer must support task-action authorization before a message can be sent.' };
@@ -202,6 +203,10 @@ export function createRemoteSessionHandoff(deps: {
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Update the destination computer to support ordinary task creation. No task was created.' };
       if (creation && (creation.agentKind === 'acp' || creation.providerId !== undefined) && capability.ordinaryCreatePluginEngine !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Update the destination computer to support plugin-engine task creation. No task was created.' };
+      // An older destination would reject the unknown key or, worse, cut the worktree from its
+      // default branch. Refuse before anything is created.
+      if (creation?.baseRef !== undefined && capability.ordinaryCreateBaseRef !== 1)
+        return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Update the destination computer to support base_ref for new task worktrees. No task was created.' };
       if ('pluginId' in sender && capability.pluginCaller !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer does not support Plugin callers; no message was sent.' };
       assertCurrent();
@@ -290,6 +295,13 @@ export function createRemoteSessionHandoff(deps: {
         workspaceKind: result.workspaceKind === 'project' ? 'project' as const : 'dialogue' as const,
         workingDir: typeof result.workingDir === 'string' ? result.workingDir : '',
         worktreePath: typeof result.worktreePath === 'string' ? result.worktreePath : null,
+        ...(typeof result.worktreeBaseRef === 'string' && result.worktreeBaseRef
+          ? { worktreeBaseRef: result.worktreeBaseRef.slice(0, 1024) } : {}),
+        ...(typeof result.worktreeBaseStaleReason === 'string' && result.worktreeBaseStaleReason
+          ? { worktreeBaseStaleReason: result.worktreeBaseStaleReason.slice(0, 200) } : {}),
+        // Older destinations do not report the provider location: leave it unknown, never assume local.
+        ...(result.agentDeviceId === null || (typeof result.agentDeviceId === 'string' && result.agentDeviceId)
+          ? { agentDeviceId: typeof result.agentDeviceId === 'string' ? result.agentDeviceId.slice(0, 128) : null } : {}),
         model: typeof result.model === 'string' ? result.model : undefined,
         providerId: typeof result.providerId === 'string' ? result.providerId : null,
         effort: remoteSessionCreationSchema.shape.effort.safeParse(result.effort).data ?? null,

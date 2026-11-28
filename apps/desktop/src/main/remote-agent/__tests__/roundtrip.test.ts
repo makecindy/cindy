@@ -20,7 +20,7 @@ import type {
   StartSessionOptions,
   UserMessage,
 } from '@cindy/maker-core';
-import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Maker, Session,
+import { AcpAgent, type AcpLineTransport, AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Maker, Session,
   type CreateSessionOptions, type SessionMeta } from '@cindy/maker-core';
 import { createServer } from 'node:http';
 import { isProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
@@ -47,6 +47,7 @@ import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
 import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator';
 import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
 import { MAKER_INVOKE } from '../../maker-ipc/channels';
+import { applyLeadVendorOptions, createAcpLeadBriefingHandoff } from '../../maker-ipc/orcaSessionStartOptions';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
 import { sharedTurnReceipt } from '../sharedTurnValue.js';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
@@ -2014,6 +2015,100 @@ describe('a plugin engine of another computer', () => {
     host.dispose();
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：createDeviceAgentStarter ↔ createRemoteAgentHost 真实往返；此前归属供应商组的任务
+  //   切到远程插件引擎时，即使残留组绑定或换机凭证，也不应带 groupAssigned / groupSwitch 打开插件引擎，
+  //   避免被远端 runHost 以 [REMOTE_AGENT_UNSUPPORTED] 拒绝；同 starter 开内置引擎仍照常携带。
+  // - Bug／规则依据：2026-11-28 实机反馈（供应商组任务切到远程 Antigravity 报 LAZY_CREATE_FAILED:
+  //   [REMOTE_AGENT_UNSUPPORTED] plugin engines only run ordinary tasks of your own computers or direct shares）；
+  //   docs/dev-rules/acp-plugin-harness.md。
+  // - 现有覆盖缺口：本文件其余插件引擎用例直接调 startRemoteAgentSession，未经过 createDeviceAgentStarter
+  //   的 isGroupAssigned / groupSwitch 装配。
+  // - 最小失败输入：isGroupAssigned=()=>true 且带 groupSwitch 凭证时，通过 createDeviceAgentStarter 打开 'acp'。
+  // - tier：unit（进程内 fake Agent，与本 describe 其余往返用例同一隔离方式）。
+  it('omits stale provider-group assignment and switch flags when opening a remote plugin engine, while keeping them for built-in engines', async () => {
+    const { host, started } = createPluginEngineHost();
+    const openPayloads: Array<{ agentKind?: string; groupAssigned?: boolean; acceptsGroupSwitch?: boolean; groupSwitchToken?: string }> = [];
+    const starter = createDeviceAgentStarter({
+      remoteInvoke: async (_deviceId, _channel, args) => {
+        const req = JSON.parse(JSON.stringify(args[0])) as {
+          op?: string;
+          agentKind?: string;
+          payload?: { json?: { groupAssigned?: boolean; acceptsGroupSwitch?: boolean; groupSwitchToken?: string } };
+        };
+        if (req.op === 'open') {
+          openPayloads.push({
+            agentKind: req.agentKind,
+            groupAssigned: req.payload?.json?.groupAssigned,
+            acceptsGroupSwitch: req.payload?.json?.acceptsGroupSwitch,
+            groupSwitchToken: req.payload?.json?.groupSwitchToken,
+          });
+        }
+        try {
+          const result = await host.handle(CONTROLLER, req);
+          return { ok: true, result: JSON.parse(JSON.stringify(result ?? null)) };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return { ok: false, error: { code: 'IPC_ERROR', message } };
+        }
+      },
+      rgPath: () => RG,
+      codexPath: () => 'fixture-never-spawned',
+      mcpProviders: () => [],
+      prepareMcpBridge: async () => ({
+        mcpBridge: { servers: [] },
+        disposeSessionCtx: async () => {},
+        closeSessionInstance: () => {},
+      }) as never,
+      makerMemory: () => undefined,
+      captureKnownFileBefore: async () => undefined,
+      noteOpaqueTurnChange() {},
+      isGroupAssigned: () => true,
+      groupSwitch: { takeForOpen: () => 'stale-group-switch-token', offer: vi.fn() },
+      logger: historyLogger,
+    });
+
+    const acpHandle = await starter({
+      agentKind: 'acp',
+      deviceId: 'studio-mac',
+      options: {
+        sessionId: 'stale-group-plugin-task',
+        workingDir: project,
+        model: 'default',
+        providerId: ENGINE,
+        permissionMode: 'default',
+      },
+    });
+    expect(acpHandle.agentKind).toBe('acp');
+    expect(started).toHaveLength(1);
+    expect(openPayloads[0]).toEqual({
+      agentKind: 'acp',
+      groupAssigned: undefined,
+      acceptsGroupSwitch: undefined,
+      groupSwitchToken: undefined,
+    });
+    await acpHandle.close({ reason: 'navigation' });
+
+    const builtinHandle = await starter({
+      agentKind: 'pi',
+      deviceId: 'studio-mac',
+      options: {
+        sessionId: 'still-group-builtin-task',
+        workingDir: project,
+        model: 'm',
+        permissionMode: 'default',
+      },
+    });
+    expect(openPayloads[1]).toEqual({
+      agentKind: 'pi',
+      groupAssigned: true,
+      acceptsGroupSwitch: true,
+      groupSwitchToken: 'stale-group-switch-token',
+    });
+    await builtinHandle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+
   it.each([
     ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
     ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],
@@ -2219,6 +2314,7 @@ describe('shared startup lease budget', () => {
     const target = providerShareHostPeer('startup-budget', 'executor-m');
     const generation = '11111111-1111-4111-8111-111111111111';
     const calls: Array<{ device: string; op: string; method?: string; model?: string; callId?: string; sessionId?: string; generation?: string; runId?: string }> = [];
+    const wireCalls: Array<{ method?: string; args: unknown }> = [];
     const runs = new Map<string, Run>();
     const sessions = new Map<string, string>();
     const disposed: string[] = [];
@@ -2230,7 +2326,7 @@ describe('shared startup lease budget', () => {
     let allocations = 0;
     const renewals = new Map<string, number>();
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
-    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
+    const state = { pluginEngine: false, device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
       startFailure: '', startFailureName: 'AgentStartupStoppedError', startedId: undefined as string | undefined, localFailure: '',
       startupEnd: undefined as { reason: string; idleReclaimed?: true } | undefined,
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
@@ -2240,7 +2336,7 @@ describe('shared startup lease budget', () => {
       directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false, rejectHandoff: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => {
-      const item = { t: 'started', handle: { id: state.startedId ?? 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } };
+      const item = { t: 'started', handle: { id: state.startedId ?? 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: state.pluginEngine ? ['setModel', 'setVendorOptions'] : ['setModel'], state: {} } };
       const end = state.startupEnd;
       if (end && end.reason !== 'missing') {
         run.onData(Buffer.from(`${JSON.stringify(item)}\n${JSON.stringify({ t: 'closed', ...end })}\n`), true);
@@ -2292,8 +2388,8 @@ describe('shared startup lease budget', () => {
         }
         if (state.delayCaps) { const ms = state.delayCaps; state.delayCaps = 0; await vi.advanceTimersByTimeAsync(ms); }
         return { ok: true, result: { version: 1, maxRuns: state.maxRuns, idleReclaimMinutes: state.idleReclaimMinutes, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
-          virtualWorkspace: true, directGuestExecution: true, ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
-          agents: [{ kind: 'codex', available: true }] } };
+          virtualWorkspace: true, directGuestExecution: true, ...(state.pluginEngine ? { pluginEngines: true, localApplication: true } : {}), ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
+          agents: [{ kind: 'codex', available: true }, ...(state.pluginEngine ? [{ kind: 'acp', available: true, providerId: 'acp-plugin:fixture:engine' }] : [])] } };
       }
       if (request.op === 'open') {
         if (state.rejectHandoff && request.payload?.json?.requireGroupSwitchToken) return { ok: false,
@@ -2314,6 +2410,7 @@ describe('shared startup lease budget', () => {
         if (run) emit(run, { t: 'closed', reason: 'closed' });
       }
       if (request.op === 'call') {
+        wireCalls.push({ method: request.method, args: request.payload?.json });
         const run = runs.get(request.runId!);
         if (run && !(state.holdSend && request.method === 'send') && !(state.holdModel && request.method === 'setModel')) {
           emit(run, { t: 'result', callId: request.callId, ok: true, value: null });
@@ -2346,7 +2443,7 @@ describe('shared startup lease budget', () => {
     historyOpenLink.mockResolvedValue(undefined);
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
-    return { owner, target, generation, state, calls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
+    return { owner, target, generation, state, calls, wireCalls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
       pendingClose, prepare, allocation, capsReply, emit, started, guestSwitch, renewals, start,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
@@ -3459,6 +3556,72 @@ describe('shared startup lease budget', () => {
         await flush();
       }
     } finally { await handle.close(); }
+  });
+
+  // Integration: the real same-account proxy replays the cached briefing alongside
+  // revocation, whether promotion came before or after reclaim. In both cases the
+  // team is revoked before reconnect; an active team's replay is outside this test.
+  it.each([true, false])('keeps the replayed briefing out of the prompt after team revocation (promotion before reclaim=%s)', async beforeReclaim => {
+    const f = fixture();
+    Object.assign(f.state, { ready: true, pluginEngine: true });
+    const providerId = 'acp-plugin:fixture:engine';
+    const handle = await f.start({ agentKind: 'acp', deviceId: 'executor-m', options: {
+      sessionId: 'role-replay', workingDir: project, providerId, model: 'm',
+    } });
+    let target: AgentSessionHandle | undefined;
+    try {
+      const first = [...f.runs.values()].at(-1)!;
+      const reclaim = async () => {
+        f.emit(first, { t: 'closed', reason: 'ended', idleReclaimed: true });
+        await flush();
+      };
+      const handoff = createAcpLeadBriefingHandoff({ currentOwner: () => 'owner',
+        readActiveTeamId: async () => 'team', readRole: async () => 'lead' });
+      if (!beforeReclaim) await reclaim();
+      await applyLeadVendorOptions(handoff, { leadSessionId: 'role-replay', teamId: 'team', newTeam: true }, {
+        agentKind: 'acp', agentDeviceId: 'executor-m', workDir: project, setVendorOptions: handle.setVendorOptions!,
+      }, () => { throw new Error('remote promotion must not request local hydration'); });
+      expect(handoff.hasPending('role-replay')).toBe(false);
+      if (beforeReclaim) await reclaim();
+      await handle.setVendorOptions!({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+      await handle.send({ type: 'user', content: 'continue without the team' });
+      expect([...f.runs.values()].at(-1)!.runId).not.toBe(first.runId);
+      const patches = f.wireCalls.filter(call => call.method === 'setVendorOptions').map(call => (call.args as Record<string, unknown>[])[0]!);
+      expect(patches).toHaveLength(beforeReclaim ? 2 : 1);
+      const replay = patches.at(-1)!;
+      expect(replay).toEqual({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null, pluginEngineRoleBriefing: expect.any(String) });
+      if (beforeReclaim) expect(patches[0]).toEqual({ orcaRole: 'lead', orcaWorkflowId: 'team', orcaLeadSessionId: 'role-replay', pluginEngineRoleBriefing: replay.pluginEngineRoleBriefing });
+      const sends = f.wireCalls.filter(call => call.method === 'send');
+      expect(sends).toHaveLength(1);
+      const message = (sends[0]!.args as UserMessage[])[0]!;
+      expect(message.content).toBe('continue without the team');
+
+      const prompts: unknown[] = [];
+      const engine = new AcpAgent({
+        auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }),
+          logout: async () => {}, getAuthEnv: async () => ({}) },
+        runtimeConfig: {}, binaryPath: '', logger: historyLogger, clientInfo: { name: 'test', version: '1' },
+        endpoints: { connect: async () => {
+          let onLine: ((line: string) => void) | undefined;
+          const transport: AcpLineTransport = {
+            write(line) {
+              const { id, method, params } = JSON.parse(line);
+              const result = method === 'initialize' ? { protocolVersion: 1, agentCapabilities: {} }
+                : method === 'session/new' ? { sessionId: 'legacy-replay' } : { stopReason: 'end_turn' };
+              if (method === 'session/prompt') prompts.push(params.prompt);
+              queueMicrotask(() => onLine?.(JSON.stringify({ jsonrpc: '2.0', id, result })));
+            },
+            onLine(listener) { onLine = listener; return () => { onLine = undefined; }; },
+            onClose: () => () => {}, close: async () => {},
+          };
+          return transport;
+        } },
+      });
+      target = await engine.startSession({ workingDir: project, model: '', providerId });
+      await target.setVendorOptions!(replay);
+      await target.send(message);
+      expect(prompts).toEqual([[{ type: 'text', text: 'continue without the team' }]]);
+    } finally { await target?.close(); await handle.close(); }
   });
 
   // MCP heap regression: exercise the controller's real pool via a one-slot

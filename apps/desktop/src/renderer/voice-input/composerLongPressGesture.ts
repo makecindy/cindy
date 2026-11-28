@@ -2,6 +2,8 @@ import type { VoiceInputState } from '@cindy/voice-input-core';
 
 /** 在输入框里按住鼠标左键多久才开始语音输入。 */
 export const COMPOSER_LONG_PRESS_VOICE_INPUT_MS = 600;
+/** 确认非普通点击后提前预热云端 ASR 连接的等待时长（绝不提前打开麦克风）。 */
+export const COMPOSER_LONG_PRESS_HOLD_WARMUP_MS = 240;
 /** 等待期间指针移动超过这个距离即视为在拖选文字，放弃本次长按。 */
 export const COMPOSER_LONG_PRESS_MOVE_TOLERANCE_PX = 4;
 
@@ -18,10 +20,17 @@ export function isComposerLongPressVoiceReady(): boolean {
 
 export type ComposerLongPressVoiceGestureOptions = {
   holdMs?: number;
+  warmupDelayMs?: number;
   moveTolerancePx?: number;
   getState: () => VoiceInputState;
   /** Prepare only after the hold is recognized; cleanup hands off after start. */
   prepare?: () => (() => void) | void;
+  /**
+   * Optional press-triggered cloud ASR prewarm after `warmupDelayMs` of still
+   * hold (never opens the microphone). Returns a cleanup invoked immediately if
+   * the user releases, moves, or aborts before `holdMs`.
+   */
+  onHoldWarmup?: () => (() => void) | void;
   /**
    * 开始录音。返回 `false` 表示这次没有占用录音（已在录音、被取消等），
    * 调用方不得再对当前会话执行 `stop()`。
@@ -51,6 +60,7 @@ export type ComposerLongPressVoiceGesture = {
 type PendingPress = {
   origin: ComposerLongPressPoint;
   timer: ReturnType<typeof setTimeout>;
+  warmupTimer?: ReturnType<typeof setTimeout>;
 };
 
 const isIdleLike = (state: VoiceInputState): boolean =>
@@ -70,6 +80,7 @@ export function createComposerLongPressVoiceGesture(
   options: ComposerLongPressVoiceGestureOptions,
 ): ComposerLongPressVoiceGesture {
   const holdMs = options.holdMs ?? COMPOSER_LONG_PRESS_VOICE_INPUT_MS;
+  const warmupDelayMs = options.warmupDelayMs ?? COMPOSER_LONG_PRESS_HOLD_WARMUP_MS;
   const moveTolerancePx = options.moveTolerancePx ?? COMPOSER_LONG_PRESS_MOVE_TOLERANCE_PX;
   let pending: PendingPress | null = null;
   let holding = false;
@@ -80,6 +91,19 @@ export function createComposerLongPressVoiceGesture(
   let disposed = false;
   let startGeneration = 0;
   let releasePreparation: (() => void) | void;
+  let cancelHoldWarmup: (() => void) | void;
+
+  const clearHoldWarmup = (invokeCleanup: boolean): void => {
+    const cancel = cancelHoldWarmup;
+    cancelHoldWarmup = undefined;
+    if (invokeCleanup) {
+      try {
+        cancel?.();
+      } catch {
+        // Warmup cleanup is best-effort.
+      }
+    }
+  };
 
   const clearPreparation = (): void => {
     const release = releasePreparation;
@@ -90,7 +114,9 @@ export function createComposerLongPressVoiceGesture(
   const clearPending = (): void => {
     if (!pending) return;
     clearTimeout(pending.timer);
+    if (pending.warmupTimer !== undefined) clearTimeout(pending.warmupTimer);
     pending = null;
+    clearHoldWarmup(true);
     clearPreparation();
   };
 
@@ -127,11 +153,15 @@ export function createComposerLongPressVoiceGesture(
   };
 
   const beginVoiceInput = (): void => {
+    if (pending?.warmupTimer !== undefined) clearTimeout(pending.warmupTimer);
     pending = null;
     if (disposed || !isIdleLike(options.getState())) {
+      clearHoldWarmup(true);
       clearPreparation();
       return;
     }
+    // Hand off the prewarmed connection to start() instead of discarding it.
+    clearHoldWarmup(false);
     holding = true;
     options.onHoldStart?.();
     // Opening a Bluetooth microphone can interrupt playback in other apps even
@@ -170,9 +200,20 @@ export function createComposerLongPressVoiceGesture(
     press(point) {
       if (disposed || pending || holding || startPromise) return;
       if (!isIdleLike(options.getState())) return;
+      const warmupTimer = options.onHoldWarmup && warmupDelayMs > 0 && warmupDelayMs < holdMs
+        ? setTimeout(() => {
+            if (!pending || disposed || holding || !isIdleLike(options.getState())) return;
+            try {
+              cancelHoldWarmup = options.onHoldWarmup?.();
+            } catch {
+              // Warmup is optional; start() always falls back to normal connect.
+            }
+          }, warmupDelayMs)
+        : undefined;
       pending = {
         origin: point,
         timer: setTimeout(beginVoiceInput, holdMs),
+        warmupTimer,
       };
     },
     move(point) {

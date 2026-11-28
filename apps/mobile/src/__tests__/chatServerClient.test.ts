@@ -335,6 +335,30 @@ describe('group list activity', () => {
     expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
   });
 
+  // bot-group-chat.md 第 9 节 (2026-11-28), unit regression shared with Desktop's getGroup: a group-Cindy request
+  // held for its requester's computer choice showed every member a public notice and a running Cindy nobody
+  // else could stop. Entry: chatGroupView / rosterActivity on the direct Chat Server path.
+  it.each([[id(11), true], [id(12), false]] as const)('keeps a request waiting for %s to choose a computer out of group activity', async (requester, own) => {
+    const source: ChatMessage = { ...message(30), authorId: requester, content: [{ type: 'text', text: 'Weekly report' }] };
+    const notice = (n: number, reason: 'unbound' | 'offline'): ChatMessage => ({ ...message(n), authorId: id(20), author: { kind: 'bot', name: 'Cindy' },
+      origin: 'bot', content: [{ type: 'card', namespace: 'cindy.group-assistant', schemaRevision: 1, fallback: 'notice',
+        data: { type: 'executor_unavailable', reason, requesterId: requester, sourceMessageId: source.id } }] });
+    const value: ChatSnapshot = { ...snapshot(), assistantComputers: [{ id: 'mac', name: 'Mac' }], messages: [source, notice(31, 'unbound'), notice(32, 'offline')], members: [
+      { id: id(11), kind: 'human', name: 'Self', state: 'joined', ownerActorId: id(11), ownerName: 'Self', avatar: null, role: 'owner' },
+      { id: id(12), kind: 'human', name: 'Peer', state: 'joined', ownerActorId: id(12), ownerName: 'Peer', avatar: null, role: 'member' },
+      { id: id(20), kind: 'bot', assistant: true, name: 'Cindy', state: 'joined', ownerActorId: '', ownerName: '', avatar: null, role: 'member' },
+    ] };
+    const executions = [{ id: id(50), bot_id: id(20), requester_id: requester, source_message_id: source.id, epoch: 1, status: 'needs_input' }];
+    const view = chatGroupView({ snapshot: value, messages: value.messages, before: null, executions }, id(11), [], 'group');
+    expect(view.round).toMatchObject({ status: 'idle', speakers: [], othersActive: false });
+    // The requester keeps the offline notice; the unbound one becomes their own card. Others see neither.
+    expect(view.messages.map(m => m.id)).toEqual(own ? [source.id, id(32)] : [source.id]);
+    expect(view.assistantDeviceWaits).toEqual(own ? [{ executionId: id(50), sourceMessageId: source.id, requestText: 'Weekly report' }] : undefined);
+    // Another member's wait never marks the group row as waiting for this account.
+    if (!own) expect(await createChatServerClient(vi.fn().mockImplementation(async (path: string) => path.endsWith('/executions') ? executions : []))
+      .rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
+  });
+
   it('places a newly created empty group and a group with a new topic ahead of an older main chat', () => {
     const old = chatRoomRow(room(1), { ...snapshot(), messages: [{ ...message(20), createdAt: '2026-10-10T12:00:00Z' }] });
     const fresh = chatRoomRow({ ...room(2), created_at: '2026-10-11T12:00:00Z' }, { ...snapshot(), messages: [] });

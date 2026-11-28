@@ -2,7 +2,8 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { Editor } from '@tiptap/core';
 import { Schema } from '@tiptap/pm/model';
-import { EditorState, type Transaction } from '@tiptap/pm/state';
+import { history, undo as pmUndo } from '@tiptap/pm/history';
+import { EditorState, TextSelection, type Transaction } from '@tiptap/pm/state';
 import type { VoiceInputRendererEvent } from '@cindy/voice-input-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -192,6 +193,58 @@ afterEach(() => {
 });
 
 describe('in-app dictionary learning after undo', () => {
+  // 测试价值：经 useVoiceInput 的受控文本目标验证还原 ASR 原文不会被当成手工词典纠错，随后真实编辑仍能学习。
+  // 依据：PR #13667 与 #13665 合并后，润色撤销和文本目标词典监听共享同一替换路径。
+  // 现有覆盖缺口：编辑器撤销测试不经过 textTarget 的监听器；受控字段测试没有先还原原文。
+  // 最小输入：一次预润色听写、一次 Cmd+Z、一次用户手工改字；tier: unit，内存目标且无真实 I/O。单文件实测墙钟 5.43s（测试本身 90ms）。
+  it('keeps text-target dictionary learning clean after restoring raw ASR, then learns a real edit', () => {
+    let onEvent!: (event: VoiceInputRendererEvent) => void;
+    vi.stubGlobal('electronAPI', { voiceInput: {
+      onEvent: (listener: typeof onEvent) => { onEvent = listener; return vi.fn(); },
+      cancel: vi.fn().mockResolvedValue({ ok: true }),
+    } });
+    let text = '前文：';
+    const textTarget = {
+      getText: () => text,
+      getSelection: () => ({ from: text.length, to: text.length }),
+      replace: (range: { from: number; to: number }, replacement: string) => {
+        text = text.slice(0, range.from) + replacement + text.slice(range.to);
+        return { start: range.from, end: range.from + replacement.length };
+      },
+      focus: vi.fn(),
+    };
+    const hook = renderHook(() => useVoiceInput(null, true, undefined, { textTarget }));
+    const raw = '使用 cloud code';
+    const refined = '使用 Cloud Code。';
+    act(() => onEvent({
+      type: 'submitted', runId: 'run-field-undo', text: refined,
+      segment: {
+        id: 'segment-field-undo', source: 'mic', status: 'submitted', text: refined,
+        basedOnText: raw, updatedAt: Date.now(),
+      },
+    }));
+    expect(text).toBe('前文：' + refined);
+
+    act(() => expect(hook.result.current.handleUndoKeyDown(new KeyboardEvent('keydown', {
+      key: 'z', metaKey: true, cancelable: true,
+    }))).toBe(true));
+    expect(text).toBe('前文：' + raw);
+    act(() => hook.result.current.inspectTextTargetValue(text));
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(mocks.advise).not.toHaveBeenCalled();
+
+    text = '前文：使用 Codex Code。';
+    act(() => hook.result.current.inspectTextTargetValue(text));
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(mocks.advise).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      source: 'in_app',
+      rawTranscriptText: raw,
+      beforeText: raw,
+      afterText: '使用 Codex Code。',
+    }));
+    hook.unmount();
+  });
+
   it('keeps pre-refined text visible on confirmation and retains the raw source for learning', () => {
     const raw = '呃使用 cloud code。';
     const dictation = mountDictation(raw);
@@ -268,4 +321,225 @@ describe('in-app dictionary learning after undo', () => {
       expect(mocks.advise).toHaveBeenCalledTimes(1);
     },
   );
+
+  // 测试价值：验证桌面应用内润色独立撤销（两级 Cmd/Ctrl+Z：润色后 -> ASR 原文 -> 听写前），且退回原文不产生脏词典学习、对原文的二次手修仍能正常学习。
+  // 依据：语音输入优化 ⑧ 要求应用内润色拆分为独立 ProseMirror 撤销步，同时覆盖停顿预润色（零闪烁确认）与受控文本框场景。
+  // 缺口：既有用例未挂载真实 ProseMirror history() 插件验证两级撤销及预润色首步回退原文契约。
+  // 最小输入：带真实 history() 的 ProseMirror 文档分别经历 stop 后润色与停顿预润色。
+  // tier: unit，jsdom + 假时钟，耗时 <30ms。
+  it('splits post-stop refinement into its own ProseMirror undo step without dirty dictionary learning', () => {
+    let onEvent!: (event: VoiceInputRendererEvent) => void;
+    vi.stubGlobal('electronAPI', {
+      voiceInput: {
+        onEvent: (listener: typeof onEvent) => {
+          onEvent = listener;
+          return vi.fn();
+        },
+        cancel: vi.fn().mockResolvedValue({ ok: true }),
+      },
+    });
+    const draftPlugin = createVoiceInputDraftPlugin();
+    let state = EditorState.create({
+      doc: schema.node('doc', null, [schema.node('paragraph')]),
+      plugins: [history(), draftPlugin],
+    });
+    const listeners = new Set<(payload: { transaction: Transaction }) => void>();
+    const dispatch = (transaction: Transaction) => {
+      state = state.apply(transaction);
+      listeners.forEach((listener) => listener({ transaction }));
+    };
+    const editor = {
+      get state() {
+        return state;
+      },
+      view: {
+        get state() {
+          return state;
+        },
+        dispatch,
+      },
+      isDestroyed: false,
+      commands: { focus: vi.fn() },
+      on: (_event: string, listener: (payload: { transaction: Transaction }) => void) =>
+        listeners.add(listener),
+      off: (_event: string, listener: (payload: { transaction: Transaction }) => void) =>
+        listeners.delete(listener),
+    } as unknown as Editor;
+
+    const hook = renderHook(() => useVoiceInput(editor, true));
+    const raw = '呃使用 cloud code';
+    const refined = '使用 Cloud Code。';
+    act(() => {
+      onEvent({
+        type: 'submitted',
+        runId: 'run-undo',
+        text: raw,
+        segment: { id: 'seg-1', source: 'mic', status: 'submitted', text: raw, updatedAt: Date.now() },
+      });
+    });
+    expect(state.doc.textContent).toBe(raw);
+
+    act(() => {
+      onEvent({
+        type: 'refined',
+        runId: 'run-undo',
+        text: refined,
+        segment: { id: 'seg-1', source: 'mic', status: 'refined', text: refined, updatedAt: Date.now() },
+        range: { id: 'range-1', segmentIds: ['seg-1'], startOffset: 0, endOffset: raw.length, userTouched: false },
+      });
+    });
+    expect(state.doc.textContent).toBe(refined);
+
+    // 1st Cmd/Ctrl+Z restores raw ASR text and must NOT schedule dirty dictionary learning.
+    act(() => {
+      expect(pmUndo(state, dispatch)).toBe(true);
+    });
+    expect(state.doc.textContent).toBe(raw);
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(mocks.advise).not.toHaveBeenCalled();
+
+    // 2nd Cmd/Ctrl+Z removes the entire dictation back to pre-dictation state.
+    act(() => {
+      expect(pmUndo(state, dispatch)).toBe(true);
+    });
+    expect(state.doc.textContent).toBe('');
+    hook.unmount();
+  });
+
+  it('supports two-step Cmd/Ctrl+Z on pre-refined pause confirmation via handleUndoKeyDown', () => {
+    let onEvent!: (event: VoiceInputRendererEvent) => void;
+    vi.stubGlobal('electronAPI', {
+      voiceInput: {
+        onEvent: (listener: typeof onEvent) => {
+          onEvent = listener;
+          return vi.fn();
+        },
+        cancel: vi.fn().mockResolvedValue({ ok: true }),
+      },
+    });
+    const draftPlugin = createVoiceInputDraftPlugin();
+    let state = EditorState.create({
+      doc: schema.node('doc', null, [schema.node('paragraph')]),
+      plugins: [history(), draftPlugin],
+    });
+    const listeners = new Set<(payload: { transaction: Transaction }) => void>();
+    const dispatch = (transaction: Transaction) => {
+      state = state.apply(transaction);
+      listeners.forEach((listener) => listener({ transaction }));
+    };
+    const editor = {
+      get state() {
+        return state;
+      },
+      view: {
+        get state() {
+          return state;
+        },
+        dispatch,
+      },
+      isDestroyed: false,
+      commands: { focus: vi.fn() },
+      on: (_event: string, listener: (payload: { transaction: Transaction }) => void) =>
+        listeners.add(listener),
+      off: (_event: string, listener: (payload: { transaction: Transaction }) => void) =>
+        listeners.delete(listener),
+    } as unknown as Editor;
+
+    const hook = renderHook(() => useVoiceInput(editor, true));
+    const raw = '呃使用 cloud code。';
+    const refined = '使用 Cloud Code。';
+    act(() => {
+      onEvent({
+        type: 'submitted',
+        runId: 'run-pre',
+        text: refined,
+        segment: {
+          id: 'seg-pre',
+          source: 'mic',
+          status: 'submitted',
+          text: refined,
+          basedOnText: raw,
+          updatedAt: Date.now(),
+        },
+      });
+    });
+    expect(state.doc.textContent).toBe(refined);
+    expect(hook.result.current.canUndoRefinement).toBe(true);
+
+    // 1st Cmd+Z intercepts and restores raw ASR text without dirty dictionary learning.
+    const undoEvent = new KeyboardEvent('keydown', {
+      key: 'z',
+      metaKey: true,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      cancelable: true,
+    });
+    const preventDefault = vi.spyOn(undoEvent, 'preventDefault');
+    let handled = false;
+    act(() => {
+      handled = hook.result.current.handleUndoKeyDown(undoEvent);
+    });
+    expect(handled).toBe(true);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(undoEvent.defaultPrevented).toBe(true);
+    expect(state.doc.textContent).toBe(raw);
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(mocks.advise).not.toHaveBeenCalled();
+
+    // 2nd Cmd+Z removes the dictation cleanly.
+    act(() => {
+      expect(pmUndo(state, dispatch)).toBe(true);
+    });
+    expect(state.doc.textContent).toBe('');
+    hook.unmount();
+  });
+
+  it('restores selected editor text after undoing a pre-refined dictation twice', () => {
+    let onEvent!: (event: VoiceInputRendererEvent) => void;
+    vi.stubGlobal('electronAPI', { voiceInput: {
+      onEvent: (listener: typeof onEvent) => { onEvent = listener; return vi.fn(); },
+      cancel: vi.fn().mockResolvedValue({ ok: true }),
+    } });
+    const draftPlugin = createVoiceInputDraftPlugin();
+    let state = EditorState.create({
+      doc: schema.node('doc', null, [schema.node('paragraph', null, [schema.text('旧内容')])]),
+      plugins: [history(), draftPlugin],
+    });
+    state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, 1, 4)));
+    const listeners = new Set<(payload: { transaction: Transaction }) => void>();
+    const dispatch = (transaction: Transaction) => {
+      state = state.apply(transaction);
+      listeners.forEach((listener) => listener({ transaction }));
+    };
+    const editor = {
+      get state() { return state; },
+      view: { get state() { return state; }, dispatch },
+      isDestroyed: false,
+      commands: { focus: vi.fn() },
+      on: (_event: string, listener: (payload: { transaction: Transaction }) => void) => listeners.add(listener),
+      off: (_event: string, listener: (payload: { transaction: Transaction }) => void) => listeners.delete(listener),
+    } as unknown as Editor;
+    const hook = renderHook(() => useVoiceInput(editor, true));
+    act(() => onEvent({
+      type: 'submitted', runId: 'run-replace', text: '润色文本',
+      segment: {
+        id: 'seg-replace', source: 'mic', status: 'submitted', text: '润色文本',
+        basedOnText: '识别原文', updatedAt: Date.now(),
+      },
+    }));
+    expect(state.doc.textContent).toBe('润色文本');
+    act(() => expect(hook.result.current.handleUndoKeyDown(new KeyboardEvent('keydown', {
+      key: 'z',
+      metaKey: true,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      cancelable: true,
+    }))).toBe(true));
+    expect(state.doc.textContent).toBe('识别原文');
+    act(() => expect(pmUndo(state, dispatch)).toBe(true));
+    expect(state.doc.textContent).toBe('旧内容');
+    hook.unmount();
+  });
 });

@@ -78,6 +78,30 @@ describe('desktop scheduler cross-device transport', () => {
     expect(s.invoke).toHaveBeenCalledTimes(1);
   });
 
+  // PR #13682: remote schedule_get bypasses the local runtime callback. A
+  // bound schedule must receive the target's transient deferral without a new
+  // channel; older peers still return the persisted schedule. tier: unit.
+  it('enriches a bound remote schedule with target deferral and tolerates older peers', async () => {
+    const s = setup();
+    const schedule = { id: 's1', targetSessionId: 'session-1' };
+    s.invoke.mockResolvedValueOnce({ ok: true, result: schedule });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { deferredSchedules: [
+      { scheduleId: 's1', count: 2, firstAt: 100, lastReason: 'session-running' },
+    ] } });
+    expect(await s.remote.invoke('mac', 'get', ['s1'])).toEqual({ ok: true, data: {
+      ...schedule, deferral: { count: 2, firstAt: 100, lastReason: 'session-running' },
+    } });
+    expect(s.invoke.mock.calls.map(([, channel]) => channel)).toEqual([
+      'maker:schedule:get', 'maker:schedule:get-runtime-state',
+    ]);
+    expect(s.invoke.mock.calls[1][3]?.preSend).toBe(s.invoke.mock.calls[0][3]?.preSend);
+
+    const old = setup();
+    old.invoke.mockResolvedValueOnce({ ok: true, result: schedule });
+    old.invoke.mockResolvedValueOnce({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } });
+    expect(await old.remote.invoke('mac', 'get', ['s1'])).toEqual({ ok: true, data: schedule });
+  });
+
   it.each([
     { outcome: { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } } as InvokeResultPayload, code: 'REMOTE_UNSUPPORTED' },
     { outcome: new DeviceLinkError('INVOKE_TIMEOUT', 'slow'), code: 'REMOTE_TIMEOUT' },

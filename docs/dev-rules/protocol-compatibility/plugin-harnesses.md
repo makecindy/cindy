@@ -205,9 +205,9 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
    `acpHarnessKeyFromProviderId` 与新版注册表据此拆出引擎；旧端按引擎键查不到而判为不可用，不会落到其他引擎或账号。
    `maker:list-plugin-engines` 把它列为一项：`key` 为 `<引擎键>~<后缀>`，追加可选 `accountProviderOf`（所属引擎键），沿用引擎的模型与模式，
    `remoteUse` 恒为不支持（不对其他电脑与分享开放）；显示名、隐藏、停用按自己的键存在 `plugin-engine-prefs.json`。
-6. **Device Link 与 IPC**：账号管理沿用既有 `maker:subscription-accounts`（账号命令的 `providerId` 接受插件引擎 id，任务账号的 `session` 读取仍只接受内置供应商，`add`/`login` 追加可选
+6. **Device Link 与 IPC**：账号管理沿用既有 `maker:subscription-accounts`（账号命令与只读 `session` 探测的 `providerId` 均接受插件引擎 id；`session` 查询仅面向本机或同账号其他电脑，分享受邀者与共享任务访客一律 `PERMISSION_DENIED`，执行端仅在引擎开放远程调用且模型允许时回报绑定账号是否停用/移出/受限及是否有替换账号可接手，不带身份与目录；`add`/`login` 追加可选
    `methodId`；视图追加可选 `pluginEngine`、账号用量 `usage.plugin`、`authIssue: 'account-mismatch'`）与推送 `subscription-accounts:changed`
-   （插件引擎的 providerId 也会出现，旧界面按不认识的 providerId 忽略）。旧执行电脑以 `INVALID_PARAMS` 拒绝插件引擎 id，控制端按不支持处理。
+   （插件引擎的 providerId 也会出现，旧界面按不认识的 providerId 忽略）。旧执行电脑以 `INVALID_PARAMS` 拒绝插件引擎 id（含 `session` 探测），控制端按不支持降级为原路径（不交接上下文、不自动换号）。
    `maker:list-plugin-engines` 视图追加可选 `accounts`（登录方式，不含秘密）。`maker:get-plugin-engine-usage` 追加可选第二参数 `{ sessionId }`：
    读该任务所绑账号的用量（本机窗口：未分配时为空）；device-link 调用（手机、同账号远控）带上时，执行电脑认识这个任务就读它所绑账号，
    不认识就按原来的读法读引擎原有登录；旧 Host 忽略多余参数。
@@ -417,6 +417,15 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
    - 代理任务行（`OrcaRemoteWorkerProxySessionSeed`）追加可选 `providerId` 落库，`orcaRemoteWorkerBridge` 放开 `'acp'` Worker 向 Lead 回报（MCP 上下文 `agentKind` 与 `acp-agent.ts` 同口径映射为 `'pi'`）。
    - 不新增 channel、allowlist 项或中转帧，官方与自建中转按既有 invoke 帧透明转发，无需改动。
 
+## 插件工具卡片识别
+
+任务消息的 `tool_use.content` 新增可选字符串 `mcpToolName`。新版桌面只在识别插件卡片和媒体锚点时
+优先使用它，普通工具行继续显示 `toolName`。据对 Factory droid 1.23.0 打包代码的静态阅读（未实测），
+droid 在 `tool_call.name` 中以 `server___tool` 报 MCP 机器名。新版仅按本会话挂载的服务器解析此格式；
+同一解析也用于已有的空工具结果回填（#12891）。不识别截断加哈希的长名字。旧桌面忽略新字段，
+不识别此机器名格式时降级为普通工具行；手机仍只读取已有字段。不改变权限判定、真实 MCP 参数、
+消息通道或中转帧；自建中转原样转发。
+
 ## 用户自定义提示词（ACP `systemPrompt`，2026-11-28）
 
 Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定义提示词」按 ACP v1 标准字段交出（#13098、#13515）：
@@ -438,3 +447,14 @@ Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定
 实现见 maker-core `agents/acp/{acp-agent,protocol,session}.ts` 与 `maker.ts`；回归见 maker-core `acp-session.test.ts`
 （本机、隔离伙伴、同账号托管、受邀者托管四种输入）、`maker.test.ts`（只取冻结正文，`prepareStartOptions` 拼入的协同说明不外发）
 与 Desktop `remote-agent/__tests__/mirror.test.ts`（发起端 `userPrompt` 到达执行端）。
+
+## 同账号远程任务的 Lead 角色说明
+
+同账号远程任务仍通过既有 `setVendorOptions` 发送角色说明字符串，不新增协议或重连投递机制。
+与本机重建时从宿主进程内交接待发说明不同，远程设置缓存随同账号代理存活：
+
+1. **代理保留、团队未撤销**：远端执行进程让位后重连，代理会把缓存中待交付的说明交给新进程；
+   已交付的说明也可能再进入一次提示。与 `main` 一致。
+2. **整个代理重建**：原代理的设置缓存不会随之恢复，待交付的说明会丢失。与 `main` 一致。
+3. **团队已撤销**：即使代理把旧说明和撤销字段一起重放，旧说明也不会再进入提示。
+   这是本次改进；`main` 在这种情况下仍会注入旧说明。

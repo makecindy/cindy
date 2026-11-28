@@ -274,6 +274,22 @@ Fast 合入 discovery 层；仅适用于 `https://api.openai.com/v1` Responses �
 Ultra 由 Codex 原生解释（含多 Agent 行为及普通 HTTP effort 映射），不能把字符串
 `ultra` 直接当成公共 Responses API 的 reasoning effort。
 
+在 [#13713](https://github.com/makecindy/cindy/issues/13713) 的本地对照中，以
+`codexTerraProxy.integration.test.ts` 的真实 Codex、Desktop 代理和回环 Responses
+上游模拟自定义连接。Codex CLI 0.167.2 的原生目录未列出精确型号
+`codex/gpt-6.2-astra`。普通任务的实测字段如下。
+
+| `turn/start.effort` | 代理入口 `reasoning.effort` | 回环上游收到的 `reasoning.effort` |
+| --- | --- | --- |
+| ultra | medium | medium |
+| high | high | high |
+| xhigh | xhigh | xhigh |
+| max | max | max |
+
+排查同类反馈时，在同一次请求上关联这三个位置，并检查 `x-openai-subagent`。
+本次以上样本均未带该请求头，Ultra 到普通 HTTP 档位的转换在进入 Desktop 代理前已经发生。
+此结果仅覆盖本地合成路由。真实 Magpie 的目录、转发、日志展示、模型计算量及子任务档位仍需各自的证据。
+
 ### 型号标准与 Gateway 控制（2026-09-07 用户裁决）
 
 Gateway 下发不是所有模型事实的唯一依据。先对照官方规格、当前原生目录和实际通道，

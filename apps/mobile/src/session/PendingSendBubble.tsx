@@ -15,6 +15,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { describeOutboxEnqueueRefusal } from '@/device-link/remoteStatus';
 import { ActivityIndicator, Animated, Easing, Pressable, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { CompanionFadeIn } from '@/session/CompanionEntering';
@@ -340,6 +341,7 @@ export function PendingSendBubble({
   const spinning = pendingSendSpins(item.phase);
   const editing = item.phase === 'editing';
   const failed = item.phase === 'failed';
+  const errorText = item.errorText ? describeOutboxEnqueueRefusal(item.errorText) ?? item.errorText : null;
   // Local outbox rows have not reached the desktop queue yet, but users must
   // still be able to cancel them while upload/enqueue is in flight. Settling
   // rows deliberately remain non-interactive: they have already left the
@@ -421,6 +423,8 @@ export function PendingSendBubble({
   const statusLabel = item.historyConfirmation
     ? `${bubbleLabel} · ${t('message.queue.deliveryUnconfirmed')}`
     : failed ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
+    : item.waitingFor === 'previous'
+      ? `${bubbleLabel} · ${t('message.queue.waitingForPrevious')}`
     : waiting || item.waitingForRemoteAccount
       ? t('message.queue.waitingMessage', { text: bubbleLabel })
     : spinning
@@ -622,7 +626,8 @@ export function PendingSendBubble({
       <View style={styles.statusRow} testID={`pendingSend.statusRow.${item.clientId}`}>
         {item.historyConfirmation ? (
           <OutboxHistoryConfirmationRow clientId={item.clientId}
-            requested={item.historyConfirmation === 'requested'} onConfirm={actions.onRetryOutbox} />
+            requested={item.historyConfirmation === 'requested'} onConfirm={actions.onRetryOutbox}
+            onRemove={actions.onRemoveOutbox} />
         ) : failed ? (
           <>
             <Text numberOfLines={1} style={styles.statusError}>
@@ -639,16 +644,17 @@ export function PendingSendBubble({
         ) : waiting && statusShown ? (
           <CompanionFadeIn distance={0} duration={motionDuration.fast} play={statusShown === 'revealed'}>
           <View style={styles.statusActions}>
-            <Text numberOfLines={1} style={styles.statusText}>
-              {item.waitingFor === 'computer' && actions.waitingComputerName
-                ? t('message.queue.waitingForNamedComputer', { name: actions.waitingComputerName })
-                : t(item.waitingFor === 'network' ? 'message.queue.waitingForNetwork' : 'message.queue.waitingForComputer')}
+            <Text numberOfLines={1} style={item.waitingFor === 'previous' ? styles.queueStatusText : styles.statusText}>
+              {item.waitingFor === 'previous' ? t('message.queue.waitingForPrevious')
+                : item.waitingFor === 'computer' && actions.waitingComputerName
+                  ? t('message.queue.waitingForNamedComputer', { name: actions.waitingComputerName })
+                  : t(item.waitingFor === 'network' ? 'message.queue.waitingForNetwork' : 'message.queue.waitingForComputer')}
             </Text>
             {item.waitingFor === 'computer' && actions.onReconnectComputer ? (
               <StatusAction busy={actions.busy} label={t('message.queue.reconnectComputer')}
                 onPress={actions.onReconnectComputer} testID={`pendingSend.reconnect.${item.clientId}`} />
             ) : null}
-            {outbox && item.canCancel !== false ? (
+            {outbox && item.canCancel !== false && (item.waitingFor !== 'previous' || selected) ? (
               <>
                 <View style={styles.statusDivider} />
                 <StatusAction busy={actions.busy} label={t('message.queue.cancel')}
@@ -685,8 +691,8 @@ export function PendingSendBubble({
       </View>
       {/* 有具体原因的失败(比如模型不支持图片)直接写出来,用户才知道该怎么处理;图片没传上去的
           通用提示由那张图上的重传按钮表达,轻点气泡才看。 */}
-      {!item.historyConfirmation && item.errorText && (failedImages === 0 || selected) ? (
-        <Text style={styles.errorReason} testID={`pendingSend.error.${item.clientId}`}>{item.errorText}</Text>
+      {!item.historyConfirmation && errorText && (failedImages === 0 || selected) ? (
+        <Text style={styles.errorReason} testID={`pendingSend.error.${item.clientId}`}>{errorText}</Text>
       ) : null}
       {/* 轻点气泡看排队操作为什么不可用。 */}
       {selected && pendingText && statusShown ? (
@@ -751,10 +757,11 @@ function QueuedSendMenu({ item, actions, accessibilityLabel }: {
   );
 }
 
-export function OutboxHistoryConfirmationRow({ clientId, requested, onConfirm }: {
+export function OutboxHistoryConfirmationRow({ clientId, requested, onConfirm, onRemove }: {
   clientId: string;
   requested: boolean;
   onConfirm(clientId: string): void;
+  onRemove(clientId: string): void;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
@@ -764,6 +771,8 @@ export function OutboxHistoryConfirmationRow({ clientId, requested, onConfirm }:
       <View style={styles.statusDivider} />
       <StatusAction busy={requested} disabled={requested} label={t('message.queue.recheckDelivery')} primary
         onPress={() => onConfirm(clientId)} testID={`pendingSend.outboxRecheck.${clientId}`} />
+      <StatusAction disabled={requested} label={t('message.queue.delete')}
+        onPress={() => onRemove(clientId)} testID={`pendingSend.outboxRemove.${clientId}`} />
     </View>
   );
 }
@@ -883,7 +892,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   statusActions: { maxWidth: '100%', alignItems: 'center', alignSelf: 'stretch', flexDirection: 'row', gap: spacing.xs },
   confirmationActions: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, maxWidth: '100%' },
   queueMenuTrigger: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, minHeight: 44, minWidth: 44 },
-  queueStatusText: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  queueStatusText: { color: colors.textTertiary, flexShrink: 1, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   // 说明 / 报错是成句的话:13/18,二级色;失败用报错色。
   statusText: { color: colors.textSecondary, flexShrink: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   statusError: { color: colors.errorText, flexShrink: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },

@@ -31,6 +31,7 @@ const h = vi.hoisted(() => ({
   hasRegisteredWorktreeForSession: vi.fn(),
   recycleWorktreeForRemovedSession: vi.fn(),
   isOwnerScopeCurrent: vi.fn(),
+  isTurnRunning: vi.fn<(id: string) => boolean>(),
   upsertRecentWorkdir: vi.fn(async () => true),
   captureOwnerScope: false,
   drizzle: {},
@@ -97,12 +98,21 @@ import {
   scheduleWorktreeRecycleForStatusChange,
   setSessionWorktreeRecycle,
   setSessionRuntimeCleanup,
-  setSessionsStatusInDb,
+  setSessionsStatusInDb as writeSessionStatuses,
 } from '../localDb/ipc/sessions.js';
 import { setSessionRouteLockImplementation } from '../localDb/sessionRouteLock.js';
 import { setSessionRestoreObserver } from '../localDb/sessionRestoreRetention.js';
 import { queueSessionWorktreeRecycle } from '../worktree/recycleQueue';
 import { admitTaskAction, assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
+import { configureTaskArchiveRuntime, isTaskBusyForArchive } from '../task-management/service.js';
+
+function setSessionsStatusInDb(
+  sessionIds: string[],
+  status: 'active' | 'archived',
+  beforeMutation?: () => Promise<void>,
+) {
+  return writeSessionStatuses(sessionIds, status, { isBusyForArchive: isTaskBusyForArchive, beforeMutation });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -118,6 +128,12 @@ beforeEach(() => {
   h.captureOwnerScope = false;
   h.readBindings.mockReset().mockResolvedValue([]);
   h.requestRecycle.mockReset().mockResolvedValue(undefined);
+  h.isTurnRunning.mockReset().mockReturnValue(false);
+  configureTaskArchiveRuntime({
+    busy: h.isTurnRunning,
+    waiting: () => false,
+    pending: async () => false,
+  });
   Object.assign(h.drizzle, {
     select: () => ({ from: () => ({ where: () => ({ limit: h.readBindings }) }) }),
   });
@@ -127,6 +143,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  configureTaskArchiveRuntime(null);
   setSessionRestoreObserver(null);
   // Finish queued cleanup before removing its hooks or resetting the next test's mocks.
   await queueSessionWorktreeRecycle(async () => {});
@@ -137,6 +154,31 @@ afterEach(async () => {
 });
 
 describe('setSessionsStatusInDb', () => {
+  // #13601 (unit): existing batch tests cover idle writes and revoked callers.
+  // One running target must reject the entire batch before any archive side effect.
+  it('rejects the whole batch when a target starts running during archive preparation', async () => {
+    h.readBindings.mockImplementationOnce(async () => {
+      h.isTurnRunning.mockImplementation(id => id === 'running');
+      return [];
+    });
+    h.tx.mockImplementationOnce(async () => []);
+
+    try {
+      await expect(setSessionsStatusInDb(['finished', 'running'], 'archived')).rejects.toMatchObject({
+        code: 'PRECONDITION_FAILED',
+        message: expect.stringContaining('still running'),
+      });
+      expect(h.requestRecycle).not.toHaveBeenCalled();
+      expect(h.tx).not.toHaveBeenCalled();
+      expect(h.runtimeCleanup).not.toHaveBeenCalled();
+      expect(h.closeSharedTask).not.toHaveBeenCalled();
+      expect(h.closeSession).not.toHaveBeenCalled();
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    } finally {
+      h.tx.mockReset();
+    }
+  });
+
   // #10310, unit: restored retention introduces an asynchronous boundary before
   // activation. Revocation at that boundary must prevent the status write.
   it('rechecks authorization after persisting restore retention', async () => {

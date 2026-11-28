@@ -168,9 +168,9 @@ export function commitModelGroupDecision(result: ModelGroupResolveResult | null)
 export async function bindModelGroupSession(
   sessionId: string,
   selection: ModelGroupSelection,
-  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'> | null,
+  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'> | null,
 ): Promise<void> {
-  const route: { agentKind: ModelGroupCandidate['agentKind']; providerId: string; model: string; agentDeviceId?: string } | null =
+  const route: { agentKind: ModelGroupCandidate['agentKind']; providerId: string; model: string; agentDeviceId?: string; accountId?: string } | null =
     !result ? null : 'outcome' in result ? (result.outcome === 'routed' ? result.route : null) : result;
   if (result && 'outcome' in result) commitModelGroupDecision(result);
   if (!route) return;
@@ -179,8 +179,9 @@ export async function bindModelGroupSession(
     selection,
     route: {
       agentKind: route.agentKind, providerId: route.providerId, model: route.model,
-      // 记录带上运行位置：同一个模型在另一台电脑上是另一个来源。
+      // 记录带上运行位置与本机账号槽位：同一个供应商下的不同电脑或拆平账号是不同来源。
       ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+      ...(route.accountId ? { accountId: route.accountId } : {}),
     },
   }).catch((err: unknown) => log.warn('model group session binding failed', err));
 }
@@ -227,7 +228,7 @@ export function useModelGroupLocationName(): ModelGroupLocationName {
   return useMemo(() => modelGroupLocationNameFrom(devices, nameFor), [devices, nameFor]);
 }
 
-type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
+type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'>;
 
 export interface ModelGroupCandidateNames {
   provider: ProviderView | undefined;
@@ -294,8 +295,11 @@ export function useModelGroupCandidateNames(
     const knownModel = model ?? everywhere.flatMap((views) => views.flatMap((view) => view.models[agent] ?? []))
       .find((item) => item.id === candidate.model);
     const knownProvider = provider ?? everywhere.flat().find((view) => view.id === candidate.providerId);
-    const sourceName = provider?.name ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId
-      ? fallback.sourceName : knownProvider?.name ?? fallback?.sourceName ?? candidate.providerId);
+    const hasAccountSourceName = !!candidate.accountId && !!fallback?.sourceName && fallback.sourceName !== candidate.providerId;
+    const sourceName = hasAccountSourceName
+      ? fallback!.sourceName!
+      : provider?.name ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId
+        ? fallback.sourceName : knownProvider?.name ?? fallback?.sourceName ?? candidate.providerId);
     return {
       provider,
       modelName: model?.name ?? (fallback?.modelName && fallback.modelName !== candidate.model
