@@ -2,7 +2,7 @@
 
 > 迁自 `DESIGN.md` §4，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
 > **读取时机**：改动设备访问胶囊、伙伴模型与能力页或「关于」里的 harness 版本之前
-> **适用路径**：`apps/desktop/src/renderer/components/settings/HarnessVersionMenuRow.tsx`、`apps/desktop/src/renderer/features/bots/BotCapabilitySettings.tsx`、`apps/desktop/src/renderer/features/bots/BotModelChainEditor.tsx`
+> **适用路径**：`apps/desktop/src/renderer/components/settings/MyDevicesPanel.tsx`、`apps/desktop/src/renderer/components/settings/CloudComputerRow.tsx`、`apps/desktop/src/renderer/components/settings/HarnessVersionMenuRow.tsx`、`apps/desktop/src/renderer/features/bots/BotCapabilitySettings.tsx`、`apps/desktop/src/renderer/features/bots/BotModelChainEditor.tsx`
 
 ### Device access pills
 

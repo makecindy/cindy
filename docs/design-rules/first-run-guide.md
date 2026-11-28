@@ -1,6 +1,6 @@
 # 开始引导
 
-> 迁自 `DESIGN.md` §4，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
+> 迁自 `DESIGN.md` §4、§14.4，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
 > **读取时机**：改动首次登录后的开始引导之前
 > **适用路径**：`apps/desktop/src/renderer/features/first-run-guide/**`
 

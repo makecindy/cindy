@@ -2,7 +2,7 @@
 
 > 迁自 `DESIGN.md` §2、§5，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
 > **读取时机**：改动桌面任务侧栏、伙伴侧栏或任务创建者筛选之前
-> **适用路径**：`apps/desktop/src/renderer/features/cc-agent/sidebar/**`、`apps/desktop/src/renderer/features/bots/TeammatesSection.tsx`
+> **适用路径**：`apps/desktop/src/renderer/features/cc-agent/sidebar/**`、`apps/desktop/src/renderer/features/bots/TeammatesSection.tsx`、`apps/mobile/src/session/HomeDisplayMenu*.tsx`、`apps/mobile/src/session/homeChromeMenus.ts`、`apps/mobile/src/session/homeDisplaySettings.ts`、`apps/mobile/src/session/homeViewPreferenceStore.ts`、`apps/mobile/src/platform/chrome/useNativeMenuReminderImage.ts`
 
 ### Filter reminder inside display settings
 

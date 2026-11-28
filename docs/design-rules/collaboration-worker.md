@@ -68,13 +68,17 @@ adds an agent switch between the role row and the first-task box (see Fallbacks 
   another computer adds that computer's working directory: the chat folder or a folder path, with
   a folder picker. The execution-device label uses the small uppercase label style; a label that
   contains a user-given name, such as 「Mac Studio 上的工作目录」, keeps its own case.
-- **New-task draft.** When collaboration starts from a new-task draft, the form has no More
-  Settings and the first task starts empty.
+- **New-task draft.** When collaboration starts from a new-task draft, the form has no Project
+  field — More Settings appears only when other execution devices are available — and the role's
+  built-in starter task is omitted (task text remembered from a previous submission for that role
+  still pre-fills).
 - **Fallbacks on another computer.** When the task's computer runs an older Cindy that does not
   share its provider list, a Claude / Codex / Pi segmented switch appears between the role row and
   the first-task box, and the Fast toggle moves onto the toolbar. When that computer does not
-  support Worker permission modes, the toolbar has no permission button, a red line under the
-  first-task box says 「远程设备的版本过旧，暂不支持协同」, and the primary button stays disabled.
+  support Worker permission modes, the toolbar has no permission button; in Start Collaboration, a
+  red line under the first-task box says 「远程设备的版本过旧，暂不支持协同」 and the primary button
+  stays disabled, while adding a Worker to an existing remote team omits the error line and keeps
+  the primary button enabled for compatibility.
 
 Initial focus goes to the first-task textarea, the form's primary input; choosing Custom moves
 focus to the role-name input. Tab containment, Esc, focus return and the blocked dismissal during

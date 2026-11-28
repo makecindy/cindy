@@ -1,6 +1,6 @@
 # 聊天界面
 
-> 迁自 `DESIGN.md` §4 与文末无编号章，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
+> 迁自 `DESIGN.md` §4、§14.4 与文末无编号章，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
 > **读取时机**：改动聊天正文、群聊、频道或附件图片在对话里的显示之前
 > **适用路径**：`apps/desktop/src/renderer/components/chat/**`、`apps/desktop/src/renderer/features/bots/BotChannelsPage.tsx`、`apps/desktop/src/renderer/features/bots/BotGroupAssistantDeviceCard.tsx`
 

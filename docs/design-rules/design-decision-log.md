@@ -1450,7 +1450,7 @@ DESIGN.md 瘦身 4a 把下列历史说明从正文移到这里，原文逐字保
 
 ## 2026-11-29 · Worker 创建弹窗：确认现行布局，规格补齐（主人裁决，DESIGN.md 瘦身 4b）
 
-主人对照现在的弹窗截图（浅色、深色各 17 个状态）确认了现行布局，去掉「layout pending sign-off」。规格一节搬到 [collaboration-worker.md](./collaboration-worker.md)，并补上截图核对时发现规格没写的部分：工具栏的语音输入按钮、模型面板里的智能路由与插件引擎、「上次选择的模型或来源不可用」与没有可用模型的提示、旧版本远程电脑的 Agent 切换与 Fast 开关、远程不支持 Worker 权限档时的提示、远程读不到角色清单时不能移除角色、新任务草稿没有「更多设置」、「更多设置」里的项目与运行设备细节、Agent 在另一台电脑时的供应商标识。选了插件引擎时权限菜单取引擎档位与 Worker 档位的交集，主人确认这是预期。同时按 #13716 写入关闭按钮改用共享图标按钮并带提示、Esc 先收起提示，以及含设备名的标签不转大写。
+主人对照现在的弹窗截图（浅色、深色各 17 个状态）确认了现行布局，去掉「layout pending sign-off」。规格一节搬到 [collaboration-worker.md](./collaboration-worker.md)，并补上截图核对时发现规格没写的部分：工具栏的语音输入按钮、模型面板里的智能路由与插件引擎、「上次选择的模型或来源不可用」与没有可用模型的提示、旧版本远程电脑的 Agent 切换与 Fast 开关、远程不支持 Worker 权限档时的提示、远程读不到角色清单时不能移除角色、新任务草稿省略项目字段与内置起手句、「更多设置」里的项目与运行设备细节、Agent 在另一台电脑时的供应商标识。选了插件引擎时权限菜单取引擎档位与 Worker 档位的交集，主人确认这是预期。同时按 #13716 写入关闭按钮改用共享图标按钮并带提示、Esc 先收起提示，以及含设备名的标签不转大写。
 
 搬动时从正文移出的来源说明：标题 `(owner-requested simplification, 2026-11-10; layout pending sign-off)`；Roles `owner request, 2026-11-10:`；Remove role `(owner decisions, 2026-11-10)`、`(owner request)`；First task `(owner decision, 2026-11-10)`；Mobile `(owner request, 2026-11-10)`。
 

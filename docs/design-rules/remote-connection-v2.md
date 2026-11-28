@@ -1,6 +1,6 @@
 # 远程连接 V2
 
-> 迁自 `DESIGN.md` §4，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
+> 迁自 `DESIGN.md` §2、§4，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
 > **读取时机**：改动远程连接 V2 的拓扑、状态色或消息流动画之前
 > **适用路径**：`apps/desktop/src/renderer/features/remote-connection-v2/**`
 
