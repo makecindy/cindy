@@ -218,6 +218,9 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
    （[`cindy-bots-runtime.md` §3.2](../product-rules/cindy-bots-runtime.md)）。体检关闭 live handle 的原因是
    `runtime-refresh`，close 监听在有 `acquirePendingAgentSwitch` 时保住任务，新 handle 由
    `refreshSessionAfterPendingAgentSwitch` 按最新 DB 行重建；体检抛错按直发口径让这条消息失败。
+   运行时在 runner 外刷新后，发送准备与过载重试都以 Maker 当前 live 实例登记待切换关闭，
+   只有实例和 `agent-switch` 原因同时匹配才保留该轮；原消息随换绑后的实例派发，不重投（#13655，
+   回归见 [`turnRunnerCompanionRouting.test.ts`](../../apps/desktop/src/main/im/shared/__tests__/turnRunnerCompanionRouting.test.ts)）。
    6c. **全响应（ambient）前置判定不留痕迹**：`messageHandler.processOne` 只对 `event.ambient === true` 的消息、
    且 adapter 实现了 `ambientTurnGate` 时，在 ack / 提前落库 / 群上下文拼装**之前**问一次该不该插话；
    `'skip'` 直接 return（不落库、不起轮次、不推进群窗口游标），钩子抛错或判不出来按 `'proceed'` 走原路径。
