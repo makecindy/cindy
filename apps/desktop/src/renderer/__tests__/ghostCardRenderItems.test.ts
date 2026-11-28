@@ -165,9 +165,11 @@ describe('ghost_card · live persisted tool identity', () => {
 });
 
 describe('ghost_card · settled 配对', () => {
-  // ACP harness §4, unit: existing renderer fixtures start with a normalized
-  // name; feed real ACP translations with friendly titles and mixed results.
-  it('reopens ACP tool history with the original title and two correctly paired cards', async () => {
+  // ACP harness §4, unit: feed real ACP translations with friendly titles
+  // and mixed results through the stream persister and history renderer.
+  // #13597: the foreground case missed the separate background insert, which
+  // dropped mcpToolName when a titled ghost_call began between turns.
+  it.each(['turn', 'background'] as const)('reopens %s ACP tool history with the original title and two correctly paired cards', async (scope) => {
     const translator = new AcpUpdateTranslator({
       blockIdPrefix: 'acp-card-fixture',
       mcpServerNames: ['cindy'],
@@ -184,7 +186,7 @@ describe('ghost_card · settled 配对', () => {
       ...translator.handleUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'second', status: 'completed', rawOutput: { xdt_card_id: 'native-second' } }),
     ];
     const { rows, persist, drain } = cardPersistence('session-a');
-    persist(events);
+    persist(scope === 'background' ? events.map(event => ({ ...event, turnScope: scope })) : events);
     await drain();
     const messages = mapServerMessages([...rows.values()]);
     expect(messages.find(message => message.toolUseId === 'normal')).toMatchObject({

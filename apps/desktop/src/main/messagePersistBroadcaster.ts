@@ -1619,7 +1619,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       enqueueVisibleDbMessage(`tool_use:${sessionId}:${persistId}`, sessionId, {
         clientId: persistId,
         role: 'tool_use',
-        content: { toolUseId, toolName, input: persistedInput },
+        content,
         toolUseId: toolUseId || undefined,
         agentMeta: persistedMeta,
         createdAt,
