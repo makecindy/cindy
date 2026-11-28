@@ -597,6 +597,53 @@ describe('mergeDiscoveredRuntimeModels 排序', () => {
     ]);
     expect(merged.map((model) => model.id)).toEqual(['new-1', 'new-2', 'old-b', 'old-a']);
   });
+
+  it('preserves explicit discoveredCost and filters invalid cost boundary values', () => {
+    const discovered = parseModelsListResponse({
+      data: [
+        {
+          id: 'gemini-4-argon',
+          name: 'Gemini 4 Argon',
+          discoveredCost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 1.25 },
+          efforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium',
+        },
+        {
+          id: 'zero-and-mixed',
+          name: 'Zero and Mixed',
+          discoveredCost: {
+            input: 0,
+            output: -1,
+            cacheRead: Number.NaN,
+            cacheWrite: Number.POSITIVE_INFINITY,
+          },
+        },
+        {
+          id: 'string-cost',
+          name: 'String Cost',
+          discoveredCost: { input: '2', output: null },
+        },
+        {
+          id: 'array-cost',
+          name: 'Array Cost',
+          discoveredCost: [1, 2],
+        },
+      ],
+    })!;
+    expect(discovered[0].discoveredCost).toEqual({
+      input: 2,
+      output: 10,
+      cacheRead: 0.1,
+      cacheWrite: 1.25,
+    });
+    expect(discovered[0].discoveredMetadata).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
+    });
+    expect(discovered[1].discoveredCost).toEqual({ input: 0 });
+    expect(discovered[2].discoveredCost).toBeUndefined();
+    expect(discovered[3].discoveredCost).toBeUndefined();
+  });
 });
 
 // 回归价值：2026-11-19 #11456；Magpie 自定义 URL 此前漏解析 OpenRouter pricing 且刷新缺少 pricing 时
