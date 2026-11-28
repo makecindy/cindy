@@ -10,6 +10,11 @@
 不新增协议字段或版本协商。旧控制端可能仍按该字段省略持续会话提醒，或展示旧暂停文案。
 `parseScheduleBindings` 对未知字段继续忽略，旧被控端缺省该字段不影响新控制端的提醒筛选。
 
+同一投影同时增量透传可选 `source`（仅已知枚举 `'user' | 'project' | 'bot'` 下发，缺失或未知值省略）：
+桌面控制端归档确认仅对明确声明 `source === 'user'` 的绑定提供勾选删除；旧被控端未返回 `source` 时默认禁止删除，
+防止把远程仓库自动化（`project`）误标为可删。旧控制端 `parseScheduleBindings` 与手机端 `normalizeScheduleList`
+均兼容该可选字段；载荷位于既有 `invoke-result` 内部，自建中转透传无感知，无需升级。
+
 产品语义与托管任务边界见 [`archive-pauses-automations.md`](../../product-rules/archive-pauses-automations.md)。
 
 不新增 channel、能力、服务端 schema、数据库或 Mobile 原生指纹，`maker:schedule:list` 沿用既有白名单。

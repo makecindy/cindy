@@ -8,9 +8,10 @@ import { setActiveCatalog } from '../active-catalog.js';
 import { createCodexSpawnConfig } from '../codexSpawnConfigCore.js';
 import { prepareCodexBrowserCompanion } from '../codex-browser-companion.js';
 import { prepareCodexCustomContextCatalog } from '../codex-custom-context-catalog.js';
+import { desktopMakerLogger } from '../logger-adapter.js';
 
 vi.mock('../logger-adapter.js', () => ({
-  desktopMakerLogger: { warn: vi.fn(), error: vi.fn() },
+  desktopMakerLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock('../subagent-model-settings-store.js', () => ({
   readSubagentModelSettings: () => ({ codexSmartSubagentRouting: false }),
@@ -43,11 +44,11 @@ beforeEach(async () => { scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'cind
 afterEach(async () => { await fs.rm(scratch, { recursive: true, force: true }); });
 const fixtureHome = () => path.join(scratch, 'codex-home');
 
-function fixture() {
+function fixture(bridge: import('../../mcp-integrations/codexHttpBridge.js').CodexHttpBridge | null = null) {
   const buildSessionMcpConfig = vi.fn(() => ({ 'mcp_servers.local_slow.enabled': true }));
   const getCodexExtraSpawnConfig = vi.fn(async () => ({
     extraArgs: localMcpArgs, extraEnv: { LOCAL_MCP_TOKEN: 'fixture-only' },
-    bridge: null, bridgeServerNames: ['local_slow'], buildSessionMcpConfig,
+    bridge, bridgeServerNames: ['local_slow'], buildSessionMcpConfig,
   }));
   const scopedReady = vi.fn(() => true);
   const release = vi.fn(async () => {});
@@ -121,6 +122,22 @@ describe('Codex spawn MCP ownership', () => {
     expect(localMcpArgs).not.toContain(browserArgs[1]);
   });
 
+  it('retires only the instances configured by that host on the shared bridge', async () => {
+    const closeSessionInstance = vi.fn();
+    const f = fixture({ closeSessionInstance } as unknown as import('../../mcp-integrations/codexHttpBridge.js').CodexHttpBridge);
+    const first = await f.prepare([], { credentialMode: 'oauth-bearer' });
+    const second = await f.prepare([], { credentialMode: 'oauth-bearer', accountHostKey: 'account' });
+    const session = { vendorOptions: { example: true } };
+    first.buildSessionMcpConfig!('one', session);
+    second.buildSessionMcpConfig!('two');
+    expect(f.buildSessionMcpConfig).toHaveBeenCalledWith('one', session);
+    await first.onHostRetired!();
+    expect(closeSessionInstance.mock.calls).toEqual([['one']]);
+    await second.onHostRetired!();
+    expect(closeSessionInstance.mock.calls).toEqual([['one'], ['two']]);
+    expect(f.release).toHaveBeenCalledWith('account');
+  });
+
   it('places desktop input rules in the resumed runtime home and leaves external profiles alone', async () => {
     const historyHome = path.join(scratch, 'codex-accounts', 'a'.repeat(64), 'openai-fixture');
     const f = fixture();
@@ -158,6 +175,65 @@ describe('Codex spawn MCP ownership', () => {
     f.scopedReady.mockReturnValue(false);
     await expect(f.prepare([], guest)).rejects.toMatchObject({ codexSpawnConfigFatal: true });
     expect(f.release).toHaveBeenCalledOnce();
+  });
+
+  // 测试价值：依据未装 ChatGPT.app 重复 WARN 1550 次事故；此前 codexSpawnConfigCore.test.ts 只 mock ready 状态，
+  // 漏测 unavailable 时的日志级别与重复准备去重；失效后果是每次会话准备都向主进程日志刷重复 WARN；
+  // 生产入口 createCodexSpawnConfig；最小失败输入为连续返回 provider_not_installed 与重复 provider_untrusted；tier: unit。
+  it('never warns when ChatGPT.app is not installed and deduplicates unchanged unavailable warnings until state changes', async () => {
+    const f = fixture();
+    vi.mocked(prepareCodexBrowserCompanion)
+      .mockResolvedValueOnce({
+        status: 'unavailable',
+        reason: 'provider_not_installed',
+        detail: 'companion app bundle is not installed: /Applications/ChatGPT.app',
+        extraArgs: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'unavailable',
+        reason: 'provider_not_installed',
+        detail: 'companion app bundle is not installed: /Applications/ChatGPT.app',
+        extraArgs: [],
+      });
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    expect(desktopMakerLogger.warn).not.toHaveBeenCalled();
+    expect(desktopMakerLogger.debug).toHaveBeenCalledTimes(1);
+
+    vi.mocked(prepareCodexBrowserCompanion)
+      .mockResolvedValueOnce({
+        status: 'unavailable',
+        reason: 'provider_untrusted',
+        detail: 'companion app bundle failed OpenAI macOS signature verification',
+        extraArgs: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'unavailable',
+        reason: 'provider_untrusted',
+        detail: 'companion app bundle failed OpenAI macOS signature verification',
+        extraArgs: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'ready',
+        extraArgs: browserArgs,
+        version: 'fixture',
+        startupTimeoutMs: 10_000,
+        browserClientPath: 'unused-browser-client',
+      })
+      .mockResolvedValueOnce({
+        status: 'unavailable',
+        reason: 'provider_untrusted',
+        detail: 'companion app bundle failed OpenAI macOS signature verification',
+        extraArgs: [],
+      });
+
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    expect(desktopMakerLogger.warn).toHaveBeenCalledTimes(1);
+
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    await f.prepare([], { credentialMode: 'oauth-bearer' });
+    expect(desktopMakerLogger.warn).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -264,6 +340,59 @@ describe('Codex launch requires its local route', () => {
       customContextModel: 'fixture-model', customContextWindow: 272_000,
     });
     expect(config.contextProviderModels).toEqual(['fixture-model']);
+    await config.onHostRetired?.();
+  });
+
+  // #12423 unit: verify the shared Desktop/Host launch boundary propagates
+  // Fast for the selected official connection, including a guest whose grant covers it.
+  it.each([
+    { official: true, expected: true },
+    { official: false, expected: false },
+    { official: true, grant: 'matching', expected: true },
+    { official: true, grant: 'different-connection', expected: false },
+    { official: true, grant: 'different-model', expected: false },
+    { official: true, review: true, expected: true },
+    { official: false, review: true, expected: false },
+  ])('limits the native Fast declaration to the selected route and guest grant (%j)', async ({ official, grant, review, expected }) => {
+    const f = routeFixture();
+    f.ready();
+    const modelId = 'gpt-6.2-sol';
+    const selectedProvider = buildUserProvider({ id: 'fixture-fast-api', name: 'API connection', runtimes: { codex: {
+      baseUrl: official ? 'https://api.openai.com/v1' : 'https://relay.example/v1',
+      wireProtocol: 'openai-responses',
+      models: [{ id: modelId, name: modelId, supportsFastMode: true }],
+    } } }, { getDiscoveredModelMetadata: () => ({ supportsUltrafastMode: official }) });
+    const prepare = createCodexSpawnConfig({
+      ...f.ports,
+      getDesktopSelectableCatalog: () => ({ ...BUNDLED_CATALOG, providers: [selectedProvider] }),
+      resolveDesktopModelContextProviderId: () => selectedProvider.id,
+    });
+    const catalogPath = path.join(scratch, 'fixture-catalog.json');
+    const extraArgs = ['-c', 'model_catalog_json=' + JSON.stringify(catalogPath)];
+    vi.mocked(prepareCodexCustomContextCatalog).mockReset();
+    await fs.writeFile(catalogPath, JSON.stringify({ models: [] }));
+    vi.mocked(prepareCodexCustomContextCatalog).mockResolvedValueOnce({ catalogPath, extraArgs });
+    const config = await prepare([], {
+      hostPurpose: review ? 'review' : 'custom-context', customContextHostKey: 'fast-fixture',
+      customContextProviderId: selectedProvider.id, customContextModel: modelId,
+      ...(!review ? { customContextWindow: 272_000 } : {}),
+      ...(grant ? {
+        deviceHostedGuestProviderId: grant === 'different-connection' ? provider.id : selectedProvider.id,
+        deviceHostedGuestSessionId: 'guest-fast-fixture',
+        deviceHostedGuestModelIds: [grant === 'different-model' ? 'fixture-model' : modelId],
+      } : {}),
+    });
+    if (review && !official) {
+      expect(prepareCodexCustomContextCatalog).not.toHaveBeenCalled();
+    } else {
+      expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: expected, declareUltrafastMode: expected }));
+      if (review) {
+        const [options] = vi.mocked(prepareCodexCustomContextCatalog).mock.lastCall!;
+        expect(options.contextWindow).toBeUndefined();
+        expect(options.resolveContextWindow).toBeUndefined();
+      }
+      if (!grant) expect(config.extraArgs).toEqual(expect.arrayContaining(extraArgs));
+    }
     await config.onHostRetired?.();
   });
 

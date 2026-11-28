@@ -6,6 +6,7 @@ import {
   INVOKE_TRANSFER_MIN_CHARS,
   InboundInvokeTransferOptions,
   InvokeResultCache,
+  RetiredInvokeTracker,
   encodeInvokeResultTransfer,
   parseInvokeTransferOptions,
   type DeviceLinkTransferCodec,
@@ -320,5 +321,66 @@ describe('invoke result delta', () => {
     const base = JSON.stringify([{ body: 'x'.repeat(1024 * 1024) }]);
     expect(() => applyInvokeResultPatch(base, { a: Array(8).fill(0) }, INVOKE_TRANSFER_MAX_CHARS))
       .toThrow('delta result too large');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：InvokeResultCache.prepare/decode + InboundInvokeTransferOptions + encodeInvokeResultTransfer + RetiredInvokeTracker。
+  //   弱网滞后期间前一次增量尚未送达控制端时，后续携带旧 ifNoneMatch 的重试与 fresh/非 fresh 混合读取仍命中已确认基准回小增量，不退回连续 200+ KiB 全文。
+  // - Bug／规则依据：64 帧可靠窗口积压事故（6 条 sessions:list 共 1385 KiB 全量快照）；engineering-conventions.md §8 客户端读取性能。
+  // - 现有覆盖缺口：原有测试每次串行收到响应才发下一笔，未覆盖「中间响应滞留在慢队列、控制端仍持旧 tag 重试」及 fresh 参数导致的缓存键分裂。
+  // - 最小失败输入：基准 tag-0 已确认后连续发生 3 次单行更新，控制端仍持 tag-0 并切换 fresh:true 读取。
+  // - tier：unit（真实 zlib/sha256 编解码，<20ms）。
+  it('retains the last client-confirmed delta base across unacknowledged updates and fresh toggles', () => {
+    const bases = new InvokeDeltaBases();
+    const inbound = new InboundInvokeTransferOptions();
+    const cache = new InvokeResultCache(codec);
+    const makeRows = (updatedRow: number, revision: number) =>
+      Array.from({ length: 120 }, (_, i) => ({
+        id: `sess-${i}`,
+        title: `Session ${i}`,
+        preview: i === updatedRow ? `rev-${revision}-${'更'.repeat(80)}` : 'steady-preview-'.repeat(12),
+      }));
+
+    const initialReq = cache.prepare('desktop', {
+      channel: 'local-db:sessions:list',
+      args: [20, 'all', { includePinned: true, tagCatalog: 1 }],
+    });
+    inbound.record('phone', 'req-0', initialReq.payload);
+    const initialWire = encodeInvokeResultTransfer(
+      inbound.get('phone', 'req-0')!,
+      { ok: true, result: makeRows(0, 0) },
+      codec,
+      { src: 'phone', bases },
+    );
+    expect(initialReq.decode(initialWire)).toEqual({ ok: true, result: makeRows(0, 0) });
+
+    // Simulate 3 unacknowledged refreshes (including fresh:true) before req-1..req-3 reach the phone:
+    // every request still carries tag-0 as ifNoneMatch, and every response must stay a compact delta.
+    for (let rev = 1; rev <= 3; rev++) {
+      const retryReq = cache.prepare('desktop', {
+        channel: 'local-db:sessions:list',
+        args: [20, 'all', { includePinned: true, tagCatalog: 1, ...(rev % 2 === 1 ? { fresh: true } : {}) }],
+      });
+      expect(retryReq.payload.transfer?.ifNoneMatch).toEqual(expect.any(String));
+      inbound.record('phone', `req-${rev}`, retryReq.payload);
+      const wire = encodeInvokeResultTransfer(
+        inbound.get('phone', `req-${rev}`)!,
+        { ok: true, result: makeRows(rev, rev) },
+        codec,
+        { src: 'phone', bases },
+      );
+      expect(wire.ok && wire.transfer?.delta).toBeDefined();
+      expect(wire.ok && wire.transfer?.gzipBase64).toBeUndefined();
+      if (rev === 3) {
+        expect(retryReq.decode(wire)).toEqual({ ok: true, result: makeRows(3, 3) });
+      }
+    }
+
+    const tracker = new RetiredInvokeTracker();
+    for (let i = 0; i < 10; i++) tracker.note('desktop', `old-${i}`);
+    expect(tracker.peek('desktop')).toEqual(['old-2', 'old-3', 'old-4', 'old-5', 'old-6', 'old-7', 'old-8', 'old-9']);
+    expect(parseInvokeTransferOptions({ retired: ['a', '', 'a', 'x'.repeat(200), 'b'] })).toEqual({ retired: ['a', 'b'] });
+    tracker.acknowledge('desktop', ['old-2', 'old-3']);
+    expect(tracker.peek('desktop')).toEqual(['old-4', 'old-5', 'old-6', 'old-7', 'old-8', 'old-9']);
   });
 });

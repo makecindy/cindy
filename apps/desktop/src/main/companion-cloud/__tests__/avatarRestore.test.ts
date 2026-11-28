@@ -51,6 +51,22 @@ describe('restoreCloudAvatar', () => {
     fetchPublicImageBytes.mockRejectedValue(new Error('The operation was aborted'));
     await expect(restoreCloudAvatar('https://cdn.example/avatar.png', abort.signal)).rejects.toThrow('AVATAR_UNAVAILABLE');
   });
+
+  // Explicit user take-over falls back to a local-only default avatar on transient download failures
+  // instead of locking the companion demoted, while still respecting abort / owner change.
+  it('falls back to a local-only default avatar on transient failures when fallbackOnTransient is enabled', async () => {
+    fetchPublicImageBytes.mockRejectedValue(new Error('remote image request failed: HTTP 503'));
+    await expect(restoreCloudAvatar('https://cdn.example/avatar.png', undefined, { fallbackOnTransient: true }))
+      .resolves.toEqual({ portable: '🤖', fallback: true });
+    fetchPublicImageBytes.mockRejectedValue(new Error('OWNER_CHANGED'));
+    await expect(restoreCloudAvatar('https://cdn.example/avatar.png', undefined, { fallbackOnTransient: true }))
+      .rejects.toThrow('OWNER_CHANGED');
+    const abort = new AbortController();
+    abort.abort();
+    fetchPublicImageBytes.mockRejectedValue(new Error('The operation was aborted'));
+    await expect(restoreCloudAvatar('https://cdn.example/avatar.png', abort.signal, { fallbackOnTransient: true }))
+      .rejects.toThrow('AVATAR_UNAVAILABLE');
+  });
 });
 
 describe('avatarDownloadMaySucceedLater', () => {

@@ -96,7 +96,7 @@ vi.mock('node:crypto', async (importOriginal) => ({
   },
 }));
 
-import { manageNginx } from '../nginx';
+import { manageNginx, planNginx } from '../nginx';
 
 const main = '/etc/nginx/nginx.conf';
 const site = '/etc/nginx/conf.d/website.conf';
@@ -110,6 +110,48 @@ server { listen 443 ssl default_server; server_name website.example.test;
   ssl_certificate /website/cert.pem; ssl_certificate_key /website/key.pem;
   root /website/public; location / { try_files $uri $uri/ /index.html; }
 }`;
+
+function plan(files: Map<string, string>) {
+  return planNginx({
+    main,
+    files,
+    address: '203.0.113.10',
+    port: 47821,
+    challengePort: 47822,
+    ipv6: true,
+    existingCertificate: true,
+    certificateNames: () => [],
+  });
+}
+
+it('preserves quoted JSON log delimiters and the following site patch anchor (#12427)', () => {
+  const logFormat = `log_format site_total escape=json '{'
+    '"uri":"$request_uri"'
+    '}';\n`;
+  const https = `server { listen 443 ssl; server_name 203.0.113.10;
+    add_header X-Separator ";";
+    return 200 '}';
+  }`;
+  const files = new Map([[main, originalMain], [site, logFormat + https]]);
+
+  const { patches } = plan(files);
+  const sitePatch = patches.find((patch) => patch.file === site);
+  expect(sitePatch?.before).toBe(https);
+  expect(sitePatch?.after).toContain('add_header X-Separator ";";');
+  expect(sitePatch?.after).toContain("return 200 '}'; }");
+  expect(sitePatch?.after).toContain('proxy_pass http://127.0.0.1:47821;');
+});
+
+it.each([
+  ['events {} http { log_format json "{"', 'Invalid Nginx directive'],
+  ['events {} http { log_format json "{";', 'Unclosed Nginx block'],
+  ['events {} http { log_format json "{" }', 'Invalid Nginx directive'],
+  ['events {} http { log_format json "{', 'Invalid Nginx token'],
+  ['events {} http {} }', 'Invalid Nginx directive'],
+])('rejects malformed configuration (%s)', (source, error) => {
+  expect(() => plan(new Map([[main, source]]))).toThrow(error);
+});
+
 function material(key: string) {
   h.files.set('/var/lib/cindy-relay/tls/material.json', JSON.stringify({ cert: `test-cert-${key}`, key }));
 }
@@ -149,6 +191,23 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.unstubAllGlobals());
+
+// #12427 diagnostic follow-up: real prepare entry; existing quote tests only cover successful parsing.
+// Unit: included-file syntax failures must identify their source without returning argument values.
+it.each([
+  ['# header\r\nserver {\r\n  proxy_set_header Authorization private-test-token\r\n}', 'Invalid Nginx directive', 3, 3, 'proxy_set_header'],
+  ['# header\nserver {\n  set $secret "private-test-token', 'Invalid Nginx token', 3, 15, null],
+  ['# header\nserver {\n  set $secret ${private-test-token', 'Unclosed Nginx variable', 3, 15, null],
+  ['# header\nserver {\n  set $secret private-test-token;', 'Unclosed Nginx block', 2, 1, 'server'],
+] as const)('reports safe source coordinates for %s', (source, reason, line, column, directive) => {
+  h.files.set(site, source);
+  let message = '';
+  try { prepare(); } catch (error) { message = (error as Error).message; }
+  expect(message).toContain(`${reason} at ${JSON.stringify(site)}:${line}:${column}`);
+  if (directive) expect(message).toContain(`(directive: ${directive})`);
+  expect(message).not.toContain('private-test-token');
+  expect(h.signals).toEqual([]);
+});
 
 it('preserves quoted log format delimiters before a server in an included file (#12427)', () => {
   const format = `log_format site_total escape=json '{' # comment with }

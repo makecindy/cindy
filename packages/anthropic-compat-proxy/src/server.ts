@@ -17,7 +17,7 @@ import { installResponseGuard } from './response-guard.js';
 import { collectRecoverableBody } from './oversized-attachments.js';
 import { countInlineRequestImages, mergeRequestSizeBudgets, requestSizeBudgetAfterRejection, requestSizeModelFamily, type ImageRouteInfo, type RequestSizeBudget, type WireFormat } from './request-size-control.js';
 import { classifyRequestSizeError, type RequestSizeError } from './request-size-errors.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -135,6 +135,7 @@ const DEBUG_REQUEST_DUMP_MAX_BYTES = 64 * 1024;
 // 错误响应 (status >= 400) body 的 dump 上限。错误响应通常只是一个 JSON error 对象
 // (~几百字节),给 16KB 已经非常宽裕,超出按相同截断策略尾部追加 "... (truncated, total N bytes)"。
 const ERROR_RESPONSE_DUMP_MAX_BYTES = 16 * 1024;
+const RECOVERY_ERROR_BODY_LIMIT_BYTES = 64 * 1024;
 /**
  * 流式响应的终态事件:Responses `response.completed|failed|incomplete`、Anthropic
  * `message_stop`、Chat Completions `data: [DONE]`。见 forward() 里 client close 的收口。
@@ -910,15 +911,15 @@ function dumpBody(buf: Buffer, maxBytes: number): string {
  * 任何失败(未知编码 / 截断的压缩流 / 非法数据)都返回**原始 buffer 引用**, 调用方据此
  * 判断"是否成功解压"(decoded !== buf 即成功), 失败时日志退回原样, 不抛错、不影响主流程。
  */
-function decodeBodyForLog(buf: Buffer, contentEncoding: string | undefined): Buffer {
+function decodeBodyForLog(buf: Buffer, contentEncoding: string | undefined, maxOutputLength?: number): Buffer {
   if (!contentEncoding || buf.length === 0) return buf;
   const enc = contentEncoding.toLowerCase().trim();
   try {
-    if (enc === 'gzip' || enc === 'x-gzip') return gunzipSync(buf);
-    if (enc === 'br') return brotliDecompressSync(buf);
+    if (enc === 'gzip' || enc === 'x-gzip') return gunzipSync(buf, { maxOutputLength });
+    if (enc === 'br') return brotliDecompressSync(buf, { maxOutputLength });
     if (enc === 'deflate') {
       // deflate 有两种封装: zlib 头(inflateSync)和裸 deflate(inflateRawSync), 依次尝试。
-      try { return inflateSync(buf); } catch { return inflateRawSync(buf); }
+      try { return inflateSync(buf, { maxOutputLength }); } catch { return inflateRawSync(buf, { maxOutputLength }); }
     }
   } catch {
     // 截断的压缩流 / 非法数据 → 回退原始字节(日志里仍是乱码但不崩)
@@ -1166,7 +1167,7 @@ function forward(
     upstreamReq.destroy(new Error('client aborted before response completed'));
   });
 
-  upstreamReq.on('response', (upstreamRes) => {
+  const handleUpstreamResponse = (upstreamRes: IncomingMessage, skipRecovery = false): void => {
     // 请求已经因客户端断开或另一条 upstream error 路径收口时,不要再向同一个
     // ServerResponse 写 header/pipe;恢复上游读取以释放 socket。
     if (clientAborted || upstreamFailureHandled || clientRes.destroyed || upstreamResponseTerminal === 'client-aborted') {
@@ -1182,15 +1183,16 @@ function forward(
     }
     const status = upstreamRes.statusCode ?? 502;
 
-    // ── 上游 400/422 的透明重试 ──────────────────────────────────────────────
-    // 只对启用恢复规则的客户端错误(400/422)缓冲判定:
-    // 先把(很小的) 错误体完整缓冲下来, 在 'end' 找第一条 match 命中且 strip 出东西的规则,
-    // 剥字段重发最多一次, 对客户端透明；重试后只分类不可恢复的错误，不再重发。
-    // xAI 对不可反序列化 / 解不开的 encrypted_content 可能回 422 invalid-argument, 不能只认 400。
-    // 2xx 流式响应 / 其它 4xx5xx / 无适用规则走下面原有的 writeHead + pipe, 零额外延迟。
-    const activeRules = (status === 400 || status === 422)
-      ? recoveryRules.filter((r) => r.enabled() && (canRetry || r.unrecoverableCode))
-      : [];
+    const candidateRules = skipRecovery ? [] : recoveryRules.filter((rule) =>
+      (rule.statusCodes?.includes(status) ?? (status === 400 || status === 422)) &&
+      rule.enabled() && (canRetry || rule.unrecoverableCode),
+    );
+    const boundedErrorBody = status === 404 || recoveryRules.some(
+      (rule) => rule.boundedErrorBody && rule.statusCodes?.includes(status),
+    );
+    const recoveryBodyLimit = boundedErrorBody ? RECOVERY_ERROR_BODY_LIMIT_BYTES : Infinity;
+    const contentLength = Number(upstreamRes.headers['content-length']);
+    const activeRules = contentLength > recoveryBodyLimit ? [] : candidateRules;
     const recover413 = status === 413 && canRetry && recoverUpstreamOversized;
     const recoverSize400 = status === 400 && canRetry && recoverRequestSize;
     if (recover413) {
@@ -1251,6 +1253,7 @@ function forward(
     }
     if (activeRules.length > 0 || recover413 || recoverSize400) {
       const chunks: Buffer[] = [];
+      let bufferedBytes = 0;
       const failBufferedResponse = (
         reason: 'error' | 'aborted' | 'close',
         rawError?: unknown,
@@ -1270,33 +1273,54 @@ function forward(
             forwardLifecycle.onFailure?.(failure, status),
           );
         }
-        logger.error?.('upstream response stream error (during 400 buffering)', {
+        logger.error?.('upstream response stream error during recovery buffering', {
           reqId,
           err: String(err),
           reason,
           status,
-          bytes: chunks.reduce((sum, chunk) => sum + chunk.length, 0),
+          bytes: bufferedBytes,
         });
-        // 400/422 buffering never creates a responseObserver sink; only the
+        // Recovery buffering never creates a responseObserver sink; only the
         // streaming path below owns observer start/data/end/error callbacks.
         finishClientAfterUpstreamFailure(err);
       };
       failActiveResponse = (err) => failBufferedResponse('error', err);
 
-      upstreamRes.on('data', (chunk: Buffer) => {
+      const onData = (chunk: Buffer) => {
         if (upstreamResponseTerminal !== null) return;
+        if (bufferedBytes + chunk.length > recoveryBodyLimit) {
+          upstreamRes.pause();
+          upstreamRes.off('data', onData);
+          upstreamRes.off('end', onEnd);
+          upstreamRes.off('error', onError);
+          upstreamRes.off('aborted', onAborted);
+          upstreamRes.off('close', onClose);
+          // Replay the bounded prefix through the ordinary response path, which owns
+          // backpressure, observers and terminal events for the unchanged response.
+          upstreamRes.unshift(chunk);
+          for (const prefix of chunks.reverse()) upstreamRes.unshift(prefix);
+          chunks.length = 0;
+          handleUpstreamResponse(upstreamRes, true);
+          return;
+        }
+        bufferedBytes += chunk.length;
         chunks.push(chunk);
-      });
-      upstreamRes.on('end', async () => {
+      };
+      const onEnd = async () => {
         if (upstreamResponseTerminal !== null) return;
         upstreamResponseTerminal = 'end';
         if (clientAborted || clientRes.destroyed || upstreamFailureHandled) return;
-        const errBody = Buffer.concat(chunks);
+        const errBody = Buffer.concat(chunks, bufferedBytes);
         // 先按 content-encoding 解压一次 —— 规则 matches / errorType / body dump 都吃解压后的字节。
         // node:http 不自动解压; 上游若 gzip/br 压缩, 直接对压缩字节跑 regex 会漏判, 透明重试就不触发。
         // (回客户端仍是原始 errBody + content-encoding 头透传, 客户端自己解压, 见下方 clientRes.end)
-        const decodedErrBody = decodeBodyForLog(errBody, String(upstreamRes.headers['content-encoding'] ?? ''));
-        const decodedText = decodedErrBody.toString('utf8');
+        const encoding = String(upstreamRes.headers['content-encoding'] ?? '').trim().toLowerCase();
+        const decodedErrBody = decodeBodyForLog(
+          errBody, encoding, boundedErrorBody ? recoveryBodyLimit : undefined,
+        );
+        const unreadableRecoveryBody = boundedErrorBody && encoding !== '' && encoding !== 'identity' &&
+          decodedErrBody === errBody;
+        const decodedText = unreadableRecoveryBody ? '' : decodedErrBody.toString('utf8');
         if (status === 400 && recoverRequestSize && canRetry) {
           const sizeError = classifyRequestSizeError(decodedText);
           if (sizeError.kind !== 'other' && sizeError.kind !== 'unsupported-image' && sizeError.kind !== 'context-too-long') {
@@ -1331,11 +1355,11 @@ function forward(
         for (const [matchedIndex, rule] of activeRules.entries()) {
           if (!canRetry) break;
           if (!rule.matches(decodedText)) continue;
-          const stripped = rule.strip(body);
+          const stripped = rule.strip(body, decodedText);
           if (!stripped) continue;
           let retryBody = stripped;
           const appliedRules: RecoveryRule[] = [rule];
-          // 透明重试只有一次。若同一历史里同时存在多类已知坏 payload,在这一次 retry
+          // 普通规则共享一次透明重试。若同一历史里同时存在多类已知坏 payload,在这一次 retry
           // 前把其它安全 strip 也顺手应用掉,避免第一类 400 恢复后立刻撞第二类 400。
           // applyOnUnmatchedRetry === false 的规则只在自己 matches 时跑,不能叠到
           // 别人的 400 上(xAI ModelInput 清洗会改写 OpenAI collab 历史)。
@@ -1376,9 +1400,9 @@ function forward(
               retryBody,
               clientRes,
               logger,
-              recoveryRules,
+              rule.followUpRule ? [rule.followUpRule] : recoveryRules,
               reqId,
-              false,
+              rule.followUpRule !== undefined,
               overrideTarget,
               headerOverride,
               headerDelete,
@@ -1461,7 +1485,7 @@ function forward(
             sink?.onData?.(errBody);
             sink?.onEnd?.();
           } catch (err) {
-            logger.warn?.('responseObserver threw on buffered 400', { reqId, err: String(err) });
+            logger.warn?.('responseObserver threw on buffered recovery response', { reqId, err: String(err) });
           }
         }
         const errorType = extractErrorType(decodedErrBody, String(upstreamRes.headers['content-type'] ?? ''));
@@ -1495,15 +1519,18 @@ function forward(
           clientRes.writeHead(status, upstreamRes.statusMessage, respHeaders);
         }
         clientRes.end(errBody);
-      });
-      upstreamRes.on('error', (err) => failBufferedResponse('error', err));
-      // IncomingMessage 在连接被对端提前掐断时可能只发 `aborted`,不一定随后发
-      // `error`;两条事件都接入同一个幂等收口。
-      upstreamRes.on('aborted', () => failBufferedResponse('aborted'));
-      upstreamRes.on('close', () => {
+      };
+      const onError = (err: Error) => failBufferedResponse('error', err);
+      const onAborted = () => failBufferedResponse('aborted');
+      const onClose = () => {
         if (upstreamResponseTerminal !== null || upstreamRes.complete) return;
         failBufferedResponse('close');
-      });
+      };
+      upstreamRes.on('data', onData);
+      upstreamRes.on('end', onEnd);
+      upstreamRes.on('error', onError);
+      upstreamRes.on('aborted', onAborted);
+      upstreamRes.on('close', onClose);
       return;
     }
 
@@ -1974,7 +2001,11 @@ function forward(
         const merged = Buffer.concat(errBuf);
         // 先按 content-encoding 解压(失败 / 截断会返回 merged 原引用), errorType 与 body dump 共用。
         // 注意: errBuf 最多收 16KB 压缩字节, 截断的 gzip/br 解不开 → decoded === merged → 走原始字节分支。
-        const decoded = decodeBodyForLog(merged, String(upstreamRes.headers['content-encoding'] ?? ''));
+        const decoded = decodeBodyForLog(
+          merged,
+          String(upstreamRes.headers['content-encoding'] ?? ''),
+          boundedErrorBody ? recoveryBodyLimit : undefined,
+        );
         const errorType = extractErrorType(decoded, String(upstreamRes.headers['content-type'] ?? ''));
         if (errorType) baseCtx.errorType = errorType;
         if (logger.isDebugEnabled?.()) {
@@ -2005,7 +2036,8 @@ function forward(
       failStreamingResponse('close');
     });
 
-  });
+  };
+  upstreamReq.on('response', handleUpstreamResponse);
 
   let requestTimedOut = false;
   upstreamReq.on('error', (err) => {
@@ -2285,6 +2317,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   const resolveOutboundForTarget = async (
     target: UpstreamTarget,
     reqId: number,
+    wsAttempt?: { proxyInstanceId: string; reqId: number; attempt: number },
   ): Promise<ResolvedOutboundProxy | undefined> => {
     const resolver = opts.resolveOutboundProxy;
     if (!resolver) return undefined;
@@ -2295,20 +2328,20 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     try {
       raw = await resolver(upstreamOrigin);
     } catch (err) {
-      logger.warn?.('outbound proxy resolver threw — using direct connection', { reqId, err: String(err) });
+      logger.warn?.('outbound proxy resolver threw — using direct connection', wsAttempt ?? { reqId, err: String(err) });
       return undefined;
     }
     if (!raw) return undefined;
     const parsed = parseOutboundProxyUrl(raw);
     if (!parsed) {
       // raw 可能带凭证,只记脱敏形态。
-      logger.warn?.('unsupported outbound proxy url — using direct connection', {
+      logger.warn?.('unsupported outbound proxy url — using direct connection', wsAttempt ?? {
         reqId,
         proxy: redactProxyUrlForLog(String(raw)),
       });
       return undefined;
     }
-    logger.debug?.('using outbound proxy for upstream', {
+    logger.debug?.('using outbound proxy for upstream', wsAttempt ?? {
       reqId,
       proxy: parsed.url,
       upstream: upstreamOrigin,
@@ -2335,9 +2368,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   let inflight = 0;
   const inflightSockets = new Set<Socket>();
 
-  // 单调递增 reqId, 用来在 cc-proxy.log 里把"▶ forward / ◀ response / error" 三条
-  // 日志归到同一笔请求,grep `reqId=N` 就能拉出完整往返。整数 wrap 后(非常远的未来)
-  // 重复也无所谓,只用于读日志的人眼对齐。
+  // reqId 仅在本实例内递增。跨实例统计 WS 握手用 (proxyInstanceId, reqId)，不能只数 reqId。
+  const proxyInstanceId = randomUUID();
   let reqIdSeq = 0;
 
   const server: Server = createServer(async (req, res) => {
@@ -3156,11 +3188,25 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
    */
   server.on('upgrade', (req, clientSocket: Socket, head: Buffer) => {
     const reqId = ++reqIdSeq;
+    let upstreamAttempt = 0;
+    const attemptFields = () => ({ proxyInstanceId, reqId, attempt: upstreamAttempt });
+    const startedAt = performance.now();
+    let handshakeFinished = false;
+    const finishUpgrade = (
+      outcome: 'success' | 'failed' | 'cancelled' | 'http-fallback', why: string, status?: number,
+      level: 'info' | 'warn' | 'error' = 'info',
+    ): void => {
+      if (handshakeFinished) return;
+      handshakeFinished = true;
+      logger[level]?.('websocket upgrade result', {
+        ...attemptFields(), outcome, why, status, elapsedMs: Math.round(performance.now() - startedAt),
+      });
+    };
     const headers = flattenRequestHeaders(req.headers);
     const url = req.url ?? '/';
     const inboundRejection = admitInbound(opts.authorizeInbound, { method: req.method ?? 'GET', url, headers });
     if (inboundRejection) {
-      logger.warn?.('inbound upgrade rejected', { reqId, path: url.split('?')[0], code: inboundRejection.code });
+      finishUpgrade('failed', 'inbound upgrade rejected', inboundRejection.status, 'warn');
       writeUpgradeFailure(clientSocket, inboundRejection.status, inboundRejection.status === 401 ? 'Unauthorized' : 'Forbidden');
       return;
     }
@@ -3168,27 +3214,21 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
 
     // 不配 resolver = 本 proxy 不接 upgrade(Claude Code 侧就是这样, 行为与扩展前一致)。
     if (!resolveWsUpstream) {
-      logger.debug?.('upgrade rejected — resolveWebSocketUpstream not configured', { reqId, url });
+      finishUpgrade('failed', 'no-upstream-resolver', 501);
       writeUpgradeFailure(clientSocket, 501, 'Not Implemented');
       return;
     }
     // 只接 websocket; 其它 upgrade 协议(h2c 等)不猜语义。
     if ((headers.upgrade ?? '').toLowerCase() !== 'websocket') {
-      logger.debug?.('upgrade rejected — not a websocket upgrade', {
-        reqId, url, upgrade: headers.upgrade ?? '',
-      });
+      finishUpgrade('failed', 'unsupported-upgrade', 501);
       writeUpgradeFailure(clientSocket, 501, 'Not Implemented');
       return;
     }
     let upstreamUrl: string | null;
     try {
       upstreamUrl = resolveWsUpstream({ url, headers });
-    } catch (err) {
-      logger.error?.('resolveWebSocketUpstream threw', {
-        reqId,
-        url,
-        err: String(err),
-      });
+    } catch {
+      finishUpgrade('failed', 'resolver-error', 500, 'error');
       writeUpgradeFailure(clientSocket, 500, 'Internal Server Error');
       return;
     }
@@ -3197,7 +3237,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       // 降级是 session 级(一次即稳定)。宿主返回 null 的语义是"这个会话走 HTTP 更合适"
       // (需要 recoveryRules / responseObserver), 不是拒绝服务 —— 用 501 会让 codex
       // 直接报错而不是降级。
-      logger.debug?.('upgrade declined by host — signalling 426 to fall back to HTTP', { reqId, url });
+      finishUpgrade('http-fallback', 'host-declined', 426);
       writeUpgradeFailure(clientSocket, 426, 'Upgrade Required');
       return;
     }
@@ -3207,11 +3247,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     let target: UpstreamTarget;
     try {
       target = parseUpstream(resolvedWebSocketUpstream);
-    } catch (err) {
-      logger.error?.('resolveWebSocketUpstream returned an unusable url', {
-        reqId,
-        err: String(err),
-      });
+    } catch {
+      finishUpgrade('failed', 'invalid-upstream', 500, 'error');
       writeUpgradeFailure(clientSocket, 500, 'Internal Server Error');
       return;
     }
@@ -3229,7 +3266,6 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       clearTimeout(handshakeTimer);
       handshakeTimer = null;
     };
-    let upstreamAttempt = 0;
     let removeAuthorizationListener: (() => void) | undefined;
     let authorizeWebSocket: (() => boolean) | undefined;
     let preparedTransforms: (() => { outbound: Transform; inbound: Transform }) | undefined;
@@ -3256,13 +3292,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       clientSocket,
       upstreamSocket: null,
       closeForHostFallback: () => {
-        settle('host-http-fallback');
+        settle('host-http-fallback', 'cancelled');
         connection.upstreamSocket?.destroy();
         clientSocket.destroy();
         if (!established) upstreamReqForEarlyClose?.destroy();
       },
     };
-    const settle = (why: string, err?: Error): void => {
+    const settle = (why: string, outcome: 'failed' | 'cancelled' | 'http-fallback' = 'failed', status?: number): void => {
       if (settled) return;
       settled = true;
       clearHandshakeTimer();
@@ -3273,13 +3309,11 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       }
       liveWebSockets -= 1;
       liveWebSocketConnections.delete(connection);
-      logger.info?.('◀ websocket closed', {
-        reqId,
-        threadId: threadId || undefined,
-        why,
-        live: liveWebSockets,
-        err: err ? String(err) : undefined,
-      });
+      if (handshakeFinished) {
+        logger.info?.('◀ websocket closed', { ...attemptFields(), why, live: liveWebSockets });
+      } else {
+        finishUpgrade(outcome, why, status);
+      }
     };
     liveWebSocketConnections.add(connection);
 
@@ -3289,12 +3323,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // can otherwise stay half-open until its upstream eventually responds.
     clientSocket.on('end', () => {
       if (established || settled) return;
-      settle('client-end-before-upgrade');
+      settle('client-end-before-upgrade', 'cancelled');
       upstreamReqForEarlyClose?.destroy();
       clientSocket.end();
     });
     clientSocket.on('close', () => {
-      settle('client-close');
+      settle('client-close', 'cancelled');
       if (!established) {
         upstreamReqForEarlyClose?.destroy();
         return;
@@ -3307,10 +3341,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // resolver / PAC 解析本身是异步的。error listener 必须在 await 之前安装,否则
     // Windows 代理切换、网络瞬断等事件若恰好落在这个窗口,Socket 的未监听 error
     // 可能上抛到进程级。upstream request 尚未创建时只记账；创建后同时终止它。
-    clientSocket.on('error', (err) => {
+    clientSocket.on('error', () => {
       if (established) return;
-      logger.debug?.('client socket error before upgrade established', { reqId, err: String(err) });
-      settle('client-error', err);
+      settle('client-error', 'cancelled');
       upstreamReqForEarlyClose?.destroy();
     });
 
@@ -3320,18 +3353,15 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       clientSocket.pause();
       try {
         clientSocket.write(localHandshake);
-        logger.info?.('websocket reconnect held by local proxy', {
-          reqId,
-          threadId,
-        });
-      } catch (err) {
-        settle('local-reconnect-handshake-error', err instanceof Error ? err : undefined);
+        logger.info?.('websocket reconnect held by local proxy', attemptFields());
+      } catch {
+        settle('local-reconnect-handshake-error');
         clientSocket.destroy();
         return;
       }
     }
 
-    const scheduleReconnectAttempt = (why: string, err?: Error): void => {
+    const scheduleReconnectAttempt = (why: string): void => {
       if (!locallyAcceptedForReconnect || settled || clientSocket.destroyed) return;
       clearHandshakeTimer();
       upstreamReqForEarlyClose = null;
@@ -3341,12 +3371,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         WEBSOCKET_RECONNECT_MAX_DELAY_MS,
       );
       logger.warn?.('websocket reconnect upstream unavailable; retrying in proxy', {
-        reqId,
-        threadId,
-        attempt: upstreamAttempt,
+        ...attemptFields(),
         delayMs,
         why,
-        err: err ? String(err) : undefined,
       });
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
@@ -3357,15 +3384,16 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
 
     function startUpstreamAttempt(): void {
       upstreamAttempt += 1;
+      const attempt = attemptFields();
       void (async () => {
-        const outbound = await resolveOutboundForTarget(target, reqId);
+        const outbound = await resolveOutboundForTarget(target, reqId, attempt);
         if (settled || clientSocket.destroyed) return;
         let outboundHeaders = headers;
         if (opts.prepareWebSocketRequest) {
           const prepared = await opts.prepareWebSocketRequest({ url, headers });
           if (settled || clientSocket.destroyed) return;
           const revoke = (): void => {
-            settle('host-authorization-revoked');
+            settle('host-authorization-revoked', 'cancelled');
             upstreamReqForEarlyClose?.destroy();
             connection.upstreamSocket?.destroy();
             clientSocket.destroy();
@@ -3396,10 +3424,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       // 这条链路出问题时"有没有建连 / 谁先关的 / 关在哪一步"是唯一有用的线索,
       // debug 级别在打包版里拿不到。
       logger.info?.('▶ upgrade to upstream', {
-        reqId,
-        upstreamBase: formatUpstreamBase(target),
-        path: upstreamPath,
-        viaProxy: outbound ? outbound.target.url : 'direct',
+        ...attempt, viaProxy: Boolean(outbound),
       });
 
       // flattenRequestHeaders 刻意剥掉 hop-by-hop header(connection / keep-alive /
@@ -3425,16 +3450,15 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         why: 'handshake-timeout' | 'upstream-error',
         status: 502 | 504,
         message: 'Bad Gateway' | 'Gateway Timeout',
-        err?: Error,
       ): void => {
         if (attemptSettled || established || settled) return;
         attemptSettled = true;
         clearHandshakeTimer();
         if (locallyAcceptedForReconnect) {
-          scheduleReconnectAttempt(why, err);
+          scheduleReconnectAttempt(why);
           return;
         }
-        settle(why, err);
+        settle(why, 'failed', status);
         writeUpgradeFailure(clientSocket, status, message);
       };
 
@@ -3443,7 +3467,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       // This deadline is removed on 101; it never limits model inference.
       handshakeTimer = setTimeout(() => {
         if (attemptSettled || established || settled) return;
-        logger.warn?.('upgrade handshake timed out', { reqId, path: upstreamPath });
+        logger.warn?.('upgrade handshake timed out', attempt);
         failTransientAttempt('handshake-timeout', 504, 'Gateway Timeout');
         upstreamReq.destroy();
       }, WEBSOCKET_UPGRADE_TIMEOUT_MS);
@@ -3464,7 +3488,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         // 客户端可能恰好在上游 101 到达前断开。此时 close listener 已经 settle，
         // 或 socket 已 destroy 但 close 事件尚未派发；都不能再把上游连接接入隧道。
         if (settled || clientSocket.destroyed || upstreamSocket.destroyed) {
-          settle('upgrade-raced-with-close');
+          settle('upgrade-raced-with-close', clientSocket.destroyed ? 'cancelled' : 'failed');
           upstreamSocket.destroy();
           clientSocket.destroy();
           return;
@@ -3514,8 +3538,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         });
 
         // 只有出错才强拆两端 —— 那时缓冲里的数据已经没有意义。
-        const abort = (why: string) => (err?: Error): void => {
-          settle(why, err);
+        const abort = (why: string) => (): void => {
+          settle(why);
           upstreamSocket.destroy();
           clientSocket.destroy();
         };
@@ -3560,21 +3584,15 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
 
           clientSocket.setNoDelay(true);
           upstreamSocket.setNoDelay(true);
-        } catch (err) {
-          abort('handshake-forward-error')(
-            err instanceof Error ? err : new Error(String(err)),
-          );
+        } catch {
+          abort('handshake-forward-error')();
           return;
         }
 
         upstreamSocket.pipe(guarded?.inbound ?? clientSocket);
         clientSocket.pipe(outboundStream);
         if (locallyAcceptedForReconnect) clientSocket.resume();
-        logger.info?.('◀ websocket established', {
-          reqId, status: upstreamRes.statusCode, live: liveWebSockets,
-          upstreamHeadBytes: upstreamHead?.length ?? 0,
-          clientHeadBytes: head?.length ?? 0,
-        });
+        finishUpgrade('success', 'established', upstreamRes.statusCode);
       });
 
       // 上游没给 101 而是普通响应(403 / 426 / 503 等): **连 body 一起原样回写**。
@@ -3588,8 +3606,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         attemptSettled = true;
         clearHandshakeTimer();
         upstreamReqForEarlyClose = null;
-        settle('upstream-refused');
         const status = upstreamRes.statusCode ?? 502;
+        const fallbackToHttp = !locallyAcceptedForReconnect && shouldFallbackToHttpAfterUpgradeResponse(status);
+        settle('upstream-refused', fallbackToHttp ? 'http-fallback' : 'failed', status);
         if (onUpgradeFailure && (status === 401 || status === 403)) {
           const observe = onUpgradeFailure;
           const chunks: Buffer[] = [];
@@ -3603,9 +3622,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           });
         }
         logger.warn?.('upstream refused websocket upgrade', {
-          reqId,
-          status,
-          path: upstreamPath,
+          ...attempt, status,
         });
         upstreamReq.setTimeout(0);
         if (locallyAcceptedForReconnect) {
@@ -3617,21 +3634,16 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           clientSocket.destroy();
           return;
         }
-        if (shouldFallbackToHttpAfterUpgradeResponse(status)) {
+        if (fallbackToHttp) {
           logger.info?.('websocket upgrade unsupported on current path — falling back to HTTP', {
-            reqId,
-            status,
-            path: upstreamPath,
+            ...attempt, status,
           });
           // 客户端已经只需要 426，仍要消费上游 body 才能复用/释放连接；但 resume
           // 不会吞掉源流 error。代理/WAF 若在 403 body 中途断开，监听并记日志，
           // 避免 IncomingMessage error 上升成进程级未处理异常。
-          upstreamRes.once('error', (err) => {
+          upstreamRes.once('error', () => {
             logger.warn?.('websocket fallback response body failed', {
-              reqId,
-              status,
-              path: upstreamPath,
-              err: String(err),
+              ...attempt, status,
             });
           });
           upstreamRes.resume();
@@ -3654,18 +3666,11 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         // IncomingMessage error 还可能升级为进程级异常。用 end 而不是立即 destroy，
         // 先尽量刷出已经收到的状态行和错误详情。
         let refusalBodyTerminal = false;
-        const failRefusalBody = (
-          reason: 'error' | 'aborted' | 'close',
-          err?: Error,
-        ): void => {
+        const failRefusalBody = (reason: 'error' | 'aborted' | 'close'): void => {
           if (refusalBodyTerminal) return;
           refusalBodyTerminal = true;
           logger.warn?.('websocket refusal response body failed', {
-            reqId,
-            status,
-            path: upstreamPath,
-            reason,
-            err: err ? String(err) : undefined,
+            ...attempt, status, reason,
           });
           if (!clientSocket.destroyed) {
             clientSocket.end(() => clientSocket.destroy());
@@ -3674,7 +3679,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         upstreamRes.once('end', () => {
           refusalBodyTerminal = true;
         });
-        upstreamRes.once('error', (err) => failRefusalBody('error', err));
+        upstreamRes.once('error', () => failRefusalBody('error'));
         // IncomingMessage 对提前断流的事件形态取决于 Node/代理/平台：可能有 error，
         // 也可能只有 aborted 或 incomplete close。三路必须汇入同一个幂等收口，
         // 否则裸 socket 没有 EOF，Codex 会一直等拒绝响应结束。
@@ -3686,26 +3691,22 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         upstreamRes.pipe(clientSocket);
       });
 
-      upstreamReq.on('error', (err) => {
-        logger.warn?.('upgrade upstream request failed', {
-          reqId,
-          err: String(err),
-        });
-        failTransientAttempt('upstream-error', 502, 'Bad Gateway', err);
+      upstreamReq.on('error', () => {
+        if (!attemptSettled && !established && !settled) logger.warn?.('upgrade upstream request failed', attempt);
+        failTransientAttempt('upstream-error', 502, 'Bad Gateway');
       });
 
       upstreamReq.end();
-      })().catch((err: unknown) => {
+      })().catch(() => {
         // 与 respondRoutingFailure 同款理由: 不让 async handler 的 rejection 漂成
         // process-level unhandledRejection。
-        logger.error?.('websocket upgrade handler threw', { reqId, err: String(err) });
+        logger.error?.('websocket upgrade handler threw', attempt);
         if (established || settled) return;
-        const error = err instanceof Error ? err : new Error(String(err));
         if (locallyAcceptedForReconnect) {
-          scheduleReconnectAttempt('handler-error', error);
+          scheduleReconnectAttempt('handler-error');
           return;
         }
-        settle('handler-error', error);
+        settle('handler-error', 'failed', 500);
         writeUpgradeFailure(clientSocket, 500, 'Internal Server Error');
       });
     }

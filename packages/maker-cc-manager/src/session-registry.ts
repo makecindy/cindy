@@ -418,6 +418,13 @@ export class SessionRegistry {
               },
             });
             if (result.kind === 'ask_user_question') {
+              if (result.dismissed === true || result.behavior === 'deny') {
+                return {
+                  behavior: 'deny',
+                  message: result.reason
+                    ?? 'The question was dismissed before the user answered it. Do not assume an answer or proceed as if the user approved; ask again if needed or wait for the user.',
+                };
+              }
               return {
                 behavior: 'allow',
                 updatedInput: { ...input, answers: result.answers ?? {} },

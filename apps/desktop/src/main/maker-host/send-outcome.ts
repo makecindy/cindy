@@ -40,6 +40,8 @@ export type HostSendOutcome = {
   busySessionIds?: string[];
   /** Main-only proof of stopped subscription admission, not an opaque adapter failure. */
   startupAdmission?: 'subscription-account-limited';
+  /** Local Codex admission stopped before dispatch. Shared account snapshot expiry. */
+  accountReadRetryAt?: number;
 };
 
 export type DesktopSessionDispatchSuccess = {
@@ -87,13 +89,14 @@ export interface SanitizedSendOutcomeError {
 export function createHostSendFailure(
   code: HostSendFailureCode,
   message: string,
-  extra?: Pick<HostSendOutcome, 'busySessionIds' | 'startupAdmission'>,
+  extra?: Pick<HostSendOutcome, 'busySessionIds' | 'startupAdmission' | 'accountReadRetryAt'>,
 ): HostSendOutcome {
   return {
     kind: 'host-send',
     accepted: false,
     code,
     message,
+    ...(extra?.accountReadRetryAt !== undefined ? { accountReadRetryAt: extra.accountReadRetryAt } : {}),
     ...(extra?.startupAdmission ? { startupAdmission: extra.startupAdmission } : {}),
     ...(extra?.busySessionIds ? { busySessionIds: [...extra.busySessionIds] } : {}),
   };

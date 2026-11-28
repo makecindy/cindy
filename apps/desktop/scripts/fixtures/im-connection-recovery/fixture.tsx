@@ -1,15 +1,15 @@
-import { DiscordBotSection } from '../../../src/renderer/components/settings/DiscordBotSection';
-import { TelegramBotSection } from '../../../src/renderer/components/settings/TelegramBotSection';
-import { DingTalkBotSection } from '../../../src/renderer/components/settings/DingTalkBotSection';
-import { WecomBotSection } from '../../../src/renderer/components/settings/WecomBotSection';
+import { DiscordBotSettings } from '../../../src/renderer/components/settings/DiscordBotSection';
+import { TelegramBotSettings } from '../../../src/renderer/components/settings/TelegramBotSection';
+import { DingTalkBotSettings } from '../../../src/renderer/components/settings/DingTalkBotSection';
+import { WecomBotSettings } from '../../../src/renderer/components/settings/WecomBotSection';
 import { ConfirmDialogProvider } from '../../../src/renderer/components/ui/confirm-dialog-provider';
 import { mountPage, subscription } from '../../ui-page/harness';
 
 const sections = {
-  discord: DiscordBotSection,
-  telegram: TelegramBotSection,
-  dingtalk: DingTalkBotSection,
-  wecom: WecomBotSection,
+  discord: DiscordBotSettings,
+  telegram: TelegramBotSettings,
+  dingtalk: DingTalkBotSettings,
+  wecom: WecomBotSettings,
 };
 const pending = () => new Promise(() => {});
 const status = { kind: 'error', reason: 'Temporary network failure', code: 'network' };
@@ -30,6 +30,7 @@ function timeoutThenConnect() {
 }
 
 void mountPage({
+  route: '/settings?tab=im-bot',
   host: (ctx) => ({
     maker: {
       imDefaultSettingsGet: async () => ({
@@ -74,7 +75,7 @@ void mountPage({
           data-fixture={ctx.data.saveTimeout ? 'save-timeout' : undefined}
           className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]"
         >
-          <Section expanded onToggle={() => {}} />
+          <Section />
         </div>
       </ConfirmDialogProvider>
     );

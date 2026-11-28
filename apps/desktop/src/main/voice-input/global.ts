@@ -198,6 +198,8 @@ type VoiceInputGlobalErrorCode =
   | 'unavailable'
   | 'unconfirmed'
   | 'permission'
+  /** macOS 27.3+: Cindy may control only chosen apps, and the target is not one of them. */
+  | 'appNotAllowed'
   | 'failed'
   /**
    * 这次调用在启动 listener 期间被更晚的一轮顶掉了。既不是故障也不该清理状态，
@@ -538,6 +540,10 @@ export function getGlobalOverlayPasteContext(): MacPasteContext | null {
   return overlayPasteContext;
 }
 
+export function getGlobalOverlayPasteTarget(): MacPasteTarget | null {
+  return overlayPasteTarget;
+}
+
 /**
  * Same as getGlobalOverlayPasteContext, but waits up to `timeoutMs` for an
  * in-flight capture to finish first. Capture is fired off when the overlay
@@ -549,14 +555,29 @@ export function getGlobalOverlayPasteContext(): MacPasteContext | null {
 export async function awaitGlobalOverlayPasteContext(
   options?: { timeoutMs?: number },
 ): Promise<MacPasteContext | null> {
-  if (overlayPasteContext) return overlayPasteContext;
-  if (!overlayPasteTargetPromise) return null;
+  const snapshot = await awaitGlobalOverlayPasteSnapshot(options);
+  return snapshot.context;
+}
+
+/**
+ * Awaits the in-flight overlay target + AX context capture (bounded by
+ * `timeoutMs`) and returns both the foreground app target and AX surroundings.
+ */
+export async function awaitGlobalOverlayPasteSnapshot(
+  options?: { timeoutMs?: number },
+): Promise<{ context: MacPasteContext | null; target: MacPasteTarget | null }> {
+  if (overlayPasteContext && overlayPasteTarget) {
+    return { context: overlayPasteContext, target: overlayPasteTarget };
+  }
+  if (!overlayPasteTargetPromise) {
+    return { context: overlayPasteContext, target: overlayPasteTarget };
+  }
   const timeoutMs = options?.timeoutMs ?? 800;
   await Promise.race([
     overlayPasteTargetPromise.catch(() => null),
     new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
   ]);
-  return overlayPasteContext;
+  return { context: overlayPasteContext, target: overlayPasteTarget };
 }
 
 /**
@@ -1931,11 +1952,11 @@ function handleGlobalVoiceInputShortcut(phase?: Extract<GlobalVoiceInputShortcut
 
   if (sendShortcutToActiveInlineVoiceInput(phase)) return;
 
-  // Warm the provider auth path the moment the shortcut is detected. The
-  // overlay/renderer takes ~100ms to ask for `voice-input:start`; doing the
-  // disk read + token parse now overlaps that window so the WebSocket dial
-  // finds the token already hot in memory.
-  void prewarmVoiceInputProvider();
+  // Warm the provider auth & managed press-triggered ASR path the moment the
+  // shortcut is detected. The overlay/renderer takes ~100-250ms to claim the
+  // trigger and invoke `voice-input:start`; overlapping session allocation +
+  // WS dial with that window cuts TTFT without keeping any idle connection.
+  void prewarmVoiceInputProvider({ pressTriggered: true });
 
   const focusedWindow = BrowserWindow.getFocusedWindow();
   if (focusedWindow) {
@@ -2984,6 +3005,15 @@ async function pasteTextToMacTarget(text: string, pasteTarget: MacPasteTarget | 
       'Accessibility permission is required for automatic input.',
       result.reason || result.error || 'Accessibility permission is not granted.',
       'permission',
+    );
+  }
+  // macOS 27.3+: Cindy may control only the apps the person chose, and this
+  // target is not one of them. The helper refuses before touching the clipboard.
+  if (isMacAppControlNotAllowedError(result.reason) || isMacAppControlNotAllowedError(result.error)) {
+    throw new PasteCommandError(
+      'This app is not one of the apps Cindy may control.',
+      result.reason || result.error || 'App control is limited to chosen apps.',
+      'appNotAllowed',
     );
   }
 
@@ -4263,6 +4293,11 @@ function getPasteErrorPresentation(error: unknown): {
 function isMacAccessibilityPermissionError(value: string | null | undefined): boolean {
   if (!value) return false;
   return value.toLowerCase().includes('accessibility permission is not granted');
+}
+
+/** Exact phrase of HelperError.appControlNotAllowed in macos-text-insertion-helper.swift. */
+function isMacAppControlNotAllowedError(value: string | null | undefined): boolean {
+  return value?.includes('App control is limited to chosen apps') === true;
 }
 
 function getPasteErrorDetail(error: unknown): string {

@@ -153,6 +153,8 @@ export interface BotGroupChatServiceDeps {
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
+    /** Set by the host only after resolving the visible Cindy task for this room or thread. */
+    groupAssistantTask?: true;
     targetSessionId: string;
     message: string;
     persistedContent: string;
@@ -179,7 +181,7 @@ export interface BotGroupChatServiceDeps {
    * folder (`projectDir`) or under 「对话」 (null), with this user's new-task model and permission.
    */
   ensureGroupAssistantSession?: (input: { sessionId?: string; title: string; projectDir: string | null }) =>
-    Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; errorCode: string; message: string }>;
+    Promise<{ ok: true; sessionId: string; created: boolean; modelFallback?: { name?: string } } | { ok: false; errorCode: string; message: string }>;
   /**
    * Turns a composer's attachments into stored ones (bot-group-chat.md §3.1): images end up
    * in the media store under this group, files stay where they are on this computer or, from
@@ -206,7 +208,7 @@ export interface BotGroupChatServiceDeps {
   decidePlan?: (input: PlanDecisionInput, signal: AbortSignal) => Promise<PlanDecision | null>;
   workDir?: Pick<BotGroupWorkDir, 'prepare' | 'snapshot' | 'changedFiles' | 'trashGroupFolder'>;
   /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
-  validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
+  validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string; errorCode?: 'PROJECT_NOT_REGISTERED' | 'INVALID_PARAMS' }>;
   /**
    * A task this computer runs, for its group card: title, state and recorded pull request; null
    * when the task is gone (bot-group-chat.md §10).
@@ -669,9 +671,16 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
   const scopeIsCurrent = (scope: DataOwnerBroadcastScope | undefined) =>
     !scope || !deps.isOwnerScopeCurrent || deps.isOwnerScopeCurrent(scope);
 
-  const emit = (groupId: string, change: BotGroupChange, scope?: DataOwnerBroadcastScope) => {
+  /**
+   * Local groups have no server history generation; this service run is the boundary.
+   * A restart builds a new revision, so a renderer still showing pre-restart pages never
+   * merges a post-restart delta over them (bot-group-chat.md §11.2 historyRevision).
+   */
+  const localHistoryRevision = `local-${createId()}`;
+
+  const emit = (groupId: string, change: BotGroupChange, scope?: DataOwnerBroadcastScope, messages?: BotGroupMessageView[]) => {
     if (!scopeIsCurrent(scope)) return;
-    deps.onChanged?.({ groupId, change }, scope);
+    deps.onChanged?.({ groupId, change, ...(messages?.length ? { messages, historyRevision: localHistoryRevision } : {}) }, scope);
   };
 
   const readGroup = async (groupId: string): Promise<GroupRow | null> => {
@@ -907,7 +916,15 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     planId?: string | null;
     files?: string[];
     attachments?: BotGroupAttachment[];
-  }) => getDbClient().tx('botGroups.appendMessage', { message: messageRow(message) });
+  }) => {
+    const row = messageRow(message);
+    const appended = await getDbClient().tx('botGroups.appendMessage', { message: row });
+    // Deltas ride the change push (same contract as Chat Server groups): the view a full
+    // read would return, synthesized from the row and its committed sequence. A clientId
+    // retry re-inserts nothing, so its duplicate carries no view (emit stays bare).
+    const view = appended.created ? toMessageView({ ...row, sequence: appended.sequence }) : undefined;
+    return { ...appended, view };
+  };
 
   const messageRow = (message: {
     groupId: string;
@@ -941,9 +958,9 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
 
   const postNotice = async (groupId: string, member: MemberRow, notice: BotGroupNoticeCode, scope?: DataOwnerBroadcastScope, failureCode?: BotGroupRuntimeFailureCode) => {
     if (!scopeIsCurrent(scope)) return;
-    await appendMessage({ groupId, kind: 'notice', authorKind: 'system', authorBotId: member.botId, authorName: member.name, noticeCode: notice,
+    const appended = await appendMessage({ groupId, kind: 'notice', authorKind: 'system', authorBotId: member.botId, authorName: member.name, noticeCode: notice,
       ...(failureCode ? { content: botGroupRuntimeFailureDetail(failureCode) } : {}) });
-    emit(groupId, 'messages', scope);
+    emit(groupId, 'messages', scope, appended.view ? [appended.view] : undefined);
   };
 
   const cancelWaiter = (sessionId: string | null) => {
@@ -1217,7 +1234,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       // Reserve the slot before awaiting so concurrent replies cannot exceed the cap.
       if (outcome.kind === 'reply' && posted < MAX_BOT_MESSAGES_PER_ROUND) {
         posted += 1;
-        await appendMessage({
+        const appended = await appendMessage({
           groupId: input.groupId,
           kind: 'message',
           authorKind: 'bot',
@@ -1226,7 +1243,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           content: clampChars(outcome.text, MAX_BOT_REPLY_CHARS),
         });
         spoke = true;
-        emit(input.groupId, 'messages', input.scope);
+        emit(input.groupId, 'messages', input.scope, appended.view ? [appended.view] : undefined);
       } else if (outcome.kind === 'failed') {
         round.dropped.add(botId);
         await postNotice(input.groupId, member, outcome.notice, input.scope, outcome.failureCode);
@@ -1253,13 +1270,13 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         if (!spokeThisCircle) break;
       }
       if (live() && posted > 0) {
-        await appendMessage({
+        const appended = await appendMessage({
           groupId: input.groupId,
           kind: 'round-end',
           authorKind: 'system',
           mentions: { all: false, botIds: input.responders },
         });
-        emit(input.groupId, 'messages', input.scope);
+        emit(input.groupId, 'messages', input.scope, appended.view ? [appended.view] : undefined);
       }
     } catch (error) {
       deps.log?.warn('Bot group round failed', { groupId: input.groupId, error: String(error) });
@@ -1331,8 +1348,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       .where(and(eq(botGroupPlans.id, plan.id), inArray(botGroupPlans.status, ['running', 'waiting'])))
       .returning({ id: botGroupPlans.id });
     if (updated.length === 0 || !scopeIsCurrent(scope)) return updated.length > 0;
-    await appendMessage({ groupId, kind: 'notice', authorKind: 'system', noticeCode: 'plan-stopped', planId: plan.id });
-    emit(groupId, 'messages', scope);
+    const appended = await appendMessage({ groupId, kind: 'notice', authorKind: 'system', noticeCode: 'plan-stopped', planId: plan.id });
+    emit(groupId, 'messages', scope, appended.view ? [appended.view] : undefined);
     emit(groupId, 'plan', scope);
     return true;
   };
@@ -1420,7 +1437,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           input.fallback?.();
           return;
         }
-        await appendMessage({
+        const appended = await appendMessage({
           groupId,
           kind: 'notice',
           authorKind: 'system',
@@ -1428,7 +1445,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           authorName: input.organizer.name,
           noticeCode: 'plan-failed',
         });
-        emit(groupId, 'messages', input.scope);
+        emit(groupId, 'messages', input.scope, appended.view ? [appended.view] : undefined);
       };
       if (!decision?.needsPlan) return noPlan();
       const members = await readMembers(groupId);
@@ -1892,6 +1909,9 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       ok: true,
       group: {
         ...summary,
+        // Same-run deltas carry this revision (see `emit`): the open view merges them
+        // without waiting for this full read, and still reloads afterwards as before.
+        historyRevision: localHistoryRevision,
         messages,
         hasMoreBefore,
         round: {
@@ -1990,10 +2010,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         if (typeof raw.projectDir !== 'string' || !raw.projectDir || raw.projectDir.length > MAX_PROJECT_DIR_CHARS) {
           return failure('INVALID_PARAMS', '项目文件夹无效');
         }
-        const checked = deps.validateProjectDir
-          ? await deps.validateProjectDir(raw.projectDir).catch(() => ({ ok: false as const, message: '' }))
-          : ({ ok: false as const, message: '' });
-        if (!checked.ok) return failure('INVALID_PARAMS', checked.message || '项目文件夹不可用');
+        const checked = await deps.validateProjectDir?.(raw.projectDir).catch(() => undefined);
+        if (!checked?.ok) return failure(checked?.errorCode ?? 'INVALID_PARAMS', checked?.message || '项目文件夹不可用');
         patch.projectDir = checked.dir;
       }
     }
@@ -2155,7 +2173,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           return failure('PLAN_OPEN', '群里还有没做完的分工，请先做完或结束');
         }
         const scope = captureScope();
-        let appended: { id: string; sequence: number; created: boolean };
+        let appended: Awaited<ReturnType<typeof appendMessage>>;
         try {
           appended = await appendMessage({ groupId, kind: 'message', authorKind: 'user', content: text, mentions, clientId, attachments });
         } catch (error) {
@@ -2170,7 +2188,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         // A new user message supersedes whatever the group was saying or deciding.
         await cancelRound(groupId, scope);
         if (cancelPlanning(groupId)) emit(groupId, 'round', scope);
-        emit(groupId, 'messages', scope);
+        emit(groupId, 'messages', scope, appended.view ? [appended.view] : undefined);
         for (const member of members) {
           if (member.status !== 'active' && mentions.botIds.includes(member.botId)) {
             await postNotice(groupId, member, 'member-unavailable', scope);

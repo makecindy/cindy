@@ -12,6 +12,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ModelGroupResolveRequest, ModelGroupResolveResult } from '../../../shared/modelGroups';
+
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) }));
+
 import { createModelGroupSessionStart, type ModelGroupSessionStartPorts } from '../sessionStart';
 
 const routed = (agentDeviceId?: string): ModelGroupResolveResult => ({
@@ -38,6 +41,14 @@ function ports(result: ModelGroupResolveResult) {
 }
 
 describe('a mode picks the first source of a new task and is settled when its first turn is dispatched', () => {
+  // 2026-11-26 audit: only the scheduler caught a failing resolve; a Worker or other entry failed to create its
+  // task. Minimal input: resolve throws. Expected: the entry creates the task on its saved model.
+  it('creates the task on its saved model when routing itself fails', async () => {
+    const { value } = ports(routed());
+    const start = createModelGroupSessionStart({ ...value, resolve: async () => { throw new Error('catalog read failed'); } });
+    await expect(start.prepare('daily', { keptModelName: 'gpt-saved' })).resolves.toBeNull();
+  });
+
   it('gives the entry the picked source and settles only at dispatch, under that message, once', async () => {
     const { value, calls } = ports(routed('desk-2'));
     const start = createModelGroupSessionStart(value);
@@ -64,6 +75,26 @@ describe('a mode picks the first source of a new task and is settled when its fi
     expect(calls.writeNote).toHaveBeenCalledOnce();
   });
 
+  // model-groups.md §3(2026-11-26，dash 建议)：本机来源背后是电脑组或几个账号时，说明写到实际分到的那台电脑或账号；
+  // 别的电脑上的来源不问(那台自己分)，读不到时照旧写，不让说明迟迟不出现。
+  it('names the computer or account the inner group or pool assigned, only for a local source', async () => {
+    const run = async (result: ModelGroupResolveResult, innerChoice: ModelGroupSessionStartPorts['innerChoice']) => {
+      const { value, calls } = ports(result);
+      const start = createModelGroupSessionStart({ ...value, innerChoice });
+      start.attach('task-1', (await start.prepare('daily', { keptModelName: 'gpt-saved' }))!.token);
+      start.dispatched('task-1', 'msg-1');
+      await vi.waitFor(() => expect(calls.writeNote).toHaveBeenCalledOnce());
+      return calls.writeNote.mock.calls[0]![1].modelName as string;
+    };
+    const asked = vi.fn(async () => 'work@example.com');
+    expect(await run(routed(), asked)).toMatch(/ · work@example\.com$/);
+    expect(asked).toHaveBeenCalledWith('task-1', { providerId: 'openai-work', model: 'gpt-astra' });
+    expect(await run(routed(), async () => null)).not.toContain('work@example.com');
+    const remote = vi.fn(async () => 'never');
+    expect(await run(routed('desk-2'), remote)).not.toContain('never');
+    expect(remote).not.toHaveBeenCalled();
+  });
+
   it('keeps the saved model when nothing is usable and says so; a deleted mode changes nothing', async () => {
     const kept = ports({ outcome: 'unavailable', groupName: 'Daily mode', trace: [] });
     const start = createModelGroupSessionStart(kept.value);
@@ -87,5 +118,36 @@ describe('a mode picks the first source of a new task and is settled when its fi
     expect(calls.resolve[1]).toEqual({ selection: { type: 'route', id: 'daily' }, dryRun: true });
     expect(await start.exists('daily')).toBe(true);
     expect(await createModelGroupSessionStart(ports({ outcome: 'missing', groupName: 'Gone', trace: [] }).value).exists('gone')).toBe(false);
+  });
+
+  // 2026-11-28 回归：拆平后的单账号选路在 attach 时必须调用 pinLocalSource 固定账号槽位，
+  // 且 dispatched 直接写明已含账号名的说明、不再等待内层 innerChoice。
+  it('pins the picked local accountId on attach and skips innerChoice when already flattened', async () => {
+    const pinned: Array<{ sessionId: string; route: { providerId: string; accountId?: string } }> = [];
+    const innerChoice = vi.fn(async () => 'should-not-run');
+    const base = ports({
+      outcome: 'routed',
+      decisionId: 'dec-flat',
+      groupName: 'OpenAI',
+      route: { agentKind: 'codex', providerId: 'openai', accountId: 'second', model: 'gpt-6.2' },
+      modelName: 'GPT-6.2',
+      sourceName: 'OpenAI · second@example.com',
+      why: 'expiring',
+      quota: null,
+      trace: [],
+    });
+    const start = createModelGroupSessionStart({
+      ...base.value,
+      pinLocalSource: (sessionId, route) => { pinned.push({ sessionId, route }); },
+      innerChoice,
+    });
+    const prepared = await start.prepare('src:openai-gpt', { keptModelName: 'gpt-saved' });
+    expect(prepared?.route).toMatchObject({ providerId: 'openai', accountId: 'second' });
+    start.attach('s-flat', prepared!.token);
+    expect(pinned).toEqual([{ sessionId: 's-flat', route: { providerId: 'openai', accountId: 'second' } }]);
+    expect(base.calls.bind.mock.calls[0]?.[2]).toContain('acct:second');
+    start.dispatched('s-flat', 'user-1');
+    expect(innerChoice).not.toHaveBeenCalled();
+    expect(base.calls.writeNote.mock.calls[0]?.[1]?.modelName).toBe('GPT-6.2 · OpenAI · second@example.com');
   });
 });

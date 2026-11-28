@@ -70,6 +70,8 @@ export interface PluginIconMetadata {
   sizeBytes: number;
   /** 短期 HTTPS 图标下载地址。 */
   url: string;
+  /** Optional OSS-resized list image. Hash and size above describe the original. */
+  thumbnailUrl?: string;
   /** 图标地址过期时间，格式为带毫秒的 UTC ISO 8601。 */
   expiresAt: string;
 }
@@ -317,6 +319,7 @@ function parseIconMetadata(value: unknown, path: string, options?: PluginObjectU
     mimeType,
     sha256: sha256(raw.sha256, `${path}.sha256`),
     sizeBytes: raw.sizeBytes,
+    ...(raw.thumbnailUrl === undefined ? {} : { thumbnailUrl: parsePluginObjectUrl(raw.thumbnailUrl, `${path}.thumbnailUrl`, options) }),
     url: parsePluginObjectUrl(raw.url, `${path}.url`, options),
     expiresAt: isoDate(raw.expiresAt, `${path}.expiresAt`),
   };

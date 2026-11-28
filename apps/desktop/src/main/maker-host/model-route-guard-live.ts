@@ -168,18 +168,22 @@ export async function resolveScheduledModelSelectionLive(
   selection: ScheduledModelSelection,
   readRemoteProviders?: (agentDeviceId: string) => Promise<ProviderView[]>,
 ): Promise<ScheduledModelSelection> {
-  if (selection.agentDeviceId) {
+  if (selection.agentKind === 'acp') {
+    throw new Error('Plugin engines are not resolved through the built-in catalog');
+  }
+  const builtinSelection = { ...selection, agentKind: selection.agentKind };
+  if (builtinSelection.agentDeviceId) {
     if (!readRemoteProviders) throw new Error('Scheduled remote model resolution is not available');
     let views: ProviderView[] = [];
     const rejection = await checkDeviceRoute(async () => {
-      views = await readRemoteProviders(selection.agentDeviceId!);
+      views = await readRemoteProviders(builtinSelection.agentDeviceId!);
       return views;
-    }, selection.agentKind, selection.providerId, selection.model);
+    }, builtinSelection.agentKind, builtinSelection.providerId, builtinSelection.model);
     if (rejection) throw new Error(`Scheduled remote model route unavailable: ${rejection}`);
-    return resolveScheduledModelSelection(selection, views);
+    return resolveScheduledModelSelection(builtinSelection, views);
   }
   const generation = getActiveAppSession().generation;
-  return resolveScheduledModelSelectionWithRefresh(selection, {
+  return resolveScheduledModelSelectionWithRefresh(builtinSelection, {
     readProviders: () => getDesktopProviderService().listProviders({
       allowSideEffects: false, getCatalog: getActiveCatalog,
     }),

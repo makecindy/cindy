@@ -442,8 +442,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerVoicePlacement = voiceUiAvailable');
     expect(source).toContain('hasTrailingAction: composerSendSlotIsStop || composerShowSendButton');
     expect(source).toContain('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
-    // 录音状态由语音按钮形态表达（Mic / 红点计时胶囊 / spinner），状态行只承载错误与声纹过滤提示。
-    expect(source).toContain('const voiceStatusVisible = voiceUiAvailable && Boolean(voiceStatusText);');
+    // 录音状态由语音按钮表达；状态行承载错误、声纹提示与短暂的还原原文入口。
+    expect(source).toContain('const voiceStatusVisible = voiceUiAvailable && (Boolean(voiceStatusText) || voiceRefinementUndoVisible);');
     expect(voiceButtonSource).toContain(') : voiceRecordingTimer.label !== null ? (');
     expect(voiceButtonSource).toContain('<VoiceRecordingPillContent');
     // 录音中语音按钮展开成红点+计时胶囊,右缘锚定、只向左生长;旧的红框 Square 形态不再使用。

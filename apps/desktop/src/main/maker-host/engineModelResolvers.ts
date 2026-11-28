@@ -20,6 +20,7 @@ import {
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { readCodexContextWindowInfo } from './codex-context-window.js';
+import { needsOpenAiApiCodexFastDeclaration } from './codex-api-model-capabilities.js';
 import { resolveRouteModelEfforts, type ModelContextProviderResolver } from './routeModelEfforts.js';
 
 export type { ModelContextProviderResolver };
@@ -76,6 +77,7 @@ export type CodexModelResolvers = Required<Pick<AgentDeps,
   | 'resolveVerifiedContextWindow'
   | 'resolveCodexContextWindowInfo'
   | 'resolveCodexThreadContextWindow'
+  | 'needsCodexFastCatalog'
 >>;
 
 export function createCodexModelResolvers(ports: CodexModelResolverPorts): CodexModelResolvers {
@@ -96,6 +98,11 @@ export function createCodexModelResolvers(ports: CodexModelResolverPorts): Codex
         resolveContextProviderId(getCatalog(), 'codex', providerId, modelId), modelId),
     resolveCodexContextWindowInfo: (modelId, config, reportedUsableWindow, codexHome) =>
       readCodexContextWindowInfo({ codexHome: codexHome ?? ports.getCodexHome(), binaryPath: ports.getCodexBinaryPath(), modelId, config, reportedUsableWindow }),
+    needsCodexFastCatalog: (providerId, modelId) => {
+      const catalog = getCatalog();
+      const source = resolveContextProviderId(catalog, 'codex', providerId, modelId);
+      return needsOpenAiApiCodexFastDeclaration(catalog.providers.find(provider => provider.id === source), modelId);
+    },
     resolveCodexThreadContextWindow: (providerId, modelId) => {
       const source = resolveContextProviderId(getCatalog(), 'codex', providerId, modelId);
       const override = source ? readModelContextLimit('codex', source, modelId) : null;

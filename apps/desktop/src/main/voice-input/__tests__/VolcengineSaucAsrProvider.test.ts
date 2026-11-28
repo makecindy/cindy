@@ -2,7 +2,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import { once } from 'node:events';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { describe, expect, it, vi } from 'vitest';
-import { VoiceConversationInput, type ConversationInputEvent } from '@cindy/voice-input-core';
+import { VoiceConversationInput, type AsrEvent, type ConversationInputEvent } from '@cindy/voice-input-core';
 
 const diagnosticLog = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock('../../logger.js', () => ({ createLogger: () => diagnosticLog }));
@@ -130,6 +130,51 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     expect(packet[1]).toBe(0x10);
     expect(packet[2]).toBe(0x11);
     expect(packet.length).toBeGreaterThan(8);
+  });
+
+  it('sends dictionary hotwords and recent dialog context in initial SAUC corpus.context when provided', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    let initialRequestPayload: Record<string, unknown> | undefined;
+    let socket: WebSocket | undefined;
+    server.on('connection', (client) => {
+      socket = client;
+      client.on('message', (data) => {
+        const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+        const decoded = decodeVolcengineMessage(buf);
+        if (decoded.messageType === 0x1 && !initialRequestPayload) {
+          initialRequestPayload = decoded.payload as Record<string, unknown>;
+          client.send(serverAckPacket());
+        }
+      });
+    });
+    let provider: VolcengineSaucAsrProvider | undefined;
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected loopback address.');
+      provider = new VolcengineSaucAsrProvider({
+        proxyApiKey: 'test-key',
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        endpointPath: '/asr',
+        resourceId: 'volc.test',
+        recognitionHints: {
+          hotwords: ['PostgreSQL', 'LiteLLM'],
+          recentContext: ['排查语音识别热词'],
+        },
+      });
+      await provider.start();
+      const request = initialRequestPayload?.request as { corpus?: { context?: string } } | undefined;
+      expect(request?.corpus?.context).toBeDefined();
+      expect(JSON.parse(request!.corpus!.context!)).toEqual({
+        hotwords: [{ word: 'PostgreSQL' }, { word: 'LiteLLM' }],
+        context_type: 'dialog_ctx',
+        context_data: [{ text: '排查语音识别热词' }],
+      });
+    } finally {
+      await provider?.stop();
+      socket?.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('encodes audio chunks with positive and negative sequence numbers', () => {
@@ -758,6 +803,144 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
       await expect(provider.start()).rejects.toThrow(
         `Volcengine SAUC ASR handshake failed: HTTP 403 Forbidden (127.0.0.1:${address.port}/volcengine/api/v3/sauc/bigmodel_async)`,
       );
+    } finally {
+      await provider?.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  // 测试价值：验证 VolcengineSaucAsrProvider 主动会话轮换的先建后拆（make-before-break）无感切流、Upgrade 响应头回调，以及 429 单会话并发限制时自动退化为先拆后建。
+  // 依据：语音输入优化 ⑤⑥ 要求在 180s 上限前无缝切至新连接且不触发 disconnected 报错，并预留单步 WS Upgrade 响应头透传。
+  // 缺口：既有测试仅覆盖断连后 recover()，未覆盖主动 rotateSession() 的双连接并发切换与 429 回退分支。
+  // 最小输入：本地回环 WebSocketServer 上 2 个连接（正常并发切换 + 并发连接拒 429）。
+  // tier: unit，本地回环 WS 服务器，耗时 <100ms。
+  it('rotates sessions make-before-break without emitting disconnected and forwards upgrade response headers', async () => {
+    let connectionCount = 0;
+    let firstSocketClosedBeforeSecondConnected = false;
+    let firstSocketOpen = false;
+    const upgradeHeadersSeen: Array<Record<string, string | string[] | undefined>> = [];
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    server.on('headers', (headers) => {
+      headers.push('X-Voice-Max-Session-Ms: 240000');
+    });
+    server.on('connection', (socket) => {
+      connectionCount += 1;
+      const idx = connectionCount;
+      if (idx === 1) {
+        firstSocketOpen = true;
+        socket.on('close', () => {
+          firstSocketOpen = false;
+        });
+      } else if (idx === 2) {
+        firstSocketClosedBeforeSecondConnected = !firstSocketOpen;
+      }
+      socket.on('message', (raw) => {
+        const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
+        const messageType = bytes[1] >> 4;
+        if (messageType === 0x1) {
+          socket.send(serverAckPacket());
+        } else if (messageType === 0x2) {
+          socket.send(serverTranscriptPacket(idx === 1 ? '第一句。' : '第二句。', true));
+        }
+      });
+    });
+
+    let provider: VolcengineSaucAsrProvider | undefined;
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      const events: AsrEvent[] = [];
+      provider = new VolcengineSaucAsrProvider({
+        connectionProvider: async () => ({
+          websocketUrl: `ws://127.0.0.1:${address.port}/asr`,
+          authorizationToken: `ticket-${connectionCount + 1}`,
+          onUpgradeResponse: (headers) => upgradeHeadersSeen.push(headers),
+        }),
+        resourceId: 'volc.test',
+        connectTimeoutMs: 2_000,
+      });
+      provider.onEvent((event) => events.push(event));
+
+      await provider.start();
+      provider.appendAudio(makePcmChunk(), makeTrace(0));
+      await waitFor(() => events.some((e) => e.type === 'stable' && e.text === '第一句。'));
+
+      await provider.rotateSession();
+      expect(connectionCount).toBe(2);
+      expect(firstSocketClosedBeforeSecondConnected).toBe(false);
+      expect(events.some((e) => e.type === 'disconnected')).toBe(false);
+      expect(upgradeHeadersSeen.length).toBeGreaterThanOrEqual(2);
+      expect(upgradeHeadersSeen[0]['x-voice-max-session-ms']).toBe('240000');
+
+      provider.appendAudio(makePcmChunk(), makeTrace(1));
+      await waitFor(() => events.some((e) => e.type === 'stable' && e.text === '第一句。第二句。'));
+    } finally {
+      await provider?.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('falls back to break-before-make when standby rotation hits HTTP 429 concurrency limit', async () => {
+    let activeConnections = 0;
+    let totalAccepted = 0;
+    let rejected429 = 0;
+    const server = new WebSocketServer({
+      host: '127.0.0.1',
+      port: 0,
+      verifyClient(_info, done) {
+        if (activeConnections >= 1) {
+          rejected429 += 1;
+          done(false, 429, 'Too Many Requests');
+          return;
+        }
+        done(true);
+      },
+    });
+    server.on('connection', (socket) => {
+      activeConnections += 1;
+      totalAccepted += 1;
+      const idx = totalAccepted;
+      socket.on('close', () => {
+        activeConnections = Math.max(0, activeConnections - 1);
+      });
+      socket.on('message', (raw) => {
+        const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
+        const messageType = bytes[1] >> 4;
+        if (messageType === 0x1) {
+          socket.send(serverAckPacket());
+        } else if (messageType === 0x2) {
+          socket.send(serverTranscriptPacket(idx === 1 ? '前文。' : '续文。', true));
+        }
+      });
+    });
+
+    let provider: VolcengineSaucAsrProvider | undefined;
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      const events: AsrEvent[] = [];
+      provider = new VolcengineSaucAsrProvider({
+        connectionProvider: async () => ({
+          websocketUrl: `ws://127.0.0.1:${address.port}/asr`,
+          authorizationToken: 'ticket-limit',
+        }),
+        resourceId: 'volc.test',
+        connectTimeoutMs: 2_000,
+      });
+      provider.onEvent((event) => events.push(event));
+
+      await provider.start();
+      provider.appendAudio(makePcmChunk(), makeTrace(0));
+      await waitFor(() => events.some((e) => e.type === 'stable' && e.text === '前文。'));
+
+      await provider.rotateSession();
+      expect(rejected429).toBe(1);
+      expect(totalAccepted).toBe(2);
+
+      provider.appendAudio(makePcmChunk(), makeTrace(1));
+      await waitFor(() => events.some((e) => e.type === 'stable' && e.text === '前文。续文。'));
     } finally {
       await provider?.stop();
       await new Promise<void>((resolve) => server.close(() => resolve()));

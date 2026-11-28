@@ -18,7 +18,16 @@ const SEGMENT = MARK + '#', ESCAPED = MARK + '=';
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const INDEX = new Int16Array(128).fill(-1);
 for (let index = 0; index < ALPHABET.length; index++) INDEX[ALPHABET.charCodeAt(index)] = index;
-const CANONICAL = /^[A-Za-z0-9+/]*={0,2}$/;
+
+function isStrictBase64Chars(text: string): boolean {
+  const padding = text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0;
+  const end = text.length - padding;
+  for (let index = 0; index < end; index++) {
+    const code = text.charCodeAt(index);
+    if (code >= 128 || INDEX[code] < 0) return false;
+  }
+  return true;
+}
 
 interface NodeBuffer { from(value: string | Uint8Array, encoding?: string): Uint8Array & { toString(encoding: string): string } }
 /** What the platform has: Node's `Buffer` (Desktop, Node Host), `atob`/`btoa` (newer React Native), or neither. */
@@ -29,7 +38,7 @@ export function base64Codec(platform: Base64Platform) {
   const { Buffer: NodeBuffer, atob: atobFn, btoa: btoaFn } = platform;
   /** The bytes of `text` if it is base64 in its one canonical form (standard alphabet, padded, unused bits zero); otherwise null. */
   const canonicalBase64Bytes = (text: string): Uint8Array | null => {
-    if (text.length % 4 !== 0 || !CANONICAL.test(text)) return null;
+    if (text.length % 4 !== 0 || !isStrictBase64Chars(text)) return null;
     const padding = text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0;
     if (padding) {
       const last = INDEX[text.charCodeAt(text.length - padding - 1)];

@@ -8,10 +8,10 @@ A session can run inside its own **git worktree** — a separate working copy of
 
 **Opting in:**
 
-- In the new-session view, pick a project that is a git repository. A combined control appears next to the project picker: the left half shows the **Branch** (the source branch, defaulting to the repo's current branch; click it to search and choose another), and the right half is a **worktree** checkbox. Tick **worktree** to use isolation.
-- The checkbox is off by default. Cindy remembers your last explicit choice for new sessions on that computer.
+- In the new-session view, pick a project that is a git repository. A single workspace branch capsule appears next to the project picker (showing the current/source branch, any pending remote updates or conflict status, and a subtle `worktree` badge when isolation is enabled). Click it to toggle **Run in isolated copy (`worktree`)**, review sync status, switch branches, or open the inline 30-second guide.
+- Isolation is off by default. Cindy remembers your last explicit choice for new sessions on that computer.
 - The worktree is created when you send the first message. While it's being created, an overlay shows **Creating worktree · input disabled** and the composer unlocks automatically when it's ready.
-- Next to the branch, a refresh button can pull the latest commits for the selected branch from its remote before you start.
+- Inside the branch capsule popover, you can pull remote updates (`--ff-only` or clean zero-token rebase after read-only `merge-tree` preflight), hand off conflicting diverged branches to the Agent, or — when local branches and idle worktrees accumulate — run a read-only-first AI workspace audit before cleaning up.
 
 **Where it goes:**
 
@@ -41,7 +41,9 @@ A session can run inside its own **git worktree** — a separate working copy of
 
 - Automations can run in a **New worktree session** (see the Scheduling automations topic), collaboration Workers can get their own worktree (**Create a worktree for this Worker**), and importing a shared session offers **Create in a worktree**.
 - In **Sidebar settings → Session info**, tick **worktree** to show each session's worktree name; click it to open the folder.
-- A session whose working directory is a worktree can't be moved to another project yet.
+- A session whose working directory is a worktree can be moved to another project. Cindy keeps the
+  worktree as the execution directory and changes the task's project membership. Changing the
+  execution directory itself still requires a worktree handoff.
 
 **Notes:**
 

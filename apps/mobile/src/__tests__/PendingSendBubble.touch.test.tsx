@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react';
+import { act, useSyncExternalStore, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { GestureResponderEvent } from 'react-native';
@@ -15,13 +15,19 @@ import { useWaitingComputerRecovery } from '@/session/useWaitingComputerRecovery
 import type { DeviceView } from '@cindy/device-link';
 import { usePendingOutboxActions, usePendingSendActions } from '@/session/usePendingSendActions';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
-import type { DurableOutboxRecord } from '@/session/durableOutbox';
+import { createDurableOutbox, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { createDurableOutboxDelivery } from '@/session/durableOutboxDelivery';
+import { DeviceLinkError } from '@cindy/device-link';
+import type { QueuedRemoteMessage } from '@/session/types';
 import type { TFunction } from 'i18next';
 
-const outbox = vi.hoisted(() => ({ records: [] as DurableOutboxRecord[], update: vi.fn().mockResolvedValue(undefined) }));
+const outbox = vi.hoisted(() => ({
+  records: [] as DurableOutboxRecord[], update: vi.fn().mockResolvedValue(undefined),
+  discardUnconfirmed: vi.fn(), alert: vi.fn(),
+}));
 vi.mock('@/session/mobileDurableOutbox', () => ({
   getCurrentMobileOutboxRecords: () => outbox.records,
-  mobileDurableOutbox: { update: outbox.update },
+  mobileDurableOutbox: { update: outbox.update, discardUnconfirmed: outbox.discardUnconfirmed },
 }));
 
 const { handlers, frames, durableThumbs } = vi.hoisted(() => ({
@@ -40,7 +46,7 @@ vi.mock('react-native', async () => {
     return createElement(tag, { 'data-testid': props.testID, onClick: props.disabled ? undefined : props.onPress }, props.children);
   };
   class AnimatedValue { setValue() {} interpolate() { return 0; } }
-  return { AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) }, View: view('div'), Text: view('span'), Pressable: view('button'), ActivityIndicator: () => null,
+  return { Alert: { alert: outbox.alert }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) }, View: view('div'), Text: view('span'), Pressable: view('button'), ActivityIndicator: () => null,
     Platform: { OS: 'ios' }, NativeModules: {}, UIManager: { getViewManagerConfig: () => ({}) },
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
     Animated: { View: view('div'), Value: AnimatedValue, timing: () => ({ start() {}, stop() {} }) },
@@ -78,7 +84,9 @@ vi.mock('@/session/SentInlineAtomBody', async () => {
 vi.mock('@/session/sentAttachmentThumbStore', () => ({ getSentAttachmentThumbUri: (ref: string) => durableThumbs.get(ref) ?? null,
   useSentAttachmentThumbsVersion: () => 0 }));
 vi.mock('react-i18next', () => ({ initReactI18next: { type: '3rdParty', init: () => undefined },
-  useTranslation: () => ({ t: (key: string) => key }) }));
+  useTranslation: () => ({ t: (key: string) => key === 'message.queue.deliveryUnconfirmed'
+    || key === 'message.queue.recheckDelivery'
+    || key === 'message.queue.waitingForPrevious' ? i18n.t(key) : key }) }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }),
@@ -214,6 +222,16 @@ it('rechecks the waiting computer once, backs off, and never resubmits the messa
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+// Unit: only a locally persisted text still awaiting its receipt offers delivery details.
+it('reveals the pending delivery explanation and drops it after acknowledgement', () => {
+  const awaiting = { actions: null, phase: 'sending' as const, queueIndex: null, pendingDelivery: true };
+  show(awaiting);
+  expect(host.textContent).toContain('message.queue.pendingDelivery');
+  show(awaiting, 'a');
+  expect(host.textContent).toContain('message.queue.pendingDeliveryHint');
+  show({ ...awaiting, pendingDelivery: false }, 'a');
+  expect(host.textContent).not.toContain('message.queue.pendingDelivery');
+});
 it('lets an in-flight local outbox message open its cancel action', () => {
   show({ actions: null, phase: 'sending', queueIndex: null });
   touch('Start'); touch('End'); flush();
@@ -236,10 +254,172 @@ it('offers retry and delete on a failed send without opening it first, and re-up
   expect(removeOutbox).toHaveBeenCalledWith('a');
   expect(select).not.toHaveBeenCalled();
 });
+// Unit of the real bubble: persisted Host refusal is rendered in the
+// current language, with the existing failure actions and no recheck.
+it('displays the reason for a rejected send in the current language', async () => {
+  const previousLanguage = i18n.language;
+  try {
+    for (const [language, copy] of [
+      ['zh-CN', '这个任务当前无法接收消息。'],
+      ['en', 'This task cannot receive messages right now.'],
+    ]) {
+      await i18n.changeLanguage(language);
+      show({ actions: null, phase: 'failed', queueIndex: null, errorText: 'session is not active' });
+      expect(host.querySelector('[data-testid="pendingSend.error.a"]')?.textContent).toBe(copy);
+      expect(host.querySelector('[data-testid="pendingSend.outboxRetry.a"]')).not.toBeNull();
+      expect(host.querySelector('[data-testid="pendingSend.outboxRecheck.a"]')).toBeNull();
+    }
+  } finally {
+    await i18n.changeLanguage(previousLanguage);
+  }
+});
+it('shows a message held behind a local send in the waiting state', async () => {
+  const previousLanguage = i18n.language;
+  try {
+    await i18n.changeLanguage('zh-CN');
+    show({ actions: null, phase: 'waiting', waitingFor: 'previous', queueIndex: null });
+    expect(host.textContent).toContain('等待前一条消息');
+    expect(host.querySelector('[data-testid="pendingSend.reconnect.a"]')).toBeNull();
+    expect(host.querySelector('[data-testid="pendingSend.outboxRetry.a"]')).toBeNull();
+  } finally {
+    await i18n.changeLanguage(previousLanguage);
+  }
+});
 it('lets a real body link consume the pending tap before the frame commits', () => {
   show(); touch('Start'); touch('End');
   act(() => host.querySelector<HTMLElement>('[data-testid="link"]')!.click());
   flush(); expect(openLink).toHaveBeenCalledOnce(); expect(select).not.toHaveBeenCalled();
+});
+
+// UI unit regression with the real ledger, driver and task-page callback. The wire
+// cases cover Host persistence; this case makes the missing confirmation visible
+// and verifies that a tap changes only the read request for that same message.
+it.each(['recheck', 'retry-old-failure', 'retry-v1-legacy-miss', 'retry-v1-timeout', 'delete-unconfirmed'] as const)(
+  'acts on the original message on %s', async (action) => {
+  const previousLanguage = i18n.language;
+  await i18n.changeLanguage('zh-CN');
+  const storage = new Map<string, string>();
+  const ledger = createDurableOutbox({
+    getAllKeys: async () => [...storage.keys()], getItem: async (key) => storage.get(key) ?? null,
+    setItem: async (key, value) => { storage.set(key, value); },
+    removeItem: async (key) => { storage.delete(key); },
+  });
+  await ledger.activate('test');
+  const task = 'task-recheck';
+  const pending = (clientId: string, text: string, createdAt: number): DurableOutboxRecord => ({
+    version: 1, accountId: 'test', deviceId: 'pc', createdAt, state: 'queued', uploads: [],
+    item: buildOutboxItem({
+      sessionId: task, clientId, text, permissionModeAtSend: 'ask', readyAttachments: [], claimedUploads: [],
+    }),
+  });
+  const first = pending('a', 'original message', 1);
+  const next = pending('b', 'later message', 2);
+  const v1 = action === 'retry-v1-legacy-miss' || action === 'retry-v1-timeout';
+  await ledger.add({ ...first, state: action === 'recheck' ? 'confirming' : 'failed',
+    ...(action === 'delete-unconfirmed' ? { historyConfirmation: 'unconfirmed' } : {}),
+    retrySafe: v1, enqueueStarted: true, prepared: { clientId: 'a' } as QueuedRemoteMessage });
+  await ledger.add(next);
+  const projection = { ...EMPTY_INPUT_PROJECTION, sessionId: task, ...(v1 ? { inputDeliveryVersion: 1 as const } : {}) };
+  const history = vi.fn(async (_r: DurableOutboxRecord) => {
+    if (action === 'retry-old-failure') throw new DeviceLinkError('NOT_FOUND', 'Message does not exist');
+    if (action === 'retry-v1-legacy-miss') throw Object.assign(new Error('[NOT_FOUND] Message 不存在'), { code: 'IPC_ERROR' });
+    if (action === 'retry-v1-timeout') throw new DeviceLinkError('INVOKE_TIMEOUT', 'read timed out');
+    throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'old peer');
+  });
+  const legacyHistory = vi.fn<(r: DurableOutboxRecord) => Promise<boolean>>()
+    .mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  const enqueue = vi.fn(async (_r: DurableOutboxRecord) => projection);
+  const delivery = createDurableOutboxDelivery({
+    store: ledger, isCurrent: () => true, canRun: () => true, session: async () => null,
+    projection: async () => projection, enqueue, history, legacyHistory,
+    prepare: async (r) => ({ clientId: r.item.clientId } as QueuedRemoteMessage),
+    upload: async () => { throw new Error('unexpected upload'); }, cancel: async () => false,
+    bindProjection: () => () => {}, cleanup: async () => {}, discardUploads: () => {},
+    retryable: () => false, describe: String, confirmationMessage: 'check receipt', clearedMessage: 'task cleared',
+  });
+  outbox.update.mockImplementation((r, patch) => ledger.update(r, patch));
+  outbox.discardUnconfirmed.mockImplementation((record) => ledger.discardUnconfirmed(record));
+  const clearSelection = () => {};
+  function Screen() {
+    const records = useSyncExternalStore(ledger.subscribe, ledger.getSnapshot);
+    outbox.records = records.filter(r => !r.cleanupOutcome);
+    const { retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
+      deviceId: 'pc', deviceName: 'Computer', sessionId: task, router: { push: vi.fn() },
+      outboxSessionAliveRef: { current: task }, setError: vi.fn(),
+      setQueueSelectedClientId: clearSelection, t: i18n.t,
+    });
+    const actions = usePendingSendActions({
+      retryOutboxItem, removeOutboxItem, sessionId: task, queueBusy: false, queueSelectedClientId: null,
+      setQueueSelectedClientId: clearSelection, beginQueueEdit: edit,
+      steerQueueItem: steer, removeQueueItem: remove, moveQueueItem: move,
+    });
+    const items = buildPendingSendItems({
+      outbox: outbox.records.map(r => ({ ...outboxDisplayItem(r.state === 'failed'
+        ? outboxItemWithEnqueueFailure(r.item, r.error ?? 'old failure') : r.item),
+        historyConfirmation: r.historyConfirmation, canCancel: !r.historyConfirmation })),
+      queue: [], settling: [], editingClientId: null, hiddenClientIds: new Set(),
+      sendingClientIds: new Set(), steeringClientIds: new Set(), presentationByClientId: new Map(),
+    });
+    return <>{items.map(entry => <PendingSendBubble key={entry.key} item={entry} actions={actions}
+      renderText={(body) => <span>{body}</span>} renderFile={() => null} renderImage={() => null} />)}</>;
+  }
+  try {
+    await delivery.run();
+    act(() => root.render(<Screen />));
+    const messageRow = host.querySelector('[data-testid="pendingSend.row.a"]')!;
+    expect(messageRow.textContent).toContain('original message');
+    if (action === 'retry-old-failure' || v1) {
+      expect(enqueue).not.toHaveBeenCalled();
+      const retry = messageRow.querySelector<HTMLElement>('[data-testid="pendingSend.outboxRetry.a"]')!;
+      await act(async () => retry.click());
+      expect(enqueue).not.toHaveBeenCalled();
+      await act(async () => delivery.run());
+      expect(history).toHaveBeenLastCalledWith(expect.objectContaining({ item: first.item }), true);
+      expect(legacyHistory).not.toHaveBeenCalled();
+      expect(enqueue.mock.calls.map(([r]) => r.prepared?.clientId)).toEqual(['a']);
+      return;
+    }
+    expect(messageRow.textContent).toContain('发送结果未确认');
+    const deleteButton = messageRow.querySelector<HTMLElement>('[data-testid="pendingSend.outboxRemove.a"]')!;
+    expect(deleteButton).not.toBeNull();
+    expect(messageRow.querySelector('[data-testid="pendingSend.outboxRetry.a"]')).toBeNull();
+    if (action === 'delete-unconfirmed') {
+      act(() => deleteButton.click());
+      const [title, body, buttons] = outbox.alert.mock.calls[0]!;
+      expect(title).toBe('删除这条消息？');
+      expect(body).toContain('电脑可能已经收到这条消息。删除只会移除本机的待发消息。');
+      expect(buttons[0].text).toBe('取消');
+      expect(enqueue).not.toHaveBeenCalled();
+      await act(async () => buttons[1].onPress());
+      expect(host.querySelector('[data-testid="pendingSend.row.a"]')).toBeNull();
+      await act(async () => delivery.run());
+      expect(history).not.toHaveBeenCalled();
+      expect(enqueue.mock.calls.map(([r]) => r.item.clientId)).toEqual(['b']);
+      return;
+    }
+    expect([...host.querySelectorAll('[data-testid^="pendingSend.row."]')].map(row => row.getAttribute('data-testid')))
+      .toEqual(['pendingSend.row.a', 'pendingSend.row.b']);
+    expect(enqueue).not.toHaveBeenCalled();
+    const check = messageRow.querySelector<HTMLElement>('[data-testid="pendingSend.outboxRecheck.a"]')!;
+    expect(check.textContent).toBe('重新确认');
+    await act(async () => check.click());
+    expect(outbox.update).toHaveBeenCalledWith(expect.objectContaining({ item: first.item }), { historyConfirmation: 'requested' });
+    expect(messageRow.textContent).toContain('发送结果未确认');
+    expect(handlers.get('pendingSend.outboxRecheck.a')?.disabled).toBe(true);
+    expect(handlers.get('pendingSend.outboxRemove.a')?.disabled).toBe(true);
+    await act(async () => delivery.run());
+    expect(host.querySelector('[data-testid="pendingSend.outboxConfirmation.a"]')).toBeNull();
+    expect(enqueue).not.toHaveBeenCalled();
+    await act(async () => delivery.run());
+    expect(history.mock.calls.map(([r]) => r.item.clientId)).toEqual(['a', 'a']);
+    expect(legacyHistory.mock.calls.map(([r]) => r.item.clientId)).toEqual(['a', 'a']);
+    expect(enqueue.mock.calls.map(([r]) => r.item.clientId)).toEqual(['b']);
+  } finally {
+    delivery.stop();
+    outbox.records = [];
+    outbox.update.mockReset().mockResolvedValue(undefined);
+    await i18n.changeLanguage(previousLanguage);
+  }
 });
 
 // #7083 unit regression: the production hooks feed the real bubble. Existing
@@ -417,7 +597,13 @@ it.each([
   expect(move.mock.calls).toEqual(expected.map((id) => ['a', id === 'moveUp' ? 'up' : 'down']));
 });
 it('hides unavailable choices and removes the menu while busy or dispatched', () => {
-  show({ actions: { ...item.actions!, steer: { disabled: true, disabledReason: 'Not available' } } });
+  const unsupported = buildQueueRowPresentation({
+    item: { clientId: 'a', text: 'hello' },
+    originalIndex: 0,
+    queueLength: 1,
+    projection: { ...EMPTY_INPUT_PROJECTION, steerUnsupported: true },
+  });
+  show({ actions: unsupported.actions });
   const menu = handlers.get('pendingSend.queueMenu.a')!;
   expect((menu.actions as MenuAction[]).map(({ id }) => id)).toEqual(['edit', 'remove']);
   const choose = menu.onPressAction as (event: { nativeEvent: { event: string } }) => void;

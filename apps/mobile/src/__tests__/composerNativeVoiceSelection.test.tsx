@@ -124,3 +124,16 @@ it.each([{ images: [] }, { images: ['eA=='] }])('does not let a rejected native 
   expect(placeholders).toBe(0);
   expect(fail).not.toHaveBeenCalled();
 });
+
+it('hands native the dictation insertion point so it can scroll to new text', () => {
+  const { input, render } = mount('前后');
+  expect(bridge.props.document.caret).toBeUndefined();
+  const partial = '前语音内容后';
+  input.current!.rememberSelection(partial, { start: 5, end: 5 });
+  render(partial, [{ type: 'quote', quote: { text: '引用' } }]);
+  // Native offsets count the quote atom as one character.
+  expect(bridge.props.document.caret).toBe(6);
+  // A draft the dictation did not produce keeps native's own selection.
+  render('别的草稿');
+  expect(bridge.props.document.caret).toBeUndefined();
+});

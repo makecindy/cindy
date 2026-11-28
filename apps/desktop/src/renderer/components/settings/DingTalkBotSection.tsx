@@ -6,10 +6,28 @@ import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { useDingTalkBot } from '@/hooks/useDingTalkBot';
 import { cn } from '@/lib/utils';
-import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
+import {
+  formatImDefaultRouteSummary,
+  ImChannelSettingsCard,
+  useImChannelSettingsSummary,
+} from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import {
+  ImBotBlockCard,
+  ImBotPersonalWay,
+  ImBotSetupGuide,
+  ImBotStatusText,
+  ImBotSubPage,
+  ImCompanionBotsSection,
+  useImBotNav,
+  type ImBotStatusTone,
+} from './ImBotPageParts';
+import { ImChatSettingsCard } from './ImChatSettingsSection';
+import { ImChannelProjectRows } from './ImChannelProjectRows';
+import { ImReplyTargetField, useImReplyTarget } from './ImReplyTargetField';
 
 const DEVELOPER_PORTAL_URL = 'https://open-dev.dingtalk.com/';
 
@@ -35,12 +53,49 @@ export function DingTalkBotSection({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const bot = useDingTalkBot();
+  const controller = useDingTalkBot();
+  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('dingtalk');
+  return (
+    <DingTalkBotSectionView
+      expanded={expanded}
+      onToggle={onToggle}
+      controller={controller}
+      routeSummary={routeSummary}
+      defaultSettings={
+        <ImDefaultSettingsSection channel="dingtalk" embedded onSummaryChange={setRouteSummary} />
+      }
+    />
+  );
+}
+
+export function DingTalkBotSectionView({
+  controller,
+  idPrefix = '',
+  canDisconnect = true,
+  canReconnect = true,
+  routeSummary,
+  defaultSettings,
+  connectionDetails,
+
+  expanded,
+  onToggle,
+}: {
+  idPrefix?: string;
+  canDisconnect?: boolean;
+  canReconnect?: boolean;
+  controller: ReturnType<typeof useDingTalkBot>;
+  routeSummary: import('./ImDefaultSettingsSection').ImDefaultSettingsSummary | null;
+  defaultSettings: React.ReactNode;
+  connectionDetails?: React.ReactNode;
+
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const bot = controller;
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
   const [showSecret, setShowSecret] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
-  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('dingtalk');
 
   const guideSteps = useMemo(
     () => [1, 2, 3, 4].map((step) => t(`settings.dingtalkBot.guide.step${step}`)),
@@ -61,14 +116,10 @@ export function DingTalkBotSection({
 
   return (
     <ImChannelSettingsCard
-      id={imBotSettings.dingtalk.targetId}
+      id={`${idPrefix}${imBotSettings.dingtalk.targetId}`}
       title={t(imBotSettings.dingtalk.titleKey)}
       description={t('settings.dingtalkBot.description')}
-      routeSummary={
-        routeSummary
-          ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}`
-          : null
-      }
+      routeSummary={formatImDefaultRouteSummary(routeSummary, t)}
       expanded={expanded}
       onToggle={onToggle}
       status={
@@ -91,7 +142,7 @@ export function DingTalkBotSection({
         </span>
       }
     >
-      <ImDefaultSettingsSection channel="dingtalk" embedded onSummaryChange={setRouteSummary} />
+      {defaultSettings}
       <div className="h-px w-full bg-[var(--border-default)]" />
 
       {connected ? (
@@ -110,24 +161,31 @@ export function DingTalkBotSection({
                 {t('settings.dingtalkBot.connected.heading')}
               </div>
               <div className="mt-1 text-12 text-[var(--settings-section-desc)]">
-                {bot.ownerUserId
-                  ? t('settings.dingtalkBot.connected.ownerBound')
-                  : t('settings.dingtalkBot.connected.waitingOwner')}
+                {connectionDetails
+                  ? null
+                  : bot.ownerUserId
+                    ? t('settings.dingtalkBot.connected.ownerBound')
+                    : t('settings.dingtalkBot.connected.waitingOwner')}
               </div>
             </div>
           </div>
-          <InfoRow label={t('settings.dingtalkBot.appKeyLabel')} value={bot.appKey} />
-          <InfoRow
-            label={t('settings.dingtalkBot.connected.ownerLabel')}
-            value={bot.ownerUserId || t('settings.dingtalkBot.connected.notBound')}
-          />
+          {connectionDetails ?? (
+            <>
+              <InfoRow label={t('settings.dingtalkBot.appKeyLabel')} value={bot.appKey} />
+              <InfoRow
+                label={t('settings.dingtalkBot.connected.ownerLabel')}
+                value={bot.ownerUserId || t('settings.dingtalkBot.connected.notBound')}
+              />
+            </>
+          )}
+
           <Button data-setting-id={imBotSettings.dingtalk.id}
             variant="secondary"
             size="lg"
             loading={bot.isClearing}
             type="button"
             onClick={() => void clear()}
-            disabled={bot.isClearing}
+            disabled={!canDisconnect || bot.isClearing}
           >
             <Trash2 size={13} />
             {t('settings.dingtalkBot.disconnect')}
@@ -137,6 +195,7 @@ export function DingTalkBotSection({
         <div className="flex flex-col gap-3">
           <FieldLabel>{t('settings.dingtalkBot.appKeyLabel')}</FieldLabel>
           <TextInput
+            label={t('settings.dingtalkBot.appKeyLabel')}
             value={bot.appKey}
             onChange={bot.setAppKey}
             placeholder={t('settings.dingtalkBot.appKeyPlaceholder')}
@@ -145,6 +204,7 @@ export function DingTalkBotSection({
           <div className="relative">
             <TextInput
               type={showSecret ? 'text' : 'password'}
+              label={t('settings.dingtalkBot.appSecretLabel')}
               value={bot.appSecret}
               onChange={bot.setAppSecret}
               placeholder={
@@ -190,6 +250,7 @@ export function DingTalkBotSection({
                 size="lg"
                 loading={bot.isSaving}
                 onReconnect={bot.reconnect}
+                disabled={!canReconnect}
                 className="flex-1"
               >
                 {t('settings.dingtalkBot.reconnect')}
@@ -214,7 +275,7 @@ export function DingTalkBotSection({
               <button data-setting-id={imBotSettings.dingtalk.id}
                 type="button"
                 onClick={() => void clear()}
-                disabled={bot.isClearing}
+                disabled={!canDisconnect || bot.isClearing}
                 className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full border border-[var(--settings-btn-secondary-border)] text-[var(--settings-trash-icon)]"
                 aria-label={t('settings.dingtalkBot.disconnect')}
               >
@@ -270,12 +331,14 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 }
 
 function TextInput({
+  label,
   value,
   onChange,
   placeholder,
   type = 'text',
   className,
 }: {
+  label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
@@ -284,6 +347,7 @@ function TextInput({
 }) {
   return (
     <input data-setting-id={imBotSettings.dingtalk.id}
+      aria-label={label}
       type={type}
       value={value}
       onChange={(event) => onChange(event.target.value)}
@@ -309,6 +373,152 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       <span className="max-w-[65%] truncate font-medium text-[var(--settings-section-title)]">
         {value}
       </span>
+    </div>
+  );
+}
+
+const statusTone: Record<DingTalkBotTransportStatus['kind'], ImBotStatusTone> = {
+  idle: 'off',
+  connecting: 'progress',
+  connected: 'connected',
+  conflict: 'progress',
+  error: 'error',
+};
+
+export function useDingTalkListStatus(): { configured: boolean; tone: ImBotStatusTone; labelKey: string } {
+  const { status, hasSecret } = useDingTalkBot();
+  return { configured: hasSecret || status.kind !== 'idle', tone: statusTone[status.kind], labelKey: statusKey[status.kind] };
+}
+
+/** 设置 → IM 机器人 → 钉钉。钉钉只有「你自己的机器人」一种方式, 未连接时表单直接在子页里。 */
+export function DingTalkBotSettings() {
+  const bot = useDingTalkBot();
+  const nav = useImBotNav();
+  const replyTarget = useImReplyTarget('dingtalk');
+  const toCompanion = replyTarget.supported && !!replyTarget.companionBotId;
+  const { confirm } = useConfirmDialog();
+  const { t } = useTranslation();
+
+  const clear = useCallback(async () => {
+    const confirmed = await confirm({
+      title: t('settings.dingtalkBot.disconnectConfirm.title'),
+      description: t('settings.dingtalkBot.disconnectConfirm.description'),
+      confirmText: t('settings.dingtalkBot.disconnectConfirm.confirm'),
+      cancelText: t('settings.dingtalkBot.disconnectConfirm.cancel'),
+    });
+    if (confirmed) await bot.clear();
+  }, [bot, confirm, t]);
+
+  if (nav.page === 'model') {
+    return (
+      <ImBotSubPage title={t('settings.imBot.rows.model')} description={t('settings.imBot.apps.dingtalk')}>
+        <ImBotBlockCard><ImDefaultSettingsSection channel="dingtalk" embedded /></ImBotBlockCard>
+      </ImBotSubPage>
+    );
+  }
+
+  if (bot.status.kind !== 'connected') {
+    return (
+      <>
+        <ImBotPersonalWay id={imBotSettings.dingtalk.targetId}>
+          <ImBotBlockCard><DingTalkSetupForm bot={bot} onClear={clear} /></ImBotBlockCard>
+        </ImBotPersonalWay>
+        <ImCompanionBotsSection channel="dingtalk" />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <ImBotPersonalWay id={imBotSettings.dingtalk.targetId}>
+        <SettingsCard>
+          <ImReplyTargetField target={replyTarget} setting="dingtalk" />
+          {toCompanion ? null : <ImChannelProjectRows channel="dingtalk" appName={t('settings.imBot.apps.dingtalk')} settingId={imBotSettings.dingtalk.id} />}
+        </SettingsCard>
+        {toCompanion ? null : <ImChatSettingsCard channel="dingtalk" />}
+        <SettingsCard>
+          <SettingsRow
+            title={bot.appKey}
+            hint={<ImBotStatusText tone="connected">
+              {[t(statusKey.connected), t(bot.ownerUserId ? 'settings.dingtalkBot.connected.ownerBound' : 'settings.dingtalkBot.connected.waitingOwner')].join(' · ')}
+            </ImBotStatusText>}
+          />
+          <SettingsRow data-setting-id={imBotSettings.dingtalk.id} danger title={t('settings.imBot.rows.unbind')}
+            disabled={bot.isClearing} onClick={() => void clear()} />
+        </SettingsCard>
+      </ImBotPersonalWay>
+      <ImCompanionBotsSection channel="dingtalk" />
+    </>
+  );
+}
+
+function DingTalkSetupForm({ bot, onClear }: { bot: ReturnType<typeof useDingTalkBot>; onClear: () => Promise<void> }) {
+  const { t } = useTranslation();
+  const [showSecret, setShowSecret] = useState(false);
+  const guideSteps = useMemo(() => [1, 2, 3, 4].map((step) => ({ body: t(`settings.dingtalkBot.guide.step${step}`) })), [t]);
+  return (
+    <div className="flex flex-col gap-3">
+      <FieldLabel>{t('settings.dingtalkBot.appKeyLabel')}</FieldLabel>
+      <TextInput label={t('settings.dingtalkBot.appKeyLabel')} value={bot.appKey} onChange={bot.setAppKey} placeholder={t('settings.dingtalkBot.appKeyPlaceholder')} />
+      <FieldLabel>{t('settings.dingtalkBot.appSecretLabel')}</FieldLabel>
+      <div className="relative">
+        <TextInput
+          type={showSecret ? 'text' : 'password'}
+          label={t('settings.dingtalkBot.appSecretLabel')}
+          value={bot.appSecret}
+          onChange={bot.setAppSecret}
+          placeholder={bot.hasSecret ? t('settings.dingtalkBot.appSecretSavedPlaceholder') : t('settings.dingtalkBot.appSecretPlaceholder')}
+          className="pr-10"
+        />
+        <button data-setting-id={imBotSettings.dingtalk.id}
+          type="button"
+          onClick={() => setShowSecret((value) => !value)}
+          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)]"
+          aria-label={showSecret ? t('settings.dingtalkBot.hideSecret') : t('settings.dingtalkBot.showSecret')}
+        >
+          {showSecret ? <EyeOff size={18} /> : <Eye size={18} />}
+        </button>
+      </div>
+      <div className="min-h-[18px] text-12">
+        {bot.validationError ? (
+          <span className="text-[var(--settings-error-text)]" role="alert">{bot.validationError}</span>
+        ) : bot.status.kind === 'error' ? (
+          <ImConnectionError message={t('settings.dingtalkBot.errorHint')} details={bot.status.reason} />
+        ) : (
+          <span className="text-[var(--settings-source-meta)]">{t('settings.dingtalkBot.formHint')}</span>
+        )}
+      </div>
+      <div className="flex gap-2">
+        {bot.hasSecret && !bot.appSecret.trim() ? (
+          <ImReconnectButton variant="cta" size="lg" loading={bot.isSaving} onReconnect={bot.reconnect} className="flex-1">
+            {t('settings.dingtalkBot.reconnect')}
+          </ImReconnectButton>
+        ) : (
+          <Button data-setting-id={imBotSettings.dingtalk.id} variant="cta" size="lg" loading={bot.isSaving} type="button"
+            onClick={() => void bot.connect()} disabled={!bot.canConnect} className="flex-1">
+            {bot.isSaving && <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />}
+            {t('settings.dingtalkBot.connect')}
+          </Button>
+        )}
+        {bot.hasSecret && (
+          <button data-setting-id={imBotSettings.dingtalk.id}
+            type="button"
+            onClick={() => void onClear()}
+            disabled={bot.isClearing}
+            className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full border border-[var(--settings-btn-secondary-border)] text-[var(--settings-trash-icon)]"
+            aria-label={t('settings.dingtalkBot.disconnect')}
+          >
+            <Trash2 size={16} />
+          </button>
+        )}
+      </div>
+      <ImBotSetupGuide
+        settingId={imBotSettings.dingtalk.id}
+        title={t('settings.dingtalkBot.guide.title')}
+        steps={guideSteps}
+        linkLabel={t('settings.dingtalkBot.guide.openPortal')}
+        onOpenLink={() => window.electronAPI.openExternal?.(DEVELOPER_PORTAL_URL)}
+      />
     </div>
   );
 }

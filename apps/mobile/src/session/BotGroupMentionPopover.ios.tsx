@@ -5,11 +5,12 @@ import { font, foregroundStyle, frame, padding } from '@expo/ui/swift-ui/modifie
 import { View } from 'react-native';
 import { useTheme } from '@/theme';
 import { spacing } from '@/theme/tokens';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import type { BotGroupMentionPopoverProps } from './BotGroupMentionPopover';
 import { BOT_GROUP_MENTION_AVATAR_SIZE } from './BotGroupAvatars';
 
 /** A real native popover, including compact-width iPhone presentation. */
-export function BotGroupMentionPopover({ position, width, onClose, avatar, name, displayName, caption }: BotGroupMentionPopoverProps) {
+export function BotGroupMentionPopover({ position, width, onClose, avatar, name, external, displayName, orgDetail, caption }: BotGroupMentionPopoverProps) {
   const { mode, colors } = useTheme();
   // Mount the anchor before presentation; presenting during native onAppear
   // uses a detached hosting controller on the first tap.
@@ -22,8 +23,12 @@ export function BotGroupMentionPopover({ position, width, onClose, avatar, name,
         <HStack spacing={spacing.lg} modifiers={[padding({ all: spacing.lg }), frame({ width })]} testID="botGroup.mention.identity">
           <RNHostView matchContents><View style={{ width: BOT_GROUP_MENTION_AVATAR_SIZE, height: BOT_GROUP_MENTION_AVATAR_SIZE }}>{avatar}</View></RNHostView>
           <VStack alignment="leading" spacing={spacing.xs} modifiers={[frame({ maxWidth: Infinity, alignment: 'leading' })]}>
-            <Text modifiers={[font({ textStyle: 'headline' }), foregroundStyle(colors.textPrimary)]}>{name}</Text>
+            <HStack spacing={spacing.xs}>
+              <Text modifiers={[font({ textStyle: 'headline' }), foregroundStyle(colors.textPrimary)]}>{name}</Text>
+              {external ? <RNHostView matchContents><BotGroupExternalBadge /></RNHostView> : null}
+            </HStack>
             {displayName ? <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}>{displayName}</Text> : null}
+            {orgDetail ? <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}>{orgDetail}</Text> : null}
             {caption ? <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}>{caption}</Text> : null}
           </VStack>
         </HStack>

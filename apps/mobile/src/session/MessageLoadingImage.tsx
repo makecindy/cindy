@@ -9,6 +9,11 @@ import {
 import { Image as ExpoImage, type ImageProps } from "expo-image";
 import { ImageOff, LoaderCircle } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  registerChatServerNativeImageCacheClearer,
+  registerChatServerPurgedRoomStore,
+} from "@/chat/chatServerMediaCache";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import {
   iconSize,
@@ -18,6 +23,22 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
+
+registerChatServerNativeImageCacheClearer(() => {
+  void ExpoImage.clearMemoryCache?.()?.catch?.(() => undefined);
+  void ExpoImage.clearDiskCache?.()?.catch?.(() => undefined);
+});
+// Room ids only (no media or account data); see chatServerMediaCache purgedRooms.
+const PURGED_ROOMS_KEY = "cindy.chat-media.purged-rooms.v1";
+registerChatServerPurgedRoomStore({
+  load: async () => {
+    const parsed: unknown = JSON.parse((await AsyncStorage.getItem(PURGED_ROOMS_KEY)) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  },
+  save: (roomIds) => {
+    void AsyncStorage.setItem(PURGED_ROOMS_KEY, JSON.stringify(roomIds)).catch(() => undefined);
+  },
+});
 
 /** Shared by remote resolution and byte decoding, so neither stage appears blank. */
 export function MessageImagePlaceholder({

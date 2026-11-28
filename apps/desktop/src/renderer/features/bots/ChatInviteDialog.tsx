@@ -1,3 +1,4 @@
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED } from '@cindy/maker-shared/botGroupChat';
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
@@ -116,7 +117,7 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
         }
         // Already a member: the invitation's only remaining purpose is to open the group.
         if (result.joined) { onJoined?.(result.groupId); onClose(); return; }
-        const status = await api().status().catch(() => undefined);
+        const status = BOT_GROUP_PERSONAL_REPLIES_ENABLED ? await api().status().catch(() => undefined) : undefined;
         if (!current()) return;
         setMaskSupported(status?.personalMask === true);
         setPreview(result); setNow(Date.now());

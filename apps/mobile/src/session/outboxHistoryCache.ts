@@ -5,6 +5,17 @@ import { findRemoteHistoryView } from './remoteHistoryViews';
 import { remoteSessionStore } from './remoteSessionStore';
 import type { RemoteMessage } from './types';
 
+/** Positive, device-scoped user history only; a missing page or queue item proves nothing. */
+export function hasObservedOutboxHistory(deviceId: string, sessionId: string, clientId: string): boolean {
+  const matches = (row: RemoteMessage) => row.role === 'user'
+    && row.sessionId === sessionId && row.clientId === clientId;
+  if (remoteSessionStore.getSessionDeviceId(sessionId) === deviceId
+      && remoteSessionStore.getMessages(sessionId).some(matches)) return true;
+  const snapshot = findRemoteHistoryView(deviceId, sessionId)?.getSnapshot();
+  return snapshot?.ready === true && historyViewLeaves(snapshot.items).some(item =>
+    item.type === 'messages' && item.messages.some(matches));
+}
+
 /** A sent row can age out of the latest window; it must not become a pending bubble forever. */
 function coversMessage(snapshot: HistoryViewSnapshot<RemoteMessage>, clientId: string, message?: RemoteMessage): boolean {
   if (!snapshot.ready) return false;

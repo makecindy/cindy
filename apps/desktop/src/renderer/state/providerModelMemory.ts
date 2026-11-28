@@ -705,9 +705,12 @@ function getVersion(): number {
   return version;
 }
 /** React hook —— 订阅 providerModelMemory 变更版本号(useSyncExternalStore)。 */
-export function useProviderModelMemoryVersion(): number {
-  return useSyncExternalStore(subscribe, getVersion, getVersion);
+export function useProviderModelMemoryVersion(enabled = true): number {
+  // Another computer's settings page keeps the hook order but never subscribes to this computer's store.
+  return useSyncExternalStore(enabled ? subscribe : subscribeNowhere, enabled ? getVersion : noVersion, enabled ? getVersion : noVersion);
 }
+const subscribeNowhere = (): (() => void) => () => undefined;
+const noVersion = (): number => 0;
 /** 订阅 providerModelMemory 变更(非 React,如 App.tsx 把快照镜像给 main)。 */
 export function subscribeProviderModelMemory(listener: () => void): () => void {
   return subscribe(listener);

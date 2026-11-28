@@ -22,6 +22,11 @@ Chrome 仍是 `my-browser`）。Native Messaging 的注册文件布局（`<App S
 只保存配对，旧版本存下的名单读到即忽略。事件 `browser-extension-policy-request` 沿用原名，现在只
 在没有配对缓存时用来索要配对。
 
+插件请求 `status` 时，若 `nativeBinding` 为 `unavailable` 且宿主已取得登记失败码，
+响应附带可选的 `nativeBindingReason`。例如，`NATIVE_HOST_IN_USE` 表示同名登记已被占用，
+`INSTALL_FAILED` 表示一般安装失败。登记恢复后省略该字段。旧宿主也可能省略它，
+插件应保留原有的通用提示。
+
 Native Messaging 临时注册失败由宿主按 5 秒、15 秒、30 秒、1 分钟、2 分钟、5 分钟退避，
 之后保持每 5 分钟重试，不依赖打开插件面板或点击刷新。注册冲突、路径安全校验失败及
 确认插件自带程序缺失时停止自动重试；通用 `ENOENT`、`EPERM` 等错误不直接判为永久失败。
@@ -46,3 +51,15 @@ Native Messaging 临时注册失败由宿主按 5 秒、15 秒、30 秒、1 分�
 扩展只显示阶段；线协议版本不变。插件侧来源为 `tasks.getRun().preview`（见
 [插件任务流式预览](plugin-task-run-preview.md)）。实现见 `bridge.ts` `relayProgress`，回归见
 `bridge.test.ts`。
+
+WebSocket 保活与即时唤醒（2026-11-28）：`/health` 的 `capabilities` 新增 `'ws-v1'`，线协议版本保持
+`0.4.13` 不变。宿主在原回环端口新增 `POST /ws/ticket`（沿用现有自定义头与会话鉴权，发放一次性
+15 秒有效期、绑定 `clientId`/`origin`/`session` 的短票据）、`GET /poll?nowait=1`（无任务立即返回
+`{job: null}`）以及 `GET /ws` WebSocket 升级入口（仅接受 `127.0.0.1` Host 且持有有效票据的扩展
+Origin；首帧校验 `{type: 'auth', clientId, session, ticket}` 后进入长连）。宿主每 15 秒发送
+`{type: 'ping', ts}` 保活（扩展回 `{type: 'pong', ts}` 以刷新 `seen` 并重置 Chrome MV3 30 秒空闲
+回收计时），有任务入队时主动推送 `{type: 'job_available'}` 触发扩展立即通过 `/poll?nowait=1` 取任务；
+无在途任务且无 HTTP `/poll` 等待者时，WS 异常断开会立即失效该客户端租约，避免 macOS 零窗口 Profile
+卸载后继续误判在线 35 秒。旧扩展无视 `ws-v1` 照常走 HTTP `/poll` 与 `/health`；新扩展在旧宿主
+（`capabilities` 不含 `ws-v1`）或 WS 握手/断连失败时自动回落到既有 HTTP 长轮询，不要求同步升级。
+实现见 `main/browser-extension/bridge.ts`，回归见 `bridge.test.ts`。

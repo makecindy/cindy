@@ -6,6 +6,7 @@
  * 同款),本模块只放与页面状态无关的纯逻辑:附件重建、带重试的 rewind 提交、
  * 错误文案与文件回滚提示。
  */
+import { parseBase64DataUrl } from '@cindy/maker-shared';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import {
   composerDocumentHasContent,
@@ -128,8 +129,10 @@ function isMessageEditErrorCode(err: unknown, code: string): boolean {
 }
 
 function readDataUriBase64(uri: string): string | null {
-  const match = /^data:[^;,]+;base64,(.*)$/s.exec(uri);
-  return match ? match[1] : null;
+  return parseBase64DataUrl(uri, /^data:[^;,]+;base64$/, {
+    allowEmpty: true,
+    allowLineTerminators: true,
+  })?.payload ?? null;
 }
 
 function imageExtForMime(mimeType: string): string {

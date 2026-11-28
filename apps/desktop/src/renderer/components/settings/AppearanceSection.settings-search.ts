@@ -68,6 +68,26 @@ export const appearanceSettings = defineSettings({
     titleKey: 'settings.appearance.sidebarAndPanels',
     sectionKey: 'settings.appearance.sidebarAndPanels',
   },
+  chatLayout: {
+    id: 'appearance.chatLayout',
+    tab: 'appearance',
+    targetId: 'settings-chat-layout',
+    titleKey: 'settings.appearance.chatLayout.label',
+    sectionKey: 'settings.appearance.sidebarAndPanels',
+    options: [
+      { value: 'standard', labelKey: 'settings.appearance.chatLayout.standard' },
+      { value: 'wide', labelKey: 'settings.appearance.chatLayout.wide' },
+    ],
+  },
+  chatWidth: {
+    id: 'appearance.chatWidth',
+    tab: 'appearance',
+    targetId: 'settings-chat-width',
+    fallbackTargetId: 'settings-chat-layout',
+    titleKey: 'settings.appearance.chatLayout.width',
+    descriptionKey: 'settings.appearance.chatLayout.hint',
+    sectionKey: 'settings.appearance.sidebarAndPanels',
+  },
   wallpaperCustomChoose: {
     id: 'settings.appearance.wallpaper.customChoose',
     fallbackTargetId: 'settings-search-target-appearance-wallpaper',

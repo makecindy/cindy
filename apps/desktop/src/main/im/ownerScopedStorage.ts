@@ -186,6 +186,19 @@ export function ownerScopedImSecretRevision(name: string): string {
   return `sha256:${crypto.createHash('sha256').update(encrypted).digest('hex')}`;
 }
 
+function unlinkIfPresent(file: string): void {
+  try {
+    fs.unlinkSync(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+function removeSecretFiles(target: string): void {
+  unlinkIfPresent(`${target}.bak`);
+  unlinkIfPresent(target);
+}
+
 function prepareSecretPath(name: string): string | null {
   const scoped = scopedSecretPath(name);
   if (!scoped) return null;
@@ -212,6 +225,14 @@ function readSecretResult(name: string): IMSecretReadResult {
 }
 
 /** @cindy/im secret adapter whose logical keys follow the active data owner. */
+/** Explicit preference reset needs a durable outcome instead of best-effort cleanup. */
+export function removeOwnerScopedImSecretStrict(name: string): void {
+  const target = prepareSecretPath(name);
+  if (!target) throw new Error('IM owner is unavailable');
+  try { fs.unlinkSync(target); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+}
+
 export const ownerScopedImSecrets: ImSecrets = {
   isAvailable: () => safeStorage.isEncryptionAvailable() && scopedSecretPath('probe') !== null,
   write(name, plaintext) {
@@ -236,14 +257,28 @@ export const ownerScopedImSecrets: ImSecrets = {
   remove(name) {
     try {
       const target = prepareSecretPath(name);
-      if (target) {
-        try { fs.unlinkSync(`${target}.bak`); } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        }
-        fs.unlinkSync(target);
-      }
+      if (target) removeSecretFiles(target);
     } catch {
-      // Missing credentials are already removed.
+      // Legacy callers request best-effort removal.
+    }
+  },
+  removeConfirmed(name) {
+    try {
+      const target = prepareSecretPath(name);
+      if (!target) return false;
+
+      // An eligible legacy file that failed to migrate can reappear on a later
+      // read. Confirm its absence for the owner allowed to claim it.
+      const session = getActiveAppSession();
+      if (session.mode === 'cloud' && session.dataOwnerId &&
+          hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) {
+        const legacy = path.join(safeStorageDir(), `${name}.enc`);
+        if (fs.lstatSync(legacy, { throwIfNoEntry: false })) return false;
+      }
+      removeSecretFiles(target);
+      return true;
+    } catch {
+      return false;
     }
   },
 };

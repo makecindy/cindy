@@ -10,6 +10,8 @@ export type SsoOrgRealmClients = Record<AuthRegion, SsoOrgDiscoveryClient>;
 export interface SsoOrgRealmDiscovery {
   region: AuthRegion;
   discovery: SsoOrgDiscovery;
+  /** Set only if explicit-organization discovery continued despite a failed peer lookup. */
+  unconfirmedRegion?: AuthRegion;
 }
 
 function isNotFound(reason: unknown): boolean {
@@ -40,26 +42,31 @@ export async function discoverSsoOrgRealm(
       "Enterprise identifier exists in both auth regions",
     );
   }
+  const cnNotFound = cn.status === "rejected" && isNotFound(cn.reason);
+  const globalNotFound = global.status === "rejected" && isNotFound(global.reason);
   if (
     cn.status === "fulfilled" &&
     global.status === "rejected" &&
-    (options.allowPartialSuccess || isNotFound(global.reason))
+    (options.allowPartialSuccess || globalNotFound)
   ) {
-    return { region: "cn", discovery: cn.value };
+    return {
+      region: "cn",
+      discovery: cn.value,
+      ...(globalNotFound ? {} : { unconfirmedRegion: "global" }),
+    };
   }
   if (
     global.status === "fulfilled" &&
     cn.status === "rejected" &&
-    (options.allowPartialSuccess || isNotFound(cn.reason))
+    (options.allowPartialSuccess || cnNotFound)
   ) {
-    return { region: "global", discovery: global.value };
+    return {
+      region: "global",
+      discovery: global.value,
+      ...(cnNotFound ? {} : { unconfirmedRegion: "cn" }),
+    };
   }
-  if (
-    cn.status === "rejected" &&
-    global.status === "rejected" &&
-    isNotFound(cn.reason) &&
-    isNotFound(global.reason)
-  ) {
+  if (cnNotFound && globalNotFound) {
     throw new AuthApiError(
       "ORG_SSO_NOT_FOUND",
       404,

@@ -5,7 +5,9 @@ import {
   connectionIssueHint,
   connectionIssueTitle,
   describeRemoteComposerBlockingError,
+  describeNewSessionError,
   describeRemoteError,
+  describeOutboxEnqueueRefusal,
   formatRemoteError,
   humanizeRemoteError,
   isAutoRecoveringRemoteError,
@@ -39,6 +41,21 @@ describe('remoteStatus', () => {
     expect([0, 1, 2, 3, 4, 5, 6].map(connectionRecoverySyncRetryDelayMs))
       .toEqual([900, 1_800, 3_600, 7_200, 14_400, 28_800, 30_000]);
     expect(connectionRecoverySyncRetryDelayMs(20)).toBe(30_000);
+  });
+
+  it('names known enqueue refusals and keeps an unknown write result ambiguous', () => {
+    expect(describeOutboxEnqueueRefusal(new Error('session is not active'))).toBe('这个任务当前无法接收消息。');
+    expect(describeOutboxEnqueueRefusal(new Error('[NOT_FOUND] Session task-1 not found')))
+      .toBe(i18n.t('deviceLink.remoteError.notFound'));
+    expect(describeOutboxEnqueueRefusal(new Error('[UNSUPPORTED_CAPABILITY] Host does not yet support teammate tasks')))
+      .toBe('这台电脑暂不支持向这个任务发送这类消息。');
+    expect(describeOutboxEnqueueRefusal(new Error('[INVALID_PARAMS] invalid files')))
+      .toBe('这条消息有无效内容，电脑未接收。');
+    expect(describeOutboxEnqueueRefusal(new Error('[PRECONDITION_FAILED] REMOTE_OPTIMISTIC_INPUT_CLEARED: stale')))
+      .toBe('任务已清空或正在清空，消息仍保存在本机。');
+    expect(describeOutboxEnqueueRefusal(new Error('[NOT_FOUND] Session does not exist'))).toBeUndefined();
+    expect(describeOutboxEnqueueRefusal(new DeviceLinkError('ACCESS_REVOKED', 'access changed'))).toBeUndefined();
+    expect(describeOutboxEnqueueRefusal(new DeviceLinkError('INVOKE_TIMEOUT', 'reply lost'))).toBeUndefined();
   });
 
   it('labels relay status', () => {
@@ -78,6 +95,29 @@ describe('remoteStatus', () => {
       '[REMOTE_DISABLED] remote disabled',
     );
     expect(formatRemoteError(new Error('[NOT_CONNECTED] offline'))).toBe('[NOT_CONNECTED] offline');
+  });
+
+  // Production create-failure formatter, unit: maker:create-session refuses
+  // with binary_not_ready inside the existing precondition envelope. Other
+  // preconditions must still use their original copy.
+  it('renders the no-engine refusal in the current language, including after restoring draft state', async () => {
+    const error = new DeviceLinkError('IPC_ERROR' as never, '[PRECONDITION_FAILED] binary_not_ready: No Agent engine is available');
+    const raw = formatRemoteError(error);
+    const recovered = { creationError: raw };
+    const previousLanguage = i18n.language;
+    try {
+      for (const language of ['zh-CN', 'en']) {
+        await i18n.changeLanguage(language);
+        const description = i18n.t('deviceLink.agentAuth.engineMissing');
+        expect(describeNewSessionError(raw)).toBe(description);
+        expect(describeNewSessionError(recovered)).toBe(i18n.t('session.screen.createFailedNotice', { message: description }));
+        expect(humanizeRemoteError(error)).toBe(description);
+      }
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
+    const otherPrecondition = '[PRECONDITION_FAILED] another precondition';
+    expect(describeNewSessionError(otherPrecondition)).toBe(otherPrecondition);
   });
 
   it('recognizes a host refusal because the task is still running', () => {

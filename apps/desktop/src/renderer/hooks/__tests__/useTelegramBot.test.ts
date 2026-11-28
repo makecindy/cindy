@@ -79,4 +79,29 @@ describe('useTelegramBot', () => {
     expect(result.current.saveTimedOut).toBe(false);
     expect(result.current.status).toEqual({ kind: 'connected', appId: '123456' });
   });
+
+  // Unit: disconnect can return an error status without rejecting its promise.
+  // The real settings hook must preserve the bound account in that case.
+  it('keeps the Telegram binding when disconnect did not clear its credentials', async () => {
+    toast.error.mockClear();
+    toast.success.mockClear();
+    const refused = { kind: 'error', reason: 'fixture storage error', code: 'secret-unavailable' } as TelegramBotTransportStatus;
+    Object.assign(window, {
+      electronAPI: {
+        telegramBot: {
+          getStatus: vi.fn().mockResolvedValue({
+            status: { kind: 'connected' }, ownerUserId: '123456', botUsername: 'fixturebot',
+          }),
+          onStatusChange: () => () => {},
+          disconnect: vi.fn().mockResolvedValue({ status: refused }),
+        },
+      },
+    });
+    const { result } = renderHook(() => useTelegramBot());
+    await waitFor(() => expect(result.current.ownerUserId).toBe('123456'));
+    await act(() => result.current.disconnect());
+    expect(result.current).toMatchObject({ ownerUserId: '123456', botUsername: 'fixturebot', status: refused });
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('logic.toasts.telegramBotDisconnectFailed');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
 });

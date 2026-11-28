@@ -1,3 +1,6 @@
+import { clearGlmFlashDiscovery, GLM_REALTIME_FLASH, hasGlmFlashDiscovery, isGlmApiBase, isGlmPresetRoute } from '../../shared/glmRealtimeDiscovery.js';
+import { createGlmFlashProbeBatch } from '../voice-conversation/glmFlashProbe.js';
+import { realtimeHeaders } from '../voice-conversation/realtimeProtocol.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import type { ProviderListOptions } from '../maker-host/provider-service.js';
 import type { ProviderPickerVisibilityScope } from '../maker-host/model-visibility-mirror.js';
@@ -12,7 +15,10 @@ import { buildModelsFetchRequest } from '../maker-host/provider-model-fetch.js';
 import { randomUUID } from 'node:crypto';
 import { getProviderRouteCredentialRevision } from '../maker-host/provider-route.js';
 import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
-import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import { cloudManagementExecution } from '../host-settings/managementCalls.js';
+import { presentManagementDeviceCode } from '../host-settings/managementAuthorization.js';
+import { isProviderConnectionIcon, isProviderConnectionImage } from '@cindy/model-providers/branding';
+import { readProviderConnectionIcons, setProviderConnectionIcon, setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
 import { pruneProviderGroupBindings } from '../provider-group/bindings.desktop.js';
 import { writeProviderGroup } from '../provider-group/store.js';
@@ -66,6 +72,10 @@ import type {
   ModelPriceOverrideView,
 } from '../../shared/modelPriceOverride.js';
 import type { MoneyCurrency } from '../../shared/regionalMoney.js';
+import {
+  MAX_MODEL_COMPACTION_PCT,
+  MIN_MODEL_COMPACTION_PCT,
+} from '../../shared/modelContextLimit.js';
 import {
   MAX_PROVIDER_ORDER_ID_LENGTH,
   MAX_PROVIDER_ORDER_ITEMS,
@@ -235,18 +245,21 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
     return creating && Object.keys(input).length === 1 && input.bindGeminiImages === true ? { bindGeminiImages: true } : null;
   }
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
+  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'appendRealtimeModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
     return null;
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
   const policy = (input as Record<string, unknown>).codexImageGenerationRestartPolicy;
   const append = (input as Record<string, unknown>).appendSpeechModelsOnly;
+  const realtime = (input as Record<string, unknown>).appendRealtimeModelsOnly;
   const refreshAgents = (input as Record<string, unknown>).speechReferenceRefreshAgents;
   if (refreshAgents !== undefined && (!Array.isArray(refreshAgents) ||
     refreshAgents.length === 0 || refreshAgents.length > VALID_AGENTS.length ||
     refreshAgents.some(agent => !VALID_AGENTS.includes(agent)) ||
     new Set(refreshAgents).size !== refreshAgents.length)) return null;
   if (append !== undefined && append !== true) return null;
+  if (realtime !== undefined && realtime !== true) return null;
+  if (realtime && entries.length !== 1) return null;
   if (policy !== undefined && policy !== 'interrupt') return null;
   if (append && (source || policy || refreshAgents)) return null;
   const withdrawn = (input as Record<string, unknown>).removeWithdrawnModels;
@@ -267,6 +280,7 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
     ...(source === 'manual-settings' ? { source } : {}),
     ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
     ...(append ? { appendSpeechModelsOnly: true as const } : {}),
+    ...(realtime ? { appendRealtimeModelsOnly: true as const } : {}),
     ...(refreshAgents ? { speechReferenceRefreshAgents: refreshAgents as AgentKind[] } : {}),
     ...(withdrawn ? { removeWithdrawnModels: (withdrawn as { agent: AgentKind; modelId: string }[])
       .map(({ agent, modelId }) => ({ agent, modelId })) } : {}),
@@ -319,6 +333,7 @@ function oauthRuntimeEndpointSignature(config: CustomProviderConfig | null): str
 export interface ProviderHandlerDeps {
   /** Test seam: production reads known locations on this desktop, never renderer paths. */
   localProviderSourceContext?: () => LocalSourceContext;
+  registerCloudCredentialReplacement?(handler: import('./ipcHandlerRegistry.js').IpcHandler): void;
   /**
    * 当前供应商视图（含实时连接状态）；见 createDesktopProviderService。
    *
@@ -472,7 +487,7 @@ export interface ProviderHandlerDeps {
   readSavedProviderRoute(
     providerId: string,
     agent: AgentKind,
-  ): { baseUrl: string; modelsUrl: string | null } | null;
+  ): { baseUrl: string; modelsUrl: string | null; catalogPresetId?: string } | null;
   /**
    * 本机 agent CLI 安装 / 登录态扫描(生产 = scanLocalCliAuth(createLocalCliScanDeps());
    * 单测注入 stub 不碰真实 home)。只 stat 不读内容(规则 23)。
@@ -694,6 +709,9 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     ...(spec.redirect === 'error' ? { redirect: 'error' as const } : {}),
     apiKey: (spec.apiKey as string | null | undefined) ?? null,
     headers: spec.headers as Record<string, string> | undefined,
+    ...(typeof spec.catalogPresetId === 'string' && /^[a-z0-9-]{1,80}$/.test(spec.catalogPresetId)
+      ? { catalogPresetId: spec.catalogPresetId } : {}),
+    ...(typeof spec.refreshBatch === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(spec.refreshBatch) ? { refreshBatch: spec.refreshBatch } : {}),
     ...(typeof spec.savedProviderId === 'string' ? { savedProviderId: spec.savedProviderId } : {}),
     ...(typeof spec.wireProtocol === 'string'
       ? { wireProtocol: spec.wireProtocol as ProviderModelsFetchSpec['wireProtocol'] }
@@ -724,6 +742,7 @@ export function registerProviderHandlers(
   registry: IpcHandlerRegistry,
   deps: ProviderHandlerDeps,
 ) {
+  const probeGlmFlash = createGlmFlashProbeBatch();
   const modelDiscoveryRequests = new Map<string, symbol>();
   // The dispatch revision is intentionally Codex-specific for config-only edits.
   // Keep a discovery-only stamp for other runtimes, including edit-away/edit-back.
@@ -805,7 +824,13 @@ export function registerProviderHandlers(
         const listedUpstream = sameContext && ((proven && submittedListed === true) || (priorModel?.listedUpstream === true
           && JSON.stringify(priorModel.route ?? null) === JSON.stringify(model.route ?? null)));
         // A stale renderer cannot restore a source invalidated by another edit/request.
-        return { ...rest, ...((accepted ? source : old) ? { discoveredSource: accepted ? source : old } : {}),
+        // Reusing a row after a GLM key or route edit requires evidence for the
+        // new credentials. A stale Settings save cannot re-enable a denied row.
+        const glmRow = model.id === GLM_REALTIME_FLASH && (isGlmApiBase(runtime.baseUrl) || isGlmPresetRoute(runtime.baseUrl, runtime.catalogPresetId)
+          || (prior && (isGlmApiBase(prior.baseUrl) || isGlmPresetRoute(prior.baseUrl, prior.catalogPresetId))));
+        const savedModel = glmRow && !(accepted && signatures.length) && !hasGlmFlashDiscovery(priorModel)
+          ? clearGlmFlashDiscovery(rest) : rest;
+        return { ...savedModel, ...((accepted ? source : old) ? { discoveredSource: accepted ? source : old } : {}),
           ...(listedUpstream ? { listedUpstream: true as const } : {}),
           // The absence receipt is never inherited: only the refresh that observed it may set it.
           ...(listedUpstream && proven && submittedMissing === true ? { missingUpstream: true as const } : {}) };
@@ -1861,17 +1886,37 @@ export function registerProviderHandlers(
     if (provider.source === 'organization') {
       throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
-    if (value.action === 'rename' && typeof value.name === 'string' && value.name.trim() && value.name.length <= 128) {
+    if (value.action === 'rename' || value.action === 'appearance') {
+      const name = typeof value.name === 'string' ? value.name.trim() : undefined;
+      const icon = value.icon;
+      if ((value.name !== undefined || value.action === 'rename') && (!name || name.length > 128)) {
+        throwIpcError('INVALID_PARAMS', 'Invalid provider name');
+      }
+      if (value.action === 'appearance' && provider.source !== 'user' || icon !== undefined &&
+          (value.action !== 'appearance' || icon !== null && !isProviderConnectionIcon(icon) && !isProviderConnectionImage(icon))) {
+        throwIpcError('INVALID_PARAMS', 'Invalid connection artwork');
+      }
       if (provider.source === 'builtin') {
-        await setProviderPresentation(providerId, { name: value.name });
+        await setProviderPresentation(providerId, { name });
       } else {
         const id = storedCustomProviderId(providerId);
-        const name = value.name.trim();
         await withProviderConfigMutation(id, async () => {
           assertOptionalRequestedOwner(value);
           const current = await getCustomProvider(id);
           assertOptionalRequestedOwner(value);
-          if (!current || !await updateCustomProvider(id, { ...current, name })) throwIpcError('NOT_FOUND', 'Provider not found');
+          if (!current) throwIpcError('NOT_FOUND', 'Provider not found');
+          const icons = icon === undefined ? {} : readProviderConnectionIcons();
+          const previousIcon = Object.hasOwn(icons, providerId) ? icons[providerId] : null;
+          if (icon !== undefined) await setProviderConnectionIcon(providerId, icon);
+          if (!name || current.name === name) return;
+          try {
+            assertOptionalRequestedOwner(value);
+            if (!await updateCustomProvider(id, { ...current, name })) throwIpcError('NOT_FOUND', 'Provider not found');
+          } catch (error) {
+            assertOptionalRequestedOwner(value);
+            if (icon !== undefined) await setProviderConnectionIcon(providerId, previousIcon ?? null);
+            throw error;
+          }
           assertOptionalRequestedOwner(value);
           await refreshCatalogAfterCommit();
         });
@@ -2428,8 +2473,17 @@ export function registerProviderHandlers(
   const modelSettingsSetCompaction = async (input: unknown, pctInput: unknown, ownerInput: unknown) => {
       assertContextOwner(ownerInput);
       const targets = parseContextTargets(input);
-      if (pctInput !== null && (typeof pctInput !== 'number' || !Number.isInteger(pctInput) || pctInput < 50 || pctInput > 90)) {
-        throwIpcError('INVALID_PARAMS', 'compaction percentage must be 50–90 or null');
+      if (
+        pctInput !== null &&
+        (typeof pctInput !== 'number' ||
+          !Number.isInteger(pctInput) ||
+          pctInput < MIN_MODEL_COMPACTION_PCT ||
+          pctInput > MAX_MODEL_COMPACTION_PCT)
+      ) {
+        throwIpcError(
+          'INVALID_PARAMS',
+          `compaction percentage must be ${MIN_MODEL_COMPACTION_PCT}–${MAX_MODEL_COMPACTION_PCT} or null`,
+        );
       }
       if (!deps.writeModelCompaction) throwIpcError('INTERNAL', 'model compaction settings unavailable');
       const ownerAtIngress = captureProviderOwnerSession();
@@ -2692,9 +2746,12 @@ export function registerProviderHandlers(
           const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
           if (!validation.ok) throwIpcError(validation.code, validation.message);
           separated = splitCustomProviderHeaders(config);
-        } else if (options.appendSpeechModelsOnly) {
+        } else if (options.appendSpeechModelsOnly || options.appendRealtimeModelsOnly) {
           if (Object.keys(keys).length) throwIpcError('INVALID_PARAMS', 'speech additions cannot change credentials');
-          try { config = appendSpeechModels(previous, config, deps.listPresets()); }
+          try {
+            config = appendSpeechModels(previous, config, deps.listPresets(),
+              options.appendRealtimeModelsOnly ? 'realtime' : 'audio_speech', deps.getModelCatalog().modelRegistry);
+          }
           catch { throwIpcError('INVALID_PARAMS', 'connection changed or invalid speech additions'); }
           const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
           if (!validation.ok) throwIpcError(validation.code, validation.message);
@@ -2851,6 +2908,17 @@ export function registerProviderHandlers(
       }
     });
   }
+  // Credential-only cloud edits retain the latest configuration inside the native queue.
+  deps.registerCloudCredentialReplacement?.(async (event, providerId, keys) => {
+    assertTrustedProviderMutationSender(event);
+    const id = storedCustomProviderId(requireProviderId(providerId));
+    const current = await getCustomProvider(id);
+    if (!current || current.auth?.method === 'oauth') throwIpcError('INVALID_PARAMS', 'API-key connection required');
+    return updateProviderFromInput(event, current, keys, { source: 'manual-settings' }, latest => {
+      if (latest.auth?.method === 'oauth') throwIpcError('INVALID_PARAMS', 'connection changed');
+      return latest;
+    });
+  });
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, (event, input, keys, options) =>
     updateProviderFromInput(event, input, keys, options),
   );
@@ -2986,6 +3054,12 @@ export function registerProviderHandlers(
                   error: removed.error ?? 'remove_failed',
                 });
               }
+            }
+            if (Object.hasOwn(readProviderConnectionIcons(), runtimeProviderId)) {
+              await setProviderConnectionIcon(runtimeProviderId, null).catch(() => {
+                log.warn('Failed to clear connection icon after provider deletion', { providerId });
+              });
+              assertProviderMutationOwner(ownerAtIngress);
             }
             // 在队列内尝试刷新目录；刷新失败不撤销已经提交的删除。
             // 凭证/override 的恢复只覆盖删除本身失败的场景。
@@ -3126,14 +3200,17 @@ export function registerProviderHandlers(
     // Authorization 等厂商私密头越过 main-only 边界发到任意地址)。因此先按 savedProviderId
     // 读已存端点,把请求目标**钉回已存 baseUrl/modelsUrl**(完全从已存配置构造目标),
     // 再合并密文头;已存路由不存在(供应商已删 / 无该 runtime)则不合并密文头,按无头降级。
+    let allowGlmProbe = !parsed.savedProviderId && (!parsed.catalogPresetId || parsed.catalogPresetId === 'zhipu-glm-cn');
     if (parsed.savedProviderId) {
-      let savedRoute: { baseUrl: string; modelsUrl: string | null } | null = null;
+      let savedRoute: { baseUrl: string; modelsUrl: string | null; catalogPresetId?: string } | null = null;
       try {
         savedRoute = deps.readSavedProviderRoute(parsed.savedProviderId, parsed.agent);
       } catch {
         savedRoute = null;
       }
       if (savedRoute) {
+        parsed.catalogPresetId = savedRoute.catalogPresetId;
+        allowGlmProbe = !savedRoute.catalogPresetId || savedRoute.catalogPresetId === 'zhipu-glm-cn';
         parsed.baseUrl = savedRoute.baseUrl;
         parsed.modelsUrl = savedRoute.modelsUrl;
         let storedHeaders: Record<string, string> | null = null;
@@ -3164,6 +3241,11 @@ export function registerProviderHandlers(
       && modelDiscoveryRequests.get(requestKey) === generation
       && (!id || (getProviderRouteCredentialRevision(id) === revision
         && modelSourceConfigGenerations.get(id) === configGeneration));
+    if (allowGlmProbe && parsed.authMethod === 'apiKey' && parsed.apiKey?.trim() && (isGlmApiBase(parsed.baseUrl) || isGlmPresetRoute(parsed.baseUrl, parsed.catalogPresetId))) {
+      const headers = realtimeHeaders(parsed.apiKey.trim(), parsed.catalogPresetId === 'zhipu-glm-cn' ? undefined : parsed.headers);
+      const batch = parsed.refreshBatch ? JSON.stringify([owner, id, revision, parsed.refreshBatch]) : undefined;
+      parsed.probeGlmFlash = () => current() ? probeGlmFlash(headers, current, batch) : Promise.resolve('unknown');
+    }
     let result = await deps.fetchModels(parsed);
     const knownGateway = id && (deps.getModelCatalog().providers ?? []).some(provider =>
       provider.id === runtimeCustomProviderId(id) && Object.values(provider.models).some(models =>
@@ -3269,7 +3351,9 @@ export function registerProviderHandlers(
       }
       const { ownerId, method } = requireProviderOAuthLoginOptions(rawOptions);
       const sender = providerOAuthRendererSender(event);
-      if (method === 'device' && !ownerId)
+      // A cloud settings page shows the device code on the controlling computer instead.
+      const management = cloudManagementExecution();
+      if (method === 'device' && !ownerId && !management)
         throwIpcError('INVALID_PARAMS', 'device login requires an initiating window');
       if (ownerId && !sender) {
         throwIpcError('INVALID_PARAMS', 'ownerId requires an Electron sender');
@@ -3307,6 +3391,7 @@ export function registerProviderHandlers(
             });
           } catch { /* A closed renderer must not interrupt credential cleanup. */ }
         }, method, (code) => {
+          if (management && isCurrent()) presentManagementDeviceCode(code);
           if (!ownerId || !sender || !isCurrent()) return;
           try {
             sender.send?.(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {

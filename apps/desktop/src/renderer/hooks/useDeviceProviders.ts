@@ -437,27 +437,32 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
 }
 
 /** device-link:订阅某被控设备时预取其供应商目录(与 prefetchDeviceCapabilities 并列调用)。 */
-export async function prefetchDeviceProviders(deviceId: string): Promise<void> {
+export async function prefetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPayload | null> {
   try {
-    await fetchDeviceProviders(deviceId);
+    return await fetchDeviceProviders(deviceId);
   } catch (err) {
     // swallow:打开会话时 hook 会再取一次(旧版被控端不支持时回退扁平列表)。
     log.debug('prefetchDeviceProviders failed (non-fatal)', {
       deviceId,
       error: err instanceof Error ? err.message : String(err),
     });
+    return null;
   }
 }
 
 /** Refresh mounted task-host catalogs after that host's discovery has recovered. */
-export function evictControlledDeviceProviders(taskDeviceId: string): void {
+export function evictControlledDeviceProviders(taskDeviceId: string, recovered?: ReadonlySet<string>): void {
   for (const key of new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys()])) {
-    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) evictDeviceProviders(key);
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId && !recovered?.has(key)) evictDeviceProviders(key);
   }
 }
 
 export function getMountedControlledDeviceProviderTargets(taskDeviceId: string): string[] {
   return [...listeners.keys()].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId);
+}
+
+export function getCachedControlledDeviceProviderTargets(taskDeviceId: string): string[] {
+  return [...cache.keys()].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId && expiry.valid(key));
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其供应商缓存(只清该设备的 key + 代际自增)。 */
@@ -496,10 +501,30 @@ export function getDeviceProvidersGeneration(deviceId: string): number {
   return deviceGen.get(deviceId) ?? 0;
 }
 
+let allEvictGen = 0;
 const routedProviderGenerations = new Map<string, number>();
+type RoutedProviderInvalidationListener = (
+  deviceId: string | null,
+  options?: { retainDisplaySnapshot?: boolean },
+) => void;
+const routedProviderInvalidationListeners = new Set<RoutedProviderInvalidationListener>();
 
 export function getRoutedProviderGeneration(deviceId: string): number {
-  return routedProviderGenerations.get(deviceId) ?? 0;
+  return allEvictGen + (routedProviderGenerations.get(deviceId) ?? 0);
+}
+
+export function subscribeRoutedProviderInvalidation(
+  listener: RoutedProviderInvalidationListener,
+): () => void {
+  routedProviderInvalidationListeners.add(listener);
+  return () => { routedProviderInvalidationListeners.delete(listener); };
+}
+
+function notifyRoutedProviderInvalidation(
+  deviceId: string | null,
+  options?: { retainDisplaySnapshot?: boolean },
+): void {
+  for (const listener of [...routedProviderInvalidationListeners]) listener(deviceId, options);
 }
 
 export function evictDeviceProviders(
@@ -507,6 +532,7 @@ export function evictDeviceProviders(
   options?: { retainDisplaySnapshot?: boolean; directOnly?: boolean; deferNotify?: boolean },
 ): number {
   // A provisional direct target must not evict the host's healthy routed aliases.
+  const routedInvalidated = !options?.directOnly && !parseModelCatalogKey(deviceId);
   if (!options?.directOnly) {
     if (!parseModelCatalogKey(deviceId)) {
       routedProviderGenerations.set(deviceId, getRoutedProviderGeneration(deviceId) + 1);
@@ -534,11 +560,14 @@ export function evictDeviceProviders(
       if (!cache.has(deviceId)) notifyDeviceProviders(deviceId, event);
     });
   } else notifyDeviceProviders(deviceId, event);
+  if (routedInvalidated) notifyRoutedProviderInvalidation(deviceId, options);
   return deviceGen.get(deviceId)!;
 }
 
 /** 账号边界：缓存、在途读取及挂载中的旧账号目录一起失效。 */
 export function evictAllDeviceProviders(): void {
+  allEvictGen += 1;
   const devices = new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys(), ...deviceGen.keys()]);
   for (const deviceId of devices) evictDeviceProviders(deviceId);
+  notifyRoutedProviderInvalidation(null);
 }

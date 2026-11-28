@@ -68,7 +68,11 @@ export function createBranchSyncHandlers<Event>(deps: {
     ) {
       throwIpcError('INVALID_PARAMS', 'Invalid repository or branch');
     }
-    return { baseRepo, branch };
+    const strategy = body.strategy;
+    if (strategy !== undefined && strategy !== 'ff-only' && strategy !== 'rebase') {
+      throwIpcError('INVALID_PARAMS', 'Invalid branch sync strategy');
+    }
+    return { baseRepo, branch, ...(strategy ? { strategy } : {}) };
   }
   async function run<T>(operation: () => Promise<T>): Promise<T> {
     try {
@@ -119,7 +123,8 @@ export function createBranchSyncHandlers<Event>(deps: {
           !operation ||
           operation.scope !== scope ||
           operation.req.baseRepo !== req.baseRepo ||
-          operation.req.branch !== req.branch
+          operation.req.branch !== req.branch ||
+          operation.req.strategy !== req.strategy
         )
           throwIpcError('INTERNAL', BRANCH_SYNC_ERROR_PREFIX + 'changed');
       } else {
