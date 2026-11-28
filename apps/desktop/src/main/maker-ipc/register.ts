@@ -1042,6 +1042,7 @@ import {
   piPackageMutationMayHaveChangedState,
   type PiPackageRuntimeInvalidationPhase,
 } from '../maker-host/pi-package-store.js';
+import { onSkillFactsGenerationChanged } from '../skillFactsGeneration';
 import {
   invalidateLocalPiPackageRuntimes,
   invalidateLocalPiPackageRuntimesForObservedChange,
@@ -6936,6 +6937,7 @@ export interface RegisterMakerIpcOptions {
 }
 
 let disposePiPackagesChangedBroadcast: (() => void) | null = null;
+let disposeSkillFactsGenerationSubscription: (() => void) | null = null;
 
 /**
  * Preselects a route in the local new-task draft, the same push the app-default model
@@ -7131,6 +7133,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   }));
   disposePiPackagesChangedBroadcast?.();
+  disposeSkillFactsGenerationSubscription?.();
+  disposeSkillFactsGenerationSubscription = onSkillFactsGenerationChanged(() => {
+    // Skill/plugin installs, removals and package changes drop the
+    // generation-cached agent skill scans; the next palette open rescans.
+    maker.invalidateAgentSkillFacts();
+  });
   disposePiPackagesChangedBroadcast = onPiPackagesChanged((origin) => {
     void invalidateLocalPiPackageRuntimesForObservedChange(maker, origin)
       .then((invalidation) => {

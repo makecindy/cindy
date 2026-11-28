@@ -5332,7 +5332,10 @@ export function ChatInput({
 
   useEffect(() => {
     if (!slashOpen) return;
-    reloadSlashCommands({ forceReload: true });
+    // 打开面板不再强制重扫：主进程按 generation 复用技能/插件 facts，
+    // 安装、卸载、编辑和包变更都会使缓存失效。打开路径的陈旧上限由
+    // roster 缓存的 TTL 提供（#9199）。
+    reloadSlashCommands();
   }, [slashOpen, reloadSlashCommands]);
   useEffect(() => {
     if (!slashOpen) {
