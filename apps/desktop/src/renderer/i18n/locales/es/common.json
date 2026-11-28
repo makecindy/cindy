@@ -16186,6 +16186,8 @@
       "codexHelperUnavailable": "cindy_helper está habilitado, pero no está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea.",
       "codexHelperUnverified": "No se pudo comprobar si cindy_helper está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea.",
       "requestFormatError": "La aplicación envió una solicitud no válida, por lo que no se pudo completar esta respuesta.",
+      "companionModelMissing": "Este amigo no tiene ningún modelo disponible. Elige un modelo y vuelve a intentarlo.",
+      "companionModelSettings": "Configuración del modelo",
       "piRetryHistoryTooLarge": "Tu mensaje no se envió. Al leer el historial para reintentar, Pi encontró una trama que superaba el límite local de 16 MiB. Puedes continuar en una tarea nueva.",
       "piRetryHistoryUnavailable": "Tu mensaje no se envió. Pi no pudo leer el historial necesario para enviarlo. Puedes volver a intentarlo o continuar en una tarea nueva.",
       "upstreamStatusError": "El proveedor devolvió {{status}}, por lo que la respuesta no pudo completarse.",

@@ -39,6 +39,7 @@ import { toast } from '@/lib/toast';
 import { getSessionDisplayTitle } from './lib/sessionDisplayTitle';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { mergeSessionSources } from './lib/mergeSessionSources';
+import { SplitPaneRouteActivationContext } from './splitPaneFocus';
 import {
   SPLIT_GROUP_SESSION_MIME,
   hasSplitGroupSessionType,
@@ -876,7 +877,13 @@ const SplitPaneView = memo(function SplitPaneView(props: PaneProps) {
   return (
     <Suspense fallback={null}>
       <CompanionPane key={props.pane.sessionId} target={props.pane.sessionId} focused={props.pane.key === props.ownerPaneKey}>
-        {(name, route, chat) => <SplitPaneContent {...props} companionTitle={name} paneRoute={route}>{chat}</SplitPaneContent>}
+        {(name, route, chat) => (
+          <SplitPaneContent {...props} companionTitle={name} paneRoute={route}>
+            <SplitPaneRouteActivationContext.Provider value={destination => props.focusSession(props.pane.sessionId, destination)}>
+              {chat}
+            </SplitPaneRouteActivationContext.Provider>
+          </SplitPaneContent>
+        )}
       </CompanionPane>
     </Suspense>
   );

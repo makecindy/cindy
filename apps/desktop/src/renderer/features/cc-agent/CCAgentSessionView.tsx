@@ -1,4 +1,4 @@
-import { useInCompanionSplitPane, useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
+import { useInCompanionSplitPane, useSplitPaneFocus, useSplitPaneRouteActivation } from '@/features/cc-agent/splitPaneFocus';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
@@ -1007,6 +1007,7 @@ function CCAgentSessionContent({
   const navigate = useNavigate();
   const paneFocused = useSplitPaneFocus();
   const inCompanionSplitPane = useInCompanionSplitPane();
+  const activateSplitPane = useSplitPaneRouteActivation();
   const ownsWindowRoute = paneFocused && navigationMode === 'route-owner';
   const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
   const sessionNavigationVersionRef = useRef(0);
@@ -1222,6 +1223,19 @@ function CCAgentSessionContent({
   const activeVoiceCallId = voiceCall.sessionId === sessionId ? voiceCall.callId : null;
   const voiceQuestionBridge = useRef<VoiceQuestionTarget | null>(null);
   const companionSettingsOpen = new URLSearchParams(location.search).get('settings') === '1';
+  const openCompanionModelSettings = botChatIdentity?.canonicalChat && !botChatIdentity.deviceId && !readOnly
+    ? () => {
+        const search = new URLSearchParams(location.search);
+        search.set('settings', '1');
+        search.set('settingsPage', 'model');
+        const route = `${location.pathname}?${search.toString()}`;
+        if (!paneFocused && activateSplitPane) {
+          activateSplitPane(route);
+        } else {
+          navigate(route);
+        }
+      }
+    : undefined;
   const openVoiceSettings = useCallback(() => {
     const search = new URLSearchParams(location.search);
     search.set('settings', '1');
@@ -6434,6 +6448,7 @@ function CCAgentSessionContent({
                 />
               ) : (
                 <ErrorTailErrorBanner
+                  onOpenCompanionModelSettings={openCompanionModelSettings}
                   onChooseComputer={sharedTaskRecovery.askAgain}
                   errorText={errorTailText}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
@@ -6511,6 +6526,7 @@ function CCAgentSessionContent({
             {/* 只隐藏已有同一错误活动行的过载重试；认证、额度等操作入口照常保留。 */}
             {showLiveErrorBanner && (
               <ErrorBanner
+                onOpenCompanionModelSettings={openCompanionModelSettings}
                 onChooseComputer={sharedTaskRecovery.askAgain}
                 error={error}
                 dismissOnEscape={viewVisible && ownsHardwareTaskActions}
