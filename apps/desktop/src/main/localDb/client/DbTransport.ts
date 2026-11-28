@@ -12,8 +12,10 @@ export interface DbTransport {
 export const DB_TRANSPORT_NOT_SENT = 'DB_TRANSPORT_NOT_SENT' as const;
 export const DB_TRANSPORT_OUTCOME_UNKNOWN = 'DB_TRANSPORT_OUTCOME_UNKNOWN' as const;
 
+export const DB_RPC_CANCELLED = 'DB_RPC_CANCELLED' as const;
+
 export type DbTransportErrorCode =
-  typeof DB_TRANSPORT_NOT_SENT | typeof DB_TRANSPORT_OUTCOME_UNKNOWN;
+  typeof DB_TRANSPORT_NOT_SENT | typeof DB_TRANSPORT_OUTCOME_UNKNOWN | typeof DB_RPC_CANCELLED;
 
 export function createDbTransportError(
   code: DbTransportErrorCode,
@@ -40,7 +42,16 @@ export interface DbTransportTerminationInfo {
   error?: Error;
 }
 
+// The worker and the caller on timeout both exchange the same shared word.
+// Only the side that observes zero may start SQL or confirm its cancellation.
+export function startDbRequest(state?: Int32Array): void {
+  if (state && Atomics.exchange(state, 0, 1) !== 0) {
+    throw new Error('db worker RPC cancelled before execution');
+  }
+}
+
 export interface RpcRequest {
+  startState?: Int32Array;
   id: number;
   op: string;
   args?: unknown;

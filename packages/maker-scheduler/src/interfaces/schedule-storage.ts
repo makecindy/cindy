@@ -2,6 +2,9 @@ import type { Schedule, ScheduleRun, ScheduleClosureFailure, ListFilter } from '
 import type { TransientPrecheckOutageState } from '../precheck-transient.js';
 
 export interface ScheduleStorage {
+  /** Keep a stalled claim's DB work within its per-schedule budget, including
+   * requests whose caller timed out before the storage worker acknowledged them. */
+  withReplanRequestLimit?<T>(scheduleId: string, limit: number, work: () => Promise<T>): Promise<T>;
   list(filter?: ListFilter): Promise<Schedule[]>;
   listActive(): Promise<Schedule[]>;
   get(id: string): Promise<Schedule | null>;

@@ -23,6 +23,8 @@ import {
   createDbTransportError,
   DB_TRANSPORT_NOT_SENT,
   DB_TRANSPORT_OUTCOME_UNKNOWN,
+  DB_RPC_CANCELLED,
+  startDbRequest,
   type DbTransport,
   type DbTransportTerminationInfo,
   type LogEvent,
@@ -32,9 +34,10 @@ import {
   type WorkerMessage,
 } from './DbTransport.js';
 import { isSqliteCorruption, createCorruptDbUnavailableError } from './sqliteCorruption.js';
-import { isBackgroundDbRpc } from './rpcAdmission.js';
+import { currentReplanRpcLimit, isBackgroundDbRpc, type ReplanRpcLimit } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const startDbRequest = ${startDbRequest.toString()};
 const installDeletedTaskVectorCleanup = ${installDeletedTaskVectorCleanup.toString()};
 const isSqliteCorruption = ${isSqliteCorruption.toString()};
 const createCorruptDbUnavailableError = ${createCorruptDbUnavailableError.toString()};
@@ -2601,6 +2604,7 @@ parentPort.on('message', async (req) => {
   const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
     if (corruptionError && req.op !== 'closeDb') throw createCorruptDbUnavailableError(corruptionError);
+    startDbRequest(req.startState);
     const result = await dispatch(req.op, req.args);
     parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
@@ -2634,6 +2638,7 @@ function elapsedMs(from: number, to: number): number {
 }
 
 interface QueuedRpc {
+  replan?: ReplanRpcLimit;
   enqueuedAt: number;
   req: RpcRequest;
   transferList: unknown[];
@@ -2721,6 +2726,10 @@ export class WorkerThreadTransport implements DbTransport {
   private corruptionError: Error | null = null;
   private vecLoaded = false;
   private readonly pending = new Map<number, PendingRpc>();
+  // Unlike timing diagnostics these entries survive caller timeout and are
+  // released only on a worker reply, failed post or transport termination.
+  private readonly postedReplans = new Map<number, string>();
+  private readonly replanCounts = new Map<string, number>();
   private readonly timedOut = new Map<number, TimedOutRpc>();
   private readonly queued: QueuedRpc[] = [];
   private readonly eventListeners = new Map<EventName, Set<(payload: unknown) => void>>();
@@ -2743,9 +2752,11 @@ export class WorkerThreadTransport implements DbTransport {
     }
     const id = WorkerThreadTransport.nextId++;
     const req: RpcRequest = { id, op, args };
+    const replan = currentReplanRpcLimit();
     const background = isBackgroundDbRpc();
     return new Promise<R>((resolve, reject) => {
       const queued: QueuedRpc = {
+        replan,
         enqueuedAt: performance.timeOrigin + performance.now(),
         req,
         transferList: transferList ?? [],
@@ -2792,7 +2803,7 @@ export class WorkerThreadTransport implements DbTransport {
 
   async close(): Promise<void> {
     if (this.closed || this.closing) return;
-    const canCloseGracefully = this.pending.size === 0 && this.queued.length === 0;
+    const canCloseGracefully = this.pending.size === 0 && this.queued.length === 0 && this.postedReplans.size === 0;
     const gracefulClose = canCloseGracefully ? this.send('closeDb') : null;
     // closeDb 仅在 transport 空闲时直发。已有 backlog 时不再把关闭请求排到队尾,
     // 直接拒绝遗留工作并 terminate,避免登出 / 退出被慢 RPC 拖住。
@@ -2902,6 +2913,18 @@ export class WorkerThreadTransport implements DbTransport {
   private dispatch(item: QueuedRpc): void {
     const { id, op } = item.req;
     if (item.queueTimeout) clearTimeout(item.queueTimeout);
+    if (item.replan) {
+      const { scheduleId, limit } = item.replan;
+      const count = this.replanCounts.get(scheduleId) ?? 0;
+      if (count >= limit) {
+        item.reject(createDbTransportError(DB_TRANSPORT_NOT_SENT, 'replan RPC limit reached while awaiting worker replies'));
+        return;
+      }
+      this.replanCounts.set(scheduleId, count + 1);
+      this.postedReplans.set(id, scheduleId);
+      item.req.startState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    }
+    const { startState } = item.req;
     const onTimeout = (): void => {
       const pending = this.pending.get(id);
       if (!pending) return;
@@ -2918,6 +2941,8 @@ export class WorkerThreadTransport implements DbTransport {
         pending.timeout = setTimeout(onTimeout, this.rpcTimeoutMs);
         return;
       }
+      const cancelledBeforeStart = startState !== undefined &&
+        Atomics.exchange(startState, 0, 1) === 0;
       this.pending.delete(id);
       const { enqueuedAt, dispatchedAt } = pending;
       const timedOutAt = performance.timeOrigin + performance.now();
@@ -2931,10 +2956,11 @@ export class WorkerThreadTransport implements DbTransport {
       this.emitRpcDebug('rpc.timeout', id, dispatch, timedOutAt, {
         dispatchedMs: elapsedMs(dispatchedAt, timedOutAt),
         workerTiming: 'unknown',
+        ...(cancelledBeforeStart ? { cancelledBeforeStart } : {}),
       });
       pending.reject(
         createDbTransportError(
-          DB_TRANSPORT_OUTCOME_UNKNOWN,
+          cancelledBeforeStart ? DB_RPC_CANCELLED : DB_TRANSPORT_OUTCOME_UNKNOWN,
           `db worker RPC timeout: op="${op}" id=${id} exceeded ${this.rpcTimeoutMs / 1000}s` +
             ` wallElapsedMs=${verdict.wallElapsedMs}`,
         ),
@@ -2958,6 +2984,7 @@ export class WorkerThreadTransport implements DbTransport {
       this.worker.postMessage(item.req, item.transferList as never);
     } catch (err) {
       clearTimeout(timeout);
+      this.releaseReplan(id);
       this.pending.delete(id);
       item.reject(createDbTransportError(DB_TRANSPORT_NOT_SENT, toError(err).message, err));
       this.drainQueue();
@@ -3043,8 +3070,18 @@ export class WorkerThreadTransport implements DbTransport {
     );
   }
 
+  private releaseReplan(id: number): void {
+    const scheduleId = this.postedReplans.get(id);
+    if (scheduleId === undefined) return;
+    this.postedReplans.delete(id);
+    const count = this.replanCounts.get(scheduleId)! - 1;
+    if (count === 0) this.replanCounts.delete(scheduleId);
+    else this.replanCounts.set(scheduleId, count);
+  }
+
   private handleMessage(msg: WorkerMessage): void {
     if ('id' in msg) {
+      this.releaseReplan(msg.id);
       // A timed-out response still reports the health of this connection. Close
       // admission before resolving/rejecting promises or draining queued work.
       if (!msg.ok && isSqliteCorruption(msg.error) && !this.corruptionError) {
@@ -3147,6 +3184,8 @@ export class WorkerThreadTransport implements DbTransport {
     }
     this.pending.clear();
     this.timedOut.clear();
+    this.postedReplans.clear();
+    this.replanCounts.clear();
     for (const queued of this.queued.splice(0)) {
       if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
       queued.reject(queuedError);

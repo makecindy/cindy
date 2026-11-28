@@ -9,6 +9,21 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 export type DbRpcAdmissionClass = 'interactive' | 'background';
 
+export interface ReplanRpcLimit {
+  scheduleId: string;
+  limit: number;
+}
+
+const replan = new AsyncLocalStorage<ReplanRpcLimit>();
+
+export function withReplanRpcLimit<T>(scheduleId: string, limit: number, work: () => T): T {
+  return replan.run({ scheduleId, limit }, work);
+}
+
+export function currentReplanRpcLimit(): ReplanRpcLimit | undefined {
+  return replan.getStore();
+}
+
 const storage = new AsyncLocalStorage<DbRpcAdmissionClass>();
 
 export function runAsBackgroundDbRpc<T>(fn: () => T): T {
