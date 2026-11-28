@@ -1823,3 +1823,42 @@ it.each(['AskUserQuestion', 'ExitPlanMode'])('retains %s only for process-only t
     { kind: 'tool', label: toolName, secondaryBody: 'Confirmed interaction', toolSettled: true },
   ]);
 });
+
+it('extracts assistant modelMismatch including optional trimmed providerName', () => {
+  const items = normalizeRemoteMessages([
+    message({
+      id: 'mm-named',
+      role: 'assistant',
+      content: 'reply',
+      agentMeta: {
+        modelMismatch: { selected: 'claude-fable-5-2', actual: 'claude-opus-4-8', providerName: ' Anthropic ' },
+      },
+    }),
+    message({
+      id: 'mm-generic',
+      role: 'assistant',
+      content: 'reply',
+      agentMeta: {
+        modelMismatch: { selected: 'claude-fable-5-2', actual: 'claude-opus-4-8', providerName: '   ' },
+      },
+    }),
+    message({
+      id: 'mm-user-ignored',
+      role: 'user',
+      content: 'prompt',
+      agentMeta: {
+        modelMismatch: { selected: 'claude-fable-5-2', actual: 'claude-opus-4-8', providerName: 'Anthropic' },
+      },
+    }),
+  ]);
+  expect(items[0].modelMismatch).toEqual({
+    selected: 'claude-fable-5-2',
+    actual: 'claude-opus-4-8',
+    providerName: 'Anthropic',
+  });
+  expect(items[1].modelMismatch).toEqual({
+    selected: 'claude-fable-5-2',
+    actual: 'claude-opus-4-8',
+  });
+  expect(items[2].modelMismatch).toBeUndefined();
+});

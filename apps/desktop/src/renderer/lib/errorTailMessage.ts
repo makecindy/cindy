@@ -1,5 +1,14 @@
 import { UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError';
+import type { Session } from './ccAgent.types';
 import type { ChatMessage } from './makerChatStore';
+
+export function isLocalPiExecution(
+  session: Pick<Session, 'agentKind' | 'remoteHostId' | 'agentDeviceId'> | undefined,
+  deviceLinkDeviceId: string | null | undefined,
+): boolean {
+  return session?.agentKind === 'pi'
+    && deviceLinkDeviceId === null && !session.remoteHostId && !session.agentDeviceId;
+}
 
 /** Location/model/history boundaries record a change, not progress on the failed input. */
 export function findErrorTailMessage(

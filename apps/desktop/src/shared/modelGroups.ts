@@ -4,6 +4,7 @@
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 
+import { pluginEngineKeyFromProviderId } from './pluginEngines.js';
 import { ROUTE_STRATEGIES, type RouteStrategy } from './routeStrategy.js';
 
 export const MODEL_GROUPS_IPC = {
@@ -11,9 +12,13 @@ export const MODEL_GROUPS_IPC = {
   SET: 'model-groups:set',
   RESOLVE: 'model-groups:resolve',
   COMMIT: 'model-groups:commit',
-  /** 记下这个任务是经哪条路线建的、用着哪个候选(撞配额时据此提议换来源)。 */
+  /** 记下这个任务是经哪条路线建的、用着哪个候选(任务中间持续托管与故障接替都据此判断)。 */
   BIND_SESSION: 'model-groups:bind-session',
-  /** 撞配额时同一条路线里还能接着用的下一个来源；没有为 null。 */
+  /** 解除任务的智能路由托管绑定(保留任务当前模型与来源，不再自动换源)。 */
+  UNBIND_SESSION: 'model-groups:unbind-session',
+  /** 读取任务当前的智能路由托管状态(用于桌面、远程控制与手机 UI 展示)。 */
+  GET_SESSION_BINDING: 'model-groups:get-session-binding',
+  /** 撞配额或来源不可用时同一条路线里还能接着用的下一个来源；没有为 null。 */
   SWITCH_OFFER: 'model-groups:switch-offer',
   /**
    * 手机或另一台电脑经这台电脑的模式建了任务后，请这台电脑在任务里写那一行说明(model-groups.md §6.3)。
@@ -24,7 +29,7 @@ export const MODEL_GROUPS_IPC = {
 
 /**
  * 同账号本人控制的手机与电脑可以远程调用的模型组接口(model-groups.md §6.3)：读模式、按模式选来源、
- * 提交选路记录、记下任务用着哪个来源、写说明。改模式(SET)只在本机。
+ * 提交选路记录、读写/解除任务托管绑定、查撞配额换源提议、写说明。改模式(SET)只在本机。
  * 协议约定见 docs/dev-rules/protocol-compatibility/model-groups-remote-pickers.md。
  */
 export const MODEL_GROUPS_REMOTE_CHANNELS = [
@@ -32,8 +37,62 @@ export const MODEL_GROUPS_REMOTE_CHANNELS = [
   MODEL_GROUPS_IPC.RESOLVE,
   MODEL_GROUPS_IPC.COMMIT,
   MODEL_GROUPS_IPC.BIND_SESSION,
+  MODEL_GROUPS_IPC.UNBIND_SESSION,
+  MODEL_GROUPS_IPC.GET_SESSION_BINDING,
+  MODEL_GROUPS_IPC.SWITCH_OFFER,
   MODEL_GROUPS_IPC.ROUTE_NOTE,
 ] as const;
+
+/** model-groups:get 的可选参数；旧主机忽略额外参数，旧控制端不传此参数。 */
+export interface ModelGroupGetOptions {
+  /** 新版手机与远程控制端显式声明：需要以独立 append-only 字段附带按供应商合并的路由及其展开。 */
+  includeSourceRoutes?: boolean;
+}
+
+/** 任务当前的智能路由托管投影，供桌面、远程控制与手机展示当前托管状态与一键退出。 */
+export interface ModelGroupSessionBindingView {
+  selection: ModelGroupSelection;
+  /** 路由显示名(合并供应商路由取父路由名，普通路由取路由名)。 */
+  routeName: string;
+  /** 若为按供应商合并的展开路由，给出父供应商路由 id，供选择器高亮 sroute:<parentId>。 */
+  parentId?: string;
+  /** 若为按供应商合并的展开路由，给出父供应商路由显示名。 */
+  parentName?: string;
+  /** 是否为按供应商合并的路由展开项。 */
+  isSourceRoute?: boolean;
+  /** 出问题时是否自动换来源。 */
+  autoSwitch: boolean;
+  /** 命中待生效的切换意图而非当前已落库行。 */
+  pendingSwitch?: boolean;
+}
+
+/** 供应商提示缓存默认有效期：未知供应商统一按 5 分钟(model-groups.md §7.1)。 */
+export const DEFAULT_PROMPT_CACHE_TTL_MS = 5 * 60_000;
+
+/**
+ * 估算当前供应商/模型的提示缓存有效期，用于持续托管在任务中间判断是否值得留在原来源保缓存。
+ * 已知供应商按已公布的标准缓存窗口，其余统一按 5 分钟。
+ */
+export function promptCacheTtlMsForProvider(provider?: {
+  type?: string | null;
+  id?: string | null;
+  model?: string | null;
+}): number {
+  const id = (provider?.id ?? '').toLowerCase();
+  const type = (provider?.type ?? '').toLowerCase();
+  const model = (provider?.model ?? '').toLowerCase();
+  // Anthropic / Claude、OpenAI / Codex、Gemini 默认瞬态提示缓存均为 ~5 分钟窗口。
+  if (type === 'anthropic' || id.includes('anthropic') || id.includes('claude') || model.includes('claude')) {
+    return 5 * 60_000;
+  }
+  if (type === 'openai' || id.includes('openai') || id.includes('codex') || model.includes('gpt-')) {
+    return 5 * 60_000;
+  }
+  if (type === 'google' || type === 'gemini' || id.includes('gemini') || model.includes('gemini')) {
+    return 5 * 60_000;
+  }
+  return DEFAULT_PROMPT_CACHE_TTL_MS;
+}
 
 /** 选法只有一套(shared/routeStrategy.ts)，账号池与供应商组也用它。 */
 export const MODEL_GROUP_STRATEGIES = ROUTE_STRATEGIES;
@@ -49,15 +108,54 @@ const LEGACY_STRATEGY: Record<ModelGroupStrategy, 'expiring' | 'order' | 'rotate
   drain: 'order', headroom: 'expiring', weighted: 'rotate',
 };
 
-/** 发给手机与另一台电脑的模式配置(model-groups:get 与伙伴设置里的模型组)：见 LEGACY_STRATEGY。 */
-export function modelGroupsConfigForRemote(config: ModelGroupsConfig): ModelGroupsConfig {
+/** 远程传输用的模式配置：routes 永远只放用户按模型排的路由，合并供应商路由及其展开走独立 append-only 字段。 */
+export interface ModelGroupsRemoteConfig extends ModelGroupsConfig {
+  /** 按供应商合并的路由在每个模型上的展开项(独立于 routes，防止旧端把展开项当普通路由平铺或截断)。 */
+  expandedRoutes?: ModelGroupRoute[];
+}
+
+function legacyStrategyRoute<T extends { strategy: ModelGroupStrategy }>(route: T): T {
+  return LEGACY_STRATEGY[route.strategy] === route.strategy
+    ? route
+    : { ...route, strategy: LEGACY_STRATEGY[route.strategy], pick: route.strategy };
+}
+
+/**
+ * 发给手机与另一台电脑的模式配置(model-groups:get 与伙伴设置里的模型组)：见 LEGACY_STRATEGY。
+ * `routes` 始终保持纯净(不含 hidden 与 parent 展开项)，确保旧手机与旧桌面零回归；
+ * 仅当调用方显式传 `includeSourceRoutes: true` 时，通过独立 append-only 字段下发 `sourceRoutes` 与 `expandedRoutes`。
+ */
+export function modelGroupsConfigForRemote(
+  config: ModelGroupsConfig,
+  options?: ModelGroupGetOptions,
+): ModelGroupsRemoteConfig {
+  const routes = config.routes
+    .filter((route) => !route.hidden && !route.parent)
+    .map(legacyStrategyRoute);
+  if (!options?.includeSourceRoutes) return { routes };
+  const sourceRoutes = (config.sourceRoutes ?? [])
+    .filter((route) => !route.hidden)
+    .map(legacyStrategyRoute);
+  const expandedRoutes = config.routes
+    .filter((route) => !route.hidden && !!route.parent)
+    .map(legacyStrategyRoute);
   return {
-    // 供应商路由及其展开目前只在这台电脑上用，不发给别的设备：旧版手机与电脑不认识 parent，会把每个模型当成
-    // 一条单独的路由平铺出来。已经用供应商路由开的任务仍由这台电脑按记下的路由接替，不受影响。
-    routes: config.routes.filter((route) => !route.hidden && !route.parent).map((route) => (LEGACY_STRATEGY[route.strategy] === route.strategy
-      ? route
-      : { ...route, strategy: LEGACY_STRATEGY[route.strategy], pick: route.strategy } as ModelGroupRoute)),
+    routes,
+    ...(sourceRoutes.length > 0 ? { sourceRoutes } : {}),
+    ...(expandedRoutes.length > 0 ? { expandedRoutes } : {}),
   };
+}
+
+/** 从另一台电脑收到的模式配置：将独立字段 `expandedRoutes` 安全合回 `routes` 供统一面板消费。 */
+export function modelGroupsConfigFromRemote(raw: unknown): ModelGroupsConfig {
+  const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const baseRoutes = Array.isArray(value.routes) ? value.routes : [];
+  const expandedRoutes = Array.isArray(value.expandedRoutes) ? value.expandedRoutes : [];
+  if (expandedRoutes.length === 0) return normalizeModelGroupsConfig(raw);
+  return normalizeModelGroupsConfig({
+    ...value,
+    routes: [...baseRoutes, ...expandedRoutes],
+  });
 }
 
 /**
@@ -95,7 +193,7 @@ export function modelGroupResolveResultFromRemote(result: ModelGroupResolveResul
     : { ...result, trace };
 }
 
-export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi';
+export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi' | 'acp';
 
 /** 一个已连接的模型：与新任务选择器选中一行时得到的组合相同。 */
 export interface ModelGroupCandidate {
@@ -107,6 +205,8 @@ export interface ModelGroupCandidate {
    * 选中它的新任务，Agent 在这个位置运行；供应商与模型属于那里的目录。
    */
   agentDeviceId?: string;
+  /** 本机多账号订阅池里的具体账号槽位 id（例如 `default` / `acct-...` / `api:...`）。省略 = 不区分账号。 */
+  accountId?: string;
   /** 用户暂时不让这条路线用它；保留在列表里。 */
   off?: boolean;
   /** 「按权重」时这个来源的权重，1–1000；不设为 1。别的选法下保留不用。 */
@@ -145,11 +245,13 @@ export interface ModelGroupRoute {
   hidden?: true;
 }
 
-/** 供应商路由的成员：一整个供应商(它提供的全部模型)，不指定模型。 */
+/** 供应商路由的成员：一整个供应商(它提供的全部模型)，或本机多账号池里的单个账号，不指定模型。 */
 export interface ModelGroupSource {
   providerId: string;
   /** 运行位置：另一台电脑的设备 id，或分享来的供应商(`share:<id>`)。省略 = 本机。与 ModelGroupCandidate 同义。 */
   agentDeviceId?: string;
+  /** 本机多账号订阅池里的具体账号槽位 id；省略 = 整个供应商连接。 */
+  accountId?: string;
   /** 用户暂时不让这条路由用它；保留在列表里。 */
   off?: boolean;
   /** 「按权重」时的权重，1–1000；不设为 1。 */
@@ -271,6 +373,8 @@ export interface ModelGroupTraceEntry {
   model: string;
   /** 运行位置；本机省略。 */
   agentDeviceId?: string;
+  /** 本机多账号订阅池里的具体账号槽位 id；不区分账号时省略。 */
+  accountId?: string;
   modelName: string;
   sourceName: string;
   state: ModelGroupTraceState;
@@ -287,6 +391,8 @@ export interface ModelGroupResolvedRoute {
   model: string;
   /** 选中的来源在另一台电脑或是分享来的：新任务的 Agent 在那里运行。本机省略。 */
   agentDeviceId?: string;
+  /** 本机多账号订阅池里选中的具体账号槽位 id；本机单账号或远程来源省略。 */
+  accountId?: string;
   effort?: string;
   /** 用户要的 Fast，且选中的来源支持；否则省略。 */
   fastMode?: true | 'ultrafast';
@@ -320,7 +426,7 @@ export type ModelGroupResolveResult = {
   /** missing = 这条路线已被删除；unavailable = 里面没有现在能用的模型。两者都沿用用户原来选的模型。 */
   | { outcome: 'missing' | 'unavailable'; groupName: string; trace: ModelGroupTraceEntry[] });
 
-/** 撞配额时「换到下一个来源继续」的提议(model-groups.md §6.1)。只提议与任务同一运行位置(本机)的来源。 */
+/** 撞配额或来源不可用时「换到下一个来源继续」的提议(model-groups.md §6.1)；支持跨本地、分享与远程位置。 */
 export interface ModelGroupSwitchOffer {
   groupName: string;
   /** 换过去之后记回去时用：任务仍属于同一个组。 */
@@ -328,10 +434,20 @@ export interface ModelGroupSwitchOffer {
   agentKind: ModelGroupAgentKind;
   providerId: string;
   model: string;
+  /** 目标运行位置：另一台电脑或分享来的供应商(`share:<id>`)；本机省略。 */
+  agentDeviceId?: string;
+  /** 本机多账号订阅池里的目标账号槽位 id；本机单账号或远程来源省略。 */
+  accountId?: string;
+  /** 路由指定的推理强度(若目标模型支持)。 */
+  effort?: string;
+  /** 目标模型的 Fast 档位(若支持)。 */
+  fastMode?: boolean | 'ultrafast';
   modelName: string;
   sourceName: string;
   /** 换到另一个引擎：要走选择器的跨引擎切换(含它的确认)。 */
   crossEngine: boolean;
+  /** 换到另一个运行位置(本机 ↔ 分享 / 另一台电脑)：走统一交接流程。 */
+  crossLocation?: boolean;
 }
 
 export interface ModelGroupResolveRequest {
@@ -344,14 +460,13 @@ export interface ModelGroupResolveRequest {
    */
   cachedQuota?: boolean;
   /**
-   * 第一条消息的情况；时间由主进程自己取，不信界面传来的。
+   * 本轮消息的情况；时间由主进程自己取，不信界面传来的。
    * effort / fastMode = 用户在选择器里给这个模型选的思考深度与 Fast：只对供应商路由展开出来的路由生效
    * (它们在选择器里就是普通模型行，这两项用户照常能调)，选中的来源不支持时不带。
    */
-  context?: { hasImages?: boolean; effort?: string; fastMode?: true | 'ultrafast' };
+  context?: { scheduled?: boolean; hasImages?: boolean; effort?: string; fastMode?: true | 'ultrafast' };
   /**
-   * 只在这个运行位置的来源里选(agentDeviceId null = 本机)：进行中的任务里选模式时用，任务换不了电脑。
-   * 省略 = 不限(新任务)。
+   * 只在这个运行位置的来源里选(agentDeviceId null = 本机)。省略 = 不限(含跨本地、分享与远程位置)。
    */
   location?: { agentDeviceId: string | null };
   /**
@@ -359,6 +474,11 @@ export interface ModelGroupResolveRequest {
    * 只能用这台开了「允许被远程调用」的来源(model-groups.md §3.1、§6.3)。其余来源按用不了处理。
    */
   remoteInvocableOnly?: boolean;
+  /**
+   * SSH 远程主机 id：存在时强制按 SSH 可用边界过滤候选(仅限本机直传源与该 SSH 主机原生 Codex，
+   * 禁止跨 agentDeviceId、禁止订阅直连与本机桥接源)。
+   */
+  sshHostId?: string;
 }
 
 function text(value: unknown, max: number): string {
@@ -366,7 +486,7 @@ function text(value: unknown, max: number): string {
 }
 
 function agentKind(value: unknown): ModelGroupAgentKind | null {
-  return value === 'cc' || value === 'codex' || value === 'pi' ? value : null;
+  return value === 'cc' || value === 'codex' || value === 'pi' || value === 'acp' ? value : null;
 }
 
 function candidate(raw: unknown): ModelGroupCandidate | null {
@@ -376,16 +496,24 @@ function candidate(raw: unknown): ModelGroupCandidate | null {
   const providerId = text(value.providerId, MODEL_GROUP_LIMITS.field);
   const model = text(value.model, MODEL_GROUP_LIMITS.field);
   if (!kind || !providerId || !model) return null;
+  if (kind === 'acp' && !pluginEngineKeyFromProviderId(providerId)) return null;
   // 运行位置截断后会指到别处：格式不对的整条丢弃，不悄悄变成本机。
   let agentDeviceId: string | undefined;
   if (value.agentDeviceId !== undefined && value.agentDeviceId !== null) {
     agentDeviceId = modelGroupAgentDeviceId(value.agentDeviceId) ?? undefined;
     if (!agentDeviceId) return null;
   }
+  let accountId: string | undefined;
+  if (value.accountId !== undefined && value.accountId !== null) {
+    if (agentDeviceId) return null;
+    accountId = modelGroupAccountId(value.accountId) ?? undefined;
+    if (!accountId) return null;
+  }
   const weight = modelGroupWeight(value.weight);
   return {
     agentKind: kind, providerId, model,
     ...(agentDeviceId ? { agentDeviceId } : {}),
+    ...(accountId ? { accountId } : {}),
     ...(value.off === true ? { off: true } : {}),
     ...(weight !== 1 ? { weight } : {}),
   };
@@ -404,15 +532,39 @@ export function modelGroupAgentDeviceId(value: unknown): string | null {
   return id && id.length <= MODEL_GROUP_LIMITS.field ? id : null;
 }
 
+const ACCOUNT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,128}$/;
+
+/** 本机多账号槽位 id（非凭证/邮箱，仅限安全标识符）；格式不对为 null。 */
+export function modelGroupAccountId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const id = value.trim();
+  return ACCOUNT_ID_PATTERN.test(id) ? id : null;
+}
+
+const CANDIDATE_ACCOUNT_MARKER = '\u0000\u0000acct:';
+
 /**
- * 候选的身份：引擎 + 供应商连接 + 模型，在另一台电脑或分享来的再加上运行位置——同一个模型在两台电脑上是两个来源。
- * 本机的键不带位置，与旧版存下的轮流位置和任务记录一致。
+ * 候选的身份：引擎 + 供应商连接 + 模型，在另一台电脑或分享来的再加上运行位置——同一个模型在两台电脑上是两个来源；
+ * 本机多账号池拆平后的单个账号再附账号后缀。本机未拆账号的键与旧版存下的轮流位置和任务记录一致。
  */
 export function modelGroupCandidateKey(
-  value: Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model'> & { agentDeviceId?: string | null },
+  value: Pick<ModelGroupCandidate, 'providerId' | 'model'> & { agentKind: ModelGroupAgentKind | 'claude-code'; agentDeviceId?: string | null; accountId?: string | null },
 ): string {
   const base = `${value.agentKind}\u0000${value.providerId}\u0000${value.model}`;
-  return value.agentDeviceId ? `${base}\u0000${value.agentDeviceId}` : base;
+  const located = value.agentDeviceId ? `${base}\u0000${value.agentDeviceId}` : base;
+  return value.accountId ? `${located}${CANDIDATE_ACCOUNT_MARKER}${value.accountId}` : located;
+}
+
+/** 去掉本机账号后缀后的候选键，用于和只存到供应商级别的会话行比对。 */
+export function modelGroupCandidateBaseKey(key: string): string {
+  const marker = key.indexOf(CANDIDATE_ACCOUNT_MARKER);
+  return marker >= 0 ? key.slice(0, marker) : key;
+}
+
+/** 从候选键里读出本机账号槽位 id（若带了账号后缀）。 */
+export function modelGroupCandidateAccountId(key: string): string | undefined {
+  const marker = key.indexOf(CANDIDATE_ACCOUNT_MARKER);
+  return marker >= 0 ? key.slice(marker + CANDIDATE_ACCOUNT_MARKER.length) || undefined : undefined;
 }
 
 function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {
@@ -451,9 +603,10 @@ function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {
   };
 }
 
-/** 供应商路由的成员在配置里的身份：运行位置 + 供应商连接。 */
-export function modelGroupSourceKey(source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId'>): string {
-  return `${source.agentDeviceId ?? ''}\u0000${source.providerId}`;
+/** 供应商路由的成员在配置里的身份：运行位置 + 供应商连接（本机多账号拆平后再加上账号槽位 id）。 */
+export function modelGroupSourceKey(source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId' | 'accountId'>): string {
+  const base = `${source.agentDeviceId ?? ''}\u0000${source.providerId}`;
+  return source.accountId ? `${base}\u0000${source.accountId}` : base;
 }
 
 function normalizeSources(raw: unknown): ModelGroupSource[] {
@@ -464,13 +617,20 @@ function normalizeSources(raw: unknown): ModelGroupSource[] {
     // 运行位置格式不对的整条丢弃，不悄悄变成本机。
     const location = entry && entry.agentDeviceId !== undefined && entry.agentDeviceId !== null
       ? modelGroupAgentDeviceId(entry.agentDeviceId) : undefined;
-    const key = `${location ?? ''}\u0000${providerId}`;
-    if (!entry || !providerId || location === null || seen.has(key)) return [];
+    const account = entry && entry.accountId !== undefined && entry.accountId !== null
+      ? (location ? null : modelGroupAccountId(entry.accountId))
+      : undefined;
+    if (!entry || !providerId || location === null || account === null) return [];
+    const key = modelGroupSourceKey({ providerId, ...(location ? { agentDeviceId: location } : {}), ...(account ? { accountId: account } : {}) });
+    if (seen.has(key)) return [];
     seen.add(key);
     const weight = modelGroupWeight(entry.weight);
     return [{
-      providerId, ...(location ? { agentDeviceId: location } : {}),
-      ...(entry.off === true ? { off: true } : {}), ...(weight !== 1 ? { weight } : {}),
+      providerId,
+      ...(location ? { agentDeviceId: location } : {}),
+      ...(account ? { accountId: account } : {}),
+      ...(entry.off === true ? { off: true } : {}),
+      ...(weight !== 1 ? { weight } : {}),
     }];
   }).slice(0, MODEL_GROUP_LIMITS.candidates);
 }

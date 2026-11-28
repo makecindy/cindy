@@ -398,7 +398,13 @@
     "forkConfirmTitle": "¿Iniciar una nueva sesión desde aquí?",
     "forkConfirmDescription": "Se creará una sesión independiente con el contexto hasta este punto. La sesión original no cambia y los mensajes futuros en cualquiera de las sesiones no afectarán a la otra.",
     "forkConfirm": "Iniciar nueva sesión",
-    "forkCancel": "Cancelar"
+    "forkCancel": "Cancelar",
+    "modelSwitchPreparation": {
+      "pending": "Próximo mensaje",
+      "preparing": "Preparando…",
+      "failed": "Error al cambiar",
+      "usingPrevious": "Este mensaje usa {{actual}}; {{target}} aún no está listo."
+    }
   },
   "shareImage": {
     "title": "Compartir conversación",
@@ -667,7 +673,20 @@
     "toolUseLoopDetectedRotationWithCount": "El modelo recorría repetidamente las mismas llamadas a herramientas. Cindy detectó {{count}} llamadas en el bucle y detuvo este turno para evitar que fuera infinito. Envía un mensaje nuevo para continuar.",
     "codexThreadLost": "El modo de autenticación de Codex cambió, por lo que esta sesión no puede continuar. Inicia una nueva sesión.",
     "remoteCompactEncryptedContent": "La compactación del contexto falló porque el modelo no pudo leer el historial cifrado. La continuación automática no se completó. Reintenta para intentar recuperarla.",
-    "encryptedContentInvalid": "El cambio de proveedor hizo que el cifrado no estuviera disponible, por lo que esta sesión solo funciona con el proveedor original. Resuélvelo en la computadora (usa “Iniciar nueva sesión desde aquí” para eliminar el contenido cifrado del protocolo y continuar en una nueva sesión)."
+    "encryptedContentInvalid": "El cambio de proveedor hizo que el cifrado no estuviera disponible, por lo que esta sesión solo funciona con el proveedor original. Resuélvelo en la computadora (usa “Iniciar nueva sesión desde aquí” para eliminar el contenido cifrado del protocolo y continuar en una nueva sesión).",
+    "providerSafetyRefusal": "La política de seguridad del proveedor de modelos bloqueó esta respuesta. Ajusta tu solicitud y vuelve a enviarla.",
+    "providerSafetyRefusalWithProvider": "La política de seguridad de {{provider}} bloqueó esta respuesta. Ajusta tu solicitud y vuelve a enviarla.",
+    "overloadBusy": "El proveedor de modelos está ocupado temporalmente y sin capacidad disponible. Vuelve a intentarlo más tarde o cambia de modelo.",
+    "overloadBusyWithProvider": "{{provider}} está ocupado temporalmente y sin capacidad disponible. Vuelve a intentarlo más tarde o cambia de modelo.",
+    "streamInterrupted": "La respuesta del proveedor de modelos se interrumpió a mitad de transmisión. Inténtalo de nuevo más tarde.",
+    "streamInterruptedWithProvider": "La respuesta de {{provider}} se interrumpió a mitad de transmisión. Inténtalo de nuevo más tarde.",
+    "upstreamStatusError": "El servicio del proveedor de modelos devolvió un error (HTTP {{status}}). Esta respuesta no se completó.",
+    "upstreamStatusErrorWithProvider": "El servicio de {{provider}} devolvió un error (HTTP {{status}}). Esta respuesta no se completó.",
+    "modelAccessDenied": "Tu cuenta actual del proveedor de modelos no tiene acceso a este modelo. Cambia de modelo o verifica los permisos con el proveedor.",
+    "modelAccessDeniedWithProvider": "Tu cuenta de {{provider}} no tiene acceso a este modelo. Cambia de modelo o verifica los permisos de acceso.",
+    "providerQuotaExhausted": "Cuota o saldo insuficiente en la cuenta del proveedor de modelos. Revisa tu cuenta del proveedor.",
+    "providerQuotaExhaustedWithProvider": "Tu cuenta de {{provider}} no tiene suficiente cuota o saldo. Revisa el estado de la cuenta.",
+    "usageLimitReachedWithProvider": "Tu cuenta de {{provider}} ha alcanzado el límite de uso"
   },
   "row": {
     "markRead": "Marcar como leído",

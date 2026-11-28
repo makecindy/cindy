@@ -406,6 +406,7 @@ export function replayOfflineInboxIntentsForDevice(
           pinnedAt: updated?.pinnedAt ?? null,
           snoozedUntil: null,
           snoozedAt: null,
+          archivedAt: updated?.archivedAt ?? null,
         });
         await safeRemoveIntent(intent.sessionId);
       } catch (err) {

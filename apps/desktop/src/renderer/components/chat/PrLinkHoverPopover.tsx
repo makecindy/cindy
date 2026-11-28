@@ -36,6 +36,22 @@ import {
 import type { PrGuidanceAction } from '@/features/cc-agent/gitContextPrVisuals';
 import { useChatSessionFile } from './ChatSessionFileContext';
 
+/**
+ * PR status context for a chat link: which status bucket to read and, for a task on another
+ * computer, which device answers. Shared by the hover popover and the inline GitHub chip.
+ */
+export function usePrLinkContext(sessionId?: string) {
+  const fileCtx = useChatSessionFile();
+  const effectiveSessionId = sessionId ?? fileCtx.sessionId;
+  const cacheSessionId = effectiveSessionId ?? CHAT_LINK_HOVER_SESSION_BUCKET;
+  const session = effectiveSessionId ? sessionsStore.findById(effectiveSessionId) : undefined;
+  const deviceLinkDeviceId =
+    (fileCtx.origin.kind === 'device' ? fileCtx.origin.deviceId : undefined) ??
+    session?.deviceLinkDeviceId ??
+    (effectiveSessionId ? getStickySessionDeviceId(effectiveSessionId) : undefined);
+  return { effectiveSessionId, cacheSessionId, session, deviceLinkDeviceId };
+}
+
 /** 同屏多条 PR/MR 链接间切换时，保证只展开一枚悬停浮窗且切换无缝。 */
 let activeHoverClose: (() => void) | null = null;
 
@@ -237,13 +253,7 @@ function PrLinkHoverActive({
 }) {
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
-  const effectiveSessionId = sessionId ?? fileCtx.sessionId;
-  const cacheSessionId = effectiveSessionId ?? CHAT_LINK_HOVER_SESSION_BUCKET;
-  const session = effectiveSessionId ? sessionsStore.findById(effectiveSessionId) : undefined;
-  const deviceLinkDeviceId =
-    (fileCtx.origin.kind === 'device' ? fileCtx.origin.deviceId : undefined) ??
-    session?.deviceLinkDeviceId ??
-    (effectiveSessionId ? getStickySessionDeviceId(effectiveSessionId) : undefined);
+  const { effectiveSessionId, cacheSessionId, session, deviceLinkDeviceId } = usePrLinkContext(sessionId);
   const remoteHostId =
     (fileCtx.origin.kind === 'ssh' ? fileCtx.origin.remoteHostId : undefined) ??
     session?.remoteHostId ??

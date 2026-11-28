@@ -197,7 +197,7 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
                 <VoiceInputButton {...voice.buttonProps} testId="new-goal-voice" tipSide="top" />
               </div>
             </div>
-            <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} />
+            <FieldVoiceInputNotice {...voice.noticeProps} />
           </div>
           <GoalAdvancedLimits value={limits} onChange={setLimits} />
           {creationProgress}

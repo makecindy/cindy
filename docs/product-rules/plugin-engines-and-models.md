@@ -48,11 +48,13 @@
 | 同账号免装远程调用 | 已支持 | 插件上报 `remoteWorkspace: true` 且用户在装插件的电脑开启「允许被远程调用」；使用端无需预装插件或 CLI，自动走影子目录与 `cindy_exec` 隧道 | 未上报或未开启时不在其他电脑列出；目标离线或中途停用时下一轮明确报错，不回退本机 |
 | 跨账号分享插件引擎 | 已支持 | 插件同时上报 `remoteWorkspace` 与 `guestWorkspace`；复用一次性分享链接、配对审批、模型白名单与受邀者用量统计 | 未声明 `guestWorkspace` 不出现分享入口，并在受邀者启动前拒绝 |
 | 桌面远程控制 & 手机控制端 | 已支持 | 桌面远控与手机控制端均支持被控电脑自身、其同账号其他电脑及其收到的插件引擎分享（经 `maker:model-catalog:read`），覆盖新建、切换、收藏、用量、Worktree、Plan Mode、Skills、输入推荐、Orca Lead／本机 Worker、伙伴模型链与插件自动化草稿 | 旧被控端不支持 `maker:model-catalog:read` 时静默降级为只列被控电脑本机引擎，缺 `maker:list-plugin-engines` 时隐藏入口不报错；手机端对不支持插件 Lead 的旧被控端给出场景化提示 |
+| 任务中途切到插件引擎 | 已支持 | 本机有目标供应商和模型的有效窗口报告时，交接沿用内置引擎的长度规则：窗口的 30%，最多 100,000 估算 token，并为已知的下一条输入留空间 | 没有有效报告、在另一台电脑执行或使用分享引擎时，仍最多交接 16,000 字符；可按随交接附带的指引查询更早的原文 |
 | 同轮插话与排队 | 已支持 | 引擎握手声明 `_meta.steering.supported` 时支持 `_session/steering`（含 `injected` 与 `queued` 结局）；运行期撤回能力即时同步至各端 | 确知不支持时经 `steerUnsupported` 在桌面与手机隐藏插话入口，输入框与队列插话改为「本轮结束后发送」排队并提示，不报 `UNSUPPORTED_CAPABILITY` |
 | 问题卡、计划更新、分叉、回退、压缩、侧聊 | 已支持 | 通过 ACP `elicitation/create` 渲染原生问题卡（含选择 + 自填折叠）；支持 `plan` 更新、分叉、编辑／回退、压缩、侧聊与上下文溢出同引擎新会话续接 | 外部引擎不支持原生操作时由 Cindy 交接／重放模拟；无原生历史回退点时按已有降级文案提示 |
 | `/` 菜单 Skill 与首轮能力告知 | 已支持 | 新会话首轮按固定顺序在首条用户消息前告知插件花名册与 Skill 清单（内置 Pi 同范围）；输入框 `/` 菜单按 `acp` 向执行电脑读取 Skill 清单并展开调用 | 宿主注入文本清洗独立 `/命令` 防误触；旧被控端不支持 `maker:list-agent-skills(acp)` 时菜单按无 Skill 降级 |
 | Worktree | 已支持 | 覆盖本机、引擎在另一台电脑、远程控制项目、手机、协同 Worker 与定时任务；检出完整完成后才启动任务并发送首条消息 | 检出失败保留草稿与附件，不在原仓库目录启动 |
-| Orca 协同（Lead & Worker） | 已支持（含边界） | 支持作为 Orca Lead 与本机 Worker（含 worktree）；新任务草稿保留 Orca 插件引擎 Worker 选择 | 插件引擎 Worker 仅在 Lead 所在电脑本机运行，拒绝跨机／SSH 远端 Worker；`set_worker_runtime` 对插件引擎 Worker 返回 `UNSUPPORTED_CAPABILITY` |
+| 个性化 → 自定义提示词 | 已支持（依赖插件声明） | 引擎握手声明 ACP `sessionCapabilities.systemPrompt` 时，新建、加载、恢复会话以 `append` 交出发起人启动时冻结的个性化正文（不含项目知识与协同说明）；本机、同账号远程与分享受邀者都用发起人自己的正文；隔离伙伴、只读 `/review` 与没有冻结值的入口（如目标模式恢复）不发 | 未声明的引擎与旧版 Cindy 不发，任务照常运行但不带自定义提示词；官方 Antigravity 插件在远程与分享模式下支持 |
+| Orca 协同（Lead & Worker） | 已支持（含边界） | 支持作为 Orca Lead 与本机 Worker（含 worktree）；新任务草稿保留 Orca 插件引擎 Worker 选择。2026-11-27 用户决定：本机普通插件引擎新会话（含 Antigravity、DeepSeek Harness）在全局协同启用、项目未禁用且 `initialize` 声明支持对应传输、`session/new` 请求带有 `cindy_orca` 并成功建立会话时，首轮复用内置引擎的协同发现说明；这不证明每个服务已连通或工具已可调用，不新增探活。已有角色时只附角色说明；宿主进程重启后不补发待发说明 | 同账号另一台电脑上运行的插件引擎普通任务暂不附协同发现说明，内置引擎在同场景会附（`apps/desktop/src/main/maker-host/index.ts` 启动钩子，原 2693–2702 行），待远程路径单独评审后再对齐。插件引擎 Worker 仅在 Lead 所在电脑本机运行，拒绝跨机／SSH 远端 Worker；`set_worker_runtime` 对插件引擎 Worker 返回 `UNSUPPORTED_CAPABILITY` |
 | 伙伴（Teammate）与群聊 | 已支持 | 伙伴模型设置与群内点名均可选择本机或普通会话可选的远程插件引擎，沿用引擎默认模型与档位规则 | 隔离伙伴不附普通任务花名册／Skill 清单；V2 项目伙伴照常附上；不支持的旧设置服务拒绝保存 |
 | 定时任务与绑定任务临时切换 | 已支持 | 支持每次新建任务（含 worktree、本机与同账号远程／有效分享插件引擎）以及本机普通任务的绑定自动化在插件引擎与内置引擎间临时切换并在下次普通发送前恢复原引擎、模型与权限档 | 拒绝持续会话、伙伴例行任务、SSH、项目级 `.cindy/automations/schedules.json` 与仅模型覆盖；绑定任务启动前准入失败须发失败通知 |
 | 目标模式与 `/learn` | 已支持 | 目标任务可设、可休眠恢复并从回合 `usage` 计预算；`/learn` 在来源任务的同一插件引擎与模型上蒸馏（不自动给「全部允许」） | 无原生 `AskUserQuestion` 的引擎在目标首轮跳过澄清；另一台电脑上的插件引擎暂不接受 `/learn` |

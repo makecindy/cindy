@@ -95,8 +95,8 @@ const GENERATED_OVERRIDES = {
   "perm-auto-selected-text": "#859900", // 自动审批的色相标识,与 bypass 橙拉开
   "perm-allow-btn-bg": "#859900",
   "perm-allow-btn-text": "#FFFFFF",
-  "perm-allow-kbd-bg": "#eee8d5",
-  "perm-allow-kbd-border": "#e1dcc4",
+  "perm-allow-kbd-bg": "rgba(0, 0, 0, 0.40)", // kbd bg：叠黑 40%，键帽比按钮更深，白字才看得清（主人 2026-11-27 裁决：原页面级 chip 色在彩色允许按钮上字底几乎同亮）
+  "perm-allow-kbd-border": "rgba(0, 0, 0, 0.52)", // 边框：叠黑 52%，同上
   "perm-code-bg": "#eee8d5",
   "perm-item-selected-bg": "#eee8d5",
   "plan-outline-active-bg": "#eee8d5",

@@ -92,13 +92,14 @@ test('a Codex start freezes its provider, gets the Fast policy and a price-tier 
   assert.equal(getSessionFastMode('codex-task'), true);
   assert.equal(typeof opts.resolveUsagePriceVariant, 'function');
   assert.equal(opts.getPriceVariant, undefined);
-  // The reader returns what the proxy captured for this runtime, and nothing after close.
+  // The reader returns what the proxy captured for this runtime, including served model, and nothing after close.
   captureUsagePricing('codex-task', 'priority', 'thread-1')({ type: 'response.completed',
-    response: { usage: { input_tokens: 10, output_tokens: 2 } } });
-  assert.equal(opts.resolveUsagePriceVariant({ threadId: 'thread-1', inputTokens: 10, outputTokens: 2, cacheReadTokens: 0 }), 'priority');
+    response: { model: 'gpt-5.4', usage: { input_tokens: 10, output_tokens: 2 } } });
+  assert.deepEqual(opts.resolveUsagePriceVariant({ threadId: 'thread-1', inputTokens: 10, outputTokens: 2, cacheReadTokens: 0 }),
+    { priceVariant: 'priority', model: 'gpt-5.4' });
   start.onClose('codex-task');
   captureUsagePricing('codex-task', 'priority', 'thread-1')({ type: 'response.completed',
-    response: { usage: { input_tokens: 10, output_tokens: 2 } } });
+    response: { model: 'gpt-5.4', usage: { input_tokens: 10, output_tokens: 2 } } });
   assert.equal(opts.resolveUsagePriceVariant({ threadId: 'thread-1', inputTokens: 10, outputTokens: 2, cacheReadTokens: 0 }), undefined);
 });
 
@@ -197,4 +198,29 @@ test('a task restored with Fast saved on its row starts on the priority price ti
   assert.equal(opts.fastMode, true);
   await start.prepareStartOptions('restored-pi-task', opts);
   assert.equal(opts.getPriceVariant(), 'priority');
+});
+
+test('a plugin engine (acp) start freezes its provider, keeps workdir prep, and skips built-in catalog/fast/budget/pricing hooks', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const { start, policies } = setup(t, 'start-options-acp');
+  const workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-acp-work-'));
+  t.after(() => fs.rmSync(workingDir, { recursive: true, force: true }));
+  writeSessionContextWindowBudget('acp-task', 60_000);
+  const opts = {
+    agentKind: 'acp',
+    providerId: 'acp-plugin:_ns__local__demo:engine',
+    model: 'default',
+    workingDir,
+    contextWindowBudget: 60_000,
+    vendorOptions: { existing: true },
+  };
+  await start.prepareStartOptions('acp-task', opts);
+  assert.equal(getSessionProvider('acp-task'), 'acp-plugin:_ns__local__demo:engine');
+  assert.equal(policies.length, 0, 'acp does not attach a built-in subscription Fast policy');
+  assert.equal(opts.fastModePolicy, undefined);
+  assert.equal(Object.hasOwn(opts, 'contextWindowBudget'), false, 'acp drops Cindy working-context budget');
+  assert.equal(opts.resolveUsagePriceVariant, undefined);
+  assert.equal(opts.getPriceVariant, undefined);
+  assert.equal(opts.vendorOptions.existing, true);
+  assert.deepEqual(opts.vendorOptions[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY], []);
 });

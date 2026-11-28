@@ -235,6 +235,7 @@ import { pluginSuggestionComposerText } from '@/features/cc-agent/pluginHomeSugg
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
+import { MAX_SESSION_REFERENCES, reconcileSessionRefsForText } from '../../../shared/agentInputQueue';
 import {
   attachGhostMediaToSession,
   getGhostMediaHandoverFromDataTransfer,
@@ -355,6 +356,7 @@ import { SendDeliveryTip } from './SendDeliveryTip';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
+import { promptRecommendationAgentKind } from '@/lib/promptRecommendationAgentKind';
 import {
   dismissPromptRecommendation,
   usePromptRecommendation,
@@ -538,6 +540,10 @@ export type SessionModelPick = (pick: {
   modelId: string;
   /** 同时换到这一档推理强度(模型组的模式指定了时)；省略 = 按选择器原有规则。 */
   effort?: Effort;
+  /** 同时设置 Fast 模式(合并供应商路由或路由指定了时)。 */
+  fastMode?: boolean | 'ultrafast';
+  /** 跨运行位置切换目标(null = 本机，string = 另一台电脑或分享来源；省略 = 保持当前运行位置)。 */
+  agentDeviceId?: string | null;
 }) => Promise<boolean>;
 
 interface ChatInputProps {
@@ -954,6 +960,7 @@ interface ChatInputProps {
   pluginModels?: PluginModelsPickerProps;
   /** 新任务的模型组(只有新任务草稿传)。 */
   modelGroups?: ModelGroupsPickerProps;
+  readModelGroupDevices?(): void;
   /**
    * 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)。只有本机新任务草稿在至少有一个引擎时传。
    * 选中引擎时：模型 pill 显示引擎与模型，权限只给引擎的两档，计划模式等内置引擎专属入口不出现，
@@ -1317,6 +1324,7 @@ export function ChatInput({
   onUnifiedDraftSelect,
   pluginModels,
   modelGroups,
+  readModelGroupDevices,
   pluginEngines,
   pluginEngineSession,
   selectedFavoriteUid = null,
@@ -4744,7 +4752,7 @@ export function ChatInput({
   // 插件引擎在列清单的这台电脑上运行(本机，或正在远控的那台)时，`/` 列出它能展开的 Cindy 技能；
   // Agent 在另一台电脑上的任务，引擎那边没有技能来源，与首轮技能清单一致不列。
   const pluginEngineDeviceId = pluginEngineSession
-    ? pluginEngineSession.engine?.deviceId
+    ? (pluginEngineSession.engine?.deviceId ?? pluginEngineSession.agentDeviceId ?? undefined)
     : !sessionId ? pluginEngines?.active?.deviceId : undefined;
   const pluginEngineSkillsListed = pluginEngineActive
     && (!pluginEngineDeviceId || pluginEngineDeviceId === deviceLinkDeviceId);
@@ -5762,6 +5770,11 @@ export function ChatInput({
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
+  const taskReferencesFit = useCallback((text: string) => {
+    if (reconcileSessionRefsForText(text, undefined).length <= MAX_SESSION_REFERENCES) return true;
+    toast.error(t('newChat.chatInput.tooManyTaskReferences', { max: MAX_SESSION_REFERENCES }));
+    return false;
+  }, [t]);
   const dispatchSend = useCallback(
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
       if (!editor) return;
@@ -6206,6 +6219,7 @@ export function ChatInput({
           slashCommandRanges = rebaseInlineRangesAfterSlashCommandRewrite(slashCommandRanges, routedText, rewritten);
           routedText = rewritten;
         }
+        if (!taskReferencesFit(routedText)) return;
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked || sourceRemoteGhosts) return;
@@ -6667,6 +6681,7 @@ export function ChatInput({
       navigate,
       planModeEntry,
       captureSendFocusForRestore,
+      taskReferencesFit,
       slashCommandsReady,
       mergedCommands,
     ],
@@ -6700,6 +6715,7 @@ export function ChatInput({
     const content = serializeEditorContent(editor);
     const completedAttachments = [...latestAttachmentsRef.current];
     if (content.text.trim().length === 0 && completedAttachments.length === 0) return;
+    if (!taskReferencesFit(content.text)) return;
 
     setSendDispatchInFlight(true);
     try {
@@ -6723,6 +6739,7 @@ export function ChatInput({
     sendDispatchInFlight,
     waitForFolders,
     folderTransfers.hasPending,
+    taskReferencesFit,
     t,
     voiceBusyOnCurrentComposer,
   ]);
@@ -9212,18 +9229,34 @@ export function ChatInput({
   // 每次渲染后换成最新闭包(与 performAgentSwitchRef 同理)；卸载时收回，横幅不会调到已离开的任务。
   useEffect(() => {
     if (!sessionModelPickRef || !sessionId) return;
-    const pick: SessionModelPick = async ({ agent, providerId, modelId, effort }) => {
+    const pick: SessionModelPick = async ({ agent, providerId, modelId, effort, fastMode: targetFastMode, agentDeviceId: targetAgentDeviceId }) => {
+      const targetLocation = targetAgentDeviceId === undefined ? effectiveAgentDeviceId : targetAgentDeviceId;
+      const crossLocation = targetLocation !== effectiveAgentDeviceId;
+      if (crossLocation) {
+        if (!sessionAgentSwitchSupported || remoteHostId) return false;
+        return performAgentSwitchRef.current(agent, modelId, providerId, {
+          ...(effort ? { effort } : {}),
+          ...(targetFastMode !== undefined ? { fastMode: targetFastMode } : {}),
+          agentDeviceId: targetLocation,
+        });
+      }
       if (!sessionEngineFilter) {
         if (agent !== runtimeAgentKind) return false;
-        return (await handleProviderChange(providerId, modelId, effort)) !== false;
+        return (await handleProviderChange(providerId, modelId, effort, undefined, targetFastMode)) !== false;
       }
       const runtime = sessionEngineFilter.runtimeAgent;
       const pending = sessionEngineFilter.pendingTarget;
       const crossEngine = runtime === undefined || agent !== runtime || (pending !== undefined && pending !== runtime);
       if (crossEngine) {
-        return sessionEngineFilter.onCrossEngineSelect({ providerId, modelId, targetAgent: agent, effort: effort ?? '' });
+        return sessionEngineFilter.onCrossEngineSelect({
+          providerId,
+          modelId,
+          targetAgent: agent,
+          effort: effort ?? '',
+          ...(targetFastMode !== undefined ? { fast: targetFastMode } : {}),
+        });
       }
-      return (await handleProviderChange(providerId, modelId, effort)) !== false;
+      return (await handleProviderChange(providerId, modelId, effort, undefined, targetFastMode)) !== false;
     };
     sessionModelPickRef.current = pick;
     return () => {
@@ -9326,20 +9359,28 @@ export function ChatInput({
     mutationLocked: composerMutationLocked || showStopButton,
   };
   const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
+  // 预测用的「已确认会话引擎」：插件引擎(ACP)任务没有内置 Harness 身份(runtimeAgentKind 为
+  // null)，但会话已确认为 ACP 时 pluginEngineSession 在。启用条件、回调入口与 IPC 参数
+  // 共用这一个值；两者都没有 = 会话信息未就绪，等待，不拿模型选择器默认值补成 claude-code
+  // (#13694：错标的请求会被主进程按 DB 的 dbAgentKind 拒绝)。
+  const predictionAgentKind = promptRecommendationAgentKind({
+    isPluginEngineSession: !!pluginEngineSession,
+    runtimeAgentKind,
+  });
   usePromptRecommendationPrediction({
     sessionId,
     recommendation,
     canPredict:
       recommendationComposerReady && !!editor && !editor.isDestroyed &&
-      deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
+      deviceLinkDeviceId !== undefined && predictionAgentKind != null &&
       hasPredictionMessages && !remoteHostId,
     predict: async (revision, isCurrent) => {
-      if (!sessionId || runtimeAgentKind == null) return null;
+      if (!sessionId || predictionAgentKind == null) return null;
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
         sessionId,
         // 插件引擎任务按 'acp' 请求：推荐只用辅助模型链，主进程据此核对任务没有换引擎。
-        agentKind: pluginEngineSession ? 'acp' : runtimeAgentKind,
+        agentKind: predictionAgentKind,
         messages: (messages ?? []).slice(-20).map(({ role, content }) => ({ role, content })),
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
@@ -9577,7 +9618,12 @@ export function ChatInput({
       {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
-            <VoiceInputStatusNotice message={voiceInput.lastError} />
+            <VoiceInputStatusNotice
+              message={voiceInput.lastError}
+              actionLabel={voiceInput.canRetryRecognition ? t('voiceInputOverlay.retryRecognition') : undefined}
+              onAction={voiceInput.canRetryRecognition ? () => { voiceInput.retryRecognition(); } : undefined}
+              actionDisabled={voiceInput.isBusy}
+            />
           ) : showSpeakerFilteredNotice ? (
             <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
           ) : null}
@@ -10296,6 +10342,7 @@ export function ChatInput({
                         ? composerAgentIdentity
                         : undefined
                     }
+                    selectionPreparation={storedAgentSwitchIntent ? storedAgentSwitchIntent.preparation ?? 'pending' : undefined}
                     // 统一模型选择器(M5 新会话 / M6 会话内)。composer 是它的两个真实入口;
                     // 其余 7 个消费者(scheduler / IM / Hook / Subagent / Worker /
                     // GhostErrand / 设置)本版一律不开。
@@ -10324,6 +10371,7 @@ export function ChatInput({
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     {...(unifiedPanelActive && modelGroups ? { modelGroups } : {})}
+                    readModelGroupDevices={unifiedPanelActive ? readModelGroupDevices : undefined}
                     // 已建普通任务也能换到 / 换出任务所属电脑的插件引擎。
                     {...(unifiedPanelActive && pluginEngines && (!sessionId || sessionAgentSwitchSupported)
                       ? { pluginEngines } : {})}

@@ -217,6 +217,7 @@ export default {
           // One boundary after the open geometry and the first selectable row mount.
           const visible = await new Promise((resolve, reject) => {
             let frameMs;
+            let openingWidth;
             let openingFrameQueued = false;
             const tick = () => {
               if (performance.now() - start > 5000) { reject(new Error('Model panel did not open')); return; }
@@ -224,10 +225,15 @@ export default {
               if (panel?.getAttribute('data-state') === 'open') {
                 if (!openingFrameQueued) {
                   openingFrameQueued = true;
+                  openingWidth = Number.parseFloat(panel.style.width);
                   requestAnimationFrame(() => { frameMs = performance.now() - start; });
                 }
                 if (panel.querySelector('[role="option"]:not([aria-disabled="true"])')) {
-                  requestAnimationFrame(() => resolve({ frameMs, firstRowFrameMs: performance.now() - start }));
+                  const openingWidthInFlight = panel.getAnimations().some(animation =>
+                    animation.transitionProperty === 'width' && animation.playState === 'running');
+                  requestAnimationFrame(() => resolve({
+                    openingWidth, openingWidthInFlight, frameMs, firstRowFrameMs: performance.now() - start,
+                  }));
                   return;
                 }
               }
@@ -240,6 +246,13 @@ export default {
         await page.waitForTimeout(280); // Real animation/ResizeObserver settling; opt-in browser benchmark.
         const after = await metrics();
         allShape = await readShape();
+        // Browser regression: a deferred catalog used to open at the loading
+        // label’s intrinsic width and then expand a second time for the rows.
+        assert.ok(Math.abs(timing.openingWidth - allShape.width) <= 1,
+          `Opening targeted ${timing.openingWidth}px but the list settled at ${allShape.width}px`);
+        if (ui.data.count >= 80) {
+          assert.equal(timing.openingWidthInFlight, false, 'Large catalog mounted during the opening width transition');
+        }
         const filterBefore = await metrics();
         const filterFrameMs = await page.getByRole('button', { name: 'OpenAI', exact: true }).evaluate(async el => {
           const start = performance.now();

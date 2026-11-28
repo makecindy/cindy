@@ -11,6 +11,7 @@ import { createCheckoutHandler } from './checkoutHandler';
 import type { CheckoutActivity } from './checkout';
 import { readOriginDefaultBranch } from './branchSync';
 import { createBranchSyncHandlers } from './branchSyncHandlers';
+import { readWorkspaceClutterSummary } from './workspaceClutter';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../device-link/invoke-context';
 import { isDesktopPlatform } from '../device-link/controllerPlatform';
@@ -24,7 +25,7 @@ import * as worktreeStore from './worktreeStore';
 import { getWorktreeRestoreStatus, restoreWorktreeForSession } from './restore';
 import { generateModelWorktreeName } from './modelName';
 import { createLogger } from '../logger';
-import { throwIpcError } from '../utils/ipcValidate';
+import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate';
 
 const log = createLogger('worktree');
 
@@ -98,6 +99,15 @@ export function registerWorktreeIpc(
   });
   ipcMain.handle('worktree:branch-sync-status', branchSync.status);
   ipcMain.handle('worktree:sync-branch', branchSync.sync);
+  ipcMain.handle('worktree:workspace-clutter-summary', (event, input: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    const body = requireObject(input);
+    const baseRepo = requireString(body.baseRepo, 'baseRepo');
+    if (!path.isAbsolute(baseRepo) || baseRepo.length > 32768 || baseRepo.includes('\0')) {
+      throwIpcError('INVALID_PARAMS', 'Invalid repository path');
+    }
+    return readWorkspaceClutterSummary(baseRepo);
+  });
 
   ipcMain.handle('worktree:create', (_e, req: CreateWorktreeReq) => {
     const context = getDeviceLinkInvokeContext();

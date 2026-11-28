@@ -49,7 +49,7 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
   const { i18n } = useTranslation();
   const identity = JSON.stringify([accountGeneration, host.deviceId, groupId]);
   const identityRef = useRef(identity); identityRef.current = identity;
-  const [state, setState] = useState<{ identity: string; value: BotGroupChatState }>(() => ({ identity,
+  const [state, setState] = useState<{ identity: string; value: BotGroupChatState; verified?: boolean }>(() => ({ identity,
     value: !revoked && cachedGroups.has(cacheKey) ? { kind: 'ready', group: cachedGroups.get(cacheKey)! } : { kind: 'loading' } }));
   // A queued read may fail before React commits the previous successful snapshot.
   const recovery = useRef({ identity, hasGroup: false });
@@ -105,8 +105,8 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
       fresh.current++; cachedGroups.set(cacheKey, group);
       void writeConversationDisk(authority, resource);
       recovery.current.hasGroup = true;
-      setState(previous => previous.identity === owner && previous.value.kind === 'ready' && previous.value.group === group
-        ? previous : { identity: owner, value: { kind: 'ready', group } });
+      setState(previous => previous.identity === owner && previous.verified && previous.value.kind === 'ready' && previous.value.group === group
+        ? previous : { identity: owner, value: { kind: 'ready', group }, verified: true });
     } catch (error) {
       if (!valid()) return;
       if (['NOT_FOUND', 'PERMISSION_DENIED'].includes(botGroupErrorCode(error) ?? '')) {
@@ -222,6 +222,6 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
   void presenceVersion;
   // Unknown presence still allows actions; the host answers or the link reports offline.
   const online = status === 'online' && !!host.deviceId && getPresenceAvailability(host.deviceId) !== false;
-  return !host.deviceId ? { ...server, server: true } : { state: value, reload, act, online, server: false, listHidden: server.listHidden, loadOlder: undefined, loadingOlder: false, media: undefined, markRead,
+  return !host.deviceId ? { ...server, server: true } : { state: value, reload, act, online, verified: value.kind === 'ready' && state.verified === true, server: false, listHidden: server.listHidden, loadOlder: undefined, loadingOlder: false, media: undefined, markRead,
     uploadAttachment: undefined, pending: NO_PENDING, pendingAction: undefined, canQueue: false, threadMeta: undefined, followThread: undefined, shareToMain: undefined, react: undefined, backfillThreads: undefined, threadsSyncing: false };
 }

@@ -8,6 +8,19 @@
       "selected": "Selected"
     }
   },
+  "voiceCall": {
+    "title": "Voice Call",
+    "saved": "Record saved",
+    "you": "You",
+    "companion": "Companion",
+    "sendFailed": "Could not send. Your words have been kept.",
+    "handoff": {
+      "sending": "Handing over…",
+      "accepted": "Handed to your companion",
+      "failed": "Could not hand over. Your words have been kept.",
+      "completed": "Result received"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Sent by local app “{{name}}”",
     "sourceLocalAppId": "App ID: {{id}}",
@@ -67,7 +80,6 @@
       "dingtalk": "DingTalk",
       "imessage": "iMessage"
     },
-    "modelMismatch": "This turn was answered by {{actual}} instead of the selected {{selected}} (temporary server-side downgrade)",
     "copyStateCopying": "Copying",
     "copyStateCopied": "Copied",
     "copyStateFailed": "Copy failed",
@@ -185,7 +197,8 @@
     "groupSent": "Sent from a group",
     "sourceGroupId": "Group ID: {{id}}",
     "selectText": "Select Text",
-    "you": "You"
+    "you": "You",
+    "recentActivity": "Recent activity"
   },
   "actions": {
     "attachmentsPrefix": "Attachments: {{names}}",
@@ -264,6 +277,8 @@
     "delete": "Delete",
     "retry": "Retry",
     "notSent": "Not sent",
+    "deliveryUnconfirmed": "Delivery unconfirmed",
+    "recheckDelivery": "Check again",
     "imagesNotUploaded_one": "{{count}} image didn't upload",
     "imagesNotUploaded_other": "{{count}} images didn't upload",
     "waitingForNamedComputer": "Sends automatically when {{name}} connects",
@@ -443,6 +458,9 @@
     "send": "Send Message",
     "sending": "Sending…",
     "sent": "Submitted",
+    "sendTooManyArguments": "This message uses more than {{limit}} items in one step. Ask the assistant to split them into smaller groups.",
+    "sendValueUnavailable": "A value this message uses is unavailable. Ask the assistant to check the form fields.",
+    "sendTextUnavailable": "Could not prepare the message to send.",
     "sendFailed": "The message was not submitted. Your entries are still here.",
     "playVideo": "Play video",
     "downloadVideo": "Download video",
@@ -499,5 +517,103 @@
     "wrap": "Wrap lines",
     "lineNumbers": "Line numbers",
     "rendered": "View document"
+  },
+  "modelMismatch": {
+    "notice": "The model provider answered this turn with {{actual}} instead of {{selected}}",
+    "noticeWithProvider": "{{provider}} answered this turn with {{actual}} instead of {{selected}}",
+    "infoLink": "Why this happened",
+    "infoTitle": "Why a different model answered",
+    "infoSummary": "Cindy sent this turn to {{selected}} as you selected, and the model provider returned the reply using {{actual}}.",
+    "infoSummaryWithProvider": "Cindy sent this turn to {{selected}} as you selected, and {{provider}} returned the reply using {{actual}}.",
+    "infoCausesTitle": "Common causes",
+    "infoCausePolicy": "Safety or content policy fallback (some models automatically fall back to an earlier model instead of refusing).",
+    "infoCauseLoad": "Temporary rerouting by the model provider during peak load.",
+    "infoCauseGateway": "Model mapping or routing rules on a third-party or custom gateway.",
+    "infoActionsTitle": "What you can do",
+    "infoActionContinue": "No settings change needed: this only affected this turn, and later messages keep requesting {{selected}}.",
+    "infoActionRetry": "If this reply does not meet your needs, rephrase your message and send again, or switch to another available model.",
+    "infoActionCheckProvider": "If this persists across turns, check your model provider’s quota status or gateway routing settings."
+  },
+  "errorExplain": {
+    "providerSafetyRefusal": {
+      "title": "Why this reply was blocked",
+      "summary": "Cindy sent your request as-is, and the model provider's built-in safety or content policy blocked the response. This is not Cindy moderation or a local plugin block.",
+      "summaryWithProvider": "Cindy sent your request as-is, and {{provider}}'s built-in safety or content policy blocked the response. This is not Cindy moderation or a local plugin block.",
+      "cause1": "The prompt, an attachment, or earlier conversation context triggered the provider’s safety classifier.",
+      "cause2": "An output safety filter stopped the model mid-generation.",
+      "action1": "Retrying the exact same prompt usually hits the same block; rephrase or remove the triggering section before sending again.",
+      "action2": "If earlier context caused the block, start a new task or switch to another model."
+    },
+    "overload": {
+      "title": "Why the provider is busy",
+      "summary": "The model provider is temporarily short on compute capacity (such as peak-load congestion or HTTP 529). This is unrelated to Cindy or your local network.",
+      "summaryWithProvider": "{{provider}} is temporarily short on compute capacity (such as peak-load congestion or HTTP 529). This is unrelated to Cindy or your local network.",
+      "cause1": "High demand during peak hours saturated the provider’s capacity for this model.",
+      "cause2": "Temporary provider maintenance or capacity throttling is active.",
+      "action1": "No need to restart Cindy or change your network setup—wait a moment and click Retry.",
+      "action2": "To continue right away, switch to another model or another source in your model group."
+    },
+    "streamInterrupted": {
+      "title": "Why the reply was interrupted",
+      "summary": "The model provider dropped the streaming connection before finishing the reply. Cindy did not crash, and completed steps and conversation history are intact.",
+      "summaryWithProvider": "{{provider}} dropped the streaming connection before finishing the reply. Cindy did not crash, and completed steps and conversation history are intact.",
+      "cause1": "A transient server error on the model provider interrupted generation mid-stream.",
+      "cause2": "A third-party or custom relay gateway timed out while streaming a long reply.",
+      "action1": "Click Retry, or send “continue” to have the model pick up from where it stopped.",
+      "action2": "If this repeats across turns, try another model or check your custom gateway’s timeout settings."
+    },
+    "upstreamStatus": {
+      "title": "Why a service error was returned",
+      "summary": "Cindy sent your request, but the model provider returned an HTTP {{status}} internal error with no details. This comes from the external service, not Cindy.",
+      "summaryWithProvider": "Cindy sent your request, but {{provider}} returned an HTTP {{status}} internal error with no details. This comes from the external service, not Cindy.",
+      "cause1": "The model provider’s backend experienced a temporary internal failure.",
+      "cause2": "A third-party or self-hosted gateway failed to forward the request or returned a custom 5xx status.",
+      "action1": "Click Retry in a moment; transient upstream blips usually clear quickly.",
+      "action2": "If you use a third-party or custom gateway, check its status and logs, or switch to another provider."
+    },
+    "modelAccessDenied": {
+      "title": "Why this model cannot be accessed",
+      "summary": "The model provider rejected access to this model for the current account. Cindy cannot override provider-side model permissions.",
+      "summaryWithProvider": "{{provider}} rejected access to this model for your current account. Cindy cannot override {{provider}} model permissions.",
+      "cause1": "Your current subscription tier or API key does not include access to this model.",
+      "cause2": "An organization admin restricted the allowed model list, or the model is unavailable in your region.",
+      "action1": "Switch to another model enabled on your current account to keep going.",
+      "action2": "Check permissions in your provider console or plan settings; if you just upgraded, reconnect the account and try again."
+    },
+    "providerQuotaExceeded": {
+      "title": "Why quota or balance is exhausted",
+      "summary": "The external model provider account you connected has run out of balance or quota and rejected the request. This is separate from your Cindy account.",
+      "summaryWithProvider": "Your connected {{provider}} account has run out of balance or quota, so {{provider}} rejected the request. This is separate from your Cindy account.",
+      "cause1": "Prepaid credits on the provider account are depleted, or no valid payment method is attached.",
+      "cause2": "A spend cap on this API key or organization quota has been reached.",
+      "action1": "Top up your balance or raise the spend limit on the provider’s billing page, then click Retry.",
+      "action2": "Or switch to another provider with available quota in the model selector."
+    },
+    "usageLimit": {
+      "title": "Why the usage limit was reached",
+      "summary": "Your connected model account hit the periodic usage window set by the model provider and cannot accept new requests right now. This limit is not imposed by Cindy.",
+      "summaryWithProvider": "Your connected {{provider}} account hit the periodic usage window set by {{provider}} and cannot accept new requests right now. This limit is not imposed by Cindy.",
+      "cause1": "Your subscription used up its allowance for the current window (such as a 5-hour or weekly cap).",
+      "cause2": "Multiple tasks or devices sharing the same account count toward the same usage window.",
+      "action1": "Wait for the window to reset and retry; if auto-continue is armed, the task will resume automatically.",
+      "action2": "To continue immediately, switch to another model, another connected subscription account, or an API provider."
+    },
+    "encryptedContent": {
+      "title": "Why some history cannot be read",
+      "summary": "Some models store encrypted internal reasoning in conversation history that only the original provider and account can decrypt. After switching providers/accounts or compacting remotely, the current provider may be unable to read older encrypted blocks.",
+      "summaryWithProvider": "Some models store encrypted internal reasoning in conversation history that only the original provider and account can decrypt. After switching providers/accounts or compacting remotely, {{provider}} may be unable to read older encrypted blocks.",
+      "cause1": "You switched to a different model provider or account that cannot decrypt earlier encrypted reasoning.",
+      "cause2": "Remote context compaction or cross-endpoint routing did not match the key used for earlier turns.",
+      "action1": "Switch back to the original provider or account to continue this task directly.",
+      "action2": "Or choose “Continue in a new task”—Cindy keeps all readable conversation history and strips unreadable encrypted blocks while leaving the original task intact."
+    },
+    "failedSamplingAttempt": {
+      "title": "Why an incomplete reply is shown",
+      "summary": "The model failed or was interrupted before finishing this reply, producing only partial output. Cindy kept the partial text visible for reference so useful context is not lost.",
+      "cause1": "A provider error, connection drop, or safety block interrupted streaming mid-reply.",
+      "cause2": "The turn errored or stopped before the response could finalize.",
+      "action1": "Check the error card below for the specific failure reason and whether you should retry.",
+      "action2": "Click Retry or send a follow-up message to continue—you can reference the partial text without starting over."
+    }
   }
 }

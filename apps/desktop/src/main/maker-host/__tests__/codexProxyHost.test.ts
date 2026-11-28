@@ -6266,6 +6266,76 @@ describe('codex proxy host', () => {
       }
     });
 
+    it('captures served model on non-xAI HTTP /responses (including gzip) and WebSocket response.completed without overriding priceVariant', async () => {
+      const host = await freshCodexProxyHost();
+      const { registerUsagePricing, clearUsagePricing } = await import('../model-usage-pricing.js');
+      const real = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn() });
+      await host.ensureCodexProxyReady();
+      const options = mockState.createAnthropicCompatProxy.mock.calls[0][0];
+      host.registerComposed('codex-non-xai-session', 'codex-non-xai-thread', 'PRODUCT_PROMPT');
+      host.setCodexProxyAuthInjection('env-key');
+      const resolveObserved = registerUsagePricing('codex-non-xai-session', true);
+      const httpWire = 'data: ' + JSON.stringify({
+        type: 'response.completed',
+        response: {
+          model: 'gpt-5.4-codex',
+          usage: { input_tokens: 40, output_tokens: 12, input_tokens_details: { cached_tokens: 15 } },
+        },
+      }) + '\n\n';
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'content-encoding': 'gzip' });
+        res.end(gzipSync(httpWire));
+      });
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const upstream = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const proxy = await real.createAnthropicCompatProxy({
+        upstream: () => upstream,
+        transformRequest: options.transformRequest,
+        responseObserver: options.responseObserver,
+        routingTransform: async (body, ctx) => ({ ...(await options.routingTransform(body, ctx)), upstreamOverride: upstream }),
+      });
+      try {
+        const res = await fetch(`${proxy.url}/responses`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'thread-id': 'codex-non-xai-thread', 'accept-encoding': 'gzip' },
+          body: JSON.stringify({ model: 'gpt-5.4', input: [] }),
+        });
+        expect(res.status).toBe(200);
+        await res.text();
+        await new Promise(resolveWait => setTimeout(resolveWait, 30));
+        expect(resolveObserved({ threadId: 'codex-non-xai-thread', inputTokens: 40, outputTokens: 12, cacheReadTokens: 15 }))
+          .toEqual({ model: 'gpt-5.4-codex' });
+
+        // WebSocket OpenAI subscription inbound response.completed frame must also confirm model.
+        const wsTransform = options.webSocketTransforms({
+          url: '/backend-api/codex/responses',
+          headers: { 'thread-id': 'codex-non-xai-thread' },
+        });
+        const wsPayload = Buffer.from(JSON.stringify({
+          type: 'response.completed',
+          response: {
+            model: 'gpt-5.4-ws',
+            usage: { input_tokens: 88, output_tokens: 19, input_tokens_details: { cached_tokens: 30 } },
+          },
+        }));
+        const wsHeader = wsPayload.length < 126
+          ? Buffer.from([0x81, wsPayload.length])
+          : Buffer.from([0x81, 126, (wsPayload.length >> 8) & 0xff, wsPayload.length & 0xff]);
+        wsTransform.inbound.resume();
+        wsTransform.inbound.write(Buffer.concat([wsHeader, wsPayload]));
+        await new Promise<void>(resolveEnd => wsTransform.inbound.end(resolveEnd));
+        expect(resolveObserved({ threadId: 'codex-non-xai-thread', inputTokens: 88, outputTokens: 19, cacheReadTokens: 30 }))
+          .toEqual({ model: 'gpt-5.4-ws' });
+      } finally {
+        await proxy.dispose();
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        clearUsagePricing('codex-non-xai-session');
+      }
+    });
+
     it('preserves priority when an xAI session sends a request through the default OpenAI route', async () => {
       const out = await runXaiTransforms('fast-other-route', {
         model: 'chatgpt/gpt-5.5', input: [], service_tier: 'priority',

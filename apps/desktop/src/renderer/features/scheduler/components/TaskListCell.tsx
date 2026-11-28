@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 import { formatLastRun, formatNextRun } from '../lib/formatters';
+import { deferralReasonKey } from '../lib/deferralReason';
 import { Badge } from '@/components/ui/badge';
 
 interface Props {
@@ -79,6 +80,8 @@ interface Props {
    * 的"没抢到槽"是两回事：不区分的话，用户会看到任务挂"运行中"几小时而无从判断。
    */
   queuedForSession?: boolean;
+  /** 本任务连续顺延重试时的瞬时诊断状态。 */
+  deferredForSession?: { count: number; firstAt: number; lastReason?: string };
 }
 
 export function TaskListCell({
@@ -97,6 +100,7 @@ export function TaskListCell({
   runBusy = false,
   waitingForResources,
   queuedForSession = false,
+  deferredForSession,
 }: Props) {
   const { t } = useTranslation();
   // 右键菜单：复用 ProjectNode 的"controlled DropdownMenu + 不可见 trigger 跟 click 坐标"模式。
@@ -161,6 +165,11 @@ export function TaskListCell({
     subtitle = t('scheduler.cell.subtitleWaitingForResources', {
       inFlight: waitingForResources.inFlight,
       max: waitingForResources.maxConcurrentRuns,
+    });
+  } else if (s.status === 'active' && deferredForSession && deferredForSession.count > 0) {
+    subtitle = t('scheduler.cell.subtitleDeferredForSession', {
+      count: deferredForSession.count,
+      reason: t(`scheduler.deferral.${deferralReasonKey(deferredForSession.lastReason)}`),
     });
   } else if (s.status === 'paused') {
     subtitle = t('scheduler.cell.subtitlePaused');

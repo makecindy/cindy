@@ -46,6 +46,10 @@ export interface ModelGroupCandidateFacts {
   price?: number | null;
   /** 这个模型能不能看图；读不到按不能。 */
   acceptsImage?: boolean;
+  /** 模型上下文窗口大小(token)，用于任务中间切换时避免无意缩容。 */
+  contextWindow?: number | null;
+  /** 供应商类型(如 anthropic / openai / google)，用于估算提示缓存 TTL。 */
+  providerType?: string | null;
   /** Route effort supported by this exact provider, model and harness. */
   effort?: string;
   /** The Fast mode the user asked for, when this exact provider, model and harness supports it. */
@@ -163,6 +167,7 @@ export function pickModelGroupCandidate(
     const base = {
       agentKind: row.candidate.agentKind, providerId: row.candidate.providerId, model: row.candidate.model,
       ...(row.candidate.agentDeviceId ? { agentDeviceId: row.candidate.agentDeviceId } : {}),
+      ...(row.candidate.accountId ? { accountId: row.candidate.accountId } : {}),
       modelName: fact?.modelName || row.candidate.model, sourceName: fact?.sourceName || row.candidate.providerId,
       quota: row.quota,
     };

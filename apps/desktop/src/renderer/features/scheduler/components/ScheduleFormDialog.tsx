@@ -359,9 +359,9 @@ export function ScheduleFormDialog({
     active: open && hookGenOpen,
     disabled: hookGenerating,
   });
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机与同账号其他电脑开放的插件引擎，可用于每次新建任务
-  // 与绑定普通桌面任务临时切换；持续会话(scheduler 任务)、脚本、伙伴例行任务与项目自动化不提供。
-  const pluginEnginesAllowed = (runMode === 'fresh' || runMode === 'bound') && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机与同账号其他电脑及分享开放的插件引擎，
+  // 可用于新建任务、持续会话、绑定非 SSH 任务、伙伴例行任务与项目自动化；仅脚本执行不可用。
+  const pluginEnginesAllowed = !isScriptMode;
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed || !!form.pluginEngine);
   const pluginEngineChoice = pluginEnginesAllowed ? form.pluginEngine ?? null : null;
   const pluginRouteDevices = useModelRouteDevices({
@@ -1086,7 +1086,6 @@ export function ScheduleFormDialog({
               <SegmentedControl
                 aria-label={t('scheduler.template.useTemplate')}
                 value={isTemplateMode ? 'gallery' : 'form'}
-                height={34}
                 options={[
                   { value: 'form', label: t('scheduler.template.blank') },
                   { value: 'gallery', label: t('scheduler.template.useTemplate') },
@@ -1186,7 +1185,6 @@ export function ScheduleFormDialog({
                             aria-label={t('scheduler.editor.executionMode.label')}
                             value={form.executionMode ?? 'agent'}
                             onValueChange={(mode) => setField('executionMode', mode)}
-                            height={34}
                             options={(['agent', 'script'] as const).map((mode) => ({
                               value: mode,
                               label: t(`scheduler.editor.executionMode.${mode}`),
@@ -1318,8 +1316,7 @@ export function ScheduleFormDialog({
                             </div>
                           </div>
                           <FieldVoiceInputNotice
-                            error={promptVoice.lastError}
-                            speakerFiltered={promptVoice.speakerFiltered}
+                            {...promptVoice.noticeProps}
                           />
                           {isBound && (form.model.trim() !== '' || !!pluginEngineChoice) && (
                             <p className="px-1 text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
@@ -1412,7 +1409,6 @@ export function ScheduleFormDialog({
                               aria-label={t('scheduler.editor.runSession.label')}
                               value={runMode}
                               onValueChange={setRunMode}
-                              height={34}
                               options={(
                                 [
                                   'fresh',
@@ -1466,7 +1462,6 @@ export function ScheduleFormDialog({
                         <SegmentedControl
                           aria-label={t('scheduler.editor.trigger.label')}
                           value={triggerMode}
-                          height={34}
                           onValueChange={(mode) => {
                             if (mode === triggerMode) return;
                             preserveTriggerScrollPosition();
@@ -1840,7 +1835,6 @@ export function ScheduleFormDialog({
                               <SegmentedControl
                                 aria-label={t('scheduler.editor.preRunPlugin.sourceLabel')}
                                 value={form.preRunSource}
-                                height={34}
                                 options={(['script', 'plugin'] as const).map((source) => ({
                                   value: source,
                                   label: t(`scheduler.editor.preRunPlugin.source.${source}`),
@@ -1966,8 +1960,7 @@ export function ScheduleFormDialog({
                                     )}
                                   />
                                   <FieldVoiceInputNotice
-                                    error={hookVoice.lastError}
-                                    speakerFiltered={hookVoice.speakerFiltered}
+                                    {...hookVoice.noticeProps}
                                   />
                                   {hookGenFailure && (
                                     <ErrorNotice
@@ -2249,8 +2242,7 @@ export function ScheduleFormDialog({
                   <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
                     <div className="min-w-0 flex-1">
                       <FieldVoiceInputNotice
-                        error={promptVoice.lastError}
-                        speakerFiltered={promptVoice.speakerFiltered}
+                        {...promptVoice.noticeProps}
                       />
                     </div>
                     <VoiceInputButton

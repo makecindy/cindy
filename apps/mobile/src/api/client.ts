@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n';
+import { retryAfterDeadline } from '@cindy/auth-client';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { selfHostedRelayAuthorizationFor } from '@/device-link/selfHostedRelayRouting';
 import { isAgentNetMediaReference } from '@cindy/agent-net-protocol';
@@ -16,6 +17,8 @@ export class ApiError extends Error {
     message: string,
     /** The server's structured `error.details`, when it sent an object. */
     public readonly details?: Record<string, unknown>,
+    /** Absolute epoch ms parsed from `Retry-After` on 429 / 503 responses. */
+    public readonly retryAt?: number,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -178,7 +181,10 @@ export async function apiFetchRaw<T>(
         // Preserve the original typed API error even if local cleanup fails.
       }
     }
-    throw new ApiError(code, response.status, error.message ?? i18n.t('apiErrors.requestFailed'), error.details);
+    const retryAt = (response.status === 429 || response.status === 503)
+      ? retryAfterDeadline(response)
+      : undefined;
+    throw new ApiError(code, response.status, error.message ?? i18n.t('apiErrors.requestFailed'), error.details, retryAt);
   }
 
   return data as T;
