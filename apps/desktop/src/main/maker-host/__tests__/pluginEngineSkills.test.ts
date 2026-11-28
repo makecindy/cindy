@@ -21,9 +21,10 @@ describe('plugin-engine Skill list', () => {
       scanCustomizations,
       readDisabledSkillPaths: () => ['/repo/.agents/skills/off/SKILL.md'],
     });
-    // `scope` feeds the `/` menu's Skill details (Review #12732): managed Skills are for every task.
+    // `scope` feeds the `/` menu's Skill details (Review #12732): managed Skills are for every task,
+    // and `managed: true` keeps them prioritized ahead of scanned folders in the ACP briefing.
     expect(await list({ workingDir: '/repo' })).toEqual([
-      { name: 'pr', description: 'Carry a PR', path: '/managed/pr/SKILL.md', scope: 'user' },
+      { name: 'pr', description: 'Carry a PR', path: '/managed/pr/SKILL.md', scope: 'user', managed: true },
       { name: 'review', description: 'Review code', path: '/skills/review/SKILL.md', scope: 'user' },
       { name: 'deploy', path: '/repo/.agents/skills/deploy/SKILL.md', scope: 'repo' },
     ]);

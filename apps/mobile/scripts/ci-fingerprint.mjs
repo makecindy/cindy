@@ -21,8 +21,8 @@ import { fileURLToPath } from 'node:url';
 
 export const FINGERPRINT_PLATFORMS = ['ios', 'android'];
 export const GUARD_COMMENT_MARKER = '<!-- mobile-fingerprint-guard -->';
-// 机器可读结论(第二行隐藏注释):review 侧的冷更审查门读这一行判「本 PR 是否触发冷更」,
-// 不靠标题文案匹配。改文案可以,这一行的格式不能动 —— 门会因此漏判(见
+// 机器可读结论(第二行隐藏注释):review 侧读这一行判「本 PR 是否触发冷更」,
+// 不靠标题文案匹配。改文案可以,这一行的格式不能动(见
 // docs/dev-rules/mobile-development.md「冷更边界」)。第一行仍是 sticky comment 的定位 marker。
 export const guardChangedMarker = (changed) => `<!-- fingerprint-changed: ${changed ? 'true' : 'false'} -->`;
 
@@ -147,7 +147,7 @@ export function compareFingerprintReports(base, current) {
 export function renderGuardComment(comparison) {
   const lines = [GUARD_COMMENT_MARKER, guardChangedMarker(comparison.changed)];
   if (comparison.changed) {
-    lines.push('### ⚠️ 本 PR 会改变 mobile 原生 runtime fingerprint');
+    lines.push('### ℹ️ 本 PR 会改变 mobile 原生 runtime fingerprint');
     lines.push('');
     lines.push('| Platform | base(main) | 本 PR 合并后 | 结果 |');
     lines.push('| --- | --- | --- | --- |');
@@ -156,9 +156,9 @@ export function renderGuardComment(comparison) {
       lines.push(`| ${row.platform} | \`${row.baseHash ?? 'unknown'}\` | \`${row.currentHash ?? 'unknown'}\` | ${status} |`);
     }
     lines.push('');
-    lines.push('**含义**:合并后 production / beta 的下一次发版对已安装包无法 OTA,必须冷更出包(`COLD_BUILD_REQUIRED`,iOS 需 bump `buildNumber` 并重走 TestFlight / 自建重签分发)。');
+    lines.push('**含义**:合并后对应平台的下一次发版需要随新原生包交付(`COLD_BUILD_REQUIRED`,iOS 需 bump `buildNumber` 并重走 TestFlight / 自建重签分发),未升级原生包的装机在更新前停留在旧指纹轨道。');
     lines.push('');
-    lines.push('- 如果这是**有意的原生变更**(升原生依赖、改 plugin、动 `app.json` / `eas.json` production 段):没问题,但请在 PR Description 里写明,发版同学好安排冷更节奏。');
+    lines.push('- 如果这是**有意的原生变更**(提升原生体验、升级原生依赖、改 plugin / 原生模块或原生配置):完全没问题,只需确保 JS 侧对旧原生包有能力探测/平滑降级,并在 PR Description 简明写清影响平台与旧包表现。');
     lines.push('- 如果你**只想改 JS/UI**:请检查是否误碰了 fingerprint 输入,常见踩点:`apps/mobile/package.json` 的 `scripts` 字段、`app.json`、`eas.json` 非 beta 段、原生相关依赖版本。');
     lines.push('');
     lines.push('> 哈希由仓库内 `@expo/fingerprint` 在 CI 同一环境下对 base / 合并结果各算一次,只用于判断 runtime fingerprint 是否变化。');

@@ -56,6 +56,10 @@ export const remoteControlSettings = defineSettings({
     titleKey: 'settings.devices.localNetwork.label',
     descriptionKey: 'settings.devices.localNetwork.deniedHint',
     sectionKey: 'settings.remoteControl.sections.myDevices',
+    keywordKeys: [
+      'settings.devices.localNetwork.promptedHint',
+      'settings.devices.localNetwork.settingsHint',
+    ],
     aliases: ['local network', 'LAN', 'direct connection', '本地网络', '局域网', '直连', '本地网络权限'],
   },
   v2: {

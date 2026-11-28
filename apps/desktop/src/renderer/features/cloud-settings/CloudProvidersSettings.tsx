@@ -19,6 +19,7 @@ import {
 } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { LocalModelCatalogNotice } from '@/components/new-chat/LocalModelCatalogNotice';
 import { Switch } from '@/components/ui/switch';
@@ -149,17 +150,7 @@ function providerIcon(p: ProviderView, size: number): ReactNode {
 }
 
 function CustomTag({ label }: { label: string }) {
-  return (
-    <span
-      className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium"
-      style={{
-        border: '1px solid var(--settings-integration-avatar-border)',
-        color: 'var(--text-tertiary)',
-      }}
-    >
-      {label}
-    </span>
-  );
+  return <Badge tone="outline">{label}</Badge>;
 }
 
 function ReconnectRequiredPill() {
@@ -882,12 +873,9 @@ function CloudProviderCatalogPage({
           badges={
             <>
               {p.id === 'xd' && xd?.accountTier === 'free' && (
-                <span
-                  data-testid="cindy-ai-free-tier-badge"
-                  className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
-                >
+                <Badge data-testid="cindy-ai-free-tier-badge">
                   {t('settings.providers.xd.accountTier.free')}
-                </span>
+                </Badge>
               )}
               {subscriptionProduct && (
                 <CloudSubscriptionTag

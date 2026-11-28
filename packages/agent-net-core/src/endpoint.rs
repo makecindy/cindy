@@ -277,6 +277,11 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
         self.listener = Some(Listener { prologue: prologue.to_vec(), config, payload: payload.to_vec(), crypto: Box::new(crypto), admit: Box::new(admit), gate });
     }
 
+    /// 有已建立、还没被 [`Endpoint::accept`] 取走的入站连接。
+    pub fn has_accepted(&self) -> bool {
+        !self.accepted.is_empty()
+    }
+
     /// 新接受的连接，取一个少一个。
     pub fn accept(&mut self) -> Option<u32> {
         self.accepted.pop_front()

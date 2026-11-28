@@ -44,11 +44,11 @@ beforeEach(async () => { scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'cind
 afterEach(async () => { await fs.rm(scratch, { recursive: true, force: true }); });
 const fixtureHome = () => path.join(scratch, 'codex-home');
 
-function fixture() {
+function fixture(bridge: import('../../mcp-integrations/codexHttpBridge.js').CodexHttpBridge | null = null) {
   const buildSessionMcpConfig = vi.fn(() => ({ 'mcp_servers.local_slow.enabled': true }));
   const getCodexExtraSpawnConfig = vi.fn(async () => ({
     extraArgs: localMcpArgs, extraEnv: { LOCAL_MCP_TOKEN: 'fixture-only' },
-    bridge: null, bridgeServerNames: ['local_slow'], buildSessionMcpConfig,
+    bridge, bridgeServerNames: ['local_slow'], buildSessionMcpConfig,
   }));
   const scopedReady = vi.fn(() => true);
   const release = vi.fn(async () => {});
@@ -120,6 +120,22 @@ describe('Codex spawn MCP ownership', () => {
     expect(result.codexBrowserUseAvailable).toBe(true);
     // The per-host preparation must not mutate the shared bridge snapshot.
     expect(localMcpArgs).not.toContain(browserArgs[1]);
+  });
+
+  it('retires only the instances configured by that host on the shared bridge', async () => {
+    const closeSessionInstance = vi.fn();
+    const f = fixture({ closeSessionInstance } as unknown as import('../../mcp-integrations/codexHttpBridge.js').CodexHttpBridge);
+    const first = await f.prepare([], { credentialMode: 'oauth-bearer' });
+    const second = await f.prepare([], { credentialMode: 'oauth-bearer', accountHostKey: 'account' });
+    const session = { vendorOptions: { example: true } };
+    first.buildSessionMcpConfig!('one', session);
+    second.buildSessionMcpConfig!('two');
+    expect(f.buildSessionMcpConfig).toHaveBeenCalledWith('one', session);
+    await first.onHostRetired!();
+    expect(closeSessionInstance.mock.calls).toEqual([['one']]);
+    await second.onHostRetired!();
+    expect(closeSessionInstance.mock.calls).toEqual([['one'], ['two']]);
+    expect(f.release).toHaveBeenCalledWith('account');
   });
 
   it('places desktop input rules in the resumed runtime home and leaves external profiles alone', async () => {

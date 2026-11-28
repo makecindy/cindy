@@ -41,7 +41,8 @@ export function BotGroupListRow({ row, online, last = false, onPress }: {
   const preview = display.preview ? parseMobileMarkdownInlines(resolveRemoteText(display.preview, i18n.language))
     .map((inline) => inline.type === 'image' ? inline.alt : inline.text).join('').replace(/\s+/g, ' ').trim() : '';
   const summary = preview || t(!row.host.deviceId && display.preview === undefined ? 'groupChat.server.previewUnavailable' : 'groupChat.list.noMessages');
-  const status = resolveTeammateStatus({ online, unread, working: !!display.generation, activities: [display.teammateActivity] });
+  const activity = display.teammateActivity?.phase === 'running' ? undefined : display.teammateActivity;
+  const status = resolveTeammateStatus({ online, unread, activities: [activity] });
   const members = botGroupMemberLinks(row.item, i18n.language).map((member) =>
     identityFor(member.botId, member.label, row.groupMembers?.find(identity => identity.botId === member.botId)));
   const time = display.timestamp !== undefined && Number.isFinite(new Date(display.timestamp).getTime())

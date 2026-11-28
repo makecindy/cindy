@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-25T10:30:00.228Z",
+  "updatedAt": "2026-11-26T04:12:01.000Z",
   "models": [
     {
       "id": "openai/gpt-6.2-sol",
@@ -2310,7 +2310,12 @@
           "defaults": {
             "supportsFastMode": false
           },
-          "referencePriceGroup": "global"
+          "referencePriceGroup": "global",
+          "forceOverrides": {
+            "supportsImageInput": true
+          },
+          "overrideReason": "DeepSeek documents the legacy deepseek-v4-flash ID as an alias routed to DeepSeek V4.1 Flash, which accepts image input. The Cindy AI Gateway currently reports text-only modalities for this route, so correct that stale capability for the XD route only.",
+          "overrideVerifiedAt": "2026-11-26"
         }
       ],
       "nativeApi": "openai-completions",

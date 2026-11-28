@@ -1,6 +1,13 @@
 import { execFile } from 'node:child_process';
 import net from 'node:net';
 import os from 'node:os';
+import type {
+  LocalNetworkAccess,
+  LocalNetworkRequestOptions,
+  LocalNetworkSettingsStage,
+} from '../../shared/localNetwork';
+
+export type { LocalNetworkAccess, LocalNetworkRequestOptions, LocalNetworkSettingsStage };
 
 /**
  * macOS Local Network privacy for this app and every child it is responsible for.
@@ -8,10 +15,10 @@ import os from 'node:os';
  * Apple exposes no status API. A denied app gets `EHOSTUNREACH` at once for any
  * LAN address, including the gateway, while public and VPN routes keep working
  * (see docs/dev-rules/remote-and-mobile-adaptation.md, "macOS「本地网络」权限").
- * Probing the gateway is therefore the observable truth; the same probe is also
- * what makes macOS show its one-time permission prompt for an undecided app.
+ * Probing the gateway is therefore the observable truth; the same probe in the
+ * foreground is also what makes macOS show its one-time permission prompt for an
+ * undecided app (provided the main executable has a unique Mach-O LC_UUID).
  */
-export type LocalNetworkAccess = 'granted' | 'denied' | 'unknown' | 'notRequired';
 
 export type LocalNetworkConnectOutcome =
   | 'connected'
@@ -25,12 +32,13 @@ export interface LocalNetworkAccessDeps {
   /** IPv4 gateway of a physical LAN interface, or null when there is no LAN. */
   lanGateway(): Promise<string | null>;
   connect(host: string, port: number, timeoutMs: number): Promise<LocalNetworkConnectOutcome>;
-  openSettings(): Promise<void>;
+  openSettings(separateWindow: boolean): Promise<void>;
   wait(ms: number): Promise<void>;
   now(): number;
 }
 
-// System Settings uses this pane's lowercase identifier; Privacy_LocalNetwork opens the overview.
+// macOS 15/26 direct pane identifier; on macOS 27.3 Apple omitted a Local Network
+// reveal key so System Settings opens the Privacy & Security overview.
 export const MAC_LOCAL_NETWORK_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?privacy-localnetwork';
 
@@ -39,8 +47,22 @@ const PROBE_PORT = 53;
 const PROBE_TIMEOUT_MS = 1500;
 /** Settings rows poll every 1.5 s; reuse one probe across overlapping readers. */
 const CACHE_MS = 1000;
-/** Time for an undecided app's system prompt to be answered before offering System Settings. */
-const PROMPT_GRACE_MS = 1200;
+/** Brief settle window after triggering the OS prompt before returning to the UI. */
+const PROMPT_SETTLE_MS = 1200;
+
+/** Validate optional IPC request parameters from the renderer. */
+export function parseLocalNetworkRequestOptions(value: unknown): LocalNetworkRequestOptions | null {
+  if (value === undefined) return {};
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'openSettings' && key !== 'separateWindow')) return null;
+  if (record.openSettings !== undefined && typeof record.openSettings !== 'boolean') return null;
+  if (record.separateWindow !== undefined && typeof record.separateWindow !== 'boolean') return null;
+  return {
+    ...(record.openSettings !== undefined ? { openSettings: record.openSettings } : {}),
+    ...(record.separateWindow !== undefined ? { separateWindow: record.separateWindow } : {}),
+  };
+}
 
 export function classifyLocalNetworkProbe(
   outcome: LocalNetworkConnectOutcome | null,
@@ -55,11 +77,17 @@ export function classifyLocalNetworkProbe(
 export class LocalNetworkAccessService {
   private reading: Promise<LocalNetworkAccess> | null = null;
   private cached: { value: LocalNetworkAccess; at: number } | null = null;
-  private requesting: Promise<LocalNetworkAccess> | null = null;
+  private promptRequesting: Promise<LocalNetworkAccess> | null = null;
+  private settingsRequesting: Promise<LocalNetworkAccess> | null = null;
   private readonly listeners = new Set<(access: LocalNetworkAccess, previous: LocalNetworkAccess | null) => void>();
   private last: LocalNetworkAccess | null = null;
+  private settingsStage: LocalNetworkSettingsStage = 'none';
 
   constructor(private readonly deps: LocalNetworkAccessDeps) {}
+
+  get settingsOpenStage(): LocalNetworkSettingsStage {
+    return this.settingsStage;
+  }
 
   /** Current access. Reads never open System Settings. */
   read(options: { fresh?: boolean } = {}): Promise<LocalNetworkAccess> {
@@ -82,24 +110,57 @@ export class LocalNetworkAccessService {
   }
 
   /**
-   * Ask for access: the probe itself shows the system prompt when macOS has not
-   * decided yet. If access is still missing afterwards, open the exact System
-   * Settings pane, because macOS never prompts again once it has a decision.
+   * Ask for access or open System Settings.
+   *
+   * Default (`openSettings` omitted/false): probes in the foreground so macOS can
+   * present its one-time Allow/Don't Allow alert, without yanking focus away to
+   * System Settings while the user is still reading the alert.
+   *
+   * Explicit (`openSettings: true`): opens System Settings only when the user asks
+   * for it (for example when macOS already recorded a denial and will not prompt
+   * again). Tracked separately from prompt probes so clicking "Open System Settings"
+   * in one surface is never swallowed by an in-flight prompt settle wait from another.
+   * A second open uses a separate System Settings window (`open -n`), falling back
+   * to the standard window if macOS refuses another instance.
    */
-  request(): Promise<LocalNetworkAccess> {
+  request(options: LocalNetworkRequestOptions = {}): Promise<LocalNetworkAccess> {
     if (this.deps.platform !== 'darwin') return Promise.resolve('notRequired');
-    if (this.requesting) return this.requesting;
-    this.requesting = (async () => {
+    if (options.openSettings) {
+      if (this.settingsRequesting) return this.settingsRequesting;
+      const run = (async () => {
+        const current = await this.read({ fresh: true });
+        if (current !== 'denied') return current;
+        const useSeparate = options.separateWindow === true || this.settingsStage === 'standard';
+        if (useSeparate) {
+          this.settingsStage = 'separate';
+          try {
+            await this.deps.openSettings(true);
+          } catch {
+            if (this.last === 'denied') await this.deps.openSettings(false);
+          }
+        } else {
+          this.settingsStage = 'standard';
+          await this.deps.openSettings(false);
+        }
+        return current;
+      })().finally(() => {
+        if (this.settingsRequesting === run) this.settingsRequesting = null;
+      });
+      this.settingsRequesting = run;
+      return run;
+    }
+    if (this.settingsRequesting) return this.settingsRequesting;
+    if (this.promptRequesting) return this.promptRequesting;
+    const run = (async () => {
       const first = await this.read({ fresh: true });
       if (first !== 'denied') return first;
-      await this.deps.wait(PROMPT_GRACE_MS);
-      const second = await this.read({ fresh: true });
-      if (second === 'denied') await this.deps.openSettings();
-      return second;
+      await this.deps.wait(PROMPT_SETTLE_MS);
+      return this.read({ fresh: true });
     })().finally(() => {
-      this.requesting = null;
+      if (this.promptRequesting === run) this.promptRequesting = null;
     });
-    return this.requesting;
+    this.promptRequesting = run;
+    return run;
   }
 
   /** Called on every observed change, including the first reading. */
@@ -123,6 +184,7 @@ export class LocalNetworkAccessService {
   }
 
   private publish(value: LocalNetworkAccess): void {
+    if (value !== 'denied') this.settingsStage = 'none';
     const previous = this.last;
     if (previous === value) return;
     this.last = value;

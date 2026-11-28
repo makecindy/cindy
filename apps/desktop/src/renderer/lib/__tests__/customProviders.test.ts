@@ -29,8 +29,8 @@ afterEach(() => {
 
 describe('saved Hinoki refresh batch', () => {
   const agents = ['claude-code', 'codex', 'pi'] as const;
-  function fixture() {
-    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'hinoki')!;
+  function fixture(id = 'hinoki') {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
     const raw = { id: 'saved-hinoki', name: 'Hinoki', runtimes: structuredClone(preset.runtimes) };
     const provider = { ...buildUserProvider(raw, { presets: [preset] }), connected: true } as ProviderView;
     expect(provider.agents).toEqual(expect.arrayContaining([...agents]));
@@ -78,6 +78,20 @@ describe('saved Hinoki refresh batch', () => {
     await fetchCustomProviderModelsForRefresh(provider, config);
     expect(transport).toHaveBeenCalledTimes(2);
   });
+  it('shares the saved Command Code catalog read but applies each runtime protocol separately', async () => {
+    const { provider, config } = fixture('command-code');
+    const transport = vi.fn(async () => Response.json({ data: [
+      { id: 'claude', supported_endpoints: ['/messages'] },
+      { id: 'responses', supported_endpoints: ['/responses'] },
+      { id: 'chat', supported_endpoints: ['/chat/completions'] },
+    ] }));
+    bridge(async () => 'fixture-key', transport);
+    const results = await fetchCustomProviderModelsForRefresh(provider, config);
+    expect(transport).toHaveBeenCalledOnce();
+    expect(Object.fromEntries(results!.map(({ agent, result }) => [agent, result.models?.map(model => model.id)])))
+      .toEqual({ 'claude-code': ['claude'], codex: ['responses'], pi: ['chat'] });
+  });
+
   it('keeps distinct saved keys separate at the real Main discovery entry', async () => {
     const { provider, config } = fixture();
     const transport = vi.fn<typeof fetch>(async () => new Response('{"data":[{"id":"future-model"}]}'));

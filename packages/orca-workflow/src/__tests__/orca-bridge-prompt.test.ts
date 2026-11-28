@@ -159,6 +159,19 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).not.toContain('Before any dispatch, call get_workspace_info');
   });
 
+  // Lead dispatch contract: a new Worker needs decisions and constraints it cannot infer,
+  // but a follow-up in an existing Worker conversation need not restate known context.
+  it('allows short follow-ups and supplies missing context for complex assignments in one message', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+    expect(prompt).toContain('State the task and expected outcome in one message.');
+    expect(prompt).toContain('If the Worker may not know');
+    expect(prompt).toContain('affect how it should act or judge completion');
+    expect(prompt).toContain('a specific source it can access directly');
+    expect(prompt).toContain('A simple follow-up can be one sentence');
+    expect(prompt).toContain('use paragraphs when needed');
+    expect(prompt).toContain('Do not repeat context the Worker already knows.');
+  });
+
   it('states the queue inspection, atomic interrupt, atomic merge, steer, and supersession rules verbatim', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
@@ -169,7 +182,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
       'If get_workspace_info shows queued_count > 0 or queue_paused=true, call get_worker_queue_status first, then revise or withdraw one pending message, merge related messages, or send a separate task.',
     );
     expect(prompt).toContain(
-      'Orders are self-contained: state, premises, acceptance, and a "supersedes earlier orders" header when replacing one — never assume the worker just read your previous message. A message that queues is consumed only after every earlier one, so never describe the queue or pending work inside it ("one order left") — that snapshot is stale on arrival; give status to the user, not to the worker.',
+      'When replacing earlier orders, include a "supersedes earlier orders" header and make the replacement complete — never assume the Worker has read the order it replaces. A message that queues is consumed only after every earlier one, so never describe the queue or pending work inside it ("one order left") — that snapshot is stale on arrival; give status to the user, not to the worker.',
     );
     expect(prompt).toContain(
       'in one parallel tool-call batch, steer-correct or interrupt every running order built on that premise and revise or withdraw queued ones (update_queued_message / cancel_queued_message)',

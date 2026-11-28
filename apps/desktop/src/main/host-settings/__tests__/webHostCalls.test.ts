@@ -30,19 +30,27 @@ describe('Host calls from the cloud service browser pages', () => {
     expect(settingsWebCommandSchema.safeParse({ kind: 'channel', channel: 'cloud:personalization:v1', args: [{ op: 'read' }] }).success).toBe(false);
   });
 
-  // Unit: favourites and provider management changes count as maintenance work; once maintenance
-  // has begun they are refused with a retryable code, while reads still answer.
+  // Unit: favourites changes count as maintenance work here, provider management in its shared
+  // handler, as over DeviceLink (provider-group/__tests__/ipc.test.ts). Once maintenance has begun a
+  // change is refused with the retryable code the cloud service reads, while reads still answer.
   it('refuses changes from a browser page once maintenance has begun', async () => {
     const gate = connectTestMaintenanceGate();
     onTestFinished(disconnectTestMaintenanceGate);
-    const f = deps();
+    const read = { action: 'manage-group', command: { action: 'get', providerId: 'anthropic' } };
+    const save = { action: 'manage-group', command: { action: 'save-if-current', providerId: 'anthropic' } };
+    // As the management handler answers once maintenance has begun: a read, but not a change.
+    const f = deps({ providerGroup: vi.fn(async (_controller: string, raw: unknown) => {
+      if ((raw as typeof read).command.action !== 'get') throw new Error('[CLOUD_MAINTENANCE_RETRY] maintenance is in progress; try again shortly');
+      return { managed: raw };
+    }) });
     gate.preparing = true;
     await expect(executeWebHostCall(input({ kind: 'channel', channel: 'maker:model-favorites:apply', args: [{}] }), f.deps))
       .resolves.toEqual({ ok: false, code: 'CLOUD_MAINTENANCE_RETRY' });
-    await expect(executeWebHostCall(input({ kind: 'channel', channel: 'provider-group:remote', args: [{ action: 'manage-group' }] }), f.deps))
-      .resolves.toEqual({ ok: false, code: 'CLOUD_MAINTENANCE_RETRY' });
     expect(f.deps.invoke).not.toHaveBeenCalled();
-    expect(f.deps.providerGroup).not.toHaveBeenCalled();
+    await expect(executeWebHostCall(input({ kind: 'channel', channel: 'provider-group:remote', args: [save] }), f.deps))
+      .resolves.toEqual({ ok: false, code: 'CLOUD_MAINTENANCE_RETRY' });
+    await expect(executeWebHostCall(input({ kind: 'channel', channel: 'provider-group:remote', args: [read] }), f.deps))
+      .resolves.toEqual({ ok: true, channel: { managed: read } });
     await expect(executeWebHostCall(input({ kind: 'channel', channel: 'maker:model-favorites:get', args: [] }), f.deps))
       .resolves.toMatchObject({ ok: true });
   });
