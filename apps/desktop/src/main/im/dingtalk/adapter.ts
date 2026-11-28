@@ -46,7 +46,8 @@ const log = createLogger('im:dingtalk-adapter');
 
 export interface DingTalkAdapterOptions {
   /** 伙伴自有连接: 主人私聊进伙伴主任务, 群按 lane 一条专线, 权限档是唯一开关。 */
-  companionBotId?: string;
+  /** 交给哪位伙伴: 固定 id(伙伴自有连接), 或每次现读(设置页那份个人机器人的「谁来回复」)。 */
+  companionBotId?: string | (() => string | null);
 }
 
 export function buildDingTalkAdapter(
@@ -54,7 +55,10 @@ export function buildDingTalkAdapter(
   config: ImOrchestratorConfig,
   options: DingTalkAdapterOptions = {},
 ): ImChannelAdapter {
-  const companion = Boolean(options.companionBotId);
+  // 交给伙伴与否按每条消息现读: 设置页那份个人机器人可以随时在「谁来回复」里切换。
+  const isCompanion = (): boolean => Boolean(
+    typeof options.companionBotId === 'function' ? options.companionBotId() : options.companionBotId,
+  );
   return {
     channel: 'dingtalk',
     // The shared card-action subscription still expects the rich interface.
@@ -120,7 +124,7 @@ export function buildDingTalkAdapter(
     // 唯一开关, 主人触发的轮次不另挂策略; 成员触发的轮次只在破坏性动作上要主人确认。
     turnPermissionPolicyFor: (event) => {
       if (!event.speaker) return undefined;
-      if (companion && event.speaker.isOwner) return undefined;
+      if (isCompanion() && event.speaker.isOwner) return undefined;
       return createDingTalkTurnPermissionPolicy(event.messageId, event.speaker.isOwner);
     },
     // 群里发言人已由下面的 `[发言人]` 行写明(含主人标记), 渠道说明不再重复。

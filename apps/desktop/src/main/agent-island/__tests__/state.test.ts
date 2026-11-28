@@ -3482,4 +3482,21 @@ describe('plugin engine work after its turn', () => {
     expect(setAgentIslandSessionBackgroundWork(state, meta, false, 6_100)).toBe(false);
     expect(snapshot(state)?.phase).toBe('completed');
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：applyAgentIslandUserPrompt 的状态写入；合成触发指令不得写入活动行或卡片预览。
+  // - Bug 依据：群聊伙伴唤起等 [UI_ACTION_TRIGGER] 指令进入灵动岛后直接展示原始英文提示。
+  // - 缺口：既有测试只传普通用户输入，未覆盖合成触发前缀的兜底拦截。
+  // - 最小失败输入：以 [UI_ACTION_TRIGGER] 开头的 prompt；tier=unit。
+  it('ignores synthetic trigger prompts instead of showing hidden instructions in previews', () => {
+    const state = createAgentIslandState();
+    const changed = applyAgentIslandUserPrompt(
+      state,
+      { sessionId: 'group-lane', agentKind: 'claude-code' },
+      '[UI_ACTION_TRIGGER]You are participating as yourself in a Cindy group chat.',
+      1_000,
+    );
+    expect(changed).toBe(false);
+    expect(state.sessions.size).toBe(0);
+  });
 });
