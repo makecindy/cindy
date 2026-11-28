@@ -38,10 +38,12 @@ import { startVoiceInputCaptureSession } from '@/voice-input/captureSession';
 import { streamRetainedAudioToMain } from '@/voice-input/failedAudioReplay';
 import { getVoiceInputWorkletUrl } from '@/voice-input/workletUrl';
 import {
+  createStartCueEchoTracker,
   createStartCueGate,
   playVoiceInputEndCue,
   playVoiceInputStartCue,
   prepareVoiceInputCues,
+  type StartCueEchoTracker,
   type StartCueGate,
 } from '@/voice-input/startCue';
 import {
@@ -69,7 +71,22 @@ export type UseAskUserDictationOptions = {
 };
 
 type Anchor = { text: string; range: TextRange };
-type SubmittedSpan = { range: TextRange; text: string; historyId: string | null };
+type SubmittedSpan = {
+  range: TextRange;
+  text: string;
+  rawText: string;
+  beforeSpanText: string;
+  historyId: string | null;
+};
+
+type AskUserUndoState = {
+  stage: 'refined' | 'raw';
+  range: TextRange;
+  beforeSpanText: string;
+  rawText: string;
+  refinedText: string;
+  historyId: string | null;
+};
 
 function supportsSystemAudioMute(): boolean {
   const platform = window.electronAPI?.platform;
@@ -88,6 +105,9 @@ export function useAskUserDictation(
   canRetryRecognition: boolean;
   /** The voiceprint filter just muted someone else's speech in this run. */
   speakerFiltered: boolean;
+  canUndoRefinement: boolean;
+  undoRefinement: () => boolean;
+  handleUndoKeyDown: (event: KeyboardEvent) => boolean;
   samplesRef: RecordingSamplesRef;
   start: () => boolean;
   retryRecognition: () => boolean;
@@ -112,8 +132,11 @@ export function useAskUserDictation(
   const runIdRef = useRef<string | null>(null);
   const engineRef = useRef<WebMicAudioEngine | null>(null);
   const startCueGateRef = useRef<StartCueGate | null>(null);
+  const startCueEchoTrackerRef = useRef<StartCueEchoTracker>(createStartCueEchoTracker());
   const anchorRef = useRef<Anchor | null>(null);
   const submittedRef = useRef<SubmittedSpan | null>(null);
+  const undoStateRef = useRef<AskUserUndoState | null>(null);
+  const [canUndoRefinement, setCanUndoRefinement] = useState(false);
   const stopInFlightRef = useRef<Promise<boolean> | null>(null);
   const completionRef = useRef<{ promise: Promise<boolean>; resolve: (ok: boolean) => void } | null>(null);
   const draftTextRef = useRef<string | null>(null);
@@ -230,6 +253,7 @@ export function useAskUserDictation(
   const stopEngine = useCallback(async () => {
     // The attempt is ending: nothing is left for the start cue to wait for.
     startCueGateRef.current?.abandon();
+    startCueEchoTrackerRef.current.reset();
     const engine = engineRef.current;
     if (!engine) return;
     try {
@@ -298,12 +322,31 @@ export function useAskUserDictation(
       if (event.type === 'submitted') {
         const anchor = anchorRef.current;
         if (!anchor) return;
+        const beforeSpanText = anchor.text.slice(anchor.range.start, anchor.range.end);
+        const rawText = event.segment.basedOnText ?? event.text;
         const next = spliceText(anchor.text, anchor.range, event.text);
+        const historyId = recordVoiceInputHistory(event.text);
         submittedRef.current = {
           range: next.range,
           text: event.text,
-          historyId: recordVoiceInputHistory(event.text),
+          rawText,
+          beforeSpanText,
+          historyId,
         };
+        if (rawText !== event.text) {
+          undoStateRef.current = {
+            stage: 'refined',
+            range: next.range,
+            beforeSpanText,
+            rawText,
+            refinedText: event.text,
+            historyId,
+          };
+          setCanUndoRefinement(true);
+        } else {
+          undoStateRef.current = null;
+          setCanUndoRefinement(false);
+        }
         anchorRef.current = { text: next.value, range: next.range };
         targetRef.current.setText(next.value);
         setLiveText(next.value);
@@ -321,7 +364,7 @@ export function useAskUserDictation(
       if (event.type === 'refined') {
         const submitted = submittedRef.current;
         if (!submitted) return;
-        const basedOn = event.segment.basedOnText ?? submitted.text;
+        const basedOn = event.segment.basedOnText ?? submitted.rawText ?? submitted.text;
         const next = replaceUneditedSpan(
           targetRef.current.getText(),
           submitted.range,
@@ -331,6 +374,17 @@ export function useAskUserDictation(
         setLiveText(null);
         if (!next) return;
         submittedRef.current = { ...submitted, range: next.range, text: event.text };
+        if (basedOn !== event.text) {
+          undoStateRef.current = {
+            stage: 'refined',
+            range: next.range,
+            beforeSpanText: submitted.beforeSpanText,
+            rawText: basedOn,
+            refinedText: event.text,
+            historyId: submitted.historyId,
+          };
+          setCanUndoRefinement(true);
+        }
         targetRef.current.setText(next.value);
         if (submitted.historyId) updateVoiceInputHistoryEntry(submitted.historyId, event.text);
         return;
@@ -391,6 +445,8 @@ export function useAskUserDictation(
     const selection = targetRef.current.getSelection();
     anchorRef.current = { text: targetRef.current.getText(), range: selection };
     submittedRef.current = null;
+    undoStateRef.current = null;
+    setCanUndoRefinement(false);
     draftTextRef.current = null;
     let resolveCompletion!: (ok: boolean) => void;
     const completion = new Promise<boolean>((resolve) => { resolveCompletion = resolve; });
@@ -415,6 +471,8 @@ export function useAskUserDictation(
       // microphone is open so capture does not queue behind that (see createStartCueGate).
       const cueGate = createStartCueGate();
       startCueGateRef.current = cueGate;
+      const cueEchoTracker = createStartCueEchoTracker();
+      startCueEchoTrackerRef.current = cueEchoTracker;
       // Like the composer, retain opening words while readiness is checked.
       const capturePromise = startVoiceInputCaptureSession({
         label: 'ask-user',
@@ -429,6 +487,7 @@ export function useAskUserDictation(
           if (attemptRef.current === attempt && stateRef.current === 'listening') setCaptureReady(true);
         },
         onPcmCaptured: (pcm) => audioAccumulatorRef.current.append(pcm),
+        isInStartCueEchoWindow: () => cueEchoTracker.isInEchoWindow(),
         onSamples: (pcm) => samplesRef.current?.(pcm),
         appendAudioChunk: (chunk) => { api.appendAudio(chunk); },
         onInterrupted: (message) => { if (attemptRef.current === attempt) void fail(message, { captureFailed: true }); },
@@ -441,7 +500,10 @@ export function useAskUserDictation(
       const feedback: Promise<unknown> = cueGate.released.then((play) => {
         if (!play || !settings.playInteractionSound) return;
         if (attemptRef.current !== attempt || stateRef.current !== 'listening') return;
-        return playVoiceInputStartCue();
+        cueEchoTracker.markCueStarted();
+        return playVoiceInputStartCue().finally(() => {
+          cueEchoTracker.markCueEnded();
+        });
       });
       // A capture that never becomes ready has nothing to wait for; do not
       // leave system mute waiting for the cap.
@@ -484,9 +546,38 @@ export function useAskUserDictation(
         return;
       }
 
+      // Start cloud ASR session in parallel with microphone/AudioWorklet init
+      // (matching useVoiceInput) instead of blocking api.start() behind capturePromise.
+      const anchor = anchorRef.current;
+      const text = anchor?.text ?? '';
+      const range = anchor?.range ?? { start: text.length, end: text.length };
+      const baseContext = buildBaseVoiceInputRefinementContext({ settings });
+      const startPromise: Promise<{ ok: true; runId: string } | { ok: false; error: string }> = Promise.resolve()
+        .then(() => api.start({
+          sourceLanguage: settings.language,
+          refinementEnabled: settings.refinementEnabled,
+          refinementCacheScope: VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
+          refinementContext: settings.refinementEnabled
+            ? {
+                ...baseContext,
+                selectionBefore: takeContextTail(text.slice(0, range.start), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+                selectedText: takeContextHead(text.slice(range.start, range.end), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+                selectionAfter: takeContextHead(text.slice(range.end), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+              }
+            : undefined,
+        }))
+        .catch((error) => ({
+          ok: false as const,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+
       const capture = await capturePromise;
-      if (attemptRef.current !== attempt) return;
+      if (attemptRef.current !== attempt) {
+        void startPromise.then((res) => { if (res.ok) void api.cancel({ runId: res.runId }); });
+        return;
+      }
       if (!capture.ok) {
+        void startPromise.then((res) => { if (res.ok) void api.cancel({ runId: res.runId }); });
         if (capture.cancelled) {
           setVoiceState('idle');
           anchorRef.current = null;
@@ -506,28 +597,7 @@ export function useAskUserDictation(
         return;
       }
 
-      const anchor = anchorRef.current;
-      const text = anchor?.text ?? '';
-      const range = anchor?.range ?? { start: text.length, end: text.length };
-      const baseContext = buildBaseVoiceInputRefinementContext({ settings });
-      let started: { ok: true; runId: string } | { ok: false; error: string };
-      try {
-        started = await api.start({
-          sourceLanguage: settings.language,
-          refinementEnabled: settings.refinementEnabled,
-          refinementCacheScope: VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
-          refinementContext: settings.refinementEnabled
-            ? {
-                ...baseContext,
-                selectionBefore: takeContextTail(text.slice(0, range.start), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-                selectedText: takeContextHead(text.slice(range.start, range.end), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-                selectionAfter: takeContextHead(text.slice(range.end), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-              }
-            : undefined,
-        });
-      } catch (error) {
-        started = { ok: false, error: error instanceof Error ? error.message : String(error) };
-      }
+      const started = await startPromise;
       if (attemptRef.current !== attempt) {
         if (started.ok) void api.cancel({ runId: started.runId });
         return;
@@ -722,6 +792,55 @@ export function useAskUserDictation(
     if (runId) void window.electronAPI?.voiceInput?.cancel?.({ runId });
   }, [clearRetainedAudio, restoreMute, stopEngine]);
 
+  const undoRefinement = useCallback((): boolean => {
+    const current = undoStateRef.current;
+    if (!current || current.stage !== 'refined') return false;
+    const replaced = replaceUneditedSpan(
+      targetRef.current.getText(),
+      current.range,
+      [current.refinedText],
+      current.rawText,
+    );
+    if (!replaced) {
+      undoStateRef.current = null;
+      setCanUndoRefinement(false);
+      return false;
+    }
+    undoStateRef.current = { ...current, stage: 'raw', range: replaced.range };
+    if (submittedRef.current) {
+      submittedRef.current = { ...submittedRef.current, range: replaced.range, text: current.rawText };
+    }
+    targetRef.current.setText(replaced.value);
+    if (current.historyId) updateVoiceInputHistoryEntry(current.historyId, current.rawText);
+    setCanUndoRefinement(false);
+    return true;
+  }, []);
+
+  const handleUndoKeyDown = useCallback((event: KeyboardEvent): boolean => {
+    if (
+      event.isComposing
+      || event.altKey
+      || event.shiftKey
+      || !(event.metaKey || event.ctrlKey)
+      || event.key.toLowerCase() !== 'z'
+    ) {
+      return false;
+    }
+    const current = undoStateRef.current;
+    if (!current) return false;
+    if (current.stage === 'refined') return undoRefinement();
+    const replaced = replaceUneditedSpan(
+      targetRef.current.getText(),
+      current.range,
+      [current.rawText],
+      current.beforeSpanText,
+    );
+    undoStateRef.current = null;
+    if (!replaced) return false;
+    targetRef.current.setText(replaced.value);
+    return true;
+  }, [undoRefinement]);
+
   return {
     state,
     captureReady,
@@ -730,6 +849,9 @@ export function useAskUserDictation(
     lastError,
     canRetryRecognition,
     speakerFiltered,
+    canUndoRefinement,
+    undoRefinement,
+    handleUndoKeyDown,
     samplesRef,
     start,
     retryRecognition,

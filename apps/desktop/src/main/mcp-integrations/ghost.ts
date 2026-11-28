@@ -275,6 +275,8 @@ export type PluginGatewayPorts = Omit<GhostGatewayPorts, PlatformService> & Part
   getGhostSetupCoordinator?: typeof desktopSetupCoordinator;
   /** Host waits may follow tool cancellation; desktop setup cards retain their own lifetime. */
   setupFollowsToolCancellation?: boolean;
+  /** Optional read-only Goal activity probe injected by launchers that run GoalController. */
+  isSessionGoalActive?: (sessionId: string) => Promise<boolean>;
 };
 
 export function createGhostGateway(ports: PluginGatewayPorts) {
@@ -687,7 +689,12 @@ async function buildGhostSessionContext(
   sessionId: string | null,
   alsWorkdir: string | null,
 ): Promise<GhostSessionContextInjected> {
-  const snapshot = sessionId ? await getSessionFsSnapshot(sessionId) : null;
+  const [snapshot, goalActive] = await Promise.all([
+    sessionId ? getSessionFsSnapshot(sessionId) : Promise.resolve(null),
+    sessionId && sessionGoalActiveProvider
+      ? Promise.resolve(sessionGoalActiveProvider(sessionId)).catch(() => false)
+      : Promise.resolve(false),
+  ]);
   return deriveGhostSessionContext(
     sessionId,
     alsWorkdir,
@@ -697,6 +704,7 @@ async function buildGhostSessionContext(
           remoteHostId: snapshot.remoteHostId,
           workdirIsReadOnly:
             workdirWriteVerdict(snapshot.permissionMode, snapshot.planModeEnabled) === 'deny',
+          goalActive,
         }
       : null,
   );
@@ -1769,6 +1777,16 @@ let pageControlGhostProvider: () => string | null = () => null;
 
 function setPageControlGhostProvider(provider: () => string | null): void {
   pageControlGhostProvider = provider;
+}
+
+/** 宿主倒置注入的活跃 /goal 只读查询：避免 ghost.desktop.ts 反向 import goal-host 形成环依赖。 */
+let sessionGoalActiveProvider: ((sessionId: string) => Promise<boolean> | boolean) | null =
+  ports.isSessionGoalActive ?? null;
+
+function setSessionGoalActiveProvider(
+  provider: ((sessionId: string) => Promise<boolean> | boolean) | null,
+): void {
+  sessionGoalActiveProvider = provider;
 }
 
 function pageControlHidden(ghost: InstalledGhost): { tools: Set<string>; manual: Set<string> } | null {
@@ -3250,5 +3268,5 @@ function getCindyGhostsMcpDeps(
     logger: log,
   };
 }
-return { authorizeDesktopSessionPath, setPageControlGhostProvider, getGhostRosterPrompt, getCindyGhostsMcpDeps };
+return { authorizeDesktopSessionPath, setPageControlGhostProvider, setSessionGoalActiveProvider, getGhostRosterPrompt, getCindyGhostsMcpDeps };
 }

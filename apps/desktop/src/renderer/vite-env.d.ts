@@ -1908,6 +1908,11 @@ interface ElectronAPI {
       sourceLanguage?: string;
       refinementEnabled?: boolean;
     }) => Promise<{ ok: true }>;
+    prewarmOnPress?: (payload?: {
+      sourceLanguage?: string;
+      refinementEnabled?: boolean;
+    }) => Promise<{ ok: true }>;
+    discardPressPrewarm?: () => Promise<{ ok: true }>;
     getBenchmarkFixtureAudio: () => Promise<
       { ok: true; path: string; wav: ArrayBuffer } | { ok: false }
     >;
@@ -1938,14 +1943,7 @@ interface ElectronAPI {
     getReadiness: () => Promise<{
       ok: boolean;
       serviceMode: VoiceInputServiceModeData;
-      provider:
-        | 'custom-realtime-asr'
-        | 'elevenlabs-scribe-realtime'
-        | 'openai-realtime-whisper'
-        | 'litellm-gpt-realtime-whisper'
-        | 'litellm-qwen3-asr-flash-realtime'
-        | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+      provider: VoiceInputProviderKindData;
       providerModel: string;
       auth: 'api-key' | 'codex';
       settingsTab: 'api-keys' | 'connections' | 'providers';
@@ -1957,14 +1955,7 @@ interface ElectronAPI {
     getReadinessCached: () => {
       ok: boolean;
       serviceMode: VoiceInputServiceModeData;
-      provider:
-        | 'custom-realtime-asr'
-        | 'elevenlabs-scribe-realtime'
-        | 'openai-realtime-whisper'
-        | 'litellm-gpt-realtime-whisper'
-        | 'litellm-qwen3-asr-flash-realtime'
-        | 'litellm-volcengine-sauc-asr'
-        | 'litellm-batch';
+      provider: VoiceInputProviderKindData;
       providerModel: string;
       auth: 'api-key' | 'codex';
       settingsTab: 'api-keys' | 'connections' | 'providers';
@@ -4529,7 +4520,7 @@ interface ElectronAPI {
     openLink: (deviceId: string) => Promise<{ appVersion: string; allowlistHash: string }>;
     closeLink: (deviceId: string) => Promise<{ ok: true }>;
     /** 远程调用被控端 allowlist 内 channel;成功拿返回值,失败 reject 带 code 的 Error */
-    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }) => Promise<unknown>;
+    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean; requireStructuredHistoryMiss?: boolean }) => Promise<unknown>;
     /** 控制端:订阅被控端某 topic 的变更推送(push 驱动侧边栏 / 会话视图) */
     subscribe: (deviceId: string, topics: string[]) => Promise<{ ok: true }>;
     /** 控制端:取消订阅某 topic */
@@ -4835,6 +4826,7 @@ interface ElectronAPI {
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
+  worktreeWorkspaceClutterSummary?: (req: import('../shared/worktreeWorkspaceClutter').WorkspaceClutterRequest) => Promise<import('../shared/worktreeWorkspaceClutter').WorkspaceClutterSummary>;
   worktreeListBranches: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').ListBranchesResp>;
@@ -5113,6 +5105,7 @@ interface ElectronAPI {
     push: (params: {
       sessionId: string;
       confirmForce?: import('@/lib/gitReview.types').ReviewPushConfirmForce;
+      syncBeforePush?: boolean;
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 

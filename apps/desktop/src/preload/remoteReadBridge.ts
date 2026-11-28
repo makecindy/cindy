@@ -112,7 +112,7 @@ export function createRemoteReadBridge(ipc: BridgeIpc) {
       forgetPeer(deviceId);
       return ipc.invoke(DEVICE_LINK_INVOKE.CLOSE_LINK, { deviceId });
     },
-    async invoke(deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }): Promise<unknown> {
+    async invoke(deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean; requireStructuredHistoryMiss?: boolean }): Promise<unknown> {
       const send = () => ipc.invoke(DEVICE_LINK_INVOKE.INVOKE, { deviceId, channel, args, ...(scheduling ? { scheduling } : {}) });
       if (!optionalReads.has(channel)) return send();
       const peer = scope(deviceId);

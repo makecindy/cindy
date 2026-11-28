@@ -23,6 +23,8 @@ import { SessionEntryRows, type SessionEntryRowsProps } from './SessionEntryList
 import { SectionCollapse } from './SectionCollapse';
 import { sessionRowKey } from './sessionRowKey';
 import { freezeInboxLayout, snapshotInboxLayout, type FrozenInboxLayout } from './taskInboxPlacement';
+import { EnvironmentHealthStrip } from './EnvironmentHealthStrip';
+import type { EnvironmentHealthAction, EnvironmentHealthAlert } from './environmentHealth';
 import {
   sessionNaturalPriorityRank,
   sessionPriorityRank,
@@ -38,6 +40,11 @@ export type TaskInboxProps = Omit<SessionEntryRowsProps, 'entries'> & {
   priorityContext: MainListPriorityContext;
   /** A teammate's task is listed only while it needs the user or runs. */
   isTeammateTask?: (session: Session) => boolean;
+  /** Aggregated environment-level health alerts; omitted or empty renders zero vertical footprint. */
+  healthAlerts?: readonly EnvironmentHealthAlert[];
+  onHealthAlertAction?: (action: EnvironmentHealthAction, alert: EnvironmentHealthAlert) => void;
+  onDismissHealthAlert?: (fingerprint: string) => void;
+  healthAlertsDefaultExpanded?: boolean;
 };
 const SECTIONS: TaskInboxSection[] = ['inbox', 'working', 'snoozed', 'archived'];
 
@@ -61,7 +68,18 @@ const InboxSessionRow = memo(function InboxSessionRow({ session, onSessionAction
 
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
-export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorityContext, isTeammateTask, ...rows }: TaskInboxProps) {
+export function TaskInbox({
+  sessions,
+  now = Date.now(),
+  contentFiltered,
+  priorityContext,
+  isTeammateTask,
+  healthAlerts,
+  onHealthAlertAction,
+  onDismissHealthAlert,
+  healthAlertsDefaultExpanded,
+  ...rows
+}: TaskInboxProps) {
   const { t, i18n } = useTranslation();
   const followingSessions = useActiveFollowUpSessions(sessions);
   // The inbox spans more tasks than the regular list (e.g. outside its status filter), so remote
@@ -205,6 +223,14 @@ export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorit
         }
       }}
     >
+      {healthAlerts && healthAlerts.length > 0 && onHealthAlertAction && onDismissHealthAlert && (
+        <EnvironmentHealthStrip
+          alerts={healthAlerts}
+          onAction={onHealthAlertAction}
+          onDismiss={onDismissHealthAlert}
+          defaultExpanded={healthAlertsDefaultExpanded}
+        />
+      )}
       {SECTIONS.map((section) => {
         // Counts stay live; only the rows hold still while hovering Done.
         const live = groups.get(section)!;

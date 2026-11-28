@@ -286,6 +286,7 @@
     "pendingDelivery": "Pendiente de entrega",
     "pendingDeliveryHint": "Guardado en este teléfono. Esperando la confirmación de tu computadora.",
     "waitingForComputer": "Se enviará cuando tu computadora vuelva a conectarse",
+    "waitingForPrevious": "En espera del mensaje anterior",
     "waitingForNetwork": "Se enviará cuando vuelvas a estar en línea",
     "queued": "En cola",
     "retryImage": "Sube esta imagen nuevamente",

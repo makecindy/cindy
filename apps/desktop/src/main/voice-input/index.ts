@@ -21,6 +21,7 @@ import {
   type DictationDictionaryAdviceResult,
   type EditableRange,
   type SpeechSegment,
+  type AsrEvent,
   type AsrProvider,
   type AudioTrace,
   type DictationRefinementContext,
@@ -85,7 +86,9 @@ import { VolcengineSaucAsrProvider } from './VolcengineSaucAsrProvider.js';
 import {
   CINDY_MANAGED_REFINER_PROVIDER,
   CindyVoiceRunContext,
+  getVoiceApiWebSocketOriginHint,
   isCindyVoiceServiceReady,
+  type CindyVoiceAsrConnection,
 } from './CindyVoiceSessionClient.js';
 import { orderVoiceInputProvidersByHealth } from './VoiceInputProviderHealth.js';
 import {
@@ -1198,7 +1201,8 @@ function buildRealtimeAsrProviderOptions(
   sourceLanguage: string | undefined,
   accessTokenProvider: () => Promise<string | null>,
   proxyBaseUrl?: string,
-  connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>,
+  connectionProvider?: () => Promise<CindyVoiceAsrConnection>,
+  proxyHintUrl?: string,
   recognitionHints?: AsrRecognitionHints,
 ): RealtimeAsrWebSocketProviderOptions {
   if (profile.mode !== 'realtime-websocket' || !profile.realtime) {
@@ -1215,6 +1219,7 @@ function buildRealtimeAsrProviderOptions(
     missingCredentialMessage: profile.missingCredentialMessage,
     errorFallbackMessage: profile.errorFallbackMessage,
     connectionProvider,
+    proxyHintUrl,
   };
   if (profile.realtime.endpointPath && !connectionProvider) {
     if (!proxyBaseUrl) throw new Error(`Proxy base URL is required for voice input provider ${profile.id}.`);
@@ -1268,9 +1273,270 @@ let inFlightPrewarmKey = '';
 let lastPrewarmAt = 0;
 let lastPrewarmKey = '';
 const PREWARM_THROTTLE_MS = 5_000;
+const PRESS_PREWARM_TTL_MS = 8_000;
 const disableRealtimePreconnect = process.env.XDT_VOICE_INPUT_DISABLE_PRECONNECT === '1';
 
-export async function prewarmVoiceInputProvider(options?: { sourceLanguage?: string; refinementEnabled?: boolean }): Promise<void> {
+type PressPrewarmedManagedSession = {
+  ownerScopeKey: ReturnType<typeof activeOwnerScopeKey>;
+  asrLanguageHint: string | undefined;
+  canRefine: boolean;
+  asrChainKey: string;
+  voiceContext: CindyVoiceRunContext;
+  provider: FallbackAsrProvider;
+  startPromise: Promise<void>;
+  connectedEvent: AsrEvent | null;
+  failed: boolean;
+  claimed: boolean;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+let pendingPressPrewarm: PressPrewarmedManagedSession | null = null;
+
+/**
+ * Wraps a press-prewarmed FallbackAsrProvider so the claiming run joins its
+ * already in-flight (or already-settled) start() handshake instead of opening
+ * a second session, while preserving activeProviderKind, recover, and rotateSession.
+ */
+class ClaimedPrewarmAsrProvider implements AsrProvider {
+  private readonly inner: FallbackAsrProvider;
+  private readonly startPromise: Promise<void>;
+  private bufferedConnectedEvent: AsrEvent | null;
+  private startedOnce = false;
+  private eventCallback: (event: AsrEvent) => void = () => {};
+
+  constructor(
+    inner: FallbackAsrProvider,
+    startPromise: Promise<void>,
+    connectedEvent: AsrEvent | null,
+  ) {
+    this.inner = inner;
+    this.startPromise = startPromise;
+    this.bufferedConnectedEvent = connectedEvent;
+    this.inner.onEvent((event) => {
+      if (this.startedOnce) {
+        this.eventCallback(event);
+      } else if (event.type === 'connected' && !this.bufferedConnectedEvent) {
+        this.bufferedConnectedEvent = event;
+      }
+    });
+  }
+
+  get activeProviderKind(): VoiceInputProviderKind | null {
+    return this.inner.activeProviderKind;
+  }
+
+  get endpointing(): NonNullable<AsrProvider['endpointing']> {
+    return this.inner.endpointing;
+  }
+
+  get recover(): (() => Promise<void>) | undefined {
+    const fn = this.inner.recover;
+    return typeof fn === 'function' ? () => fn.call(this.inner) : undefined;
+  }
+
+  get rotateSession(): (() => Promise<void>) | undefined {
+    const fn = this.inner.rotateSession;
+    return typeof fn === 'function' ? () => fn.call(this.inner) : undefined;
+  }
+
+  async start(): Promise<void> {
+    if (!this.startedOnce) {
+      this.startedOnce = true;
+      await this.startPromise;
+      if (this.bufferedConnectedEvent) {
+        const connected = this.bufferedConnectedEvent;
+        this.bufferedConnectedEvent = null;
+        this.eventCallback(connected);
+      }
+      return;
+    }
+    await this.inner.start();
+  }
+
+  appendAudio(chunk: ArrayBuffer, trace?: AudioTrace): void {
+    this.inner.appendAudio(chunk, trace);
+  }
+
+  flushAudio(): Promise<void> {
+    return this.inner.flushAudio();
+  }
+
+  stop(): Promise<void> {
+    return this.inner.stop();
+  }
+
+  dispose(): Promise<void> {
+    return this.inner.dispose();
+  }
+
+  onEvent(callback: (event: AsrEvent) => void): void {
+    this.eventCallback = callback;
+  }
+}
+
+export function discardManagedVoiceInputPressPrewarm(reason = 'discarded'): void {
+  const entry = pendingPressPrewarm;
+  if (!entry) return;
+  pendingPressPrewarm = null;
+  clearTimeout(entry.timer);
+  if (entry.claimed) return;
+  log.debug('discarding unclaimed press-triggered ASR prewarm', { reason });
+  void entry.provider.stop()
+    .catch(() => undefined)
+    .then(() => entry.provider.dispose?.())
+    .catch(() => undefined);
+}
+
+/**
+ * Strictly press-triggered managed ASR prewarm (global shortcut press-down or
+ * composer hold warmup after click disambiguation). Never opens idle background
+ * connections and always self-disposes on cancel, mismatch, or short TTL expiry.
+ */
+async function prewarmManagedVoiceInputOnPress(options?: {
+  sourceLanguage?: string;
+  refinementEnabled?: boolean;
+}): Promise<void> {
+  if (disableRealtimePreconnect) return;
+  if (isVoiceInputByokMode() || !isCindyVoiceServiceReady()) return;
+  if (hasVoiceConversationLease() || activeByWebContentsId.size > 0) return;
+
+  const ownerScopeKey = activeOwnerScopeKey();
+  const storedSettings = voiceInputDataStore.getSettings();
+  const asrLanguageHint = resolveAsrLanguageHint(options?.sourceLanguage ?? storedSettings.language);
+  const canRefine = (options?.refinementEnabled ?? storedSettings.refinementEnabled) !== false;
+  const startableAsrChain = await resolveStartableAsrChain();
+  if (startableAsrChain.length === 0) return;
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return;
+  if (hasVoiceConversationLease() || activeByWebContentsId.size > 0) return;
+
+  const asrChainKey = startableAsrChain.join(',');
+  if (
+    pendingPressPrewarm
+    && !pendingPressPrewarm.failed
+    && !pendingPressPrewarm.claimed
+    && pendingPressPrewarm.ownerScopeKey === ownerScopeKey
+    && pendingPressPrewarm.asrLanguageHint === asrLanguageHint
+    && pendingPressPrewarm.canRefine === canRefine
+    && pendingPressPrewarm.asrChainKey === asrChainKey
+  ) {
+    return;
+  }
+
+  discardManagedVoiceInputPressPrewarm('replaced');
+
+  const voiceContext = new CindyVoiceRunContext(
+    asrLanguageHint,
+    canRefine ? CINDY_MANAGED_REFINER_PROVIDER : undefined,
+  );
+  const provider = new FallbackAsrProvider(startableAsrChain.map((kind) => ({
+    kind,
+    create: () => {
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
+        throw new Error('Voice input account changed during press prewarm.');
+      }
+      return createVoiceInputProvider(kind, asrLanguageHint, voiceContext);
+    },
+  })), {
+    hedgeDelayMs: null,
+    sharedAccountRateLimit: true,
+  });
+
+  const entry: PressPrewarmedManagedSession = {
+    ownerScopeKey,
+    asrLanguageHint,
+    canRefine,
+    asrChainKey,
+    voiceContext,
+    provider,
+    startPromise: Promise.resolve(),
+    connectedEvent: null,
+    failed: false,
+    claimed: false,
+    timer: setTimeout(() => {
+      if (pendingPressPrewarm === entry) {
+        discardManagedVoiceInputPressPrewarm('ttl_expired');
+      }
+    }, PRESS_PREWARM_TTL_MS),
+  };
+  provider.onEvent((event) => {
+    if (!entry.claimed && (event.type === 'error' || event.type === 'disconnected')) {
+      entry.failed = true;
+      entry.connectedEvent = null;
+      if (pendingPressPrewarm === entry) {
+        discardManagedVoiceInputPressPrewarm('connection_lost');
+      }
+      return;
+    }
+    if (!entry.claimed && event.type === 'connected' && !entry.connectedEvent) {
+      entry.connectedEvent = event;
+    }
+  });
+  pendingPressPrewarm = entry;
+  log.debug('starting press-triggered managed ASR prewarm', {
+    asrChain: startableAsrChain,
+    asrLanguageHint: asrLanguageHint ?? '<auto-detect>',
+    canRefine,
+  });
+  entry.startPromise = provider.start().catch((error) => {
+    entry.failed = true;
+    if (pendingPressPrewarm === entry) {
+      discardManagedVoiceInputPressPrewarm('start_failed');
+    }
+    if (!entry.claimed) {
+      log.debug('press-triggered managed ASR prewarm failed (non-fatal)', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    throw error;
+  });
+  // Suppress unhandled rejection when no startVoiceInput claims this entry.
+  void entry.startPromise.catch(() => undefined);
+}
+
+function claimManagedVoiceInputPressPrewarm(criteria: {
+  ownerScopeKey: ReturnType<typeof activeOwnerScopeKey>;
+  asrLanguageHint: string | undefined;
+  canRefine: boolean;
+  asrChainKey: string;
+}): { voiceContext: CindyVoiceRunContext; provider: ClaimedPrewarmAsrProvider } | null {
+  const entry = pendingPressPrewarm;
+  if (!entry) return null;
+  if (
+    entry.failed
+    || entry.claimed
+    || entry.ownerScopeKey !== criteria.ownerScopeKey
+    || entry.asrLanguageHint !== criteria.asrLanguageHint
+    || entry.canRefine !== criteria.canRefine
+    || entry.asrChainKey !== criteria.asrChainKey
+  ) {
+    discardManagedVoiceInputPressPrewarm('mismatch');
+    return null;
+  }
+  pendingPressPrewarm = null;
+  entry.claimed = true;
+  clearTimeout(entry.timer);
+  log.debug('claimed press-triggered managed ASR prewarm', {
+    connected: Boolean(entry.connectedEvent),
+  });
+  return {
+    voiceContext: entry.voiceContext,
+    provider: new ClaimedPrewarmAsrProvider(
+      entry.provider,
+      entry.startPromise,
+      entry.connectedEvent,
+    ),
+  };
+}
+
+export async function prewarmVoiceInputProvider(options?: {
+  sourceLanguage?: string;
+  refinementEnabled?: boolean;
+  /** True only when triggered by an explicit user press/shortcut keydown. */
+  pressTriggered?: boolean;
+}): Promise<void> {
+  if (options?.pressTriggered) {
+    void prewarmManagedVoiceInputOnPress(options);
+  }
   const now = Date.now();
   // Resolve the effective chain head so refiner prewarm/cache keys follow the
   // same cooldown-aware route as the next dictation session.
@@ -1360,6 +1626,7 @@ export async function prewarmVoiceInputProvider(options?: { sourceLanguage?: str
               () => Promise.resolve(token),
               undefined,
               undefined,
+              undefined,
               recognitionHints,
             ));
           }
@@ -1371,6 +1638,7 @@ export async function prewarmVoiceInputProvider(options?: { sourceLanguage?: str
               asrLanguageHint,
               () => Promise.resolve(proxyApiKey),
               proxyBaseUrl,
+              undefined,
               undefined,
               recognitionHints,
             ));
@@ -1669,6 +1937,7 @@ function resetVoiceInputModelSelectionCaches(
   inFlightPrewarmKey = '';
   lastPrewarmKey = '';
   lastPrewarmAt = 0;
+  discardManagedVoiceInputPressPrewarm(`model_selection:${reason}`);
   log.info('voice input model selection changed', {
     reason,
     path: selection.configPath,
@@ -1873,6 +2142,7 @@ async function createVoiceInputProvider(
         () => desktopCodexAuthAdapter.getAccessToken(),
         undefined,
         undefined,
+        undefined,
         recognitionHints,
       ));
     }
@@ -1884,6 +2154,7 @@ async function createVoiceInputProvider(
           () => Promise.resolve(null),
           undefined,
           () => voiceContext.createAsrConnection(provider),
+          getVoiceApiWebSocketOriginHint(),
           recognitionHints,
         ));
       }
@@ -1898,6 +2169,7 @@ async function createVoiceInputProvider(
           sourceLanguage,
           () => Promise.resolve(proxyApiKey),
           proxyBaseUrl,
+          undefined,
           undefined,
           recognitionHints,
         ),
@@ -1915,6 +2187,7 @@ async function createVoiceInputProvider(
       if (voiceContext) {
         return new VolcengineSaucAsrProvider({
           connectionProvider: () => voiceContext.createAsrConnection(provider),
+          proxyHintUrl: getVoiceApiWebSocketOriginHint(),
           resourceId: nativeConfig.resourceId,
           pcmSampleRate: nativeConfig.pcmSampleRate,
           sourceLanguage,
@@ -1967,6 +2240,7 @@ async function createVoiceInputProvider(
     const directApiKey = readElevenLabsApiKey();
     if (!directApiKey) throw new Error(profile.missingCredentialMessage);
     return new ElevenLabsScribeProvider({
+      model: profile.model,
       apiKey: directApiKey,
       baseUrl: readElevenLabsBaseUrl(),
       sourceLanguage,
@@ -2058,6 +2332,7 @@ export function registerVoiceInputIpc(): void {
   if (!appRestoreRegistered) {
     appRestoreRegistered = true;
     app.once('before-quit', () => {
+      discardManagedVoiceInputPressPrewarm('app_quit');
       void systemAudioMuteGuard.restoreAll();
     });
     // 用户去系统设置里授权或撤销后回到应用:缓存跟着刷新,长按语音按最新授权状态生效。
@@ -2085,6 +2360,28 @@ export function registerVoiceInputIpc(): void {
     async (_event, payload?: { sourceLanguage?: string; refinementEnabled?: boolean }): Promise<{ ok: true }> => {
       void refreshVoiceInputReadinessCache('prewarm');
       void prewarmVoiceInputProvider(payload);
+      return { ok: true };
+    },
+  );
+
+  ipcMain.handle(
+    'voice-input:press-prewarm',
+    async (event, payload?: { sourceLanguage?: string; refinementEnabled?: boolean }): Promise<{ ok: true }> => {
+      assertTrustedAppRendererEvent(event);
+      void prewarmVoiceInputProvider({
+        sourceLanguage: typeof payload?.sourceLanguage === 'string' ? payload.sourceLanguage : undefined,
+        refinementEnabled: typeof payload?.refinementEnabled === 'boolean' ? payload.refinementEnabled : undefined,
+        pressTriggered: true,
+      });
+      return { ok: true };
+    },
+  );
+
+  ipcMain.handle(
+    'voice-input:discard-press-prewarm',
+    async (event): Promise<{ ok: true }> => {
+      assertTrustedAppRendererEvent(event);
+      discardManagedVoiceInputPressPrewarm('renderer_discarded');
       return { ok: true };
     },
   );
@@ -2375,19 +2672,8 @@ export function registerVoiceInputIpc(): void {
     // chain. Construction is lazy — providers beyond the first are only
     // instantiated when an earlier candidate fails to connect.
     const effectiveRefinerProfile = readyRefinerProfiles[0] ?? null;
-    // BYOK mode must never allocate a managed voice-server session even when
-    // the service is reachable — the user explicitly chose their own
-    // credential plane.
-    const voiceContext = useCindyVoiceService && isCindyVoiceServiceReady()
-      ? new CindyVoiceRunContext(
-          asrLanguageHint,
-          // Managed refinement delegates model choice and failover to
-          // voice-server; the session is registered with the 'auto' marker
-          // instead of a concrete provider id.
-          canRefine ? CINDY_MANAGED_REFINER_PROVIDER : undefined,
-        )
-      : undefined;
     if (startableAsrChain.length === 0) {
+      discardManagedVoiceInputPressPrewarm('no_asr_provider');
       log.warn(useCindyVoiceService
         ? 'no managed ASR provider is available'
         : 'no credential-ready BYOK ASR provider is available');
@@ -2397,35 +2683,60 @@ export function registerVoiceInputIpc(): void {
         error: useCindyVoiceService ? CINDY_VOICE_SERVICE_UNAVAILABLE_MESSAGE : (readiness.error ?? CINDY_VOICE_SERVICE_UNAVAILABLE_MESSAGE),
       };
     }
-    let provider: FallbackAsrProvider;
-    try {
-      provider = new FallbackAsrProvider(startableAsrChain.map((kind) => ({
-        kind,
-        create: () => {
-          if (!isStartCurrent()) throw new Error(invalidStart.error);
-          // BYOK live 谓词(PR #744 review 第二十一/二十五轮):后备转写档在前一档
-          // 失败后才被 connect,可能距会话开始数分钟 —— create 时刻按当前 override
-          // 以 (来源, 模型) 双查,停用即抛错让 fallback 落到下一家。managed 模式
-          // 路由在 voice-server,不查。
-          if (!voiceContext && isAsrProfileRouteDisabled(getVoiceInputAsrProfile(kind))) {
-            throw new Error('voice ASR provider disabled in settings');
-          }
-          return createVoiceInputProvider(kind, asrLanguageHint, voiceContext);
-        },
-      })), {
-        // Managed candidates allocate one voice-server session per provider.
-        // Do not hedge those requests: concurrent sessions race the shared
-        // run context's session id and can leave refinement attached to the
-        // losing session. BYOK providers have independent credentials and
-        // may use the staggered client-side hedge.
-        hedgeDelayMs: voiceContext ? null : undefined,
-        sharedAccountRateLimit: Boolean(voiceContext),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log.warn('provider create failed', { error: message });
-      unregisterActiveInlineVoiceInputWebContents(event.sender.id);
-      return { ok: false, error: message };
+    // BYOK mode must never allocate a managed voice-server session even when
+    // the service is reachable — the user explicitly chose their own
+    // credential plane.
+    const claimedPrewarm = useCindyVoiceService && isCindyVoiceServiceReady()
+      ? claimManagedVoiceInputPressPrewarm({
+          ownerScopeKey,
+          asrLanguageHint,
+          canRefine,
+          asrChainKey: startableAsrChain.join(','),
+        })
+      : (discardManagedVoiceInputPressPrewarm('byok_or_unready'), null);
+    const voiceContext = claimedPrewarm?.voiceContext
+      ?? (useCindyVoiceService && isCindyVoiceServiceReady()
+        ? new CindyVoiceRunContext(
+            asrLanguageHint,
+            // Managed refinement delegates model choice and failover to
+            // voice-server; the session is registered with the 'auto' marker
+            // instead of a concrete provider id.
+            canRefine ? CINDY_MANAGED_REFINER_PROVIDER : undefined,
+          )
+        : undefined);
+    let provider: FallbackAsrProvider | ClaimedPrewarmAsrProvider;
+    if (claimedPrewarm) {
+      provider = claimedPrewarm.provider;
+    } else {
+      try {
+        provider = new FallbackAsrProvider(startableAsrChain.map((kind) => ({
+          kind,
+          create: () => {
+            if (!isStartCurrent()) throw new Error(invalidStart.error);
+            // BYOK live 谓词(PR #744 review 第二十一/二十五轮):后备转写档在前一档
+            // 失败后才被 connect,可能距会话开始数分钟 —— create 时刻按当前 override
+            // 以 (来源, 模型) 双查,停用即抛错让 fallback 落到下一家。managed 模式
+            // 路由在 voice-server,不查。
+            if (!voiceContext && isAsrProfileRouteDisabled(getVoiceInputAsrProfile(kind))) {
+              throw new Error('voice ASR provider disabled in settings');
+            }
+            return createVoiceInputProvider(kind, asrLanguageHint, voiceContext);
+          },
+        })), {
+          // Managed candidates allocate one voice-server session per provider.
+          // Do not hedge those requests: concurrent sessions race the shared
+          // run context's session id and can leave refinement attached to the
+          // losing session. BYOK providers have independent credentials and
+          // may use the staggered client-side hedge.
+          hedgeDelayMs: voiceContext ? null : undefined,
+          sharedAccountRateLimit: Boolean(voiceContext),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log.warn('provider create failed', { error: message });
+        unregisterActiveInlineVoiceInputWebContents(event.sender.id);
+        return { ok: false, error: message };
+      }
     }
     let runId = '';
     const admission = { cancelled: false };
@@ -2572,6 +2883,11 @@ export function registerVoiceInputIpc(): void {
       // Managed refinement is capped per voice-server session; keep one request
       // for the final text. BYOK refiners have no such cap.
       refineRequestBudget: voiceContext ? () => voiceContext.refineRequestBudget() : undefined,
+      // Managed voice-server sessions enforce a 180s ceiling (close 1008).
+      // Proactively rotate make-before-break around 150s (pause) / 165s (deadline).
+      sessionRotation: voiceContext
+        ? { getMaxSessionMs: () => voiceContext.maxSessionMs() }
+        : undefined,
       recoveryErrorMessage: voiceContext ? getVoiceInputRateLimitMessage : undefined,
       logger,
       callbacks: {

@@ -68,7 +68,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
-import { hasUncreatedHostSession, isDurableOutboxSettled, isPendingHostDialogueCreation, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { hasUncreatedHostSession, isDurableOutboxHandedOff, isDurableOutboxSettled, isPendingHostDialogueCreation, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError, isSharedTaskPeer, isScopedPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -93,6 +93,7 @@ import {
   Pin,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings,
   Square,
@@ -662,6 +663,10 @@ import {
 import { createMobileSpeakerGate, warmMobileSpeakerFilter } from '@/session/mobileSpeakerFilter';
 import { useMobileFailedVoiceRetry } from '@/session/useMobileFailedVoiceRetry';
 import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
+import {
+  applyMobileVoiceRefinementUndoToDraft,
+  useMobileVoiceRefinementUndo,
+} from '@/session/useMobileVoiceRefinementUndo';
 import {
   createMobileVoiceDictionaryLearningTracker,
   type MobileVoiceDictionaryLearningTracker,
@@ -1591,6 +1596,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     show: showVoiceSpeakerFiltered,
     clear: clearVoiceSpeakerFiltered,
   } = useSpeakerFilterNotice();
+  const {
+    candidate: voiceRefinementUndoCandidate,
+    offer: offerVoiceRefinementUndo,
+    dismiss: dismissVoiceRefinementUndo,
+    inspectDraft: inspectVoiceRefinementUndoDraft,
+  } = useMobileVoiceRefinementUndo();
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   // 听写期间原生光标停在插入前的位置;停止后要等最终识别与润色完成才定位到插入末尾。
   // 这段时间继续隐藏光标,避免先在文字中间闪现再跳到末尾。
@@ -1865,9 +1876,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const sendInFlightRef = useRef(false);
   const rawOutboxRecords = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
   const durableOutboxRecords = useMemo(() => rawOutboxRecords.filter((record) => record.accountId === outboxOwner.accountKey && !isDurableOutboxSettled(record)), [rawOutboxRecords, outboxOwner]);
-  const outboxItems = useMemo(() => durableOutboxRecords
-    .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountKey)
-    .map(durableOutboxDisplayItem), [durableOutboxRecords, deviceId, sessionId]);
+  const taskOutboxRecords = useMemo(() => durableOutboxRecords
+    .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountKey),
+    [durableOutboxRecords, deviceId, sessionId]);
+  const outboxItems = useMemo(() => taskOutboxRecords.map(durableOutboxDisplayItem), [taskOutboxRecords]);
   const outboxRef = useRef<readonly MobileOutboxItem[]>(outboxItems);
   outboxRef.current = outboxItems;
   useEffect(() => observeDurableOutboxSending(mobileDurableOutbox, deviceId, sessionId, (record) => {
@@ -3569,13 +3581,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
     composerDraftSource.setDocument(value);
     voiceDictionaryLearningTrackerRef.current?.inspectDraft(projected);
+    inspectVoiceRefinementUndoDraft(projected);
     if (options?.persist !== false) {
       saveComposerDocumentDraft(sessionId, value);
       // Keep the legacy string mirror during the one-way migration window so
       // older builds do not turn a rich draft into an empty composer.
       saveComposerDraft(sessionId, projected);
     }
-  }, [composerDraftSource, sessionId]);
+  }, [composerDraftSource, inspectVoiceRefinementUndoDraft, sessionId]);
 
   const applyComposerDraft = useCallback((value: string, options?: { persist?: boolean }) => {
     const document = reconcileComposerProjectedText(composerDocumentRef.current, value);
@@ -3654,6 +3667,34 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const writeVoiceDraft = useComposerVoiceDraftWriter(sessionId, (update: ComposerVoiceDraftUpdate) => {
     applyRichComposerChange(reconcileComposerVoiceDraft(composerDocumentRef.current, update));
   });
+
+  const undoVoiceRefinement = useCallback(() => {
+    if (!voiceRefinementUndoCandidate) return;
+    const result = applyMobileVoiceRefinementUndoToDraft(draftRef.current, voiceRefinementUndoCandidate);
+    dismissVoiceRefinementUndo();
+    if (!result) return;
+    voiceDictionaryLearningTrackerRef.current?.noteRefinementUndone({
+      draft: result.nextDraft,
+      start: result.nextStart,
+      end: result.nextEnd,
+      rawTranscriptText: voiceRefinementUndoCandidate.rawTranscriptText,
+    });
+    composerInputRef.current?.rememberSelection(result.nextDraft, {
+      start: result.nextEnd,
+      end: result.nextEnd,
+    });
+    writeVoiceDraft({
+      draft: result.nextDraft,
+      initialDocument: composerDocumentRef.current,
+      initialSelection: {
+        start: voiceRefinementUndoCandidate.start,
+        end: voiceRefinementUndoCandidate.end,
+      },
+      insertionEnd: result.nextEnd,
+      replacement: result.replacement,
+    });
+    voiceRefinementUndoCandidate.revertHistoryToRaw?.();
+  }, [dismissVoiceRefinementUndo, voiceRefinementUndoCandidate, writeVoiceDraft]);
 
   useEffect(() => {
     const tracker = createMobileVoiceDictionaryLearningTracker({
@@ -4938,10 +4979,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 已进被控端队列的消息归队列管,不再算交接。已回流进历史、且后面已有回复(turn 已跑过)
   // 的消息也不算,否则快速 turn 结束后活动条要等后台对账才熄灭。只「已确认」不排除:
   // 被控端先落库用户消息、再跑派发前钩子,这段还没有运行信号。
-  const handoffSettledClientIds = useMemo(() => new Set([
-    ...inputProjection.pendingQueue.map((item) => item.clientId),
-    ...repliedHistoryUserClientIds(historyView.snapshot, rawMessages),
-  ]), [inputProjection.pendingQueue, historyView.snapshot, rawMessages]);
+  const rawHistoryDeviceId = remoteSessionStore.getSessionDeviceId(sessionId);
+  const handoffSettledClientIds = useMemo(() => {
+    // 活动条可以用同设备已确认的发送和实时终态收尾，待发记录仍等离线历史缓存完成。
+    const confirmedOutbox = rawHistoryDeviceId === deviceId ? {
+      sessionId,
+      clientIds: new Set(taskOutboxRecords.filter((record) => record.historyConfirmed).map((record) => record.item.clientId)),
+    } : undefined;
+    return new Set([
+      ...inputProjection.pendingQueue.map((item) => item.clientId),
+      ...repliedHistoryUserClientIds(historyView.snapshot, rawMessages, confirmedOutbox),
+    ]);
+  }, [inputProjection.pendingQueue, historyView.snapshot, rawMessages, rawHistoryDeviceId, deviceId, sessionId, taskOutboxRecords]);
   const messageHandoffActive = hasActiveOutboxHandoff(
     durableOutboxRecords,
     { deviceId, sessionId },
@@ -5899,6 +5948,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     voiceStopAfterStartRef.current = false;
     setVoiceError(null);
     clearVoiceSpeakerFiltered();
+    dismissVoiceRefinementUndo();
     setVoiceReleaseToSendActive(false);
     let claimedPrewarm: PrewarmedMobileVoiceAsr | null = null;
     let permissionRequestSeq: number | null = null;
@@ -6029,6 +6079,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
             voiceContext.createRefinerTarget(providerId, options),
           refineRequestBudget: () => voiceContext.refineRequestBudget(),
+          maxSessionMs: () => voiceContext.maxSessionMs(),
           warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string;
           }) =>
             voiceContext.warmRefiner(input),
@@ -6073,6 +6124,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 credential.settings?.language,
                 uiLanguage,
               ),
+            });
+            offerVoiceRefinementUndo({
+              draft: input.draft,
+              rawTranscriptText: input.rawTranscriptText,
+              refinedText: input.refinedText,
+              start: input.start,
+              end: input.end,
+              revertHistoryToRaw: input.revertHistoryToRaw,
             });
           },
         });
@@ -6137,7 +6196,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     }
-  }, [clearVoiceSpeakerFiltered, deviceId, failedVoiceRetry, openLink, prewarmAgentOnTyping, renderItems, showVoiceSpeakerFiltered, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
+  }, [clearVoiceSpeakerFiltered, failedVoiceRetry, deviceId, dismissVoiceRefinementUndo, offerVoiceRefinementUndo, openLink, prewarmAgentOnTyping, renderItems, showVoiceSpeakerFiltered, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
     voiceRetryRunSeqRef.current += 1;
@@ -6218,6 +6277,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       voiceSuppressNextPressRef.current = false;
       voiceStopAfterStartRef.current = false;
       voiceDictionaryLearningTrackerRef.current?.dispose();
+      dismissVoiceRefinementUndo();
       // 语音结束 hold 属于上一个会话的输入现场;切会话时连同迁移基点一并复位,
       // 被 cancel 的 run 迟到的状态回调不会在新会话上误布防。
       // 不依赖旧 controller 的迟到 done 回调来复位新页面。
@@ -6579,20 +6639,22 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       || getNewSessionCreationTask(sessionId) !== null
     );
   };
-  const { findDurableOutboxRecord, retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
+  const { retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
     deviceId, deviceName, sessionId, router, outboxSessionAliveRef,
     setError, setQueueSelectedClientId, t,
   });
   const outboxLeftVersion = useSyncExternalStore(subscribeOutboxLeftInBackground, getOutboxLeftInBackgroundVersion);
-  const outboxDisplayItems = useMemo(() => outboxItems.map((item) => {
-    const record = findDurableOutboxRecord(item.clientId);
-    return {
-      ...outboxDisplayItem(item),
-      ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
-      historyConfirmation: record?.historyConfirmation,
-      canCancel: !record?.historyConfirmation && !(record && hasUncreatedHostSession(record)),
-    };
-  }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
+  const outboxDisplayItems = useMemo(() => {
+    const head = taskOutboxRecords.findIndex((record) => !isDurableOutboxHandedOff(record));
+    return taskOutboxRecords.map((record, index) => ({
+      ...outboxDisplayItem(outboxItems[index]!),
+      sentAt: record.createdAt,
+      pendingDelivery: isPendingDeliveryAfterLeaving(record),
+      historyConfirmation: record.historyConfirmation,
+      waitingForPrevious: head !== -1 && index > head && !isDurableOutboxHandedOff(record),
+      canCancel: !record.historyConfirmation && !hasUncreatedHostSession(record),
+    }));
+  }, [taskOutboxRecords, outboxItems, outboxLeftVersion]);
 
   // Legacy creation tasks have no app-owned first record. Never downgrade durable follow-ups
   // into the old ephemeral draft recovery; new creation tasks use the branch above.
@@ -12219,6 +12281,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                       generationReliable={remoteSessionRunStatus.generationReliable}
                       tokenSpeed={remoteSessionRunStatus.tokenSpeed}
                       generationActive={remoteSessionRunStatus.generationActive}
+                      replyStreaming={makerTurnRunning && currentTurnStreaming
+                        && /^generating(?:…|\.\.\.)?$/i.test(remoteSessionRunStatus.status.trim())}
                       visible={showComposerActivity}
                       slowSendPhase={creationSlowPhase}
                     />
@@ -12419,6 +12483,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 voiceSpeakerFiltered={voiceSpeakerFiltered}
                 canRetryVoice={failedVoiceRetry.canRetry}
                 retryVoiceRecording={retryFailedVoiceRecording}
+                canUndoVoiceRefinement={Boolean(voiceRefinementUndoCandidate)}
+                onUndoVoiceRefinement={undoVoiceRefinement}
                 composerVoiceHoldArmed={composerVoiceHoldArmed}
                 setComposerVoiceHoldArmed={setComposerVoiceHoldArmed}
                 modelSheetOpen={modelSheetOpen}
@@ -13348,6 +13414,9 @@ interface SessionComposerInputProps {
   voiceSpeakerFiltered: boolean;
   canRetryVoice: boolean;
   retryVoiceRecording: () => void;
+  /** Lightweight post-refinement "restore original" action is currently available. */
+  canUndoVoiceRefinement: boolean;
+  onUndoVoiceRefinement: () => void;
   composerVoiceHoldArmed: boolean;
   setComposerVoiceHoldArmed: (value: boolean) => void;
   modelSheetOpen: boolean;
@@ -13381,7 +13450,7 @@ interface SessionComposerInputProps {
 function SessionComposerInput({
   promptRecommendation,
   onDismissPromptRecommendation,
-  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, voiceSpeakerFiltered, canRetryVoice, retryVoiceRecording, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
+  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, voiceSpeakerFiltered, canRetryVoice, retryVoiceRecording, canUndoVoiceRefinement, onUndoVoiceRefinement, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
   onPasteImages, onDragActiveChange, onInputTopLayout, composerPullThrough, renderControls,
 }: SessionComposerInputProps) {
@@ -13493,7 +13562,8 @@ function SessionComposerInput({
   // 状态行只承载错误信息与声纹过滤提示(错误优先);「正在听 / 转写中」不再占一行,对齐桌面版——
   // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
   const voiceStatusText = voiceError ?? (voiceSpeakerFiltered ? t('composer.voice.speakerFiltered') : null);
-  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceStatusText);
+  const voiceRefinementUndoVisible = voiceUiAvailable && !voiceStatusText && canUndoVoiceRefinement;
+  const voiceStatusVisible = voiceUiAvailable && (Boolean(voiceStatusText) || voiceRefinementUndoVisible);
 
   // 聚焦 / 面板打开 / 语音中呈现卡片形态（输入区全宽 + 底部工具排），其余保持单行简洁态。
   // 注意不看 composerLayout.density：有草稿 / 会话运行中未聚焦时也应收回简洁态，
@@ -13741,20 +13811,22 @@ function SessionComposerInput({
               >
                 {voiceStatusVisible ? (
                   <View style={styles.voiceStatusRow}>
-                    <Text style={styles.voiceStatusText} testID="session.voiceStatus">
-                      {voiceStatusText}
-                    </Text>
-                    {canOpenVoiceSettings ? (
-                      <RouteActionButton
-                        accessibilityLabel={t('session.common.openMicPermission')}
-                        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-                        onPress={openVoiceSettings}
-                        style={styles.voiceCancelButton}
-                        testID="session.voiceSettingsButton"
-                      >
-                        <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-                      </RouteActionButton>
-                    ) : canRetryVoice && voiceError && !voiceIsBusy && !voiceStartPending ? (
+                    {voiceStatusText ? (
+                      <>
+                        <Text style={styles.voiceStatusText} testID="session.voiceStatus">
+                          {voiceStatusText}
+                        </Text>
+                        {canOpenVoiceSettings ? (
+                          <RouteActionButton
+                            accessibilityLabel={t('session.common.openMicPermission')}
+                            hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+                            onPress={openVoiceSettings}
+                            style={styles.voiceCancelButton}
+                            testID="session.voiceSettingsButton"
+                          >
+                            <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                          </RouteActionButton>
+                        ) : canRetryVoice && voiceError && !voiceIsBusy && !voiceStartPending ? (
                       <Pressable
                         accessibilityLabel={t('composer.voice.retryRecognition')}
                         accessibilityRole="button"
@@ -13766,6 +13838,23 @@ function SessionComposerInput({
                         <Text numberOfLines={1} style={styles.voiceRetryButtonText}>
                           {t('composer.voice.retryRecognition')}
                         </Text>
+                      </Pressable>
+                        ) : null}
+                      </>
+                    ) : voiceRefinementUndoVisible ? (
+                      <Pressable
+                        accessibilityLabel={t('composer.voice.undoRefinement')}
+                        accessibilityRole="button"
+                        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+                        onPress={onUndoVoiceRefinement}
+                        style={({ pressed }) => [
+                          styles.voiceUndoRefinementPill,
+                          pressed && styles.voiceUndoRefinementPillPressed,
+                        ]}
+                        testID="session.voiceUndoRefinementButton"
+                      >
+                        <RotateCcw color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+                        <Text style={styles.voiceUndoRefinementText}>{t('composer.voice.undoRefinement')}</Text>
                       </Pressable>
                     ) : null}
                   </View>
@@ -14347,6 +14436,7 @@ function ComposerActivityStatus({
   generationReliable: reportedGenerationReliable,
   tokenSpeed,
   generationActive,
+  replyStreaming,
   visible,
   slowSendPhase = null,
 }: {
@@ -14367,6 +14457,7 @@ function ComposerActivityStatus({
   /** Host-measured live tok/s; replaces the usage-counter estimate when present. */
   tokenSpeed?: TokenSpeedSnapshot;
   generationActive: boolean;
+  replyStreaming: boolean;
   visible: boolean;
   /** Set once a new task's creation has waited past the slow-send delay. */
   slowSendPhase?: SlowSendPhase | null;
@@ -14491,6 +14582,7 @@ function ComposerActivityStatus({
       )
     : // 发送等待超过阈值时,同一行先说明卡在哪一步;创建完成后回到「思考中」。
       slowSendPhase ? t(`session.new.slowSend.${slowSendPhase}`)
+    : replyStreaming && !sideTaskRunning ? t('session.screen.replyStreaming')
     : t('session.screen.thinking');
 
   return (
@@ -15055,6 +15147,27 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceRetryButtonText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+  },
+  voiceUndoRefinementPill: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  voiceUndoRefinementPillPressed: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.borderStrong,
+  },
+  voiceUndoRefinementText: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.caption,
   },
