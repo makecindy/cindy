@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import {
-  MAX_VISIBLE_VOICE_INPUT_HISTORY_ENTRIES,
   type VoiceInputDataSnapshot,
   type VoiceInputHistoryEntry,
 } from '../../shared/voiceInputData';
@@ -32,9 +31,9 @@ export function recordVoiceInputHistory(text: string): string | null {
   }
 }
 
-export function updateVoiceInputHistoryEntry(id: string, text: string): void {
+export function updateVoiceInputHistoryEntry(id: string, text: string, rawText?: string): void {
   try {
-    window.electronAPI.voiceInput.updateHistoryEntry(id, text);
+    window.electronAPI.voiceInput.updateHistoryEntry(id, text, rawText);
   } catch {
     // History is advisory context only; do not interrupt voice input on storage errors.
   }
@@ -53,19 +52,16 @@ export function useVoiceInputHistory(): {
   deleteEntry: (id: string) => void;
 } {
   const [entries, setEntries] = useState<VoiceInputHistoryEntry[]>(() =>
-    getVoiceInputHistory(MAX_VISIBLE_VOICE_INPUT_HISTORY_ENTRIES),
+    getVoiceInputHistory(),
   );
 
   const syncFromSnapshot = useCallback((snapshot?: VoiceInputDataSnapshot) => {
-    setEntries(
-      (snapshot?.history ?? getVoiceInputHistory())
-        .slice(0, MAX_VISIBLE_VOICE_INPUT_HISTORY_ENTRIES),
-    );
+    setEntries(snapshot?.history ?? getVoiceInputHistory());
   }, []);
 
   const deleteEntry = useCallback((id: string) => {
     deleteVoiceInputHistoryEntry(id);
-    setEntries(getVoiceInputHistory(MAX_VISIBLE_VOICE_INPUT_HISTORY_ENTRIES));
+    setEntries(getVoiceInputHistory());
   }, []);
 
   useEffect(() => window.electronAPI.voiceInput.onDataChanged(syncFromSnapshot), [syncFromSnapshot]);

@@ -73,6 +73,10 @@ export const voiceInputSettings = defineSettings({
     titleKey: 'settings.voiceInput.refinement.dictionary.label',
     sectionKey: 'settings.tabs.voiceInput',
     descriptionKey: 'settings.voiceInput.refinement.dictionary.hint',
+    keywordKeys: [
+      'settings.voiceInput.refinement.dictionary.candidates.hint',
+      'settings.voiceInput.refinement.dictionary.suppressed.hint',
+    ],
   },
   muteSystemAudioLabel: {
     id: 'settings.voiceInput.muteSystemAudio.label',
@@ -100,6 +104,11 @@ export const voiceInputSettings = defineSettings({
     targetId: 'settings-search-settings-voiceInput-history-label',
     titleKey: 'settings.voiceInput.history.label',
     sectionKey: 'settings.tabs.voiceInput',
+    keywordKeys: [
+      'settings.voiceInput.history.searchAriaLabel',
+      'settings.voiceInput.history.rawLabel',
+      'settings.voiceInput.history.refinedLabel',
+    ],
   },
   sectionsUsageData: {
     id: 'settings.voiceInput.sections.usageData',
@@ -187,6 +196,11 @@ export const voiceInputSettings = defineSettings({
     titleKey: 'settings.voiceInput.serviceSource.asr.label',
     descriptionKey: 'settings.voiceInput.serviceSource.asr.hint',
     sectionKey: 'settings.tabs.voiceInput',
+    keywordKeys: [
+      'settings.voiceInput.serviceSource.localAsr.optionLabel',
+      'settings.voiceInput.serviceSource.localAsr.optionDescription',
+      'settings.voiceInput.serviceSource.localAsr.modelDirLabel',
+    ],
   },
   customAsrProtocol: {
     isVisible: isCustomAsrVisible,

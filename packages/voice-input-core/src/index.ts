@@ -8,6 +8,7 @@ export * from './speaker-onnx/onnxSpeakerEngine';
 export * from './VoiceInputController';
 export * from './VoiceTimelineLogger';
 export * from './DictationRefiner';
+export * from './DictationRewriter';
 export * from './dictionaryFuzzyMatch';
 export * from './DictationExternalEditInspector';
 export * from './DictationDictionaryAdvisor';
