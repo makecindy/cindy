@@ -1425,7 +1425,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "Modelo não alterado: o proprietário pausou este compartilhamento para você. Escolha outro modelo.",
     "REMOTE_AGENT_SHARE_REMOVED": "Modelo não alterado: este compartilhamento não está mais disponível (o proprietário o removeu ou você saiu). Escolha outro modelo.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modelo não alterado: o provedor compartilhado está temporariamente indisponível (o computador do proprietário está offline ou o compartilhamento está desativado no momento). Tente novamente mais tarde ou escolha outro modelo.",
-    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modelo não alterado: este é um compartilhamento antigo e não pode ser usado enquanto \"Usar apenas Agent-Net\" estiver ativado. Desative essa opção ou escolha outro modelo.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modelo não alterado: este é um compartilhamento antigo e não pode ser usado enquanto “Usar apenas Agent-Net” estiver ativado. Desative essa opção ou escolha outro modelo.",
     "SSH_HOST_KEY_MISMATCH": "Chave do host SSH alterada",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "O Cindy não consegue ler o anexo original; a mensagem não foi enviada. Salve uma cópia em Downloads ou em outra pasta acessível, remova o anexo original e adicione a cópia usando o botão de anexos antes de enviar novamente."
   },
@@ -1446,7 +1446,7 @@
     "TIMEOUT": "A conexão expirou. Verifique sua rede e a URL base",
     "CERT_ERROR": "A verificação do certificado falhou. Verifique se o nome do host da URL base corresponde ao certificado, assim como a cadeia de certificados e a configuração de confiança da CA da sua organização.",
     "UNKNOWN": "Erro desconhecido. Consulte os logs para mais detalhes",
-    "upstreamToast": "Falha na requisição ao provedor \"{{provider}}\": {{message}}"
+    "upstreamToast": "Falha na requisição ao provedor “{{provider}}”: {{message}}"
   },
   "appError": {
     "title": "Algo deu errado",
@@ -1979,7 +1979,7 @@
         "write": "Cindy não conseguiu salvar a chave de host confiável: {{reason}}. Conexão recusada.",
         "mismatch": "A chave de host de {{host}} mudou ({{fingerprint}}) e não corresponde mais à impressão digital em que Cindy confiava. Isso pode significar que o servidor foi reinstalado ou um ataque man-in-the-middle. Conexão recusada.",
         "file": "Arquivo de chaves de host confiáveis:\n{{filePath}}",
-        "repair": "Cindy não lê ~/.ssh/known_hosts. A impressão digital antiga está armazenada em:\n{{filePath}}\nA chave da entrada é \"{{host}}\".\nSe você confirmou que esta alteração é confiável, feche Cindy, remova apenas esta entrada, mantenha o arquivo e todos os outros hosts e conecte-se novamente. A nova impressão digital será salva na primeira conexão. Não exclua o arquivo inteiro.",
+        "repair": "Cindy não lê ~/.ssh/known_hosts. A impressão digital antiga está armazenada em:\n{{filePath}}\nA chave da entrada é “{{host}}”.\nSe você confirmou que esta alteração é confiável, feche Cindy, remova apenas esta entrada, mantenha o arquivo e todos os outros hosts e conecte-se novamente. A nova impressão digital será salva na primeira conexão. Não exclua o arquivo inteiro.",
         "verifyChange": "Confirme a alteração com o administrador do servidor antes de atualizar o registro de chaves de host confiáveis."
       },
       "footnote": "Fase A: apenas gerenciamento de conexões SSH. A execução de Agents na máquina remota chegará em uma atualização futura.",
@@ -2000,7 +2000,7 @@
       },
       "empty": {
         "title": "Nenhuma máquina remota ainda.",
-        "hint": "Clique em \"Adicionar\" para cadastrar uma ou no ícone de atualização para importar de ~/.ssh/config."
+        "hint": "Clique em “Adicionar” para cadastrar uma ou no ícone de atualização para importar de ~/.ssh/config."
       },
       "status": {
         "disconnected": "Desconectado",
@@ -2039,12 +2039,12 @@
         "done": "Concluído",
         "pickOrGenerate": "Escolha uma chave existente ou gere uma nova",
         "loading": "Buscando em ~/.ssh/…",
-        "empty": "Nenhuma chave SSH encontrada em ~/.ssh/. Clique em \"Gerar nova\" para criar uma.",
+        "empty": "Nenhuma chave SSH encontrada em ~/.ssh/. Clique em “Gerar nova” para criar uma.",
         "generateButton": "Gerar nova",
         "cancelGenerate": "Cancelar",
         "inAgent": "no ssh-agent",
         "notInAgent": "fora do ssh-agent",
-        "notInAgentTip": "Esta chave está no disco, mas não foi carregada no ssh-agent. Clique em \"Desbloquear\" para carregá-la (a frase secreta será solicitada se estiver criptografada).",
+        "notInAgentTip": "Esta chave está no disco, mas não foi carregada no ssh-agent. Clique em “Desbloquear” para carregá-la (a frase secreta será solicitada se estiver criptografada).",
         "unlockButton": "Desbloquear",
         "unlockTip": "Carregue esta chave no ssh-agent para fazer conexões SSH sem redigitar a frase secreta.",
         "unlockTitle": "Desbloquear {{name}}",
@@ -2089,7 +2089,7 @@
           "tryThis": "Tente isto no seu terminal",
           "close": "Fechar",
           "fallbackTitle": "Ou dispense completamente o agent",
-          "fallbackBody": "Você também pode escolher \"Arquivo de identidade\" ao adicionar um host. O {{appName}} lê a chave privada para a memória do processo sem ssh-agent. Atualmente, apenas chaves privadas sem criptografia são compatíveis; a senha da chave não é solicitada ao conectar. Use ssh-agent para chaves criptografadas.",
+          "fallbackBody": "Você também pode escolher “Arquivo de identidade” ao adicionar um host. O {{appName}} lê a chave privada para a memória do processo sem ssh-agent. Atualmente, apenas chaves privadas sem criptografia são compatíveis; a senha da chave não é solicitada ao conectar. Use ssh-agent para chaves criptografadas.",
           "reason": {
             "agent_unavailable": "O ssh-add não conseguiu acessar seu ssh-agent (binário ausente, agent não está em execução ou SSH_AUTH_SOCK não definida).",
             "bad_passphrase": "O ssh-add rejeitou a frase secreta.",
@@ -2289,7 +2289,7 @@
         "import": "Importar tema do VSCode / Obsidian",
         "openDir": "Abrir pasta de temas",
         "refresh": "Atualizar",
-        "exportSuccess": "{{file}} criado. Substitua os caminhos de imagem de exemplo, salve e clique em \"Atualizar\".",
+        "exportSuccess": "{{file}} criado. Substitua os caminhos de imagem de exemplo, salve e clique em “Atualizar”.",
         "exportFailed": "Falha ao exportar: {{error}}",
         "importSuccess": "{{name}} importado ({{themeCount}} variante(s)). Selecione-o na lista de temas acima.",
         "importPartial": "{{name}} importado ({{themeCount}} variante(s)). {{skipped}} cores semânticas permanecem inalteradas conforme a especificação, {{unresolved}} valores não puderam ser lidos e {{derived}} funções foram aproximadas a partir de cores próximas.",
@@ -2453,7 +2453,7 @@
       "sessionDoneAria": "Ativar ou desativar notificações do sistema para sessões",
       "feishuLabel": "Enviar mensagem privada pelo Feishu / Lark quando uma sessão terminar ou precisar de uma resposta",
       "feishuHint": "Envia uma mensagem privada pelo bot vinculado do Feishu ou Lark; apenas quando a janela está sem foco.",
-      "feishuDisabledHint": "Primeiro configure o bot em \"Bot do Feishu / Lark\" e envie uma mensagem privada a ele para concluir a vinculação.",
+      "feishuDisabledHint": "Primeiro configure o bot em “Bot do Feishu / Lark” e envie uma mensagem privada a ele para concluir a vinculação.",
       "feishuAria": "Ativar ou desativar notificações de conclusão de sessão pelo FeiShu",
       "botGroupPlan": {
         "stepDone": "{{name}} concluiu “{{task}}” — continue quando quiser",
@@ -3814,8 +3814,8 @@
         "formatStructure": "O arquivo contém um objeto JSON, sem Base64, link de importação ou estrutura adicional. Os campos abaixo descrevem um provedor personalizado com chave de API. Os nomes dos campos diferenciam maiúsculas de minúsculas; JSON não permite comentários.",
         "formatIdentity": "Obrigatório. Defina kind como \"custom\" e name como o nome do provedor que deseja exibir.",
         "formatAuth": "Obrigatório. Neste exemplo, defina method como \"apiKey\" e substitua apiKey pela chave do seu provedor.",
-        "formatEndpoint": "Obrigatório para cada endpoint. protocol aceita \"openai-chat\", \"openai-responses\", \"anthropic-messages\" e \"google-generative-ai\". Defina baseUrl como a URL HTTP(S) completa do endpoint; HTTPS é recomendado.",
-        "formatTargets": "Lista opcional de mecanismos: \"claude-code\", \"codex\" ou \"pi\". Omita-a para associar mecanismos por protocolo ou especifique os mecanismos explicitamente. O Claude Code também oferece suporte aos protocolos OpenAI e Google. O exemplo habilita apenas o Pi.",
+        "formatEndpoint": "Obrigatório para cada endpoint. protocol aceita “openai-chat”, “openai-responses”, “anthropic-messages” e “google-generative-ai”. Defina baseUrl como a URL HTTP(S) completa do endpoint; HTTPS é recomendado.",
+        "formatTargets": "Lista opcional de mecanismos: “claude-code”, \"codex\" ou \"pi\". Omita-a para associar mecanismos por protocolo ou especifique os mecanismos explicitamente. O Claude Code também oferece suporte aos protocolos OpenAI e Google. O exemplo habilita apenas o Pi.",
         "formatModels": "Opcional. Use strings de ID de modelo ou objetos com id (name é opcional). Omita a lista ou deixe-a vazia para buscar modelos após a confirmação. Uma lista não vazia pula a busca automática.",
         "formatMetadata": "Campos opcionais de modelo: group é o grupo do modelo, contextWindow é o tamanho do contexto e maxOutputTokens é o limite de saída (ambos em tokens). Os números do exemplo são ilustrativos; use as capacidades reais do modelo.",
         "formatEffort": "Campos opcionais de modelo: efforts lista os níveis de esforço de raciocínio aceitos; defaultEffort seleciona um deles como padrão. Remova ambos os campos se não tiver certeza.",
@@ -4446,7 +4446,7 @@
         "manage": {
           "title": "Modelos",
           "selected": "{{count}} exibidos",
-          "hint": "As opções definem quais modelos aparecem no seletor de modelos. Desativar uma apenas oculta o modelo; você ainda pode escolhê-lo em \"Ocultos\", no fim do seletor.",
+          "hint": "As opções definem quais modelos aparecem no seletor de modelos. Desativar uma apenas oculta o modelo; você ainda pode escolhê-lo em “Ocultos”, no fim do seletor.",
           "menu": "Gerenciar",
           "arrange": "Organizar lista",
           "byBrand": "Agrupar por fabricante",
@@ -4494,7 +4494,7 @@
       "detail": {
         "singleAgentNote": "Somente {{agent}}",
         "emptyModels": "Os modelos disponíveis são descobertos após o login",
-        "emptyList": "Clique em \"Adicionar provedor\" abaixo para conectar sua primeira fonte de modelos",
+        "emptyList": "Clique em “Adicionar provedor” abaixo para conectar sua primeira fonte de modelos",
         "emptyModelsConnected": "Conectado — buscando modelos disponíveis. Se a lista continuar vazia, tente novamente em instantes.",
         "discoveryFailed": {
           "network": "Não foi possível acessar este provedor, então sua lista de modelos está indisponível. Verifique as configurações de rede ou proxy e tente novamente.",
@@ -4517,7 +4517,7 @@
           "empty": "Este provedor não retornou modelos utilizáveis desta vez. A lista abaixo é da última atualização bem-sucedida. Verifique as permissões de acesso da sua conta e tente novamente."
         },
         "suspendedBanner": "Este provedor está desativado: novas sessões e recursos em segundo plano não o usam mais. As credenciais foram mantidas. Se você só não quer vê-lo no seletor de modelos, oculte-o em vez disso.",
-        "hiddenBanner": "Oculto do seletor de modelos. As sessões e os recursos em segundo plano que o usam não são afetados, e você ainda pode escolhê-lo em \"Ocultos\", no fim do seletor.",
+        "hiddenBanner": "Oculto do seletor de modelos. As sessões e os recursos em segundo plano que o usam não são afetados, e você ainda pode escolhê-lo em “Ocultos”, no fim do seletor.",
         "remoteAccess": {
           "label": "Permitir uso remoto",
           "description": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O Agent é executado neste computador, usando o login e a cota dele.",
@@ -5252,7 +5252,7 @@
         "headingOffline": "Offline neste dispositivo",
         "noteOffline": "Não está recebendo mensagens. O token do bot e o vínculo continuam salvos nesta máquina — fique online novamente a qualquer momento.",
         "headingConflict": "Em uso por outro dispositivo",
-        "noteConflict": "Apenas um dispositivo pode receber mensagens do mesmo bot, e este continua disputando esse acesso. Deixe o outro dispositivo offline abaixo para que este assuma, ou escolha \"Ficar offline aqui\" para ceder o acesso a ele.",
+        "noteConflict": "Apenas um dispositivo pode receber mensagens do mesmo bot, e este continua disputando esse acesso. Deixe o outro dispositivo offline abaixo para que este assuma, ou escolha “Ficar offline aqui” para ceder o acesso a ele.",
         "botLabel": "Conta do bot",
         "ownerLabel": "Meu ID de usuário"
       },
@@ -5406,7 +5406,7 @@
       },
       "groups": {
         "title": "Participação em grupos",
-        "hint": "Os grupos que o bot viu aparecem aqui. \"Ativo\" = ele lê todas as mensagens e decide por conta própria se participa (cada mensagem consome tokens).",
+        "hint": "Os grupos que o bot viu aparecem aqui. “Ativo” = ele lê todas as mensagens e decide por conta própria se participa (cada mensagem consome tokens).",
         "empty": "Ainda não há grupos. Adicione o bot a um grupo e ele aparecerá aqui quando alguém falar.",
         "error": {
           "load": "Não foi possível carregar os grupos do Telegram. Verifique a conexão e tente novamente.",
@@ -6293,7 +6293,7 @@
           "installFailed": "Falha ao instalar cua-driver",
           "permissionFailed": "As permissões do Computer Use estão incompletas",
           "permissionPending": "Conclua a autorização no Mac. Se o estado não for atualizado, verifique novamente.",
-          "permissionSettingsOpened": "Configurações de permissões do sistema abertas. Após concedê-las, volte e clique em \"Verificar novamente\".",
+          "permissionSettingsOpened": "Configurações de permissões do sistema abertas. Após concedê-las, volte e clique em “Verificar novamente”.",
           "permissionSettingsMonitoring": "Configurações de permissões do sistema abertas. Conclua as permissões e o status será atualizado automaticamente.",
           "openPermissionSettingsFailed": "Falha ao abrir as configurações de permissões do sistema"
         }
@@ -6532,11 +6532,11 @@
           "ownerTitle": "Interromper o retransmissor neste computador?",
           "ownerDescription": "Os dispositivos conectados serão desconectados e informados de que o retransmissor foi interrompido. Este computador volta ao retransmissor Cindy.",
           "memberTitle": "Voltar ao retransmissor Cindy?",
-          "memberDescription": "Este computador sai de \"{{name}}\" e usa o retransmissor Cindy. Para se conectar novamente, solicite um novo link de compartilhamento.",
+          "memberDescription": "Este computador sai de “{{name}}” e usa o retransmissor Cindy. Para se conectar novamente, solicite um novo link de compartilhamento.",
           "sharedOwnerTitle": "Voltar ao retransmissor Cindy?",
           "sharedOwnerDescription": "Este computador sai de “{{name}}” e usa o retransmissor Cindy; seus dispositivos que entraram por ele também são desconectados. Para usar de novo, peça um novo compartilhamento.",
           "serverTitle": "Voltar ao retransmissor Cindy?",
-          "serverDescription": "O retransmissor \"{{name}}\" continua em execução no seu servidor, e os dispositivos conectados ainda podem se comunicar por ele. Você pode conectar este computador novamente a qualquer momento."
+          "serverDescription": "O retransmissor “{{name}}” continua em execução no seu servidor, e os dispositivos conectados ainda podem se comunicar por ele. Você pode conectar este computador novamente a qualquer momento."
         },
         "errors": {
           "INVALID_LINK": "O link de compartilhamento ou o endereço é inválido.",
@@ -6816,7 +6816,7 @@
           "addProject": "Adicionar projeto",
           "defaultWorkspaceChip": "Padrão: {{name}}",
           "defaultWorkspaceAria": "Escolha o projeto padrão para tarefas encaminhadas",
-          "defaultWorkspaceRadioAria": "Definir \"{{name}}\" como projeto padrão",
+          "defaultWorkspaceRadioAria": "Definir “{{name}}” como projeto padrão",
           "defaultWorkspaceRowHint": "O projeto selecionado é o padrão: conversas do Telegram, Feishu / Lark, X e Discord que não escolheram um projeto executam suas tarefas nele.",
           "defaultProjectTag": "Padrão",
           "defaultProjectFullAccessWarning": "O projeto padrão “{{name}}” está com Acesso total: uma @mention de qualquer grupo é executada nele com acesso total.",
@@ -6879,7 +6879,7 @@
           "rebind": "Vincular novamente",
           "removeAria": "Desvincular este espaço de trabalho",
           "removeConfirmTitle": "Desvincular {{team}}",
-          "removeConfirmDescription": "Após a desvinculação, o espaço de trabalho do Slack \"{{team}}\" não poderá mais encaminhar tarefas a este dispositivo. Você pode autorizá-lo e vinculá-lo novamente a qualquer momento.",
+          "removeConfirmDescription": "Após a desvinculação, o espaço de trabalho do Slack “{{team}}” não poderá mais encaminhar tarefas a este dispositivo. Você pode autorizá-lo e vinculá-lo novamente a qualquer momento.",
           "removeDisplacedConfirmDescription": "Outro dispositivo assumiu esta vinculação. Removê-la apenas exclui esta linha da lista local.",
           "removeConfirm": "Desvincular",
           "cancelPending": "Cancelar",
@@ -7470,7 +7470,7 @@
     },
     "devices": {
       "title": "Vinculação de dispositivos",
-      "description": "Dispositivos conectados à mesma conta do Feishu podem se descobrir. Quando \"Permitir controle\" estiver ativado, seus outros dispositivos poderão controlar remotamente o {{appName}} nesta máquina.",
+      "description": "Dispositivos conectados à mesma conta do Feishu podem se descobrir. Quando “Permitir controle” estiver ativado, seus outros dispositivos poderão controlar remotamente o {{appName}} nesta máquina.",
       "allowControl": "Permitir que dispositivos da mesma conta controlem esta máquina",
       "allowControlHint": "Quando ativado, outros dispositivos conectados à mesma conta podem controlar esta máquina sem aprovação por conexão. Um indicador visível é exibido durante o controle, e você pode desconectar a qualquer momento.",
       "keepAwake": "Manter computador ativo",
@@ -7738,7 +7738,7 @@
         "followHeading": "Seguem a configuração do canal",
         "showMore": "Mostrar mais {{count}}",
         "showLess": "Mostrar menos",
-        "noMatch": "Nenhum grupo corresponde a \"{{query}}\"",
+        "noMatch": "Nenhum grupo corresponde a “{{query}}”",
         "project": {
           "label": "Projeto",
           "follow": "Seguir o bot",
@@ -7749,15 +7749,15 @@
         "model": {
           "label": "Modelo e esforço de raciocínio",
           "hintFollow": "Segue a Configuração de novas conversas. Se você mudar aqui o modelo ou o esforço de raciocínio, vale só para este grupo.",
-          "hintFollowProject": "Segue o projeto \"{{project}}\" em Projetos e modelos. Se você mudar aqui o modelo ou o esforço de raciocínio, vale só para este grupo.",
-          "hintProjectUnavailable": "O modelo definido para \"{{project}}\" em Projetos e modelos não está disponível agora. Escolha outro lá ou um para este grupo aqui.",
+          "hintFollowProject": "Segue o projeto “{{project}}” em Projetos e modelos. Se você mudar aqui o modelo ou o esforço de raciocínio, vale só para este grupo.",
+          "hintProjectUnavailable": "O modelo definido para “{{project}}” em Projetos e modelos não está disponível agora. Escolha outro lá ou um para este grupo aqui.",
           "hintFixed": "Este grupo tem um modelo próprio. As tarefas deste grupo cujo modelo não foi alterado mudam na próxima mensagem; as novas tarefas usam este modelo.",
           "reset": "Voltar a seguir o modelo padrão"
         },
         "permission": {
           "label": "Permissões",
           "hintFollow": "Segue o Modo de permissão para novas tarefas em grupo. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
-          "hintFollowProject": "Segue as permissões de \"{{project}}\" em Projetos e modelos. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
+          "hintFollowProject": "Segue as permissões de “{{project}}” em Projetos e modelos. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
           "hintFixed": "Este grupo tem seu próprio modo de permissão. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
           "hintFollowBot": "Segue as permissões do próprio bot. Vale só para tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
           "followWith": "Seguir · {{mode}}"
@@ -7770,7 +7770,7 @@
         },
         "widerConfirm": {
           "title": "Ampliar as permissões de {{name}}?",
-          "description": "As novas tarefas deste grupo vão passar de \"{{current}}\" para \"{{next}}\", não importa quem mencione o bot. As mensagens do grupo são controladas pelos membros, então faça isso só se confiar em todos.",
+          "description": "As novas tarefas deste grupo vão passar de “{{current}}” para “{{next}}”, não importa quem mencione o bot. As mensagens do grupo são controladas pelos membros, então faça isso só se confiar em todos.",
           "confirm": "Mudar mesmo assim",
           "cancel": "Cancelar"
         },
@@ -8212,7 +8212,7 @@
         "saveFailed": "Falha ao salvar as configurações de atalhos",
         "notBindable": "Esta combinação de teclas não pode ser usada",
         "systemReserved": "Reservada pelo sistema operacional",
-        "conflict": "Conflita com \"{{name}}\"",
+        "conflict": "Conflita com “{{name}}”",
         "voiceConflict": "Conflita com o atalho de entrada de voz",
         "composerVoiceConflict": "Conflita com o atalho de entrada de voz. Altere o atalho de envio do campo de mensagem ou o atalho de entrada de voz.",
         "menuAccelerator": "Esta combinação não pode ser registrada como atalho de menu",
@@ -8745,15 +8745,15 @@
           "empty": "Nenhuma entrada de plugin neste marketplace",
           "skippedEntries": "{{count}} entradas de plugin inválidas ignoradas",
           "unreadableEntries": "{{count}} entradas de plugin estão temporariamente ilegíveis; atualize para tentar novamente",
-          "addedReceipt": "\"{{name}}\" adicionado com {{count}} plugins encontrados",
-          "refreshedReceipt": "\"{{name}}\" atualizado com {{count}} plugins encontrados",
+          "addedReceipt": "“{{name}}” adicionado com {{count}} plugins encontrados",
+          "refreshedReceipt": "“{{name}}” atualizado com {{count}} plugins encontrados",
           "emptyWithSkippedEntries": "Nenhum plugin utilizável foi encontrado porque todas as entradas listadas foram ignoradas. Verifique os tipos de fonte, os diretórios dos plugins e as entradas do manifesto.",
           "localBadge": "Local",
           "defaultRef": "Branch padrão",
           "neverSynced": "Nunca sincronizado",
           "refresh": "Atualizar",
           "remove": "Remover",
-          "removeConfirmTitle": "Remover o marketplace \"{{name}}\"?",
+          "removeConfirmTitle": "Remover o marketplace “{{name}}”?",
           "removeConfirmDescription": "Os plugins deste marketplace não serão mais listados. Os plugins instalados serão mantidos.",
           "close": "Fechar",
           "add": "Adicionar marketplace",
@@ -8778,7 +8778,7 @@
             "structureLabelEntry": "Entrada do plugin",
             "structureNote": "O manifesto pode estar em um destes locais:",
             "manifestTitle": "Formato do manifesto",
-            "manifestBody": "name é a identidade única do marketplace (você o gerencia por esse nome após adicioná-lo). Cada source no array plugins aponta para um diretório de plugin dentro do repositório como caminho relativo; o formato de objeto {\"source\": \"local\", \"path\": \"…\"} também é compatível.",
+            "manifestBody": "name é a identidade única do marketplace (você o gerencia por esse nome após adicioná-lo). Cada source no array plugins aponta para um diretório de plugin dentro do repositório como caminho relativo; o formato de objeto {\"source\": \"local\", \"path\": “…”} também é compatível.",
             "sourceTitle": "Formatos de fonte",
             "sourceBody": "Fontes aceitas: formato abreviado owner/repo do GitHub, URLs Git completas (https / ssh / git@) e caminhos de pastas locais (com suporte a ~). A ref Git aceita uma branch, tag ou commit; deixe em branco para usar a branch padrão. Caminhos esparsos (um por linha) fazem checkout apenas dos subdiretórios listados — útil para repositórios grandes.",
             "authTitle": "Repositórios privados",
@@ -8848,7 +8848,7 @@
       "enableAria": "Ativar {{name}}",
       "uninstall": "Desinstalar",
       "uninstallConfirm": {
-        "title": "Desinstalar \"{{name}}\"?",
+        "title": "Desinstalar “{{name}}”?",
         "description": "O painel e os recursos serão removidos. A posição no layout será mantida e restaurada se você instalá-lo novamente.",
         "cancel": "Cancelar"
       },
@@ -8862,14 +8862,14 @@
         "groupSeparator": ", "
       },
       "toast": {
-        "installed": "\"{{name}}\" instalado",
-        "uninstalled": "\"{{name}}\" desinstalado",
-        "updated": "\"{{name}}\" atualizado para v{{version}}",
-        "reapproved": "\"{{name}}\" restaurado",
-        "exported": "Arquivo .cindy de \"{{name}}\" exportado",
-        "exportFailed": "Não foi possível exportar \"{{name}}\" — tente novamente",
-        "projectDisabled": "\"{{name}}\" desativado neste projeto",
-        "projectEnabled": "\"{{name}}\" agora segue a configuração global neste projeto"
+        "installed": "“{{name}}” instalado",
+        "uninstalled": "“{{name}}” desinstalado",
+        "updated": "“{{name}}” atualizado para v{{version}}",
+        "reapproved": "“{{name}}” restaurado",
+        "exported": "Arquivo .cindy de “{{name}}” exportado",
+        "exportFailed": "Não foi possível exportar “{{name}}” — tente novamente",
+        "projectDisabled": "“{{name}}” desativado neste projeto",
+        "projectEnabled": "“{{name}}” agora segue a configuração global neste projeto"
       },
       "panelError": {
         "crashed": "Este plugin falhou",
@@ -9051,12 +9051,12 @@
         "nodeSecretDetail": "A Cindy a armazena criptografada e só a injeta durante a execução dos métodos Worker declarados abaixo. O programa Node recebe o texto sem criptografia e pode retorná-lo, registrá-lo, salvá-lo ou expô-lo de outra forma ao código do plugin no navegador ou aos parâmetros do Agent. Instale apenas plugins em que você confia.",
         "nodeResident": "O programa Node pode continuar em execução em segundo plano",
         "nodeResidentDetail": "É executado enquanto o plugin está ativado e para quando ele é desativado, atualizado, desinstalado ou quando a Cindy é encerrada.",
-        "tool": "Ferramenta \"{{name}}\"",
-        "toolAutoApprove": "O Agent pode executar a ferramenta \"{{name}}\" sem confirmação",
+        "tool": "Ferramenta “{{name}}”",
+        "toolAutoApprove": "O Agent pode executar a ferramenta “{{name}}” sem confirmação",
         "toolAutoApproveDetail": "Quando o Agent chama esta ferramenta, ela é executada na hora, sem pedir confirmação nem revisar cada chamada.",
         "command": "Comando de conversa ${{command}}",
-        "panelLeft": "Painel \"{{title}}\" · exibido na barra lateral",
-        "panelTab": "Painel \"{{title}}\" · abre dentro da página Plugins",
+        "panelLeft": "Painel “{{title}}” · exibido na barra lateral",
+        "panelTab": "Painel “{{title}}” · abre dentro da página Plugins",
         "mainView": "Pode adicionar uma entrada “{{title}}” à navegação à esquerda do Cindy",
         "mainViewDetail": "Ao abri-la, a visualização principal é exibida na sandbox do plugin, sem conceder acesso a arquivos, rede ou credenciais.",
         "taskView": "Página da tarefa “{{title}}” · abre na barra lateral da tarefa",
@@ -9119,13 +9119,13 @@
         "libraryPersistDetail": "Recebe uma área de armazenamento gerenciada pela Cindy para seu trabalho (telas, imagens, bancos de dados), sem a cota normal de dados de plugins. Todas as operações de arquivos e bancos de dados são executadas pelo host; o plugin usa apenas caminhos relativos dentro da própria biblioteca e não pode acessar seus outros arquivos. Também pode pedir à Cindy para mostrar um arquivo da biblioteca no Finder ou Explorer, ou abrir a caixa de diálogo Salvar como do sistema para você escolher onde salvar uma cópia; cancelar Salvar como não copia nada. Também pode gravar uma imagem bitmap PNG na área de transferência do sistema sem caixa de diálogo de confirmação; isso substitui o conteúdo atual da área de transferência. Desinstalar o plugin não exclui esses dados; a exclusão exige uma confirmação separada nas configurações da Cindy.",
         "networkHost": "Acessa o destino de rede {{host}}",
         "networkHosts": "Destinos de rede",
-        "networkSecret": "Precisa de uma credencial sua: \"{{name}}\"",
+        "networkSecret": "Precisa de uma credencial sua: “{{name}}”",
         "networkSecretGhostInputDetail": "Coletada pela interface de configurações do próprio plugin — a página do plugin vê o valor no momento da entrada. Em seguida, ele é entregue ao host em uma única etapa para armazenamento criptografado; depois de armazenado, o plugin nunca mais pode lê-lo, e o host só o injeta nos domínios declarados pelo plugin.",
-        "networkSecretIdentity": "Usará seu e-mail de login como credencial \"{{name}}\"",
+        "networkSecretIdentity": "Usará seu e-mail de login como credencial “{{name}}”",
         "networkSecretIdentityDetail": "O valor vem do e-mail da conta em que você entrou, obtido e injetado pelo host no momento da solicitação; não há nada para preencher. O plugin pode ler esse e-mail para mostrar a identidade atual na interface de configurações.",
-        "networkSecretGhCli": "Dará preferência ao seu login local no GitHub CLI para a credencial \"{{name}}\"",
+        "networkSecretGhCli": "Dará preferência ao seu login local no GitHub CLI para a credencial “{{name}}”",
         "networkSecretGhCliDetail": "O host lê o token de login local do gh apenas quando necessário e o injeta somente em solicitações à API do GitHub; o código do plugin não pode ler nem armazenar o token. Se o gh não estiver disponível, você pode configurar um Personal Access Token alternativo nas configurações do plugin.",
-        "networkSecretOrganizationIdentity": "Usará sua identidade da organização Cindy como credencial \"{{name}}\"",
+        "networkSecretOrganizationIdentity": "Usará sua identidade da organização Cindy como credencial “{{name}}”",
         "networkSecretOrganizationIdentityDetail": "A Cindy emite uma declaração de identidade de curta duração quando necessário, e o host a envia apenas aos hosts de serviço explicitamente listados. O código do plugin não pode ler nem armazenar o token.",
         "networkSecretOauth": "Autorizar {{name}} ou usar uma conta conectada em {{host}}",
         "networkSecretOauthDetail": "O Cindy gerencia o login e os tokens. Você pode autorizar uma nova conta ou escolher uma conta conectada compatível. Confira os escopos abaixo; as contas conectadas mantêm suas permissões existentes.",
@@ -9159,7 +9159,7 @@
         "browserExtensionPageControlDetail": "Somente as extensões listadas abaixo podem se conectar. A extensão também implementa controle de páginas: com “Meu navegador” selecionado, o Agent pode ler e operar páginas no navegador que você está usando.",
         "nodeChildSpawn": "Seu programa Node pode pedir ao host para iniciar subprocessos declarados no pacote",
         "nodeChildSpawnDetail": "Somente arquivos JS declarados dentro do próprio pacote podem ser iniciados (com as mesmas permissões locais do programa principal); comandos arbitrários não podem ser executados. Os subprocessos são encerrados juntos quando o plugin é desativado ou encerrado.",
-        "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
+        "skill": "Adiciona a Skill “{{name}}” aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um arquivo de instruções que a IA carrega e segue como suas próprias instruções, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — ela não fica restrita à sandbox deste plugin. Permanece disponível enquanto o plugin está ativado e é removida quando ele é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. O texto completo da Skill não pode ser visualizado aqui — instale apenas plugins em que você confia.",
         "routineEvents": "Eventos de automação",
         "mcpUi": "Exibir páginas interativas na conversa",
@@ -9260,7 +9260,7 @@
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de conexão",
-        "confirmMessage": "O plugin \"{{name}}\" solicita adicionar o endereço de conexão {{host}}",
+        "confirmMessage": "O plugin “{{name}}” solicita adicionar o endereço de conexão {{host}}",
         "confirmDetail": "Se permitido, este plugin poderá acessar este endereço pelo host ({{label}}); a credencial que você fornecer será inserida apenas nas solicitações para este endereço.",
         "confirmAllow": "Permitir",
         "confirmCancel": "Cancelar"
@@ -9275,7 +9275,7 @@
         "brokerRedirectPortRequired": "Este plugin declara um intermediário de autorização, mas não declara redirectPort na mesma configuração OAuth. Peça ao autor para adicionar o campo para que a etapa final da autorização possa retornar à porta de escuta local.",
         "sourceMissing": "O arquivo selecionado não foi encontrado",
         "generic": "Falha na operação. Tente novamente.",
-        "updateIdMismatch": "O arquivo selecionado é o plugin \"{{id}}\", que não corresponde a este plugin \"{{expected}}\""
+        "updateIdMismatch": "O arquivo selecionado é o plugin “{{id}}”, que não corresponde a este plugin “{{expected}}”"
       },
       "detail": {
         "enable": "Ativar",
@@ -9552,7 +9552,7 @@
         "legacyReattachUnknownSource": "Estes dados de trabalho não têm registro de origem. Eles podem ter sido copiados manualmente ou por um script. Verifique se pertencem a este plugin."
       },
       "updateConfirm": {
-        "title": "Atualizar o plugin \"{{name}}\"?",
+        "title": "Atualizar o plugin “{{name}}”?",
         "body": "Versão {{from}} → {{to}}. Isso substitui a versão instalada; o estado de ativação e a posição do painel serão preservados.",
         "oauthClientChanged": "Esta atualização altera o cliente OAuth. As contas conectadas que usam a autorização integrada do plugin expirarão após a atualização e precisarão ser reconectadas.",
         "confirm": "Atualizar",
@@ -9993,7 +9993,7 @@
         "deleteFailed": "Falha ao excluir"
       },
       "deleteConfirm": {
-        "title": "Excluir \"{{name}}\"?",
+        "title": "Excluir “{{name}}”?",
         "message": "Novas sessões do Agent não carregarão mais este MCP.",
         "confirm": "Excluir"
       },
@@ -10332,7 +10332,7 @@
     "cancel": "Cancelar",
     "chooseMethod": "Escolha como entrar",
     "emailCode": "Entrar com um código por e-mail",
-    "orgDetected": "{{email}} pertence a \"{{org}}\"",
+    "orgDetected": "{{email}} pertence a “{{org}}”",
     "enterpriseLogin": "Entrar com sua identidade profissional",
     "enterpriseVia": "Login único via {{name}}",
     "personalLogin": "Entrar com uma conta pessoal",
@@ -10353,7 +10353,7 @@
     "ssoOrgSubtitle": "Digite um ID de empresa, slug de organização ou domínio verificado para continuar com o login único",
     "ssoOrgPlaceholder": "ID da empresa, identificador ou domínio",
     "ssoOrgHint": "Não sabe seu identificador de login empresarial? Consulte seu administrador",
-    "ssoOrgDetected": "Escolha uma conexão de login único para \"{{org}}\"",
+    "ssoOrgDetected": "Escolha uma conexão de login único para “{{org}}”",
     "realmConsent": {
       "personalTitle": "Login empresarial disponível",
       "personalBodyCn": "Empresa encontrada na China Continental.\nUse SSO ou continue com sua conta.",
@@ -12686,7 +12686,7 @@
         "groupNew": "Mensagens novas do grupo",
         "threadRecent": "Mensagens recentes do tópico",
         "threadNew": "Mensagens novas do tópico",
-        "replyingTo": "Em resposta a \"{{name}}\": {{text}}",
+        "replyingTo": "Em resposta a “{{name}}”: {{text}}",
         "filesOutsideWorkingDir": "Os arquivos fora do diretório de trabalho não foram anexados.",
         "modelFallback": "O modelo selecionado não está neste computador, então esta resposta usa {{model}}.",
         "modelFallbackUnnamed": "O modelo selecionado não está neste computador, então esta resposta usa um modelo disponível aqui.",
@@ -15478,11 +15478,11 @@
       "noTextContent": "(sem conteúdo de texto)",
       "orcaRowAria": "Mensagem de colaboração de {{sender}} na fila",
       "schedulerRowAria": "Mensagem de tarefa de automação de {{sender}} na fila",
-      "sessionRowAria": "Mensagem da sessão \"{{sender}}\" na fila",
+      "sessionRowAria": "Mensagem da sessão “{{sender}}” na fila",
       "sessionSenderFallback": "Outra sessão",
-      "pluginRowAria": "Mensagem do plugin \"{{sender}}\" na fila",
+      "pluginRowAria": "Mensagem do plugin “{{sender}}” na fila",
       "pluginSenderFallback": "Plugin",
-      "botRowAria": "Mensagem do amigo \"{{sender}}\" na fila",
+      "botRowAria": "Mensagem do amigo “{{sender}}” na fila",
       "dragAria": "Arraste a mensagem {{index}} da fila para reordenar",
       "steerAction": "Orientar",
       "steerRunningTip": "Encaminhar esta mensagem para a tarefa em execução sem interrompê-la; será processada quando a ação atual terminar",
@@ -16387,14 +16387,14 @@
       "switchingClaudeSubscription": "Mudando para Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Não foi possível mudar para Claude.ai ou tentar novamente nesta sessão: {{msg}}",
       "codexAppServerRetired": "A conexão com o Codex foi perdida e a solicitação em andamento foi interrompida. Você pode continuar nesta sessão.",
-      "codexAuthMissing": "O Codex remoto ainda não está conectado (401 Unauthorized). Clique em \"Sincronizar autenticação\" para enviar suas credenciais locais do Codex ao diretório do Cindy Codex remoto e tente novamente.",
+      "codexAuthMissing": "O Codex remoto ainda não está conectado (401 Unauthorized). Clique em “Sincronizar autenticação” para enviar suas credenciais locais do Codex ao diretório do Cindy Codex remoto e tente novamente.",
       "codexAuthMissingLocal": "Não foi possível autenticar a conexão “{{provider}}” neste computador. Verifique o estado de login nas configurações e volte a esta sessão após restabelecer a conexão.",
       "codexSessionExpired": "A conexão com a OpenAI precisa de uma atualização. Reconecte o ChatGPT para continuar; {{appName}} não desconectará o Codex CLI do sistema nem pedirá que você reconecte outras fontes de modelos.",
-      "codexAuthSynced": "Autenticação sincronizada. Clique em \"Tentar novamente\" para reenviar.",
+      "codexAuthSynced": "Autenticação sincronizada. Clique em “Tentar novamente” para reenviar.",
       "syncAuth": "Sincronizar autenticação",
       "syncAuthSyncing": "Sincronizando…",
       "syncAuthTitle": "Enviar credenciais locais do Codex ao diretório do Cindy Codex remoto",
-      "syncAuthSuccess": "Sincronizado — clique em \"Tentar novamente\" para reenviar",
+      "syncAuthSuccess": "Sincronizado — clique em “Tentar novamente” para reenviar",
       "syncAuthFailed": "Falha na sincronização: {{msg}}",
       "syncAuthDaemonRestartFailed": "Credenciais enviadas, mas o daemon antigo não reiniciou — reconecte ao remoto antes de tentar novamente",
       "invalidEncryptedContent": "O provedor atual não consegue ler parte do histórico. Volte ao provedor original ou continue em uma nova sessão.",
@@ -16408,7 +16408,7 @@
       "forkStripOversizedHistoryTitle": "Criar uma nova tarefa após remover imagens incorporadas grandes demais",
       "codexSessionExpiredLogin": "Reconectar ChatGPT",
       "codexSessionReconnected": "O ChatGPT foi reconectado. Clique em “Tentar novamente” para continuar.",
-      "networkUnreachable": "Erro de rede: o serviço está temporariamente inacessível. Clique em \"Tentar novamente\".",
+      "networkUnreachable": "Erro de rede: o serviço está temporariamente inacessível. Clique em “Tentar novamente”.",
       "networkUnreachableNoRetry": "Erro de rede: o serviço está temporariamente inacessível.",
       "networkAutoRetrying": "Erro de rede — tentando novamente automaticamente…",
       "networkReconnecting": "Conexão interrompida — reconectando ({{attempt}}/{{maxAttempts}})…",
@@ -17086,26 +17086,26 @@
       "attachmentSourceMissing": "Não é possível salvar o anexo porque o arquivo de origem não existe mais",
       "attachmentSaveFailed": "Não é possível salvar o anexo. Verifique as permissões da pasta de destino e tente novamente",
       "automationSent": "Enviado por automação",
-      "automationSentNamed": "Enviado pela automação \"{{name}}\"",
+      "automationSentNamed": "Enviado pela automação “{{name}}”",
       "automationViewTask": "Ver tarefa da automação",
       "sessionSent": "Enviado por outra sessão",
-      "sessionSentNamed": "Enviado pela sessão \"{{name}}\"",
+      "sessionSentNamed": "Enviado pela sessão “{{name}}”",
       "sessionViewSource": "Ver sessão de origem",
-      "botSentNamed": "Enviado pelo amigo \"{{name}}\"",
-      "groupThreadSent": "Enviado por \"{{name}}\" em um tópico de \"{{group}}\"",
-      "groupRequestSent": "Do grupo \"{{group}}\" · {{name}}",
+      "botSentNamed": "Enviado pelo amigo “{{name}}”",
+      "groupThreadSent": "Enviado por “{{name}}” em um tópico de “{{group}}”",
+      "groupRequestSent": "Do grupo “{{group}}” · {{name}}",
       "orcaFromLead": "Mensagem do Lead",
       "orcaFromWorker": "Mensagem do Worker",
       "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
-      "orcaFromWorkerNamed": "Mensagem do Worker \"{{role}}\"",
+      "orcaFromWorkerNamed": "Mensagem do Worker “{{role}}”",
       "hookChannelFrom": "De {{channel}}",
-      "deviceSentMobileNamed": "Enviado do celular \"{{name}}\"",
+      "deviceSentMobileNamed": "Enviado do celular “{{name}}”",
       "deviceSentMobile": "Enviado do celular",
-      "deviceSentDesktopNamed": "Enviado do computador \"{{name}}\"",
+      "deviceSentDesktopNamed": "Enviado do computador “{{name}}”",
       "deviceSentDesktop": "Enviado do computador",
       "deviceViewSettings": "Ver em Meus dispositivos",
       "deviceRemoved": "Este dispositivo foi removido",
-      "pluginSentNamed": "Enviado pelo plugin \"{{name}}\"",
+      "pluginSentNamed": "Enviado pelo plugin “{{name}}”",
       "pluginSent": "Enviado por plugin",
       "pluginViewDetail": "Ver plugin",
       "sourceIds": {
@@ -17267,7 +17267,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "O proprietário pausou este compartilhamento para você, então estes modelos não podem ser usados até que ele seja retomado. Troque para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Este compartilhamento não está mais disponível (o proprietário o removeu ou você saiu). Troque para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "O provedor compartilhado está temporariamente indisponível. O computador do proprietário pode estar offline ou o compartilhamento está desativado no momento. Tente novamente mais tarde ou troque para outro modelo para continuar.",
-      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este é um compartilhamento antigo e não pode ser usado enquanto \"Usar apenas Agent-Net\" estiver ativado. Desative essa opção para continuar ou troque para outro modelo.",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este é um compartilhamento antigo e não pode ser usado enquanto “Usar apenas Agent-Net” estiver ativado. Desative essa opção para continuar ou troque para outro modelo.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "As contas disponíveis para este modelo atingiram o limite de uso. Troque de modelo ou continue quando a cota for renovada.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo de computadores pode executar esta tarefa agora. Eles podem estar offline, pausados, em intervalo de espera ou sem este modelo. Verifique o grupo na página Acesso remoto e compartilhamento deste provedor.",
       "REMOTE_AGENT_GROUP_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
@@ -17379,7 +17379,7 @@
     },
     "credentialSwitchWait": {
       "waiting": "Outra tarefa do Codex está em execução em um provedor de modelos diferente. Esta mensagem será enviada automaticamente com o provedor selecionado para esta sessão quando ela terminar.",
-      "waitingForNamed": "\"{{titles}}\" está em execução em um provedor de modelos diferente. Esta mensagem será enviada automaticamente com o provedor selecionado para esta sessão quando ela terminar.",
+      "waitingForNamed": "“{{titles}}” está em execução em um provedor de modelos diferente. Esta mensagem será enviada automaticamente com o provedor selecionado para esta sessão quando ela terminar.",
       "cancel": "Cancelar",
       "cancelTitle": "Parar de esperar e remover esta mensagem"
     },
@@ -17418,7 +17418,7 @@
       "mailRemoveAttachment": "Remover {{name}}",
       "mailUpdated": "Rascunho atualizado (somente leitura)",
       "mailLegacy": "Histórico de rascunhos (somente leitura)",
-      "taskAutoArchived": "\"{{title}}\" arquivada",
+      "taskAutoArchived": "“{{title}}” arquivada",
       "taskAutoArchivedUndo": "Desfazer",
       "taskAutoArchivePending": "Será arquivada ao sair desta tarefa",
       "taskAutoArchiveBlockedDirty": "“{{title}}” não foi arquivada automaticamente: há alterações não commitadas no espaço de trabalho",
@@ -17428,7 +17428,7 @@
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
-      "fused": "\"{{name}}\" falhou repetidamente ao responder; seu bloqueio está pausado (somente observação)",
+      "fused": "“{{name}}” falhou repetidamente ao responder; seu bloqueio está pausado (somente observação)",
       "processing": "Plugin processando…",
       "viewOriginal": "Ver original",
       "viewGhostCard": "Ver cartão do plugin"
@@ -17450,10 +17450,10 @@
       "infoActionCheckProvider": "Se continuar acontecendo por vários turnos, verifique o status da cota do provedor de modelos ou o roteamento do gateway."
     },
     "ghostNotify": {
-      "secretSaved": "Credencial \"{{name}}\" salva",
+      "secretSaved": "Credencial “{{name}}” salva",
       "oauthConnected": "Autorizado — conectado como {{label}}",
       "oauthConnectedNoLabel": "Autorizado — conta conectada",
-      "connectionAdded": "Endereço de conexão de \"{{label}}\" adicionado"
+      "connectionAdded": "Endereço de conexão de “{{label}}” adicionado"
     },
     "ghostPreview": {
       "opened": "Uma página de prévia foi aberta"
@@ -18804,7 +18804,7 @@
       "createFailed": "Falha ao criar: {{message}}",
       "deleteFile": {
         "title": "Excluir arquivo",
-        "description": "Excluir \"{{name}}\"? Esta ação não pode ser desfeita.",
+        "description": "Excluir “{{name}}”? Esta ação não pode ser desfeita.",
         "confirm": "Excluir",
         "cancel": "Cancelar"
       },
@@ -18895,7 +18895,7 @@
       },
       "archiveSession": {
         "title": "Arquivar sessão",
-        "description": "\"{{title}}\" será arquivado e removido da lista. Você pode restaurá-lo na visualização de arquivados.",
+        "description": "“{{title}}” será arquivado e removido da lista. Você pode restaurá-lo na visualização de arquivados.",
         "confirm": "Arquivar",
         "cancel": "Cancelar",
         "failed": "Falha ao arquivar. Tente novamente",
@@ -18904,8 +18904,8 @@
       },
       "confirmSwitchAway": {
         "title": "O arquivo atual tem alterações não salvas",
-        "descriptionSwitchFile": "\"{{path}}\" não foi salvo. Trocar de arquivo descartará as alterações não salvas.",
-        "descriptionCloseTab": "\"{{path}}\" não foi salvo. Fechar descartará o conteúdo não salvo.",
+        "descriptionSwitchFile": "“{{path}}” não foi salvo. Trocar de arquivo descartará as alterações não salvas.",
+        "descriptionCloseTab": "“{{path}}” não foi salvo. Fechar descartará o conteúdo não salvo.",
         "saveAndSwitch": "Salvar e trocar",
         "save": "Salvar",
         "tertiary": "Não salvar",
@@ -19148,7 +19148,7 @@
       "removeProject": {
         "menu": "Remover do projeto",
         "confirmTitle": "Remover da automação do projeto?",
-        "confirmDescription": "Remove \"{{name}}\" de .cindy/automations/schedules.json. Após o commit, isso afeta todos os colaboradores.",
+        "confirmDescription": "Remove “{{name}}” de .cindy/automations/schedules.json. Após o commit, isso afeta todos os colaboradores.",
         "confirm": "Remover",
         "demote": "Remover e manter cópia pessoal",
         "demoteSuccess": "Removido do projeto e mantido como pessoal"
@@ -19258,7 +19258,7 @@
         "titleProjectCreate": "Nova automação do projeto",
         "titleProjectEdit": "Editar automação do projeto",
         "subtitle": "Escolha quando executar uma sessão de IA ou um script.",
-        "subtitleFromGhost": "\"{{name}}\" está pedindo que você crie uma automação. Escolha um modelo e salve para ativá-la.",
+        "subtitleFromGhost": "“{{name}}” está pedindo que você crie uma automação. Escolha um modelo e salve para ativá-la.",
         "save": "Salvar",
         "create": "Criar",
         "saveAria": "Salvar automação",
@@ -19305,8 +19305,8 @@
           "usage_read": "Lê os identificadores, planos, períodos de cota e horários de atualização das contas locais de Claude/Codex conectadas à sua conta Cindy. Lê o uso registrado por dia e modelo, os custos estimados, a configuração e o status dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou em outros computadores autorizados da mesma conta. Não permite ler e-mails de login das assinaturas, diretórios de contas, impressões de identidade internas, credenciais ou arquivos, nem alterar contas ou configurações."
         },
         "capabilityWarn": {
-          "ghostMissing": "Requer o plugin \"{{name}}\", que não está instalado — este recurso falhará durante a execução",
-          "ghostAsleep": "Requer o plugin \"{{name}}\", que está desativado — este recurso falhará durante a execução"
+          "ghostMissing": "Requer o plugin “{{name}}”, que não está instalado — este recurso falhará durante a execução",
+          "ghostAsleep": "Requer o plugin “{{name}}”, que está desativado — este recurso falhará durante a execução"
         }
       },
       "fields": {
@@ -19601,7 +19601,7 @@
           "placeholder": "!12, #12, group/project!12 ou um link",
           "hint": "Escreva !número para merge request, #número para issue, ou cole um link.",
           "required": "Informe o merge request ou issue a acompanhar.",
-          "mrHint": "O GitLab não envia notificações. O Cindy lê o estado no ritmo de \"Também verificar em um agendamento\" (sem executar a tarefa), usando o glab deste computador ou a conta conectada no plugin do GitLab.",
+          "mrHint": "O GitLab não envia notificações. O Cindy lê o estado no ritmo de “Também verificar em um agendamento” (sem executar a tarefa), usando o glab deste computador ou a conta conectada no plugin do GitLab.",
           "mrPluginHint": "O plugin do GitLab verifica este merge request a cada minuto, incluindo novos commits, comentários, aprovações e resultados de pipeline.",
           "issueHint": "As mudanças deste issue chegam por um webhook do GitLab. Eventos de comentário não distinguem merge requests de issues, então só contam criar, editar, fechar e reabrir o issue.",
           "issuePluginHint": "O plugin do GitLab verifica este issue a cada minuto, incluindo novos comentários.",
@@ -19729,10 +19729,10 @@
       "renameFailed": "Falha ao renomear: {{error}}",
       "deleteFailed": "Falha ao excluir: {{error}}",
       "restartFailed": "Falha ao reiniciar: {{error}}",
-      "pluginDraftIgnoredFormOpen": "\"{{name}}\" pediu para criar uma automação, mas já há um formulário aberto. Suas edições foram mantidas — salve ou feche o formulário e acione a solicitação novamente."
+      "pluginDraftIgnoredFormOpen": "“{{name}}” pediu para criar uma automação, mas já há um formulário aberto. Suas edições foram mantidas — salve ou feche o formulário e acione a solicitação novamente."
     },
     "deleteDialog": {
-      "title": "Excluir a automação \"{{name}}\"?",
+      "title": "Excluir a automação “{{name}}”?",
       "titleFallback": "Excluir automação?",
       "description": "Os acionamentos futuros serão interrompidos. Escolha o que fazer com as sessões já geradas por esta automação.",
       "sessionCountPending": "Contando sessões geradas…",
@@ -19759,7 +19759,7 @@
     },
     "confirm": {
       "delete": {
-        "title": "Excluir a automação \"{{name}}\"?",
+        "title": "Excluir a automação “{{name}}”?",
         "description": "Os acionamentos futuros serão interrompidos. O histórico de execuções existente será mantido. Isso não pode ser desfeito.",
         "withInflight": "Esta automação tem {{count}} execução(ões) em andamento. A exclusão irá interrompê-las imediatamente, e o trabalho em andamento poderá ser perdido. Continuar?",
         "confirm": "Excluir",
@@ -19767,7 +19767,7 @@
         "cancel": "Cancelar"
       },
       "pause": {
-        "title": "Pausar a automação \"{{name}}\"?",
+        "title": "Pausar a automação “{{name}}”?",
         "withInflight": "Esta automação tem {{count}} execução(ões) em andamento. A pausa irá interrompê-las imediatamente, e o trabalho em andamento poderá ser perdido. Continuar?",
         "confirm": "Pausar",
         "cancel": "Cancelar"
@@ -19812,7 +19812,7 @@
         "domain-radar": {
           "name": "Radar temático",
           "description": "Reúna periodicamente as novidades de um tema que você acompanha e entregue um resumo com análise crítica",
-          "prompt": "Reúna os acontecimentos mais recentes sobre \"{{topic}}\" das últimas 24 horas (na segunda-feira, considere todo o fim de semana) e produza um resumo com análise crítica.\nRestrições:\n- Use pesquisa na web, confira várias fontes antes de confiar em uma afirmação e cite o link da fonte de cada item\n- Priorize acontecimentos relevantes (lançamentos, pesquisas, políticas, discussões importantes); descarte conteúdo promocional vazio e republicações\n- Para cada item, acrescente uma avaliação de uma linha sobre sua importância em vez de apenas listar links\n- Quando houver poucas informações ou fontes duvidosas, diga isso com honestidade; nunca invente",
+          "prompt": "Reúna os acontecimentos mais recentes sobre “{{topic}}” das últimas 24 horas (na segunda-feira, considere todo o fim de semana) e produza um resumo com análise crítica.\nRestrições:\n- Use pesquisa na web, confira várias fontes antes de confiar em uma afirmação e cite o link da fonte de cada item\n- Priorize acontecimentos relevantes (lançamentos, pesquisas, políticas, discussões importantes); descarte conteúdo promocional vazio e republicações\n- Para cada item, acrescente uma avaliação de uma linha sobre sua importância em vez de apenas listar links\n- Quando houver poucas informações ou fontes duvidosas, diga isso com honestidade; nunca invente",
           "params": {
             "topic": {
               "label": "Tema para acompanhar",
@@ -19834,12 +19834,12 @@
         "weekly-work-draft": {
           "name": "Redator de relatório semanal",
           "description": "Compile o trabalho da semana a partir dos documentos no diretório de trabalho em um rascunho de relatório",
-          "prompt": "Com base nas alterações desta semana em documentos, notas e trabalhos no diretório de trabalho, compile um rascunho de relatório semanal.\nRestrições:\n- Use como evidência apenas conteúdo com registros reais de modificação no diretório de trabalho, citando os arquivos\n- Organize em \"Concluído nesta semana / Em andamento / Próxima semana / Precisa de alinhamento\", de forma concisa o suficiente para enviar diretamente\n- Separe avanços relevantes de tarefas rotineiras e destaque entregas de valor\n- Deixe campos com observações onde o material for insuficiente para que o usuário possa preenchê-los"
+          "prompt": "Com base nas alterações desta semana em documentos, notas e trabalhos no diretório de trabalho, compile um rascunho de relatório semanal.\nRestrições:\n- Use como evidência apenas conteúdo com registros reais de modificação no diretório de trabalho, citando os arquivos\n- Organize em “Concluído nesta semana / Em andamento / Próxima semana / Precisa de alinhamento”, de forma concisa o suficiente para enviar diretamente\n- Separe avanços relevantes de tarefas rotineiras e destaque entregas de valor\n- Deixe campos com observações onde o material for insuficiente para que o usuário possa preenchê-los"
         },
         "knowledge-freshness": {
           "name": "Verificação de atualização da base de conhecimento",
           "description": "Verificação mensal dos documentos do diretório de trabalho em busca de conteúdo desatualizado ou conflitante",
-          "prompt": "Verifique os documentos no diretório de trabalho e encontre conteúdo que precisa ser atualizado.\nRestrições:\n- Procure informações desatualizadas (datas antigas, links quebrados, processos ou ferramentas obsoletos), contradições e duplicações\n- Cite o caminho do arquivo e a localização de cada problema e explique o motivo\n- Categorize as sugestões como \"atualizar / mesclar / excluir\" e produza uma lista de revisão\n- Apresente apenas o relatório; não modifique os documentos"
+          "prompt": "Verifique os documentos no diretório de trabalho e encontre conteúdo que precisa ser atualizado.\nRestrições:\n- Procure informações desatualizadas (datas antigas, links quebrados, processos ou ferramentas obsoletos), contradições e duplicações\n- Cite o caminho do arquivo e a localização de cada problema e explique o motivo\n- Categorize as sugestões como “atualizar / mesclar / excluir” e produza uma lista de revisão\n- Apresente apenas o relatório; não modifique os documentos"
         }
       }
     },
@@ -19877,8 +19877,8 @@
       "secretMissing": "Os eventos são recusados até que um segredo seja gerado.",
       "rotateFailed": "Não foi possível gerar o segredo. Os segredos só podem ser gerenciados no computador que executa esta tarefa.",
       "genericSender": "remetente",
-      "secretFillHint": "Insira em \"{{field}}\" no {{sender}}.",
-      "secretPastePlaceholder": "Cole \"{{field}}\" do {{sender}}",
+      "secretFillHint": "Insira em “{{field}}” no {{sender}}.",
+      "secretPastePlaceholder": "Cole “{{field}}” do {{sender}}",
       "secretSave": "Salvar segredo",
       "secretSaved": "Segredo salvo.",
       "secretSaveFailed": "Não foi possível salvar o segredo. Os segredos só podem ser gerenciados no computador que executa esta tarefa.",
@@ -20076,7 +20076,7 @@
         "publicToPrivateBody": "Esta issue ficará visível apenas para você. Outros membros da equipe não a verão na lista nem na busca.",
         "publicToPrivateConfirm": "Tornar privada",
         "publicToPrivateWithAssigneeTitle": "Confirmar alteração para privada?",
-        "publicToPrivateWithAssigneeBody": "Esta issue ficará visível apenas para você. Atualmente, ela está atribuída a \"{{assignee}}\" — torná-la privada removerá automaticamente o responsável.",
+        "publicToPrivateWithAssigneeBody": "Esta issue ficará visível apenas para você. Atualmente, ela está atribuída a “{{assignee}}” — torná-la privada removerá automaticamente o responsável.",
         "publicToPrivateWithAssigneeConfirm": "Tornar privada e remover responsável",
         "assigneeFallback": "alguém",
         "privateToPublicTitle": "Tornar esta issue pública?",
@@ -20108,7 +20108,7 @@
       "marked": "Marcada como duplicada",
       "bannerPrefix": "Esta issue é uma duplicata de",
       "bannerSuffix": "",
-      "bannerTitleWrap": "\"{{title}}\"",
+      "bannerTitleWrap": "“{{title}}”",
       "checkPanel": {
         "ariaLabel": "Issues semelhantes encontradas",
         "close": "Fechar",
@@ -20151,7 +20151,7 @@
       "delete": "Excluir",
       "deleteDialog": {
         "title": "Excluir comentário?",
-        "description": "Após a exclusão, será exibido o marcador \"Este comentário foi excluído pelo autor\". Essa ação não pode ser desfeita.",
+        "description": "Após a exclusão, será exibido o marcador “Este comentário foi excluído pelo autor”. Essa ação não pode ser desfeita.",
         "cancel": "Cancelar",
         "confirm": "Confirmar exclusão",
         "confirming": "Excluindo…"
@@ -21224,7 +21224,7 @@
       "discordFieldsRequired": "Bot Token e ID de usuário do Discord são obrigatórios",
       "discordOwnerUserIdFormat": "O ID de usuário do Discord deve ter de 17 a 20 dígitos",
       "telegramFieldsRequired": "Bot Token e ID de usuário do Telegram são obrigatórios",
-      "telegramTokenFormat": "Formato de token inválido: esperado o formato \"digits:secret\" gerado pelo BotFather",
+      "telegramTokenFormat": "Formato de token inválido: esperado o formato “digits:secret” gerado pelo BotFather",
       "telegramOwnerUserIdFormat": "O ID de usuário do Telegram deve ser numérico",
       "dingtalkFieldsRequired": "Client ID e Client Secret são obrigatórios"
     },
@@ -21258,11 +21258,11 @@
       "remoteCcBinaryMissingTitle": "Componente do Claude Code não está pronto no dispositivo remoto",
       "remoteCodexBinaryMissingTitle": "Componente do Codex não está pronto no dispositivo remoto",
       "remotePiBinaryMissingTitle": "Componente do Pi não está pronto no dispositivo remoto",
-      "remoteAuthDescription": "Você precisa concluir a configuração no dispositivo remoto \"{{device}}\" antes de iniciar uma sessão aqui. Configure-o nesse dispositivo e tente novamente.",
+      "remoteAuthDescription": "Você precisa concluir a configuração no dispositivo remoto “{{device}}” antes de iniciar uma sessão aqui. Configure-o nesse dispositivo e tente novamente.",
       "remoteCodexNoSourceTitle": "Nenhuma fonte do Codex conectada no dispositivo remoto",
-      "remoteCodexNoSourceDescription": "\"{{device}}\" não tem uma fonte de modelos conectada para o Codex, então não é possível iniciar sessões daqui. Abra {{appName}} nesse dispositivo, entre na OpenAI ou conecte outra fonte em Configurações → Provedores e tente novamente.",
+      "remoteCodexNoSourceDescription": "“{{device}}” não tem uma fonte de modelos conectada para o Codex, então não é possível iniciar sessões daqui. Abra {{appName}} nesse dispositivo, entre na OpenAI ou conecte outra fonte em Configurações → Provedores e tente novamente.",
       "remoteCcNoSourceTitle": "Nenhuma fonte do Claude conectada no dispositivo remoto",
-      "remoteCcNoSourceDescription": "\"{{device}}\" não tem uma fonte de modelos do Claude conectada, então não é possível iniciar sessões daqui. Abra {{appName}} nesse dispositivo, conecte uma fonte em Configurações → Provedores e tente novamente.",
+      "remoteCcNoSourceDescription": "“{{device}}” não tem uma fonte de modelos do Claude conectada, então não é possível iniciar sessões daqui. Abra {{appName}} nesse dispositivo, conecte uma fonte em Configurações → Provedores e tente novamente.",
       "gotIt": "Entendi"
     },
     "fileTypes": {
@@ -21597,7 +21597,7 @@
       "review": "Revisar proposta",
       "fromConversation": "Sintetizada a partir da sessão atual",
       "openSession": "Abrir sessão de aprendizado",
-      "continueHint": "Continue conversando nesta sessão para revisar a proposta; aplique-a em \"Revisar proposta\" quando estiver satisfeito"
+      "continueHint": "Continue conversando nesta sessão para revisar a proposta; aplique-a em “Revisar proposta” quando estiver satisfeito"
     },
     "review": {
       "ariaLabel": "Painel de revisão de proposta de Skill",
