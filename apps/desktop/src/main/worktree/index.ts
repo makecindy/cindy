@@ -40,7 +40,12 @@ import type {
 export * as WorktreeManager from './WorktreeManager';
 export * as WorktreePool from './WorktreePool';
 export * as worktreeStore from './worktreeStore';
-export { resolveFreshSourceBranch, type FreshSourceResolution } from './freshBase';
+export {
+  resolveExplicitSourceRef,
+  resolveFreshSourceBranch,
+  type ExplicitSourceResolution,
+  type FreshSourceResolution,
+} from './freshBase';
 export {
   recycleWorktreeForRemovedSession,
   reconcileWorktreesForDeletedSessions,

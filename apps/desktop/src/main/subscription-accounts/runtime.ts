@@ -1515,6 +1515,7 @@ export interface LocalSubscriptionAccountSource {
   accountKey?: string;
   paused: boolean;
   usable: boolean;
+  running: number;
   supportedModelIds?: ReadonlySet<string>;
   apiConnectionId?: string;
 }
@@ -1558,6 +1559,7 @@ export function listSubscriptionPoolSources(providerId: string): LocalSubscripti
         label,
         ...(accountKey ? { accountKey } : {}),
         paused: account.paused,
+        running: state.running.get(keyOf(found.kind, account.id))?.size ?? 0,
         usable: !account.paused && !disconnected && (!cached || (cached.auth.authenticated && !cached.unavailable)),
         ...(supportedModelIds ? { supportedModelIds } : {}),
       };
@@ -1568,6 +1570,7 @@ export function listSubscriptionPoolSources(providerId: string): LocalSubscripti
     return {
       ...primary,
       paused: group.every((item) => item.paused),
+      running: group.reduce((sum, item) => sum + item.running, 0),
       usable: group.some((item) => item.usable),
     };
   });
@@ -1579,6 +1582,7 @@ export function listSubscriptionPoolSources(providerId: string): LocalSubscripti
           id: member.id,
           label: connection?.name ?? member.connectionId,
           paused: member.paused,
+          running: state.running.get(keyOf(found.kind, member.id))?.size ?? 0,
           usable: !member.paused && (checks.length === 0 || checks.some((check) => !check.blocked)),
           apiConnectionId: member.connectionId,
         };

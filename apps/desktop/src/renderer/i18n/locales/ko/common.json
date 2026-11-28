@@ -10999,12 +10999,14 @@
       "fileCount_other": "{{count}}개 파일",
       "emptyTitle": "아직 변경 사항이 없습니다",
       "emptyDesc": "이 세션에서는 아직 파일이 편집되지 않았습니다. Agent의 변경 사항이 여기에 표시됩니다.",
+      "emptyDescSvn": "버전 관리 중인 파일이 SVN 기준 리비전과 일치합니다.",
+      "svnSelectFile": "파일을 선택해 변경 사항을 확인하세요.",
       "emptyDescGit": "현재 git worktree에 staged 또는 unstaged 변경 사항이 없습니다.",
       "filterEmptyTitle": "이 필터에 변경 사항이 없습니다",
-      "filterEmptyDesc": "현재 필터 또는 설정에서 표시할 git 변경 사항이 없습니다.",
+      "filterEmptyDesc": "현재 필터 또는 설정에서 표시할 변경 사항이 없습니다.",
       "noSessionTitle": "세션 없음",
       "noSessionDesc": "로컬 세션을 선택하면 git worktree 변경 사항을 검토할 수 있습니다.",
-      "loadingTitle": "git 변경 사항을 읽는 중",
+      "loadingTitle": "변경 사항을 읽는 중",
       "loadingDesc": "새로고침이 끝날 때까지 이전 내용을 유지합니다.",
       "errorTitle": "변경 사항 읽기 실패",
       "refresh": "새로고침",
@@ -11278,6 +11280,10 @@
         "non-git": {
           "title": "git 저장소가 아님",
           "desc": "현재 작업 디렉터리에 사용할 수 있는 git 저장소가 없습니다."
+        },
+        "svn-unavailable": {
+          "title": "SVN을 찾을 수 없음",
+          "desc": "작업 사본의 변경 사항을 보려면 Subversion 명령줄 클라이언트를 설치하세요."
         },
         "git-unavailable": {
           "title": "git 사용 불가",
@@ -23821,7 +23827,15 @@
       "exceptionImage": "메시지에 이미지가 있어 이미지를 볼 수 있는 소스 중에서 선택",
       "exceptionImageFallback": "메시지에 이미지가 있지만 이미지를 볼 수 있는 소스가 없어 평소대로 선택",
       "exceptionHours": "이 시간대에는 '{{name}}' 사용",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "평소 사용 패턴에 따라 우선 선택",
+      "usageHabitQuota": "평소 사용 패턴에 따라 우선 선택(할당량 {{left}}% 남음)",
+      "autoBalance": "다른 소스의 여유가 부족하거나 사용 중이어서 분산 선택",
+      "autoBalanceQuota": "여유 할당량과 부하를 고려해 우선 선택({{left}}% 남음)",
+      "lessBusy": "다른 소스가 작업 실행 중이어서 여유 있는 이 소스를 먼저 사용",
+      "paygFallback": "구독 및 공유 소스를 사용할 수 없어 종량제 소스로 대체",
+      "paygReserve": "종량제 예비 소스(다른 소스를 사용할 수 없을 때만 사용)",
+      "standbyQuotaNeutral": "할당량 {{left}}% 남음({{reset}} 초기화 예정), 이번에는 미선택"
     },
     "settings": {
       "autoSwitch": {

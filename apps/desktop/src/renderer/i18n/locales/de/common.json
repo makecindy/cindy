@@ -11043,12 +11043,14 @@
       "fileCount_other": "{{count}} Dateien",
       "emptyTitle": "Noch keine Änderungen",
       "emptyDesc": "In dieser Sitzung wurden noch keine Dateien bearbeitet. Änderungen des Agents erscheinen hier.",
+      "emptyDescSvn": "Die versionierten Dateien entsprechen ihrer SVN-Basisrevision.",
+      "svnSelectFile": "Wähle eine Datei aus, um ihre Änderungen zu sehen.",
       "emptyDescGit": "Der aktuelle Git-Worktree enthält weder gestagte noch ungestagte Änderungen.",
       "filterEmptyTitle": "Keine Änderungen mit diesem Filter",
-      "filterEmptyDesc": "Mit dem aktuellen Filter oder den aktuellen Einstellungen sind keine Git-Änderungen sichtbar.",
+      "filterEmptyDesc": "Mit dem aktuellen Filter oder den aktuellen Einstellungen sind keine Änderungen sichtbar.",
       "noSessionTitle": "Keine Sitzung",
       "noSessionDesc": "Wähle eine lokale Sitzung aus, um die Änderungen in ihrem Git-Worktree zu prüfen.",
-      "loadingTitle": "Git-Änderungen werden gelesen",
+      "loadingTitle": "Änderungen werden gelesen",
       "loadingDesc": "Das Panel zeigt die bisherigen Inhalte, bis die Aktualisierung abgeschlossen ist.",
       "errorTitle": "Änderungen konnten nicht gelesen werden",
       "refresh": "Aktualisieren",
@@ -11326,6 +11328,10 @@
         "non-git": {
           "title": "Kein Git-Repository",
           "desc": "Das aktuelle Arbeitsverzeichnis enthält kein nutzbares Git-Repository."
+        },
+        "svn-unavailable": {
+          "title": "SVN nicht verfügbar",
+          "desc": "Installiere den Subversion-Kommandozeilenclient, um die Arbeitskopie zu prüfen."
         },
         "git-unavailable": {
           "title": "Git nicht verfügbar",
@@ -23923,7 +23929,15 @@
       "exceptionImage": "Die Nachricht enthält Bilder, daher wurden nur Quellen berücksichtigt, die Bilder sehen können",
       "exceptionImageFallback": "Die Nachricht enthält Bilder, aber keine Quelle kann Bilder sehen – daher wie üblich gewählt",
       "exceptionHours": "In diesem Zeitraum wird stattdessen „{{name}}“ verwendet",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Basierend auf deiner üblichen Nutzung bevorzugt gewählt",
+      "usageHabitQuota": "Basierend auf deiner üblichen Nutzung bevorzugt gewählt (noch {{left}} % Kontingent)",
+      "autoBalance": "Übernimmt Last, da andere Quellen knapp oder ausgelastet sind",
+      "autoBalanceQuota": "Nach Kontingent und Auslastung bevorzugt gewählt (noch {{left}} % Kontingent)",
+      "lessBusy": "Andere Quellen führen Aufgaben aus, daher startet diese freie Quelle zuerst",
+      "paygFallback": "Abos und geteilte Quellen nicht verfügbar – Ausweichen auf nutzungsbasierte Quelle",
+      "paygReserve": "Nutzungsbasierte Reserve; wird nur genutzt, wenn andere Quellen ausfallen",
+      "standbyQuotaNeutral": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – diesmal nicht gewählt"
     },
     "settings": {
       "autoSwitch": {

@@ -11121,12 +11121,14 @@
       "fileCount_other": "{{count}} fichiers",
       "emptyTitle": "Aucune modification",
       "emptyDesc": "Cette session n'a encore modifié aucun fichier. Les modifications de l'Agent apparaîtront ici.",
+      "emptyDescSvn": "Les fichiers versionnés correspondent à leur révision de base SVN.",
+      "svnSelectFile": "Sélectionnez un fichier pour afficher ses modifications.",
       "emptyDescGit": "Le worktree git actuel ne contient aucune modification indexée ou non indexée.",
       "filterEmptyTitle": "Aucune modification pour ce filtre",
-      "filterEmptyDesc": "Aucune modification git n'est visible avec le filtre ou les paramètres actuels.",
+      "filterEmptyDesc": "Aucune modification n'est visible avec le filtre ou les paramètres actuels.",
       "noSessionTitle": "Aucune session",
       "noSessionDesc": "Sélectionnez une session locale pour passer en revue les modifications de son worktree git.",
-      "loadingTitle": "Lecture des modifications git",
+      "loadingTitle": "Lecture des modifications",
       "loadingDesc": "Le panneau conserve le contenu précédent jusqu'à la fin de l'actualisation.",
       "errorTitle": "Impossible de lire les modifications",
       "refresh": "Actualiser",
@@ -11412,6 +11414,10 @@
         "non-git": {
           "title": "Pas un dépôt git",
           "desc": "Le répertoire de travail actuel ne contient pas de dépôt git utilisable."
+        },
+        "svn-unavailable": {
+          "title": "SVN indisponible",
+          "desc": "Installez le client en ligne de commande Subversion pour examiner cette copie de travail."
         },
         "git-unavailable": {
           "title": "Git indisponible",
@@ -24164,7 +24170,15 @@
       "exceptionImage": "Le message contient des images : seules les sources capables de les voir ont été prises en compte",
       "exceptionImageFallback": "Le message contient des images, mais aucune source ne peut les voir : choix habituel",
       "exceptionHours": "Sur cette plage horaire, utilise « {{name}} » à la place",
-      "separator": " ; "
+      "separator": " ; ",
+      "usageHabit": "Choisie en priorité selon vos habitudes d’utilisation",
+      "usageHabitQuota": "Choisie en priorité selon vos habitudes d’utilisation ({{left}} % de quota restant)",
+      "autoBalance": "Prend le relais pendant que les autres sources sont tendues ou occupées",
+      "autoBalanceQuota": "Équilibrée selon la marge de quota et la charge ({{left}} % de quota restant)",
+      "lessBusy": "Les autres sources exécutent des tâches, celle-ci est libre et passe en premier",
+      "paygFallback": "Abonnements et sources partagées indisponibles : bascule sur le paiement à l’usage",
+      "paygReserve": "Réserve en paiement à l’usage, utilisée seulement si les autres sources sont indisponibles",
+      "standbyQuotaNeutral": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} ; non retenue cette fois"
     },
     "settings": {
       "autoSwitch": {

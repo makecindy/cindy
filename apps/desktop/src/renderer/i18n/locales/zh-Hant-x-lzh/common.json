@@ -10999,12 +10999,14 @@
       "fileCount_other": "{{count}} 卷",
       "emptyTitle": "一字未動",
       "emptyDesc": "此差事尚未動一卷。待 Agent 落筆修卷或立卷，即現於此。",
+      "emptyDescSvn": "所錄諸檔，與 SVN 底本相同。",
+      "svnSelectFile": "擇檔以觀異同。",
       "emptyDescGit": "當前 git worktree 無 staged 或 unstaged 改動。",
       "filterEmptyTitle": "此篩之下，一無所見",
-      "filterEmptyDesc": "當前篩選或設定之下，無可顯之 git 改動。",
+      "filterEmptyDesc": "當前篩選或設定之下，無可顯之改動。",
       "noSessionTitle": "尚無差事",
       "noSessionDesc": "擇一本機差事，即可察其 git worktree 改動。",
-      "loadingTitle": "方讀 git 改動",
+      "loadingTitle": "方讀改動",
       "loadingDesc": "面板暫留前次內容，讀畢即重整。",
       "errorTitle": "讀取未成",
       "refresh": "重整",
@@ -11278,6 +11280,10 @@
         "non-git": {
           "title": "非 git 倉庫",
           "desc": "當前工作目錄下無可用之 git 倉庫。"
+        },
+        "svn-unavailable": {
+          "title": "未見 SVN",
+          "desc": "請裝 Subversion 命令列程式，以觀副本異同。"
         },
         "git-unavailable": {
           "title": "git 弗能用",
@@ -23821,7 +23827,15 @@
       "exceptionImage": "訊中有圖，唯於能觀圖之源中擇",
       "exceptionImageFallback": "訊中有圖，然無能觀圖之源，照常擇之",
       "exceptionHours": "此時段改行「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "循平素所用之慣，先擇此源",
+      "usageHabitQuota": "循平素所用之慣，先擇此源（尚餘 {{left}}%）",
+      "autoBalance": "他源限額偏緊或正繁忙，故先以此分擔",
+      "autoBalanceQuota": "權衡餘量與負載，先擇此源（尚餘 {{left}}%）",
+      "lessBusy": "他源方有事務在行，先用此閒源",
+      "paygFallback": "訂閱與共享皆暫不可用，暫以按量之源兜底",
+      "paygReserve": "按量計費之源，待他源皆不可用再啟",
+      "standbyQuotaNeutral": "限額尚餘 {{left}}%，{{reset}} 重設，今次未輪及"
     },
     "settings": {
       "autoSwitch": {

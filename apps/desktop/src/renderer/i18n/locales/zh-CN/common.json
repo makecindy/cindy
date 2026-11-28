@@ -10999,12 +10999,14 @@
       "fileCount_other": "{{count}} 个文件",
       "emptyTitle": "暂无改动",
       "emptyDesc": "本任务还没有任何文件改动。让 Agent 编辑或创建文件后，会在这里出现。",
+      "emptyDescSvn": "版本控制下的文件与 SVN 基准版本一致。",
+      "svnSelectFile": "选择文件查看差异。",
       "emptyDescGit": "当前 git worktree 没有 staged 或 unstaged 改动。",
       "filterEmptyTitle": "当前筛选下暂无改动",
-      "filterEmptyDesc": "当前筛选或设置下没有可显示的 git 改动。",
+      "filterEmptyDesc": "当前筛选或设置下没有可显示的改动。",
       "noSessionTitle": "暂无任务",
       "noSessionDesc": "选择一个本机任务后可查看 git worktree 改动。",
-      "loadingTitle": "正在读取 git 改动",
+      "loadingTitle": "正在读取改动",
       "loadingDesc": "面板会保留上一次内容，读取完成后刷新。",
       "errorTitle": "读取失败",
       "refresh": "刷新",
@@ -11278,6 +11280,10 @@
         "non-git": {
           "title": "不是 git 仓库",
           "desc": "当前工作目录下没有可用的 git 仓库。"
+        },
+        "svn-unavailable": {
+          "title": "找不到 SVN",
+          "desc": "安装 Subversion 命令行客户端后即可查看工作副本的差异。"
         },
         "git-unavailable": {
           "title": "git 不可用",
@@ -23820,7 +23826,15 @@
       "exceptionImage": "消息里有图片，只在能看图的来源里选",
       "exceptionImageFallback": "消息里有图片，但没有能看图的来源，照常选",
       "exceptionHours": "这个时段改走「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "根据你平时的用量优先选它",
+      "usageHabitQuota": "根据你平时的用量优先选它（还剩 {{left}}% 配额）",
+      "autoBalance": "其他来源配额偏紧或已有任务，优先用它分担",
+      "autoBalanceQuota": "综合余量与负载优先选它（还剩 {{left}}% 配额）",
+      "lessBusy": "其他来源正在运行任务，先用空闲的它",
+      "paygFallback": "订阅与共享暂不可用，改用按量付费来源兜底",
+      "paygReserve": "按量付费来源，其余来源不可用时再兜底",
+      "standbyQuotaNeutral": "还剩 {{left}}% 配额，{{reset}} 重置，这次没轮到"
     },
     "settings": {
       "autoSwitch": {

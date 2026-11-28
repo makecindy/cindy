@@ -11043,12 +11043,14 @@
       "fileCount_other": "{{count}} files",
       "emptyTitle": "No changes yet",
       "emptyDesc": "This session hasn't edited any files yet. Changes by the agent will appear here.",
+      "emptyDescSvn": "Versioned files match their SVN BASE revisions.",
+      "svnSelectFile": "Select a file to read its changes.",
       "emptyDescGit": "The current git worktree has no staged or unstaged changes.",
       "filterEmptyTitle": "No changes in this filter",
-      "filterEmptyDesc": "No git changes are visible with the current filter or settings.",
+      "filterEmptyDesc": "No changes are visible with the current filter or settings.",
       "noSessionTitle": "No session",
       "noSessionDesc": "Select a local session to review its git worktree changes.",
-      "loadingTitle": "Reading git changes",
+      "loadingTitle": "Reading changes",
       "loadingDesc": "The panel keeps the previous content until the refresh completes.",
       "errorTitle": "Failed to read changes",
       "refresh": "Refresh",
@@ -11326,6 +11328,10 @@
         "non-git": {
           "title": "Not a git repository",
           "desc": "The current working directory does not contain a usable git repository."
+        },
+        "svn-unavailable": {
+          "title": "SVN unavailable",
+          "desc": "Install the Subversion command-line client to review this working copy."
         },
         "git-unavailable": {
           "title": "Git unavailable",
@@ -23923,7 +23929,15 @@
       "exceptionImage": "The message has images, so only sources that can see images were considered",
       "exceptionImageFallback": "The message has images, but no source can see images, so it picked as usual",
       "exceptionHours": "During this time, it uses “{{name}}” instead",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Picked first based on your usual usage",
+      "usageHabitQuota": "Picked first based on your usual usage ({{left}}% quota left)",
+      "autoBalance": "Taking load while other sources are tight or busy",
+      "autoBalanceQuota": "Balanced by quota headroom and load ({{left}}% quota left)",
+      "lessBusy": "Other sources are running tasks, so this idle one goes first",
+      "paygFallback": "Subscriptions and shared sources are unavailable, falling back to pay-as-you-go",
+      "paygReserve": "Pay-as-you-go reserve; used only when other sources are unavailable",
+      "standbyQuotaNeutral": "{{left}}% of its quota is left and resets {{reset}}; not picked this time"
     },
     "settings": {
       "autoSwitch": {

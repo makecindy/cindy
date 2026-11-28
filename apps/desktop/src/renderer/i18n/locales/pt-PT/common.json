@@ -11121,12 +11121,14 @@
       "fileCount_other": "{{count}} ficheiros",
       "emptyTitle": "Ainda sem alterações",
       "emptyDesc": "Esta sessão ainda não editou ficheiros. As alterações do Agent aparecerão aqui.",
+      "emptyDescSvn": "Os ficheiros versionados correspondem à revisão base do SVN.",
+      "svnSelectFile": "Selecione um ficheiro para ver as alterações.",
       "emptyDescGit": "O worktree git atual não tem alterações preparadas ou não preparadas.",
       "filterEmptyTitle": "Sem alterações neste filtro",
-      "filterEmptyDesc": "Não há alterações git visíveis com o filtro ou as definições atuais.",
+      "filterEmptyDesc": "Não há alterações visíveis com o filtro ou as definições atuais.",
       "noSessionTitle": "Sem sessão",
       "noSessionDesc": "Selecione uma sessão local para rever as alterações do respetivo worktree git.",
-      "loadingTitle": "A ler alterações git",
+      "loadingTitle": "A ler alterações",
       "loadingDesc": "O painel mantém o conteúdo anterior até a atualização estar concluída.",
       "errorTitle": "Falha ao ler alterações",
       "refresh": "Atualizar",
@@ -11412,6 +11414,10 @@
         "non-git": {
           "title": "Não é um repositório git",
           "desc": "O diretório de trabalho atual não contém um repositório git utilizável."
+        },
+        "svn-unavailable": {
+          "title": "SVN indisponível",
+          "desc": "Instale o cliente de linha de comandos do Subversion para rever esta cópia de trabalho."
         },
         "git-unavailable": {
           "title": "Git indisponível",
@@ -24164,7 +24170,15 @@
       "exceptionImage": "A mensagem tem imagens, por isso só foram consideradas as fontes que as conseguem ver",
       "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte as consegue ver, por isso escolheu como habitualmente",
       "exceptionHours": "Neste horário, usa «{{name}}» em vez disso",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Escolhida primeiro com base na sua utilização habitual",
+      "usageHabitQuota": "Escolhida primeiro com base na sua utilização habitual ({{left}}% de quota restante)",
+      "autoBalance": "Assume a carga enquanto outras fontes estão apertadas ou ocupadas",
+      "autoBalanceQuota": "Equilibrada por folga de quota e carga ({{left}}% de quota restante)",
+      "lessBusy": "Outras fontes estão a executar tarefas, pelo que esta livre vai primeiro",
+      "paygFallback": "Subscrições e fontes partilhadas indisponíveis; a recorrer a pagamento por utilização",
+      "paygReserve": "Reserva de pagamento por utilização; usada apenas quando as restantes fontes estiverem indisponíveis",
+      "standbyQuotaNeutral": "Restam {{left}}% da quota, reposta {{reset}}; não escolhida desta vez"
     },
     "settings": {
       "autoSwitch": {

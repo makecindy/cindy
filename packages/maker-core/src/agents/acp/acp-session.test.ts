@@ -3797,7 +3797,35 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     const { session: unresumableSession } = await open(nonResumable, { extraDirs: ['/extra/a'] });
     await expect(unresumableSession.setExtraDirs(['/extra/a'])).resolves.toBeUndefined();
     await expect(unresumableSession.setExtraDirs(['/extra/b'])).rejects.toThrow();
+    // Host-owned library-slot grant/revoke does not alter handshake additionalDirectories,
+    // so it stays in-process even on non-resumable engines.
+    await expect(unresumableSession.setExtraDirs(['/extra/a', '/lib/mivo'], '/lib/mivo')).resolves.toBeUndefined();
+    await expect(unresumableSession.setExtraDirs(['/extra/a'], null)).resolves.toBeUndefined();
     await unresumableSession.close();
+
+    // Handshake additionalDirectories omits the single host-owned library slot while preserving
+    // user dirs (including an explicit user grant targeting the same directory as the library root).
+    const libOnlyAgent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { additionalDirectories: {}, resume: {} } },
+    });
+    const { session: libOnlySession } = await open(libOnlyAgent, {
+      extraDirs: ['/lib/mivo'],
+      libraryRoot: '/lib/mivo',
+    });
+    const libOnlyNew = libOnlyAgent.sent.find((m) => m.method === 'session/new');
+    expect((libOnlyNew?.params as AcpRecord).additionalDirectories).toBeUndefined();
+    await libOnlySession.close();
+
+    const sharedDirAgent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { additionalDirectories: {}, resume: {} } },
+    });
+    const { session: sharedDirSession } = await open(sharedDirAgent, {
+      extraDirs: ['/extra/user', '/lib/shared', '/lib/shared'],
+      libraryRoot: '/lib/shared',
+    });
+    const sharedDirNew = sharedDirAgent.sent.find((m) => m.method === 'session/new');
+    expect((sharedDirNew?.params as AcpRecord).additionalDirectories).toEqual(['/extra/user', '/lib/shared']);
+    await sharedDirSession.close();
 
     // Context usage is unavailable before the agent reports a context window, then reflects `usage_update` + turn usage.
     await expect(session.getContextUsage()).rejects.toThrow();
