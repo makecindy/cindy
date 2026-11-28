@@ -48,8 +48,11 @@ import { CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS, readAccountRateLimitsWithRefresh 
 import {
   BaseAgent,
   LOCAL_AGENT_CLIENT,
+  ASYNC_QUESTION_ANSWER,
+  AUTO_REVIEW_DELEGATED_CONTINUATION,
   AUTO_REVIEW_SOURCE_CONTENT,
   INHERITED_CAPABILITY_SELECTION,
+  MAIN_OWNED_SEND_CONTEXT,
   PINNED_SKILL_INVOCATION,
   CodexResumePreparationBlockedError,
   OneShotError,
@@ -73,7 +76,7 @@ import {
   botRuntimeSkillPolicy,
   isolatedBotProfile,
 } from '../base-agent.js';
-import { skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
+import { canonicalSkillPathAsync, skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
 import { snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import type { AgentCredentialMode } from '../../interfaces/auth-adapter.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
@@ -7166,8 +7169,9 @@ assertRouteCurrent();
 
     const toTurnInput = async (
       content: UserMessage['content'],
+      action: 'send' | 'steer',
+      sendOpts?: SendOptions,
       pinnedSkill?: PinnedSkillInvocation,
-      sourceContent?: UserMessage['content'],
     ): Promise<UserInput[]> => {
       if (reviewMode) {
         if (pinnedSkill) {
@@ -7185,10 +7189,10 @@ assertRouteCurrent();
         return toAppServerInput(content, opts.workingDir);
       }
 
-      const slash = parseLeadingSlashToken(
-        (pinnedSkill && typeof sourceContent === 'string' ? sourceContent : content).trim(),
-      );
+      const sourceContent = sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT];
+      const wireSlash = parseLeadingSlashToken(content.trim());
       if (pinnedSkill) {
+        const slash = typeof sourceContent === 'string' ? parseLeadingSlashToken(sourceContent.trim()) : wireSlash;
         const normalizedSlashName = slash?.name.toLowerCase();
         const normalizedSkillName = pinnedSkill.name.toLowerCase();
         if (
@@ -7206,29 +7210,67 @@ assertRouteCurrent();
         // Authenticate the command from Host-owned source text, but assemble the
         // prompt from the wire text. Notes can precede the command and library
         // mappings can follow it; neither may disappear when using a pinned Skill.
-        const wireSlash = parseLeadingSlashToken(content.trim());
         const prompt = (wireSlash?.name.toLowerCase() === normalizedSlashName
           ? wireSlash.rest
           : content).trim();
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       }
+
+      // Only the Main-attested local composer input can restore a slash that
+      // Host notes moved away from the start of the wire message.
+      const context = sendOpts?.[MAIN_OWNED_SEND_CONTEXT];
+      const localSource = context?.origin.kind === 'desktop'
+        && !opts.remoteHostId && !hosted && !isolatedBotProfile(opts.botRuntimeProfile)
+        && (!sendOpts?.origin || sendOpts.origin.kind === 'user' && !sendOpts.origin.surface)
+        && !sendOpts?.[ASYNC_QUESTION_ANSWER] && !sendOpts?.[AUTO_REVIEW_DELEGATED_CONTINUATION]
+        ? context.rawChannelText
+        : undefined;
+      const slash = localSource === undefined ? wireSlash : parseLeadingSlashToken(localSource.trim());
       if (!slash) return toAppServerInput(content, opts.workingDir);
 
       try {
-        const { skills } = await this.listSkillsForCwd(opts.workingDir, false);
+        rejectIfCancelled(sendOpts, action);
+        const skillDeadline = Date.now() + CRITICAL_THREAD_RPC_TIMEOUT_MS;
+        const { skills } = localSource === undefined
+          ? await this.listSkillsForCwd(opts.workingDir, false)
+          : await awaitCodexRouteSelection(
+              this.listSkillsForHost(host, opts.workingDir, false, CRITICAL_THREAD_RPC_TIMEOUT_MS),
+              sendOpts?.signal,
+            );
         // 受邀者：斜杠只解析它自己带来的技能与 Codex 自带技能，不把本机用户的技能文件交给模型。
         const skill = selectInvocableCodexSkill(
           guestSkillAllowed ? skills.filter((candidate) => guestSkillAllowed(candidate.path, candidate.scope)) : skills,
           slash.name,
         );
         if (!skill) return toAppServerInput(content, opts.workingDir);
+        if (localSource !== undefined && disabledSkillSnapshot.length > 0) {
+          rejectIfCancelled(sendOpts, action);
+          // The filesystem check shares the lookup deadline. A late result
+          // cannot publish a Skill after the input has fallen back or stopped.
+          const remaining = skillDeadline - Date.now();
+          const timeoutError = new Error('Codex Skill path resolution timed out');
+          if (remaining <= 0) throw timeoutError;
+          const timeout = new AbortController();
+          const signal = sendOpts?.signal ? AbortSignal.any([sendOpts.signal, timeout.signal]) : timeout.signal;
+          const timer = setTimeout(() => timeout.abort(timeoutError), remaining);
+          try {
+            const identity = await awaitCodexRouteSelection(canonicalSkillPathAsync(skill.path), signal);
+            if (disabledSkillSnapshot.includes(identity)) return toAppServerInput(content, opts.workingDir);
+          } finally {
+            clearTimeout(timer);
+          }
+        }
 
         const inputs: UserInput[] = [{ type: 'skill', name: skill.name, path: skill.path }];
-        const prompt = slash.rest.trim() || skill.interface?.defaultPrompt?.trim() || '';
+        const defaultPrompt = skill.interface?.defaultPrompt?.trim();
+        const prompt = wireSlash?.name.toLowerCase() === slash.name.toLowerCase()
+          ? wireSlash.rest.trim() || defaultPrompt
+          : content;
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       } catch (err) {
+        rejectIfCancelled(sendOpts, action);
         log.warn('failed to resolve leading slash as Codex skill, sending literal text', {
           name: slash.name,
           error: String(err),
@@ -14534,19 +14576,20 @@ assertRouteCurrent();
         try {
           turnInput = await toTurnInput(
             withLibraryNativeReadContext(message.content, mutableLibraryRoot, mutableExtraDirs),
+            'send',
+            sendOpts,
             sendOpts?.[PINNED_SKILL_INVOCATION],
-            sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT],
           );
+          if (rejectClosedOrCancelledSend(sendOpts, 'after input preparation')) {
+            isTurnStartPending = false;
+            abandonBufferedTurns('send cancelled after input preparation');
+            flushDeferredTerminalTurnCompletionsIfIdle();
+            return;
+          }
         } catch (e) {
           isTurnStartPending = false;
           flushDeferredTerminalTurnCompletionsIfIdle();
           throw e;
-        }
-        if (rejectClosedOrCancelledSend(sendOpts, 'after input preparation')) {
-          isTurnStartPending = false;
-          abandonBufferedTurns('send cancelled after input preparation');
-          flushDeferredTerminalTurnCompletionsIfIdle();
-          return;
         }
         const autoReviewIntent = (sendOpts as CodexInternalSendOptions | undefined)?.[
           CODEX_AUTO_REVIEW_INTENT
@@ -15187,7 +15230,7 @@ assertRouteCurrent();
         // Validate content before steering. `toTurnInput` can touch local
         // files/images; if that fails, leaving the current turn untouched is
         // better than sending a broken 插话.
-        const input = await toTurnInput(message.content);
+        const input = await toTurnInput(message.content, 'steer', sendOpts);
         rejectIfCancelled(sendOpts, 'steer');
         if (closed) {
           throw new Error('No active Codex turn to steer: session is closed');

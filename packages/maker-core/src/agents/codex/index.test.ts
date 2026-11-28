@@ -33,6 +33,7 @@ import {
   AgentStartupCleanupPendingError,
   type AgentDeps,
   type AgentSessionHandle,
+  type SendOptions,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
@@ -9021,6 +9022,112 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(turnStart.input).toEqual([{ type: 'text', text: wire }]);
     } finally {
       await handle.close();
+    }
+  });
+
+  it.each([
+    { source: '/probe 参数  "a b"\nnext line', local: true, enabled: true, selected: true },
+    { source: '/probe', local: true, enabled: false, selected: false },
+    { source: '/probe', local: true, enabled: true, hostDisabled: true, selected: false },
+    { source: '/unknown 参数', local: true, enabled: true, selected: false },
+    { source: 'Explain /probe', local: true, enabled: true, selected: false },
+    { source: '/probe 参数', local: false, enabled: true, selected: false },
+  ])('dispatches decorated local Skill input on send and steer: $source (local=$local, enabled=$enabled, hostDisabled=$hostDisabled)', async ({ source, local, enabled, hostDisabled, selected }) => {
+    const skillPath = '/repo/.agents/skills/probe/SKILL.md';
+    const wire = `[UI language] 简体中文\n\n${source}\n`;
+    const agent = new CodexAgent({ ...createDeps(), getDisabledSkillPaths: () => hostDisabled ? [skillPath] : [] });
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.SkillsList) return { data: [{ cwd: '/repo', errors: [], skills: [
+        { name: 'probe', path: skillPath, enabled, scope: 'repo' },
+      ] }] };
+      if (method === Method.TurnStart) return { turn: { id: 'probe-turn' } };
+      if (method === Method.TurnSteer) return { turnId: 'probe-turn' };
+      return undefined;
+    }, { userAgent: 'mock-codex/0.167.2' });
+    const handle = await agent.startSession({ sessionId: 'session-desktop-skill', model: 'gpt-5.4', workingDir: '/repo' });
+    const options: SendOptions = {
+      [AUTO_REVIEW_SOURCE_CONTENT]: source,
+      ...(local ? { [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: source } } : {}),
+    };
+    const expected = [
+      ...(selected ? [{ type: 'skill', name: 'probe', path: skillPath }] : []),
+      { type: 'text', text: wire },
+    ];
+    try {
+      await handle.send({ type: 'user', content: wire }, options);
+      await handle.steer({ type: 'user', content: wire }, options);
+      for (const method of [Method.TurnStart, Method.TurnSteer]) {
+        const request = host.request.mock.calls.find(([rpc]) => rpc === method)?.[1];
+        expect(request).toMatchObject({ input: expected });
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+
+  // #7903: lookup can stall at skills/list or while resolving the selected
+  // path. Unit tier: real dispatch and deadlines under a fake clock.
+  it.each([
+    ['send', false, 'rpc'], ['send', true, 'rpc'], ['steer', false, 'rpc'], ['steer', true, 'rpc'],
+    ['send', false, 'path'], ['send', true, 'path'], ['steer', false, 'path'], ['steer', true, 'path'],
+  ] as const)('bounds a local skill lookup during %s (cancel=%s, stage=%s)', async (method, cancel, stage) => {
+    MockCodexTransport.userAgent = 'mock-codex/0.167.2';
+    const agent = new CodexAgent({ ...createDeps(), getDisabledSkillPaths: () => stage === 'path' ? ['/repo/disabled'] : [] });
+    const handle = await agent.startSession({ sessionId: 'silent-skill-list', model: 'gpt-5.4', workingDir: '/repo' });
+    const transport = createdTransports[0];
+    transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'probe-turn' } } });
+    transport.setMockResponse(Method.TurnSteer, { result: { turnId: 'probe-turn' } });
+    const requests = () => transport.lines.map(line => JSON.parse(line));
+    const dispatchRpc = method === 'send' ? Method.TurnStart : Method.TurnSteer;
+    const reply = deferred<void>();
+    const abort = new AbortController();
+    const raw = '/probe 参数';
+    const wire = `[UI language] English\n\n${raw}`;
+    const skillPath = path.resolve('/repo/probe/SKILL.md');
+    const realpath = fs.realpath;
+    const delayedPath = vi.spyOn(fs, 'realpath').mockImplementation(async (source, options) => {
+      if (stage !== 'path' || source !== skillPath) return realpath(source, options);
+      await reply.promise;
+      return skillPath;
+    });
+    try {
+      if (method === 'steer') await handle.send({ type: 'user', content: 'Start a turn' });
+      if (stage === 'rpc') MockCodexTransport.beforeSkillsListResponse = () => reply.promise;
+      else transport.setMockResponse(Method.SkillsList, { result: { data: [{ cwd: '/repo', errors: [], skills: [
+        { name: 'probe', path: skillPath, enabled: true, scope: 'repo' },
+      ] }] } });
+      vi.useFakeTimers();
+      let result: string | undefined;
+      const pending = handle[method]({ type: 'user', content: wire }, {
+        signal: abort.signal,
+        [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: raw },
+      }).then(() => { result = 'accepted'; }, error => { result = String(error); });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requests().filter(request => request.method === Method.SkillsList)).toHaveLength(1);
+      if (stage === 'path') expect(delayedPath).toHaveBeenCalledWith(skillPath);
+      expect(requests().some(request => request.method === dispatchRpc)).toBe(false);
+      if (cancel) {
+        abort.abort();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(result).toMatch(/cancelled before acceptance/);
+        if (method === 'send') expect(handle.isTurnRunning?.()).toBe(false);
+      } else {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(result).toBe('accepted');
+        expect(requests().filter(request => request.method === dispatchRpc).map(request => request.params.input))
+          .toEqual([[{ type: 'text', text: wire }]]);
+      }
+      reply.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await pending;
+      expect(requests().filter(request => request.method === dispatchRpc)).toHaveLength(cancel ? 0 : 1);
+      expect(transport.closed).toBe(false);
+    } finally {
+      reply.resolve();
+      delayedPath.mockRestore();
+      vi.useRealTimers();
+      await handle.close();
+      await agent.dispose();
     }
   });
 

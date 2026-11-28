@@ -2,12 +2,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AgentCustomization } from '../../types/customizations.js';
 
+function skillIdentity(resolved: string): string {
+  if (path.basename(resolved).toLowerCase() === 'skill.md') resolved = path.dirname(resolved);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 /** Physical Skill identity, shared by discovery aliases and SKILL.md references. */
 export function canonicalSkillPath(value: string): string {
   let resolved = path.resolve(value);
   try { resolved = fs.realpathSync.native(resolved); } catch { /* Removed source: retain its identity. */ }
-  if (path.basename(resolved).toLowerCase() === 'skill.md') resolved = path.dirname(resolved);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  return skillIdentity(resolved);
+}
+
+/** Same physical identity and removed-source fallback for the dispatch hot path. */
+export async function canonicalSkillPathAsync(value: string): Promise<string> {
+  const absolute = path.resolve(value);
+  return skillIdentity(await fs.promises.realpath(absolute).catch(() => absolute));
 }
 
 /** Freeze physical identities before asynchronous native runtime startup. */

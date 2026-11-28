@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { canonicalSkillPath, claudeDisabledSkillOverrides, isSkillDisabled, skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from './skill-activation.js';
+import { canonicalSkillPath, canonicalSkillPathAsync, claudeDisabledSkillOverrides, isSkillDisabled, skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from './skill-activation.js';
 import { filterPiDisabledProjectSkills, applyPiDisabledSkillSettings, piDisabledDiscoveryPaths } from '../pi/skill-activation.js';
 import type { AgentCustomization } from '../../types/customizations.js';
 
@@ -17,6 +17,18 @@ function skill(name: string, scope = 'global'): AgentCustomization {
 }
 
 describe('Cindy-only Skill activation', () => {
+  // #7903: async dispatch must compare the same alias and removed-path identities
+  // as the synchronous startup snapshot. Unit tier, local temporary paths only.
+  it('matches the disabled snapshot for an alias and a missing skill entry', async () => {
+    const source = skill('async-identity');
+    const alias = path.join(root, 'async-alias');
+    await fs.promises.symlink(source.absolutePath, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const missing = path.join(root, 'missing-skill');
+    const snapshot = snapshotDisabledSkillLaunch([source.absolutePath, missing]);
+    await expect(canonicalSkillPathAsync(path.join(alias, 'SKILL.md'))).resolves.toBe(snapshot.identities[0]);
+    await expect(canonicalSkillPathAsync(path.join(missing, 'SKILL.md'))).resolves.toBe(snapshot.identities[1]);
+  });
+
   it('matches SKILL.md and directory identities without disabling an independent same-name copy', () => {
     const global = skill('example');
     const project = skill('example', 'project');
