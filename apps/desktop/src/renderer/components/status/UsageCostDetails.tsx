@@ -4,8 +4,13 @@ import { formatTurnCostMoney } from '@/lib/usageFormat';
 
 const subtotalKinds = ['actual-cost', 'value-estimate'] as const;
 
-function usageCostKindLabel(kind: UsageCostRow['money']['kind']) {
-  return kind === 'value-estimate' ? 'usageCost.estimate' : 'usageCost.charged';
+function usageCostKindLabel(kind: UsageCostRow['money']['kind'], subscriptionOnly: boolean) {
+  if (kind === 'actual-cost') return 'usageCost.charged';
+  return subscriptionOnly ? 'usageCost.estimate' : 'usageCost.estimatedCost';
+}
+
+function isSubscriptionEstimate(row: UsageCostRow) {
+  return row.money.kind === 'value-estimate' && row.billingSource === 'subscription';
 }
 
 export function UsageCostDetails({ rows }: { rows: UsageCostRow[] | null | undefined }) {
@@ -26,13 +31,16 @@ export function UsageCostDetails({ rows }: { rows: UsageCostRow[] | null | undef
               <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 font-medium">
                 <span>{t(`usageCost.${category}`)}</span>
                 <div className="flex flex-wrap gap-x-3 gap-y-1 tabular-nums">
-                  {subtotalKinds.flatMap((kind) =>
-                    usageCostTotals(group.filter((row) => row.money.kind === kind)).map((money) => (
+                  {subtotalKinds.flatMap((kind) => {
+                    const matchingRows = group.filter((row) => row.money.kind === kind);
+                    return usageCostTotals(matchingRows).map((money) => (
                       <span key={`${kind}-${money.currency}`}>
-                        {t(usageCostKindLabel(kind))} {formatTurnCostMoney(money)}
+                        {t(usageCostKindLabel(kind, matchingRows
+                          .filter((row) => row.money.currency === money.currency)
+                          .every(isSubscriptionEstimate)))} {formatTurnCostMoney(money)}
                       </span>
-                    )),
-                  )}
+                    ));
+                  })}
                 </div>
               </div>
               {group.map((row, index) => (
@@ -50,7 +58,7 @@ export function UsageCostDetails({ rows }: { rows: UsageCostRow[] | null | undef
                       : ''}
                     {t(`usageCost.source.${row.billingSource ?? 'unknown'}`)}
                     {' · '}
-                    {t(usageCostKindLabel(row.money.kind))}
+                    {t(usageCostKindLabel(row.money.kind, isSubscriptionEstimate(row)))}
                   </div>
                 </div>
               ))}
@@ -59,7 +67,9 @@ export function UsageCostDetails({ rows }: { rows: UsageCostRow[] | null | undef
         })
       )}
       {rows?.length === 0 ? <p>{t('usageCost.unavailable')}</p> : null}
-      <p className="text-[var(--text-secondary)]">{t('usageCost.explanation')}</p>
+      {rows?.some(isSubscriptionEstimate) ? (
+        <p className="text-[var(--text-secondary)]">{t('usageCost.explanation')}</p>
+      ) : null}
     </div>
   );
 }

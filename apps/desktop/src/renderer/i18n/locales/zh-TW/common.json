@@ -10477,6 +10477,7 @@
     "monthlyLimitLabel": "本週期 {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "本任務 {{cost}}",
+    "sessionEstimateLabel": "本任務估算費用 {{cost}}",
     "codex": {
       "waiting": "Codex --",
       "openAiApiLabel": "OpenAI API",
@@ -10563,6 +10564,7 @@
     "extraUsageEnabled": "額外用量已啟用",
     "costLine": "本輪消耗：{{cost}}",
     "valueLine": "本輪 token 價值：{{cost}}",
+    "estimateLine": "本輪估算費用：{{cost}}",
     "noBilledCost": "本輪費用暫不可用，僅顯示用量",
     "latestMessageTitle": "最近一輪",
     "turnCostUnavailable": "本輪費用暫無法估算",
@@ -23517,6 +23519,7 @@
     "additional": "附加費用",
     "unknownModel": "未記錄模型",
     "estimate": "估算價值",
+    "estimatedCost": "估算費用",
     "charged": "按量費用",
     "loading": "正在讀取明細…",
     "unavailable": "這筆記錄暫無明細。",

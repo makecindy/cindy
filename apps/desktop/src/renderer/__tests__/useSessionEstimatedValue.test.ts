@@ -9,6 +9,7 @@ import { combineSessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
+import { hasSubscriptionEstimateSource, turnEstimateAmounts } from '../../shared/turnEstimateAmounts';
 
 function usdEstimate(amount: number): RegionalMoney {
   return {
@@ -124,6 +125,45 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
 });
 
 describe('resolveEstimatedValueTurnCostEntry', () => {
+  // PR #12622: estimates outside the loaded message window are replayed from
+  // the history projection without the original billing details.
+  it.each(['subscription', 'provider', 'unknown', undefined] as const)(
+    'preserves the recorded legacy %s classification on history replay',
+    (billingSource) => {
+      const [money] = turnEstimateAmounts({
+        turnCostUsd: 0.53,
+        turnCostIsEstimate: true,
+        turnUsageDetails: buildTurnUsageDetails({ inputTokens: 200, billingSource }),
+      });
+      const replay = resolveEstimatedValueTurnCostEntry({
+        clientId: 'historical-estimate',
+        turnMoney: money,
+        turnCostIsEstimate: true,
+      })?.money;
+      expect(replay).toMatchObject({ amount: 0.53, currency: 'USD', approximate: true, kind: 'value-estimate' });
+      expect(replay?.estimateReasons).toContain('legacy-usd');
+      expect(hasSubscriptionEstimateSource(replay)).toBe(billingSource === 'subscription');
+    },
+  );
+
+  // PR #12622: the session estimate keeps the subscription source and only
+  // the model amount when the same turn includes a separately charged image.
+  it('retains subscription value alongside a separate media charge', () => {
+    const subscription = usdEstimate(0.53);
+    const image: RegionalMoney = { amount: 0.22, currency: 'USD', approximate: false, kind: 'actual-cost' };
+    expect(resolveEstimatedValueTurnCostEntry({
+      clientId: 'image-in-subscription-turn',
+      turnMoney: subscription,
+      turnCostIsEstimate: true,
+      turnUsageDetails: buildTurnUsageDetails({
+        inputTokens: 200,
+        billingSource: 'subscription',
+        perModelCost: [{ model: 'model-a', money: subscription, billingSource: 'subscription' }],
+        additionalCosts: [image],
+      }),
+    })).toEqual({ clientId: 'image-in-subscription-turn', money: subscription });
+  });
+
   // Unit: persisted model evidence and the live segment must produce the same two values on replay.
   it('preserves the other native estimate without counting the primary model twice', () => {
     const dollars = usdEstimate(2);

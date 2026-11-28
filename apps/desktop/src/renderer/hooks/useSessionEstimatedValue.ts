@@ -13,7 +13,7 @@ import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotCon
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { estimatedSessionValueFor } from '@/lib/makerTransport';
-import { legacyEstimateMoney, turnEstimateAmounts } from '../../shared/turnEstimateAmounts';
+import { hasSubscriptionEstimateSource, legacyEstimateMoney, turnEstimateAmounts } from '../../shared/turnEstimateAmounts';
 import {
   addCompatibleRegionalMoney,
   normalizeRegionalMoney,
@@ -57,7 +57,8 @@ function areMoneyEqual(a: RegionalMoney, b: RegionalMoney): boolean {
     a.amount !== b.amount ||
     a.currency !== b.currency ||
     a.approximate !== b.approximate ||
-    a.kind !== b.kind
+    a.kind !== b.kind ||
+    a.subscriptionSourceConfirmed !== b.subscriptionSourceConfirmed
   ) {
     return false;
   }
@@ -152,7 +153,18 @@ export function resolveEstimatedValueTurnCostEntry(
 }
 
 function sumCosts(costs: Map<string, RegionalMoney[]>): RegionalMoney[] {
-  return sumMoneyByCurrency([...costs.values()].flat().filter(money => money.amount > 0));
+  const estimates = [...costs.values()].flat().filter(money => money.amount > 0);
+  const otherEstimateCurrencies = new Set(estimates
+    .filter(money => !hasSubscriptionEstimateSource(money))
+    .map(money => money.currency));
+  return sumMoneyByCurrency(estimates).map(total => {
+    if (otherEstimateCurrencies.has(total.currency)) {
+      return { ...total, estimateReasons: total.estimateReasons?.filter(reason => reason !== 'subscription-value') };
+    }
+    return total.estimateReasons?.includes('legacy-usd')
+      ? { ...total, subscriptionSourceConfirmed: true }
+      : total;
+  });
 }
 
 const NOOP_UNSUBSCRIBE = () => {};

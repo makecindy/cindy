@@ -10598,6 +10598,7 @@
     "monthlyLimitLabel": "Ciclo {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "Sessão {{cost}}",
+    "sessionEstimateLabel": "Custo estimado da sessão {{cost}}",
     "codex": {
       "waiting": "Codex --",
       "openAiApiLabel": "OpenAI API",
@@ -10684,6 +10685,7 @@
     "extraUsageEnabled": "Utilização adicional ativada",
     "costLine": "Custo desta mensagem: {{cost}}",
     "valueLine": "Valor dos tokens desta mensagem: {{cost}}",
+    "estimateLine": "Custo estimado desta mensagem: {{cost}}",
     "noBilledCost": "Custo indisponível para esta mensagem; apenas a utilização é apresentada",
     "latestMessageTitle": "Última mensagem",
     "turnCostUnavailable": "Custo indisponível para esta mensagem",
@@ -23857,6 +23859,7 @@
     "additional": "Custos adicionais",
     "unknownModel": "Modelo não registado",
     "estimate": "Valor estimado",
+    "estimatedCost": "Custo estimado",
     "charged": "Custo de utilização",
     "loading": "A carregar detalhes…",
     "unavailable": "Os detalhes deste registo não estão disponíveis.",

@@ -566,6 +566,7 @@ describe('QuotaHoverCard', () => {
         sessionUsage={{
           costText: '$0.75',
           costIsEstimate: true,
+          costIsSubscriptionValue: true,
           actualCostText: '$0.25',
           estimatedValueText: '$0.50',
         }}
@@ -632,6 +633,7 @@ describe('QuotaHoverCard', () => {
         turnUsage={{
           costText: '$0.46',
           costIsEstimate: true,
+          costIsSubscriptionValue: true,
           totalTokensText: '74.1K',
         }}
       />,

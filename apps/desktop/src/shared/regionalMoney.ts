@@ -21,6 +21,8 @@ export interface RegionalMoney {
   approximate: boolean;
   kind: MoneyKind;
   estimateReasons?: MoneyEstimateReason[];
+  /** A recorded subscription channel confirmed the source of a legacy estimate. */
+  subscriptionSourceConfirmed?: true;
 }
 
 export interface ModelPriceQuote {
@@ -337,6 +339,9 @@ export function normalizeRegionalMoney(value: unknown): RegionalMoney | undefine
     approximate: raw.approximate,
     kind: raw.kind,
     ...(estimateReasons ? { estimateReasons } : {}),
+    ...(raw.kind === 'value-estimate' && raw.subscriptionSourceConfirmed === true
+      ? { subscriptionSourceConfirmed: true }
+      : {}),
   };
 }
 

@@ -112,6 +112,7 @@ import {
 } from '@/lib/turnUsageTooltip';
 import { aggregateAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
+import { hasSubscriptionEstimateSource } from '../../../shared/turnEstimateAmounts';
 import {
   DEFAULT_USAGE_CURRENCY,
   gatewayMoney,
@@ -666,6 +667,10 @@ function toQuotaHoverCardTurnUsage(
 ): QuotaHoverCardTurnUsage | null {
   if (!summary) return null;
   const { details } = summary;
+  const hasMultipleAmounts = Boolean(details.userTurnAmounts?.length);
+  const costIsEstimate = hasMultipleAmounts
+    ? details.userTurnAmounts?.some(money => money.kind === 'value-estimate')
+    : summary.isEstimate;
   const costText = details.userTurnAmounts?.length
     ? details.userTurnAmounts.map(formatTurnCostMoney).join(' + ')
     : summary.money
@@ -676,7 +681,11 @@ function toQuotaHoverCardTurnUsage(
 
   return {
     costText,
-    costIsEstimate: summary.isEstimate,
+    costIsEstimate,
+    costIsSubscriptionValue: costIsEstimate
+      && !details.additionalCosts?.length
+      && !details.userTurnAmounts?.some(money => money.kind === 'actual-cost')
+      && hasSubscriptionEstimateSource(summary.money, details),
     isUserTurnTotal: summary.isUserTurnTotal,
     totalTokensText: formatCompactTokens(Math.max(0, Math.floor(details.totalTokens))),
     inputTokensText: formatCompactTokens(details.inputTokens),
@@ -706,6 +715,11 @@ function formatSessionAmounts(amounts: RegionalMoney[] | undefined, fallback: Re
   ).join(' + ');
 }
 
+function isSessionSubscriptionEstimate({ estimatedAmounts, estimatedValueMoney }: SessionUsageMoney): boolean {
+  const amounts = estimatedAmounts?.length ? estimatedAmounts : [estimatedValueMoney ?? undefined];
+  return amounts.every(money => hasSubscriptionEstimateSource(money));
+}
+
 /** 把会话金额投影成卡片数据；混合合计保留实际费用与价值估算两条构成。 */
 function toQuotaHoverCardSessionUsage(
   sessionUsage: SessionUsageMoney,
@@ -729,6 +743,7 @@ function toQuotaHoverCardSessionUsage(
     costIsEstimate:
       totalMoney?.kind === 'value-estimate' ||
       Boolean(!actualMoney?.amount && estimatedValueMoney?.amount),
+    costIsSubscriptionValue: isSessionSubscriptionEstimate(sessionUsage),
     ...(actualMoney?.amount ? { actualCostText: formatSessionAmounts(sessionUsage.actualAmounts, actualMoney) } : {}),
     ...(estimatedValueMoney?.amount
       ? { estimatedValueText: formatSessionAmounts(sessionUsage.estimatedAmounts, estimatedValueMoney) }
@@ -1505,10 +1520,13 @@ export function TodaySpendChip({
     [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer],
   );
 
+  const sessionEstimateLabel = quotaCardSessionUsage?.costIsSubscriptionValue
+    ? 'todaySpend.codex.sessionValueLabel'
+    : 'todaySpend.sessionEstimateLabel';
   const sessionSegment = sessionUsage.totalMoney?.amount
     ? t(
         sessionUsage.totalMoney.kind === 'value-estimate'
-          ? 'todaySpend.codex.sessionValueLabel'
+          ? sessionEstimateLabel
           : 'todaySpend.sessionCostLabel',
         { cost: formatTurnCostMoney(sessionUsage.totalMoney) },
       )
@@ -1519,7 +1537,7 @@ export function TodaySpendChip({
             })
           : null,
         sessionUsage.estimatedValueMoney?.amount
-          ? t('todaySpend.codex.sessionValueLabel', {
+          ? t(sessionEstimateLabel, {
               cost: formatSessionAmounts(sessionUsage.estimatedAmounts, sessionUsage.estimatedValueMoney),
             })
           : null,
