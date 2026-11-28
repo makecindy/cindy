@@ -1149,7 +1149,7 @@
     "permissionMissing": "허용되지 않음",
     "openPermissionSettings": "권한 허용",
     "recheckPermissions": "다시 확인",
-    "permissionActionFailed": "권한 안내를 열지 못했습니다. 컴퓨터의 원격 제어 설정에서 다시 시도하세요.",
+    "permissionActionFailed": "권한 안내를 열지 못했습니다. 컴퓨터의 「설정 → 원격 연결」에서 다시 시도하세요.",
     "permissionCheckFailed": "권한을 확인하지 못했습니다. 컴퓨터가 온라인인지 확인하고 다시 시도하세요.",
     "openGuideOnComputer": "컴퓨터에서 권한 안내 열기",
     "permissionGuideOpened": "컴퓨터에 권한 안내를 표시했습니다. 컴퓨터에서 계속하세요.",

@@ -1178,7 +1178,7 @@
     "permissionMissing": "Non accordée",
     "openPermissionSettings": "Accorder l'autorisation",
     "recheckPermissions": "Vérifier à nouveau",
-    "permissionActionFailed": "Impossible d'ouvrir le guide des autorisations. Réessayez depuis les paramètres Contrôle à distance sur l'ordinateur.",
+    "permissionActionFailed": "Impossible d'ouvrir le guide des autorisations. Réessayez dans Paramètres → Connexion à distance sur l'ordinateur.",
     "permissionCheckFailed": "Impossible de vérifier les autorisations. Assurez-vous que l'ordinateur est en ligne et réessayez.",
     "openGuideOnComputer": "Ouvrir le guide sur l'ordinateur",
     "permissionGuideOpened": "Le guide des autorisations est ouvert sur l'ordinateur. Poursuivez là-bas.",

@@ -1178,7 +1178,7 @@
     "permissionMissing": "No concedido",
     "openPermissionSettings": "Conceder permiso",
     "recheckPermissions": "Comprobar de nuevo",
-    "permissionActionFailed": "No se pudo abrir la guía de permisos. Inténtalo de nuevo en la configuración de control remoto de la computadora.",
+    "permissionActionFailed": "No se pudo abrir la guía de permisos. Inténtalo de nuevo en Configuración → Conexión remota en la computadora.",
     "permissionCheckFailed": "No se pudieron comprobar los permisos. Asegúrate de que la computadora esté en línea e inténtalo de nuevo.",
     "openGuideOnComputer": "Abrir guía en la computadora",
     "permissionGuideOpened": "La guía de permisos está abierta en la computadora. Continúa allí.",

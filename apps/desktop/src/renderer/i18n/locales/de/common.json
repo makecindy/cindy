@@ -1161,7 +1161,7 @@
     "permissionMissing": "Nicht erteilt",
     "openPermissionSettings": "Berechtigung erteilen",
     "recheckPermissions": "Erneut prüfen",
-    "permissionActionFailed": "Die Berechtigungsanleitung konnte nicht geöffnet werden. Versuche es erneut in den Einstellungen für die Fernsteuerung auf dem Computer.",
+    "permissionActionFailed": "Die Berechtigungsanleitung konnte nicht geöffnet werden. Versuche es auf dem Computer unter Einstellungen → Remote-Verbindung erneut.",
     "permissionCheckFailed": "Berechtigungen konnten nicht geprüft werden. Stelle sicher, dass der Computer online ist, und versuche es erneut.",
     "openGuideOnComputer": "Anleitung auf dem Computer öffnen",
     "permissionGuideOpened": "Die Berechtigungsanleitung ist auf dem Computer geöffnet. Fahre dort fort.",
