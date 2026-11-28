@@ -67,6 +67,117 @@ it('waits for a fresh host signature instead of accepting the expiring lease aga
   try { const pending = lease.acquire(); await vi.advanceTimersByTimeAsync(251); expect(await pending).toEqual(fresh); expect(calls).toBe(2); }
   finally { lease.close(); client.close(); vi.useRealTimers(); }
 });
+
+// Unit, #13041: the existing fresh-lease test never receives a 429. Exercise
+// the production acquire entry shared by reconnect and renewal, using a 429
+// on the initial POST or on the status poll after an existing lease ages out.
+// The cap and clock-rollback cases check that the next admission reaches the
+// HTTP port at the local deadline and that another 429 starts a fresh wait.
+it.each([
+  { limitedStep: 'post', retryAfter: '90', stop: true, serverWaitMs: 90_000 },
+  { limitedStep: 'status', retryAfter: new Date(90_000).toUTCString(), serverWaitMs: 90_000 },
+  { limitedStep: 'post', retryAfter: '601', serverWaitMs: 601_000, localWaitMs: 600_000 },
+  { limitedStep: 'post', retryAfter: '90', serverWaitMs: 90_000, localWaitMs: 90_000, rollbackMs: 3_600_000 },
+  { limitedStep: 'post', retryAfter: 'invalid' },
+  { limitedStep: 'post', retryAfter: undefined },
+])('handles a 429 from $limitedStep with Retry-After $retryAfter (rollback: $rollbackMs)', async ({
+  limitedStep, retryAfter, stop, serverWaitMs, localWaitMs, rollbackMs,
+}) => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const { identity: host, bootstrap } = createPrivateNetwork('Rate limited lease');
+  const guest = generateIdentity('guest');
+  const membership = { memberId: 'member', guestSubject: 'guest-account', memberVersion: 1 };
+  const scope = { kind: 'shared-task', resourceId: 'task', networkId: bootstrap.networkId,
+    rootPublicKey: bootstrap.rootPublicKey, hostDeviceId: host.deviceId, ...membership } as const;
+  const delegation = createDelegation(host, bootstrap.ownerCertificate, { ...scope, guest, scope: membership });
+  const signer = { identity: guest, sign: async (value: string) => signature(guest.signingPrivateKey, value),
+    random: async () => toBase64Url(new Uint8Array(18).fill(5)) };
+  const old = createDelegation(host, bootstrap.ownerCertificate, { ...scope, guest, scope: membership, lifetimeMs: 61_000 });
+  const reply = { id: delegation.id, networkId: scope.networkId, rootPublicKey: scope.rootPublicKey,
+    certificate: bootstrap.ownerCertificate };
+  const renew = limitedStep === 'status';
+  const now = Date.now();
+  const initialPollDelay = renew ? 250 : 0;
+  const deadline = now + (renew ? 1000 : 0) + initialPollDelay + (serverWaitMs ?? 90_000);
+  const headers = new Headers();
+  if (retryAfter !== undefined) headers.set('Retry-After', retryAfter);
+  if (renew) headers.set('Date', new Date(0).toUTCString());
+  let current = true;
+  const fetch = vi.fn(async (url: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    if (String(init?.body).includes('"resourceId":"independent"')) {
+      return Response.json({ error: { code: 'PERMISSION_DENIED' } }, { status: 403 });
+    }
+    if (renew && Date.now() === now) {
+      return Response.json({ ...reply, id: old.id, status: 'ready', delegation: old });
+    }
+    if (Date.now() >= deadline) {
+      return Response.json({ ...reply, status: 'ready', delegation });
+    }
+    if (limitedStep === 'status' && !String(url).endsWith('/status')) {
+      return Response.json({ ...reply, status: 'pending' });
+    }
+    return Response.json({ error: { code: 'TOO_MANY_REQUESTS' } }, { status: 429, headers });
+  });
+  const client = new AgentNetSharingClient({ base: 'https://relay.example.test', networkId: scope.networkId,
+    rootPublicKey: scope.rootPublicKey, signer, assertCurrent() {}, hash: bytes => bytes, fetch,
+    getIdentityCard: async () => issuedCard() });
+  const options = { client, applicant: signer, scope, verifyCertificate, verifyDelegation,
+    assertCurrent() { if (!current) throw new Error('AGENT_NET_OWNER_CHANGED'); } };
+  const lease = new AgentNetSharingTransport(options);
+  const initialCalls = renew ? 3 : 1;
+  try {
+    if (renew) {
+      await expect(lease.acquire()).resolves.toEqual(old);
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    const first = expect(lease.acquire()).rejects.toMatchObject({
+      status: 429, retryAt: serverWaitMs === undefined ? undefined : deadline,
+    });
+    await vi.advanceTimersByTimeAsync(initialPollDelay);
+    await first;
+    if (serverWaitMs === undefined) {
+      await expect(lease.acquire()).rejects.toMatchObject({ status: 429, retryAt: undefined });
+      expect(fetch).toHaveBeenCalledTimes(initialCalls + 1);
+      return;
+    }
+    if (rollbackMs !== undefined) vi.setSystemTime(Date.now() - rollbackMs);
+    await vi.advanceTimersByTimeAsync((localWaitMs ?? serverWaitMs) - 1);
+    const blocked = lease.acquire().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(initialCalls);
+    await expect(blocked).resolves.toMatchObject({ status: 429, retryAt: deadline });
+    const independent = new AgentNetSharingTransport({ ...options, scope: { ...scope, resourceId: 'independent' } });
+    await expect(independent.acquire()).rejects.toMatchObject({ status: 403, code: 'PERMISSION_DENIED' });
+    independent.close();
+    current = false;
+    expect(() => lease.acquire()).toThrow('AGENT_NET_OWNER_CHANGED');
+    current = true;
+    if (stop) {
+      lease.close();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(() => lease.acquire()).toThrow('AGENT_NET_SHARING_CLOSED');
+      expect(fetch).toHaveBeenCalledTimes(initialCalls + 1);
+      return;
+    }
+    await vi.advanceTimersByTimeAsync(1);
+    if (localWaitMs !== undefined) {
+      const retryAt = Date.now() + serverWaitMs;
+      await expect(lease.acquire()).rejects.toMatchObject({ status: 429, retryAt });
+      expect(fetch).toHaveBeenCalledTimes(initialCalls + 2);
+      await expect(lease.acquire()).rejects.toMatchObject({ status: 429, retryAt });
+      expect(fetch).toHaveBeenCalledTimes(initialCalls + 2);
+      return;
+    }
+    await expect(lease.acquire()).resolves.toEqual(delegation);
+    await expect(lease.acquire()).resolves.toEqual(delegation);
+    expect(fetch).toHaveBeenCalledTimes(initialCalls + 2);
+    lease.close();
+    expect(() => lease.acquire()).toThrow('AGENT_NET_SHARING_CLOSED');
+  } finally {
+    lease.close(); client.close(); vi.useRealTimers();
+  }
+});
+
 // Unit: 2026-11-26 a Windows device whose clock ran 15s slow rejected every
 // identity card locally (INVALID_AGENT_NET_IDENTITY_CARD): the issuer's absolute
 // expiry looked like 315s away. Share links and the roster export failed before
