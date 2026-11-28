@@ -367,6 +367,16 @@ function mount(component: any, props: any) {
  */
 /** The layout key a sheet's measured views carry (`consentLayoutKey`) for this consent at the mocked window and text size. */
 const layoutKeyOf = (requestId: string) => `${requestId}|${bridge.width}x${bridge.height}@${bridge.fontScale}`;
+/** iOS: the reviewed list (source and summary first) is laid out on screen, as the device reports it after the redraw. */
+function reportReviewedShown() {
+  act(() => bridge.props.get("plugins.management.reviewLead").modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ x: 0, y: 100, width: 390, height: 80 }));
+}
+/** iOS: press "Review source and permissions", the reviewed list appears, and a person reads it a moment before Allow. */
+function reviewIOS() {
+  act(() => bridge.props.get("plugins.management.review").onPress());
+  reportReviewedShown();
+  bridge.clock += 1000;
+}
 /**
  * `content: 0` leaves the list's content height unreported (on iOS that is the list's scroll geometry, its visible height
  * included). iOS: `visible` and `content` are the native list's scroll geometry, frames are global (the list at
@@ -1222,7 +1232,7 @@ it("shows full consent facts in a separate sheet and rejects stale owner or requ
   for (const fact of ["Plugin · v2", "plugin-id", "plugins.notice.consentSource.customMarket", "Full local access risk", "Removed host access", "plugins.management.permissions.nodeRuntimeDetail", "plugins.management.oauthChanged"]) expect(container.textContent).toContain(fact);
   // iOS reviews first (maintainer review 19:34), so only the inactive guard can stop the press below.
   layOutSheet({ identity: 100, visible: 2000, content: 400 });
-  act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
+  reviewIOS();
   const allow = bridge.props.get("plugins.management.allow").onPress;
   act(() => allow());
   expect(controller.answer, "control: active and laid out, Allow answers").toHaveBeenCalledWith(true);
@@ -1499,7 +1509,7 @@ describe("older Host without a repository identity", () => {
       releaseId: "runner@1", sourceType: "local-market", source: chosen };
     p.state.expectedConsent = expected;
     const { rerender } = mount(PluginManagementConfirmation, p);
-    act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
+    reviewIOS();
     expect(bridge.props.has("plugins.management.allow"), "reviewed: Allow is offered").toBe(true);
     // The same consent can no longer be allowed here (another source than the one chosen).
     p.state.expectedConsent = { ...expected, source: { kind: "local", sourceId: "SourceB_0123456789abcd" } };
@@ -1833,7 +1843,7 @@ describe("pinned high-risk permission", () => {
       items().forEach((item: any, index: number) => act(() => item.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 300, height: reviewLines[index] })));
       const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
       expect({ allow: shown("plugins.management.allow"), review: shown("plugins.management.review") }).toEqual({ allow: false, review: true });
-      act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
+      reviewIOS();
       expect(sheetProps.controller.answer).not.toHaveBeenCalled();
       const ids = order(container);
       expect(ids.indexOf("plugins.management.reviewLead")).toBeGreaterThanOrEqual(0);
@@ -2171,11 +2181,19 @@ describe("pinned high-risk permission", () => {
         const press = bridge.props.get("plugins.management.review").onPress;
         act(() => { press(); press(); });
         expect(p.controller.answer, "review only shows the source and permissions first").not.toHaveBeenCalled();
-        // The second tap of a quick double tap lands on Allow (the same place) after the redraw: it answers nothing.
-        bridge.clock += 200;
+        // The second tap of a quick double tap, made before the reviewed list was drawn (JavaScript busy for a second):
+        // it reaches the Allow handler, but the reviewed list has not been laid out yet, so it answers nothing.
+        bridge.clock += 1000;
         act(() => bridge.props.get("plugins.management.allow").onPress());
-        expect(p.controller.answer, "a quick double tap does not answer").not.toHaveBeenCalled();
-        bridge.clock += 400;
+        expect(p.controller.answer, "a tap made before the reviewed list was on screen does not answer").not.toHaveBeenCalled();
+        reportReviewedShown();
+        // Right after the redraw, and impatient repeated taps (each restarts the wait): nothing is written.
+        for (const after of [200, 400, 400]) {
+          bridge.clock += after;
+          act(() => bridge.props.get("plugins.management.allow").onPress());
+        }
+        expect(p.controller.answer, "a quick double tap or repeated taps do not answer").not.toHaveBeenCalled();
+        bridge.clock += 600;
         // Reviewed: the source and the high-risk summary come first, in a new list at its top; then Allow answers.
         const ids = order(container);
         expect(ids.indexOf("plugins.management.reviewLead")).toBeGreaterThanOrEqual(0);
@@ -2187,7 +2205,7 @@ describe("pinned high-risk permission", () => {
     bridge.fontScale = 1;
     const p = props(allFive);
     const { container, rerender } = mount(PluginManagementConfirmation, p);
-    act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
+    reviewIOS();
     const listId = () => bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => "id" in m)?.id;
     const before = listId();
     bridge.width = 667; bridge.height = 375; bridge.fontScale = 1.6;
@@ -2196,6 +2214,23 @@ describe("pinned high-risk permission", () => {
     expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: false, allow: true });
     expect(listId(), "a new reviewed list, from its top (the source first)").toBe(`plugins.management.reviewed:${layoutKeyOf("request")}`);
     expect(listId()).not.toBe(before);
+    // Drawn anew for the new size: until it is laid out again and a moment has passed, Allow answers nothing.
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    expect(p.controller.answer).not.toHaveBeenCalled();
+    reportReviewedShown(); bridge.clock += 1000;
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    expect(p.controller.answer).toHaveBeenCalledWith(true);
+  });
+  it("iOS: reviewed, then the sheet hidden and shown again: still reviewed, Allow waits until the list is laid out again", () => {
+    bridge.fontScale = 1;
+    const p = props(allFive);
+    const { rerender } = mount(PluginManagementConfirmation, p);
+    reviewIOS();
+    rerender({ ...p, active: false });
+    rerender({ ...p });
+    act(() => bridge.props.get("plugins.management.allow").onPress());
+    expect(p.controller.answer, "shown again, not laid out yet").not.toHaveBeenCalled();
+    reportReviewedShown(); bridge.clock += 1000;
     act(() => bridge.props.get("plugins.management.allow").onPress());
     expect(p.controller.answer).toHaveBeenCalledWith(true);
   });
@@ -2203,7 +2238,7 @@ describe("pinned high-risk permission", () => {
     bridge.fontScale = 1;
     const first = props(allFive);
     const { container, rerender } = mount(PluginManagementConfirmation, first);
-    act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
+    reviewIOS();
     const lateAllow = bridge.props.get("plugins.management.allow").onPress;
     const second = props(allFive);
     second.state.receipt.consent.requestId = "request-2";
@@ -2215,7 +2250,7 @@ describe("pinned high-risk permission", () => {
     act(() => lateAllow());
     expect(first.controller.answer).not.toHaveBeenCalled();
     expect(second.controller.answer).not.toHaveBeenCalled();
-    act(() => bridge.props.get("plugins.management.review").onPress()); bridge.clock += 1000;
+    reviewIOS();
     act(() => bridge.props.get("plugins.management.allow").onPress());
     expect(second.controller.answer).toHaveBeenCalledWith(true);
   });

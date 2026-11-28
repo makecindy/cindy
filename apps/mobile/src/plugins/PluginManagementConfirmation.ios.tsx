@@ -23,7 +23,7 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConsentSheetSizes } from "./useConsentSheetSizes";
 import { CONSENT_REVIEW_ALLOW_DELAY_MS, consentReviewClockNow } from "./consentReviewClock";
 import { useWindowDimensions } from "react-native";
@@ -93,11 +93,22 @@ export function PluginManagementConfirmation(
   // measured layout cannot show the source was on screen, so it never lets Allow answer: from the first display, in
   // every orientation, text size and iOS version, the main button is "Review source and permissions".
   // Recorded at the press, read at the press (a ref, not the render): a press answers only for the consent reviewed, and
-  // not as the second tap of a quick double tap on the review button (CONSENT_REVIEW_ALLOW_DELAY_MS). Reviewed stays with
-  // the requestId: turning the phone or changing the text size afterwards keeps it reviewed (the reviewed list is drawn
-  // anew for the new size, from its top: the source first); another consent starts again from the review step.
+  // only once the reviewed list (source and summary first) has been laid out on screen for this consent and a moment has
+  // passed since then and since any earlier Allow press (CONSENT_REVIEW_ALLOW_DELAY_MS): the review button turns into
+  // Allow in the same place, so the rest of a quick double tap, a tap made before the redraw (queued while JavaScript was
+  // busy) or impatient repeated taps answer nothing. Reviewed stays with the requestId: turning the phone or changing the
+  // text size afterwards keeps it reviewed (the reviewed list is drawn anew for the new size, from its top: the source
+  // first); another consent starts again from the review step.
   const requestId = consent?.requestId ?? null;
-  const reviewedRef = useRef<{ id: string; at: number } | null>(null);
+  const reviewedRef = useRef<string | null>(null);
+  // When the reviewed list was first laid out for this consent at this window and text size (its native report), moved
+  // on by each Allow press too soon. Drawn anew (rotation, text size) or shown again after the sheet was hidden, the list
+  // has to be laid out again and the wait starts again.
+  const armedRef = useRef<{ key: string; at: number } | null>(null);
+  const reviewedShown = () => {
+    if (layoutKey && armedRef.current?.key !== layoutKey) armedRef.current = { key: layoutKey, at: consentReviewClockNow() };
+  };
+  useEffect(() => { if (!visible) armedRef.current = null; }, [visible]);
   const [reviewedFor, setReviewedFor] = useState<string | null>(null);
   const reviewed = requestId !== null && reviewedFor === requestId;
   // Layout only: reviewed, the list is reordered (source and summary first, the whole summary in it); in landscape the
@@ -129,13 +140,18 @@ export function PluginManagementConfirmation(
       testID={"plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject")}
       onPress={() => {
         // This render's consent: a press from an earlier render answers nothing newer (usePluginConsent checks it too).
-        if (accept && (needsReview || reviewedRef.current?.id !== requestId)) {
+        if (accept && (needsReview || reviewedRef.current !== requestId)) {
           if (info?.allowBlocked === true || !requestId) return;
-          reviewedRef.current = { id: requestId, at: consentReviewClockNow() };
+          reviewedRef.current = requestId;
           setReviewedFor(requestId);
           return;
         }
-        if (accept && consentReviewClockNow() - reviewedRef.current!.at < CONSENT_REVIEW_ALLOW_DELAY_MS) return;
+        if (accept) {
+          const armed = armedRef.current, now = consentReviewClockNow();
+          // Not laid out on screen yet for this consent, or too soon: nothing is written, and the wait starts again.
+          if (!layoutKey || armed?.key !== layoutKey) return;
+          if (now - armed.at < CONSENT_REVIEW_ALLOW_DELAY_MS) { armedRef.current = { key: armed.key, at: now }; return; }
+        }
         // A consent that can only be rejected never answers Allow, even reviewed (the button is disabled too).
         if (accept && info?.allowBlocked === true) return;
         answer(accept);
@@ -257,7 +273,8 @@ export function PluginManagementConfirmation(
       >
         {/* Reviewed (compact): the source and this consent's high-risk summary come first, then the rest as before. */}
         {reviewed ? (
-          <VStack testID="plugins.management.reviewLead" alignment="leading" spacing={spacing.md}>
+          <VStack testID="plugins.management.reviewLead" alignment="leading" spacing={spacing.md}
+            modifiers={[onGeometryChange(reviewedShown)]}>
             {body(info?.origin, true)}
             {body(info?.repository, true)}
             {body(info?.originSourceChanged, true)}
