@@ -35,6 +35,7 @@ import { PluginUiSidebarSections, type PluginUiEntry } from '@/cindy-brain/Plugi
 import { UpdateBanner } from './UpdateBanner';
 import { DatabaseSizeWarningBanner } from './DatabaseSizeWarningBanner';
 import { NativeBuildBanner } from './NativeBuildBanner';
+import { LocalNetworkBanner } from './LocalNetworkBanner';
 import { UserInfoSection } from './UserInfoSection';
 
 /** 折叠态 rail 宽度（px）——78px 与 ContentHeader 的红绿灯让位(pl-[78px])对齐:
@@ -298,6 +299,7 @@ export function Sidebar({
           onOpenStorage={onOpenStorage}
         />
         <NativeBuildBanner isCollapsed={(isCollapsed && !isPeek) || isRail} />
+        <LocalNetworkBanner isCollapsed={(isCollapsed && !isPeek) || isRail} />
 
         {/* Bottom: User info (Shell-level, shared across all features)
           isCollapsed 在这里表达"窄布局"（rail 居中头像）；完全隐藏态 w-0 整体裁掉。 */}
@@ -309,7 +311,7 @@ export function Sidebar({
           不提供 resize。 */}
       {!isCollapsed && !isPeek && (
         <div
-          className="absolute right-0 top-0 z-10 h-full w-[4px] cursor-col-resize group/handle"
+          className="absolute right-0 top-0 z-raised h-full w-[4px] cursor-col-resize group/handle"
           onPointerDown={onDragStart}
           onDoubleClick={onResetWidth}
         >

@@ -88,6 +88,11 @@ export default {
     await dialog.getByRole('textbox').last().fill('Happy birthday! Use Cindy more, work late less.');
     if (ui.case === 'buy') {
       await ui.capture('buy');
+      // 付款前的退款规则与礼品卡条款链接在可滚动区底部：滚到那里再截一张。
+      const termsLink = dialog.getByRole('link', { name: '《礼品卡购买与使用条款》' })
+        .or(dialog.getByRole('link', { name: 'Gift Card Terms', exact: true }));
+      await termsLink.scrollIntoViewIfNeeded();
+      await ui.capture('terms');
       return;
     }
     await dialog.getByRole('button', { name: await ui.t('billing.giftCardPurchase.pay'), exact: true }).click();

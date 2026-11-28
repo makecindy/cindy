@@ -26,15 +26,15 @@ function Fixture() {
   const { t } = useTranslation();
   const primary = isSharedCase ? { ...unknown, agentDeviceId: 'share:fixture', effort: 'high' }
     : ctx.case === 'available' || ctx.case.startsWith('loading') ? { ...unknown, model: model.id, effort: 'high' } : unknown;
+  // 伙伴只用一个模型(2026-11-26)。stored-backups：旧版本存下的多项链，编辑器只认第一项。
   const [routes, setRoutes] = useState<BotModelRoute[]>([primary,
-    ...Array.from({ length: ctx.case === 'four-backups' ? 4 : 1 }, (_, i) => ({ ...(isSharedCase ? primary : unknown),
-      model: isSharedCase ? sharedModels[1]!.id
-        : i ? `vendor/very-long-unbroken-model-identifier-${i}-abcdefghijklmnopqrstuvwxyz` : 'google/gemini-4-argon-backup' }))]);
+    ...(ctx.case === 'stored-backups' ? Array.from({ length: 4 }, (_, i) => ({ ...unknown,
+      model: `vendor/very-long-unbroken-model-identifier-${i}-abcdefghijklmnopqrstuvwxyz` })) : [])]);
   return <main className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]">
     <div className="mx-auto w-full max-w-[448px]" data-model-settings-fixture>
       <BotModelChainEditor value={routes} onChange={setRoutes} label={t('bots.model.primary')}
         layout={ctx.case === 'global-settings' ? 'settings' : 'inline'}
-        settingsRows={{ primaryLabel: t('bots.model.primary'), primaryHint: t('bots.modelChain.description') }} />
+        settingsRows={{ primaryLabel: t('bots.model.primary'), primaryHint: t('modelGroups.buddies.defaultHint') }} />
     </div>
   </main>;
 }
@@ -59,6 +59,12 @@ void mountPage({
       turnPermissionPolicy: { supported: { supported: true }, unsupportedPermissionModes: [] },
     });
     return { maker: {
+      listPluginEngines: async () => ctx.case === 'plugin-primary' ? [{
+        providerId: 'acp-plugin:sample:engine', key: 'sample:engine', ghostId: 'sample', harnessId: 'engine',
+        name: 'Sample Engine', models: [{ id: 'sample-model', displayName: 'Sample Model' }],
+        availability: { state: 'available' }, defaultPermissionMode: 'ask', permissionModes: [],
+      }] : [],
+      onPluginEnginesChanged: subscription('plugin-engines'),
       listAvailableAgents: async () => ['claude-code', 'codex', 'pi'],
       getCapabilities: async () => capabilities(false),
       onProvidersChanged: subscription('providers'),

@@ -26,7 +26,7 @@
        反馈"滚动条都可以滚出屏幕了"实际是这条 padding 制造的错觉。
      - 底 96:scroll 到底末行下方缓冲
      - 左 16:文本到行号 gutter 的额外微调(gutter 自己也有 padding,见下方) */
-  padding: 20px 12px 96px 16px !important;
+  padding: var(--space-5) var(--space-3) var(--space-24) var(--space-4) !important;
   max-width: none !important;
   margin: 0 !important;
   /* base font 14px + line-height 1.6 —— 对齐 Codex 实测节奏(2026-06-30 用户:
@@ -53,13 +53,13 @@
    gutter 的 wrapper)。doc 主题给整个 gutters 一个 padding-left: 30px,RSB 窄栏
    压到 12 透气但不浪费。 */
 .rsb-fbody-compact .cm-editor .cm-gutters {
-  padding-left: 12px !important;
+  padding-left: var(--space-3) !important;
 }
 
 /* 行号到代码内容的水平间距:doc 主题 `0 16px 0 0`,RSB 窄栏压到 5(2026-06-30 用户
    反馈"行号和代码之间间隔太明显,再小一倍")。 */
 .rsb-fbody-compact .cm-editor .cm-lineNumbers .cm-gutterElement {
-  padding: 0 5px 0 0 !important;
+  padding: 0 var(--space-1) 0 0 !important;
 }
 
 /* 部分主题(markdown 编辑)用 .cm-line 接 padding,顺手也压一下。`.cm-line` 主题
@@ -110,10 +110,10 @@
 
 /* quote / list / task line:doc 主题 paddingLeft 14 / 4,窄栏稍紧。 */
 .rsb-fbody-compact .cm-editor .cm-md-quote-line {
-  padding-left: 10px !important;
+  padding-left: var(--space-2_5) !important;
 }
 .rsb-fbody-compact .cm-editor .cm-md-list-line {
-  padding-left: 2px !important;
+  padding-left: var(--space-0_5) !important;
 }
 
 /* horizontal-rule:doc 主题给 padding 0.75em 0,窄栏稍紧。
@@ -155,8 +155,8 @@
   /* 整块灰底:对齐 chat MarkdownRenderer / Codex 的 msg-code-block-bg 颜色 token。
      左右 padding 让代码内容跟"card 边缘"有呼吸感。 */
   background-color: var(--msg-code-block-bg, rgba(127, 127, 127, 0.08)) !important;
-  padding-left: 12px !important;
-  padding-right: 12px !important;
+  padding-left: var(--space-3) !important;
+  padding-right: var(--space-3) !important;
 }
 
 /* ── Fence 块卡片(整块) ─────────────────────────────────────────────────
@@ -171,7 +171,7 @@
    不渗进透明 border 区,视觉上仍是"卡片外的空隙"。圆角用椭圆半径补偿:外圈
    纵向半径 = 8px + border 宽,使灰底(padding box)的可见圆角保持 8px 正圆。 */
 .rsb-fbody-compact .cm-editor .cm-line.cm-md-fence-first {
-  padding-top: 10px !important;
+  padding-top: var(--space-2_5) !important;
   border-top: 0.6em solid transparent;
   background-clip: padding-box !important;
   border-top-left-radius: 8px calc(8px + 0.6em);
@@ -179,7 +179,7 @@
 }
 
 .rsb-fbody-compact .cm-editor .cm-line.cm-md-fence-last {
-  padding-bottom: 10px !important;
+  padding-bottom: var(--space-2_5) !important;
   border-bottom: 0.6em solid transparent;
   background-clip: padding-box !important;
   border-bottom-left-radius: 8px calc(8px + 0.6em);
@@ -227,5 +227,5 @@
    避免误伤兄弟节点 TreeHeader / SearchPanel(2026-06-30 用户截图实测:之前用
    `.rsb-fbody-tree-pane > div` 会同时给标题栏加 48px,出现 80px 大空白)。 */
 .rsb-fbody-tree-scroll > div {
-  padding-bottom: 48px !important;
+  padding-bottom: var(--space-12) !important;
 }

@@ -14,6 +14,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { planCodexHooks } from './codexHookPlan.js';
 
 import {
   appendHookEvents, extractCodexEvents, hasMissingHookScripts, isPlainObject,
@@ -202,6 +203,14 @@ async function detectHooks(wd: string, direction: MigrationDirection, items: Mig
   const codexDir = path.join(wd, '.codex');
   const codexHooksDir = path.join(codexDir, 'hooks');
   const codexHooksJson = path.join(codexDir, 'hooks.json');
+  if (direction === 'to-codex') {
+    const plan = await planCodexHooks(wd).catch(() => undefined);
+    if (plan) items.push({
+      id: plan.id, kind: 'hooks', direction, label: 'Claude hooks → Codex hooks',
+      source: claudeHooksDir, target: codexHooksJson, subItems: plan.subItems,
+    });
+    return;
+  }
   // 检测保持只读、容错；转换时严格解析，不能因检测失败而覆盖用户文件。
   const [claudeRoot, codexRoot, tomlEvents] = await Promise.all([
     readHookJson(claudeSettings).catch(() => ({} as Record<string, unknown>)),
@@ -212,25 +221,12 @@ async function detectHooks(wd: string, direction: MigrationDirection, items: Mig
   const claudeEvents = unwrapNestedClaudeHooks(rawClaudeHooks);
   const jsonEvents = extractCodexEvents(codexRoot);
   const codexEvents = appendHookEvents(jsonEvents, missingHookEvents(tomlEvents, [jsonEvents]));
-  const toCodex = direction === 'to-codex';
-  const source = toCodex ? claudeEvents : codexEvents;
-  const targets = toCodex ? [jsonEvents, tomlEvents] : [claudeEvents];
-  const missingScripts = await hasMissingHookScripts(
-    toCodex ? claudeHooksDir : codexHooksDir,
-    toCodex ? codexHooksDir : claudeHooksDir,
-  );
-  const hasSource = Object.keys(source).length > 0 || missingScripts;
-  const repair = toCodex
-    ? !isPlainObject(codexRoot.hooks) && Object.keys(jsonEvents).length > 0
-    : claudeEvents !== rawClaudeHooks;
-  if (!hasSource || (!repair && !missingScripts && Object.keys(missingHookEvents(source, targets, direction)).length === 0)) return;
+  const missingScripts = await hasMissingHookScripts(codexHooksDir, claudeHooksDir);
+  if (!missingScripts && (!Object.keys(codexEvents).length ||
+    (claudeEvents === rawClaudeHooks && !Object.keys(missingHookEvents(codexEvents, [claudeEvents])).length))) return;
   items.push({
-    id: 'hooks:0',
-    kind: 'hooks',
-    direction,
-    label: toCodex ? 'Claude hooks → Codex hooks' : 'Codex hooks → Claude hooks',
-    source: toCodex ? claudeHooksDir : codexHooksJson,
-    target: toCodex ? codexHooksJson : claudeSettings,
+    id: 'hooks:0', kind: 'hooks', direction, label: 'Codex hooks → Claude hooks',
+    source: codexHooksJson, target: claudeSettings,
   });
 }
 

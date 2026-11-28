@@ -14,6 +14,7 @@ import {
   companionCloudCapsVersion,
   parseCompanionCloudRemoteActionResult,
   parseCompanionCloudRemoteTargets,
+  type CompanionCloudRemoteActionResult,
   type CompanionCloudRemoteTarget,
 } from '@cindy/device-link';
 import { Text } from '@/components/AppText';
@@ -30,7 +31,7 @@ type Phase =
   | { kind: 'note'; key: 'homeOutdated' | 'homeUnreachable' | 'devicesFailed' | 'noTargets' }
   | { kind: 'moving'; target: CompanionCloudRemoteTarget };
 
-export function CloudHomeSwitchSheet({ visible, onClose, botId, name, homeDeviceId, homeName, selfDeviceId, onMoved }: {
+export function CloudHomeSwitchSheet({ visible, onClose, botId, name, homeDeviceId, homeName, selfDeviceId, onMoved, readHome }: {
   visible: boolean;
   onClose: () => void;
   botId: string;
@@ -40,6 +41,8 @@ export function CloudHomeSwitchSheet({ visible, onClose, botId, name, homeDevice
   /** This phone (never a target). */
   selfDeviceId?: string | null;
   onMoved: (target: CompanionCloudRemoteTarget) => void;
+  /** The companion's main computer as the server has it now. */
+  readHome: () => Promise<string | null>;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
@@ -72,12 +75,18 @@ export function CloudHomeSwitchSheet({ visible, onClose, botId, name, homeDevice
     const offered = phase.kind === 'ready' ? phase.targets : [target];
     setPhase({ kind: 'moving', target });
     setError(null);
-    let result;
+    let result: CompanionCloudRemoteActionResult;
     try {
       result = parseCompanionCloudRemoteActionResult(await invoke(homeDeviceId, COMPANION_CLOUD_HAND_OVER_CHANNEL,
         whenBusy ? [botId, target.deviceId, { whenBusy }] : [botId, target.deviceId]));
     } catch {
-      result = { ok: false as const, code: 'OFFLINE' };
+      // The hand-over can take minutes (the phone often goes to the background meanwhile): a lost
+      // answer may still have moved it, so show where the server says it runs now (cloud-companions.md).
+      // Only a read naming the target is a success; a failed read keeps the failure.
+      const now = await readHome().catch(() => undefined);
+      result = now === target.deviceId ? { ok: true as const }
+        : typeof now === 'string' && now !== homeDeviceId ? { ok: false as const, code: 'HOME_CONFLICT' }
+          : { ok: false as const, code: 'OFFLINE' };
     }
     if (result.ok) { onMoved(target); return; }
     setPhase({ kind: 'ready', targets: offered });
@@ -90,7 +99,10 @@ export function CloudHomeSwitchSheet({ visible, onClose, botId, name, homeDevice
       return;
     }
     setError(t(result.code === 'BUSY' ? 'devices.cloudCompanion.transferBusy'
-      : result.code === 'HOME_CONFLICT' ? 'devices.cloudCompanion.switchConflict' : 'devices.cloudCompanion.switchFailed', { name, device: target.name }));
+      : result.code === 'SKILL_TARGET_OUTDATED' ? 'devices.cloudCompanion.skillTargetOutdated'
+      : result.code === 'HOME_CONFLICT' ? 'devices.cloudCompanion.switchConflict' : 'devices.cloudCompanion.switchFailed', {
+      name, device: target.name, context: result.oversizedSkill ? 'skill' : undefined, ...result.oversizedSkill,
+    }));
   };
 
   const confirm = (target: CompanionCloudRemoteTarget) => {

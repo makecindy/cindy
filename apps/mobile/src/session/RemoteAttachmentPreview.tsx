@@ -1,16 +1,18 @@
 import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { ImageLightbox } from "./ImageLightbox";
-import { buildMediaPayload } from "./messagePayload";
+import { buildMediaPayload, type AudioAttachmentPhase } from "./messagePayload";
 import {
   BotGroupTextAttachmentPreview,
   botGroupTextAttachmentPreviewKind,
 } from "./BotGroupTextAttachmentPreview";
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   Pressable,
+  StatusBar,
   StyleSheet,
   View,
 } from "react-native";
@@ -31,12 +33,17 @@ import {
 import { PdfDocumentPreview } from "./PdfDocumentPreview";
 import { ModelDocumentPreview } from "./ModelDocumentPreview";
 import { NativeVideoPlayer } from "./NativeVideoPlayer";
+import { AudioAttachmentPlayer } from "./AudioAttachmentPlayer";
 import { RemoteMediaPlayerWebView } from "./mediaPlayerWebView";
+import type { MobileMediaPlayerStatus } from "./mediaPlayerWebViewHtml";
+import { resolvedUrlKind } from "@/debug/fileDiagnostics";
+import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import { downloadRemoteMediaShareTemp } from "./remoteMediaDiskCacheExpo";
 
 export interface ResolvedPreviewFile {
   url: string;
   mimeType?: string;
+  size?: number;
   protectLocalFile?(): () => void;
 }
 
@@ -44,7 +51,8 @@ export interface ResolvedPreviewFile {
 export function RemoteAttachmentPreview(props: {
   name: string;
   mediaKind?: 'audio' | 'video';
-  resolve(signal: AbortSignal): Promise<ResolvedPreviewFile>;
+  resolve(signal: AbortSignal, forceRefresh?: boolean): Promise<ResolvedPreviewFile>;
+  onAudioPhaseChange?: (phase: AudioAttachmentPhase) => void;
   onClose(): void;
 }) {
   const resolver = useRef(props.resolve);
@@ -57,14 +65,14 @@ export function RemoteAttachmentPreview(props: {
     },
     [],
   );
-  const resolve = useCallback(async (signal?: AbortSignal) => {
+  const resolve = useCallback(async (signal?: AbortSignal, forceRefresh?: boolean) => {
     const controller = new AbortController();
     const abort = () => controller.abort();
     requests.current.add(controller);
     signal?.addEventListener("abort", abort);
     try {
       if (signal?.aborted) throw new Error("ABORTED");
-      const result = await resolver.current(controller.signal);
+      const result = await resolver.current(controller.signal, forceRefresh);
       if (controller.signal.aborted) throw new Error("ABORTED");
       return result;
     } finally {
@@ -72,7 +80,7 @@ export function RemoteAttachmentPreview(props: {
       signal?.removeEventListener("abort", abort);
     }
   }, []);
-  const textKind = botGroupTextAttachmentPreviewKind(props.name);
+  const textKind = props.mediaKind ? null : botGroupTextAttachmentPreviewKind(props.name);
   if (textKind)
     return (
       <BotGroupTextAttachmentPreview
@@ -91,7 +99,7 @@ export function RemoteAttachmentPreview(props: {
         onClose={props.onClose}
       />
     );
-  if (attachmentPreviewKind(props.name) === "image")
+  if (!props.mediaKind && attachmentPreviewKind(props.name) === "image")
     return (
       <ImageLightbox
         resolveOpaqueSource
@@ -150,14 +158,16 @@ function RemoteAttachmentBody({
   name,
   mediaKind,
   resolve,
+  onAudioPhaseChange,
   onClose,
 }: {
   name: string;
   mediaKind?: 'audio' | 'video';
-  resolve(signal: AbortSignal): Promise<ResolvedPreviewFile>;
+  resolve(signal: AbortSignal, forceRefresh?: boolean): Promise<ResolvedPreviewFile>;
+  onAudioPhaseChange?: (phase: AudioAttachmentPhase) => void;
   onClose(): void;
 }) {
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const chromeFrame = usePreviewChromeFrame();
@@ -168,11 +178,31 @@ function RemoteAttachmentBody({
   const [local, setLocal] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [nativeFailed, setNativeFailed] = useState(false);
+  const lastAudioPhase = useRef<AudioAttachmentPhase>('idle');
+  const reportAudioPhase = useCallback((phase: AudioAttachmentPhase) => {
+    if (lastAudioPhase.current === phase) return;
+    lastAudioPhase.current = phase;
+    onAudioPhaseChange?.(phase);
+  }, [onAudioPhaseChange]);
+  const handleAudioStatus = useCallback(({ state }: MobileMediaPlayerStatus) => {
+    if (state === 'error') {
+      reportAudioPhase('error');
+    } else if (lastAudioPhase.current === 'loading' && (state === 'ready' || state === 'playing')) {
+      reportAudioPhase('ready');
+    }
+  }, [reportAudioPhase]);
   const [retry, setRetry] = useState(0);
+  const refreshOnRetry = useRef(false);
   const [sharing, setSharing] = useState(false);
   const alive = useRef(true);
   const shareWork = useRef<Promise<void> | null>(null);
   const kind = mediaKind ?? attachmentPreviewKind(name, file?.mimeType);
+  const reload = (forceRefresh = false) => {
+    refreshOnRetry.current = forceRefresh;
+    setFile(null);
+    setFailed(false);
+    setRetry((value) => value + 1);
+  };
   useEffect(() => {
     alive.current = true;
     const abort = new AbortController();
@@ -182,13 +212,18 @@ function RemoteAttachmentBody({
     setLocal(null);
     setFailed(false);
     setNativeFailed(false);
+    reportAudioPhase('loading');
+    if (mediaKind === 'audio') mobileDebugLog('debug', 'files', 'audio attachment fetch start', { retry: retry > 0 });
     void resolver
-      .current(abort.signal)
+      .current(abort.signal, refreshOnRetry.current)
       .then(async (value) => {
         if (abort.signal.aborted) return;
         releaseSource = value.protectLocalFile?.();
         setFile(value);
-        if (attachmentPreviewKind(name, value.mimeType) !== "model") return;
+        if (mediaKind === 'audio') mobileDebugLog('debug', 'files', 'audio attachment source resolved', {
+          source: resolvedUrlKind(value.url), mimeType: value.mimeType, size: value.size,
+        });
+        if (mediaKind || attachmentPreviewKind(name, value.mimeType) !== "model") return;
         owned = await downloadRemoteMediaShareTemp(
           value.url,
           value.mimeType ?? "application/octet-stream",
@@ -203,12 +238,16 @@ function RemoteAttachmentBody({
         setLocal(owned);
       })
       .catch(() => {
-        if (!abort.signal.aborted) setFailed(true);
+        if (abort.signal.aborted) return;
+        setFailed(true);
+        reportAudioPhase('error');
+        if (mediaKind === 'audio') mobileDebugLog('warn', 'files', 'audio attachment fetch failed', { retry: retry > 0 });
       });
     return () => {
       alive.current = false;
       abort.abort();
       shareAbort.current?.abort();
+      if (lastAudioPhase.current === 'loading') reportAudioPhase('idle');
       void Promise.resolve(shareWork.current)
         .finally(() => {
           if (owned) remove(owned);
@@ -216,7 +255,7 @@ function RemoteAttachmentBody({
         })
         .catch(() => {});
     };
-  }, [name, retry]);
+  }, [mediaKind, name, reportAudioPhase, retry]);
   const share = useCallback(() => {
     if (shareWork.current || !file) return;
     setSharing(true);
@@ -254,6 +293,9 @@ function RemoteAttachmentBody({
   );
   return (
     <View style={[styles.root, { backgroundColor: colors.surface }]}>
+      {kind === 'audio' && Platform.OS === 'android' ? (
+        <StatusBar barStyle={mode === 'dark' ? 'light-content' : 'dark-content'} />
+      ) : null}
       <View
         style={[
           styles.root,
@@ -265,14 +307,25 @@ function RemoteAttachmentBody({
           },
         ]}
       >
-        {failed ? (
+        {kind === "audio" ? (
+          <AudioAttachmentPlayer
+            key={retry}
+            name={name}
+            source={file}
+            readFailed={failed}
+            onStatusChange={handleAudioStatus}
+            onRetry={() => reload(true)}
+          />
+        ) : failed ? (
           <View style={styles.center}>
             <Text style={[textStyles.body, { color: colors.textSecondary }]}>
               {t("files.preview.readFailed")}
             </Text>
             <Pressable
-              onPress={() => setRetry((value) => value + 1)}
+              accessibilityRole="button"
+              onPress={() => reload()}
               style={styles.retry}
+              testID="message.attachmentPreviewRetry"
             >
               <Text style={[textStyles.body, { color: colors.textPrimary }]}>
                 {t("message.attachmentPreview.retry")}
@@ -280,7 +333,7 @@ function RemoteAttachmentBody({
             </Pressable>
           </View>
         ) : !file ? (
-          <View style={styles.center}>
+          <View style={styles.center} testID="message.attachmentPreviewLoading">
             <ActivityIndicator color={colors.textSecondary} />
           </View>
         ) : kind === "pdf" ? (
@@ -300,7 +353,7 @@ function RemoteAttachmentBody({
             onError={() => setNativeFailed(true)}
             style={styles.root}
           />
-        ) : kind === "audio" || kind === "video" ? (
+        ) : kind === "video" ? (
           <RemoteMediaPlayerWebView
             kind={kind}
             url={file.url}
@@ -315,6 +368,7 @@ function RemoteAttachmentBody({
       <PreviewFooter />
       <PreviewHeader
         name={name}
+        showTitle={kind !== "audio"}
         detail={file?.mimeType}
         onClose={onClose}
         actions={[

@@ -21,6 +21,9 @@ vi.mock('../botStore', async () => {
   const { useSyncExternalStore } = await import('react');
   return {
     getBotProfiles: () => h.profiles,
+    ensureBotProfilesLoaded: async () => h.profiles,
+    hasLoadedBotProfiles: () => true,
+    getBotUnreadCounts: () => ({}),
     useBotProfiles: () => useSyncExternalStore((listener) => {
       h.profileListeners.add(listener);
       return () => h.profileListeners.delete(listener);
@@ -145,10 +148,12 @@ it.each([undefined, 'remote computer'])('redirects history to the ordinary task 
 });
 it('offers only teammates that run here to send to or delegate to, not copies that run elsewhere or were retired there', async () => {
   h.get.mockResolvedValue({ id: 'bot', name: 'Melody', status: 'active', sessions: [{ id: 'chat', kind: 'chat', status: 'active', role: 'canonical' }] });
-  h.list.mockResolvedValue([{ id: 'bot', name: 'Melody' }, { id: 'kept', name: 'Kept' }, { id: 'retired', name: 'Retired' }, { id: 'away', name: 'Away' }]);
+  // @ candidates come from the shared roster projection, not a second full list read.
+  h.profiles = [{ id: 'bot', name: 'Melody' }, { id: 'kept', name: 'Kept' }, { id: 'retired', name: 'Retired' }, { id: 'away', name: 'Away' }] as typeof h.profiles;
   h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['retired'], actors: [
     { id: 'a-away', externalId: 'away', name: 'Away', avatar: null, homeDeviceId: 'laptop' }] };
   render(<BotSessionView />);
   const chat = await screen.findByText('companion:bot');
   expect(chat.getAttribute('data-mentions')).toBe('kept');
+  expect(h.list).not.toHaveBeenCalled();
 });

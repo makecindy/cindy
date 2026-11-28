@@ -1,3 +1,10 @@
+import { configureCloudHookManagement } from '../host-settings/managementBots.js';
+import { registerCloudDomainCall } from '../host-settings/managementCalls.js';
+import { CLOUD_HOOK_PROVIDER_ACTION_URL } from '../../shared/cloudImSettings.js';
+import { getInstanceConfig } from '../instance-runtime/config.js';
+import { AuthorizationBrowser, launchAuthorizationBrowser } from '../instance-runtime/authorization-browser.js';
+import { HookAuthorizationWindows } from '../instance-runtime/hook-authorization-windows.js';
+import { onQuit } from '../lifecycle.js';
 import { registerGroupImageReader, fetchOfficialGroupImage } from './groupImageBridge.js';
 /**
  * hook-control/ipc.ts
@@ -11,7 +18,7 @@ import { registerGroupImageReader, fetchOfficialGroupImage } from './groupImageB
  * 即连即断。没有密钥概念, 旧 safeStorage secret 文件由 store 迁移时清理。
  */
 
-import { requireXCompanion, resolveXCompanionTarget } from './xCompanion.js';
+import { requireXCompanion, resolveOfficialCompanionTarget } from './xCompanion.js';
 import { captureChannelAccount } from '../im/shared/openChannelSession.js';
 
 import path from 'node:path';
@@ -60,6 +67,7 @@ import {
   isSharedPrefsAdopted,
   moveWorkspacePrefsToRenamed,
   noteSharedPrefEdited,
+  SHARED_PREFS_CHANNEL,
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
 import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
@@ -97,6 +105,7 @@ import {
   HOOK_CONTROL_EVENT,
   HOOK_CONTROL_INVOKE,
   HOOK_WORKSPACE_ALIAS_RE,
+  HOOK_CHAT_WORKSPACE_ALIAS,
   HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES,
   type HookPrefsPatch,
   type HookWorkspacePrefs,
@@ -110,6 +119,8 @@ import {
   DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT,
   createSlackHookStore,
   HookConnectionValidationError,
+  OFFICIAL_COMPANION_PROVIDERS,
+  type OfficialCompanionProvider,
   type SlackHookStore,
 } from './store.js';
 import {
@@ -130,6 +141,7 @@ import {
   mergeTelegramGroupActivationViews,
   resetGroupContextCursorsSafely,
 } from './groupWindow.js';
+import { collectOfficialGroupHistoryImages } from './groupHistoryImages.js';
 import { createHookDispatcher } from './dispatcher.js';
 import { hookModelProviderName } from './modelProviderName.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
@@ -138,17 +150,29 @@ import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
 import { validateXExternalUrl } from './xDeepLink.js';
 import { validateFeishuExternalUrl } from './feishuDeepLink.js';
+import { validateDiscordExternalUrl } from './discordDeepLink.js';
+import { providerActionUrlFromIpc } from './providerActionUrlIpc.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { setLifecycleAnnouncementFromIpc } from './lifecycleAnnouncementIpc.js';
 import { setSlackCommunicationsFromIpc } from './slackCommunicationsIpc.js';
+import { inspectOfficialHookSettings } from './store.js';
 
 const log = createLogger('hook-control');
 
 let store: SlackHookStore | null = null;
 let manager: HookControlManager | null = null;
 let disposeAuthListener: (() => void) | null = null;
+let cloudAuthorizationBrowser: AuthorizationBrowser | null = null;
+let cloudAuthorizationWindows: HookAuthorizationWindows | null = null;
+let cloudAuthorizationTeardown: Promise<void> = Promise.resolve();
+function closeCloudAuthorizationWindows(): Promise<void> {
+  const closing = cloudAuthorizationWindows?.dispose();
+  cloudAuthorizationTeardown = Promise.all([cloudAuthorizationTeardown, closing]).then(() => {});
+  return cloudAuthorizationTeardown;
+}
+onQuit('cloud-authorization-windows', () => cloudAuthorizationTeardown, 'async');
 let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 function hookControlAvailable(): boolean {
   return getAppCapabilities().canUseCindyAccountServices;
@@ -160,11 +184,12 @@ function requireHookControl(): void {
   }
 }
 
-/** provider-neutral 线(Telegram / X / 飞书)的显示名, 只用于 IPC 错误文案。 */
+/** provider-neutral 线(Telegram / X / 飞书 / Discord)的显示名, 只用于 IPC 错误文案。 */
 const NEUTRAL_PROVIDER_DISPLAY_NAMES: Record<NeutralHookProvider, string> = {
   telegram: 'Telegram',
   x: 'X',
   feishu: 'Feishu',
+  discord: 'Discord',
 };
 
 /**
@@ -177,13 +202,33 @@ function requireNeutralProvider(payload: unknown): NeutralHookProvider {
     typeof p.provider !== 'string' ||
     !Object.prototype.hasOwnProperty.call(NEUTRAL_PROVIDER_DISPLAY_NAMES, p.provider)
   ) {
-    throwIpcError('INVALID_PARAMS', 'provider must be telegram, x or feishu');
+    throwIpcError('INVALID_PARAMS', 'provider must be telegram, x, feishu or discord');
   }
   return p.provider as NeutralHookProvider;
 }
 
 function providerDisplayName(provider: NeutralHookProvider): string {
   return NEUTRAL_PROVIDER_DISPLAY_NAMES[provider];
+}
+
+/** Host assembly only: reuse the existing native instance, without creating a connection. */
+export function getHostHookPreferencesContext() {
+  if (!hookControlAvailable() || !store || !manager) return null;
+  const fingerprint = currentAccountFingerprint();
+  if (inspectOfficialHookSettings(ownerScopedUserDataPath('slack-hook.json'), fingerprint, ownerScopedUserDataPath('hook-connections.json')).status !== 'ready') return null;
+  // All official bots share one set of project settings (sharedProjectPrefs.ts).
+  const targets = [HOOK_CHAT_WORKSPACE_ALIAS, ...Object.keys(store.get().workspaces)].map((workspace) => ({
+    channel: SHARED_PREFS_CHANNEL as typeof SHARED_PREFS_CHANNEL, teamId: null, workspace,
+    label: workspace === HOOK_CHAT_WORKSPACE_ALIAS ? 'Cindy' : workspace,
+  }));
+  return { store, fingerprint,
+    targets,
+    refresh() { if (manager && !manager.refreshHello()) manager.sync(); },
+    preferencesChanged() {
+      broadcastSharedPrefs();
+      syncSharedProjectPrefs();
+    },
+  };
 }
 
 /** Local/signed-out sessions must not observe a previous cloud owner's config. */
@@ -229,6 +274,16 @@ function disabledHookView(): SlackHookView {
       binding: null,
       defaultWorkspace: null,
     },
+    discord: {
+      enabled: false,
+      url: getClientEndpoint('discordHookWsUrl'),
+      status: 'disabled',
+      lastError: null,
+      available: false,
+      capabilityPending: false,
+      binding: null,
+      defaultWorkspace: null,
+    },
   };
 }
 
@@ -266,6 +321,12 @@ function parseWorkspacePrefsWrite(payload: unknown): {
 }
 
 const remotePrefsSnapshotGenerations = new Map<HookPrefsChannel, number>();
+
+/** Host settings wrote the source table; shared rows edited there are no longer "adopted as is". */
+export function notifyHostWorkspaceProviderSourcesChanged(editedSharedWorkspaces: readonly string[] = []): void {
+  for (const workspace of editedSharedWorkspaces) noteSharedPrefEdited(workspace);
+  broadcastWorkspaceProviderSources(listWorkspaceProviderSources());
+}
 
 function broadcastWorkspaceProviderSources(entries: ReturnType<typeof listWorkspaceProviderSources>): void {
   // 多窗口同步(codex review): 会话副窗也能开设置页, 写后全窗口广播全量条目。
@@ -536,7 +597,7 @@ const projectWorkspaceSync = createProjectWorkspaceSync({
   registerDirectory: async (directory) => {
     // 升级前配置的目录此刻不在(外接盘没插)也照样登记 —— 侧栏本来就能显示暂时不可用的项目。
     const registered = await registerImProjectDirectory(directory, { requireExisting: false });
-    // 不能当项目的目录(对话托管目录、任务 worktree、伙伴的项目)跳过; 其余失败(存储没就绪、
+    // 不能当项目的目录(对话托管目录、任务 worktree)跳过; 其余失败(存储没就绪、
     // 写库失败)抛出去, 这次不算迁移完成, 下次整理再试 —— 否则这个目录会从机器人那里永久消失。
     if (!registered.ok && registered.errorCode !== 'INVALID_ARGS' && registered.errorCode !== 'NOT_A_DIRECTORY') {
       throw new Error(`${registered.errorCode}: ${registered.message}`);
@@ -649,6 +710,11 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
             url: getClientEndpoint('feishuHookWsUrl'),
             enabled: config.feishuEnabled,
           },
+          discord: {
+            name: `${BRAND_NAME} Discord`,
+            url: getClientEndpoint('discordHookWsUrl'),
+            enabled: config.discordEnabled,
+          },
           slack: {
             name: `${BRAND_NAME} Slack`,
             url: store!.effectiveUrl(),
@@ -662,7 +728,9 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
           name: meta.name,
           url: meta.url,
           enabled: meta.enabled,
-          ...(provider === 'x' ? { companionBotId: config.xCompanionBotId ?? null } : {}),
+          companionBotId: provider === 'x'
+            ? config.xCompanionBotId ?? null
+            : config.companionBotIds?.[provider as OfficialCompanionProvider] ?? null,
           // 现用名称 + 改名前的旧名称(只供查找): 服务端可能还按旧名称派发。
           workspaces: lookupWorkspaces(config.workspaces, config.retiredWorkspaces ?? {}),
           retiredWorkspaceNames: Object.keys(config.retiredWorkspaces ?? {}).filter(
@@ -682,8 +750,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       }),
       mediaStore,
       runner: createMakerHookSessionRunner({ log }),
-      resolveCompanionTarget: resolveXCompanionTarget,
+      resolveCompanionTarget: (botId, externalKey, subject, provider) =>
+        resolveOfficialCompanionTarget(provider, botId, externalKey, subject),
       buildContextPrefix: buildGroupContextPrefix,
+      collectGroupHistoryImages: collectOfficialGroupHistoryImages,
       // 新建 hook 会话默认预建独立 worktree(并发隔离); deps 组装与
       // maker-ipc/register.ts 的 use_worktree 分支同款。失败由 dispatcher
       // 回退共享目录。
@@ -762,6 +832,12 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       telegramCommandMenus: () => buildOfficialBotCommandMenus((key, locale) => t(key, locale)),
       log,
     });
+    const instance = getInstanceConfig();
+    if (instance) {
+      cloudAuthorizationBrowser ??= new AuthorizationBrowser(() => launchAuthorizationBrowser(instance.userDataDir));
+      cloudAuthorizationWindows = new HookAuthorizationWindows(cloudAuthorizationBrowser,
+        () => log.warn('Cloud authorization window cleanup failed'));
+    }
     manager = createHookControlManager({
       store,
       isAvailable: hookControlAvailable,
@@ -769,6 +845,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       getTelegramUrl: () => getClientEndpoint('telegramHookWsUrl'),
       getXUrl: () => getClientEndpoint('xHookWsUrl'),
       getFeishuUrl: () => getClientEndpoint('feishuHookWsUrl'),
+      getDiscordUrl: () => getClientEndpoint('discordHookWsUrl'),
       // 与 device-link 同款 token 源: 现值优先, 缺失 refresh 一次
       getAuthToken: async () => {
         if (!hookControlAvailable()) return null;
@@ -788,15 +865,20 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // Only advertise runtimes that are actually registered on this build.
       // Pi is optional on unsupported/unprepared platforms.
       agents: getMaker().listAvailableAgents(),
-      notifyStatus: broadcastStatus,
+      notifyStatus: (view) => {
+        cloudAuthorizationWindows?.update(view);
+        broadcastStatus(view);
+      },
       notifyPrefs: (view) => {
         persistUnsolicitedServerPrefs('slack', view.prefs);
       },
       notifyProviderPrefs: (view) => {
-        if (view.provider === 'slack') return;
+        // 官方 Discord 没有 /model 卡, 不是偏好镜像渠道: 派发只读共用那一份(session-runner)。
+        if (view.provider === 'slack' || view.provider === 'discord') return;
         persistUnsolicitedServerPrefs(view.provider, view.prefs);
       },
       onHookReadyForPrefsMirror: (provider) => {
+        if (provider === 'discord') return;
         void mirrorWorkspacePrefs(provider);
       },
       notifyTelegramBehavior: broadcastTelegramBehavior,
@@ -844,18 +926,28 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       // 绑定授权链接: 用系统浏览器打开(远程控制时落被控机, 设置页另给复制链接)
       openExternalUrl: (url) => {
-        void shell.openExternal(url);
+        const opened = cloudAuthorizationWindows
+          ? cloudAuthorizationWindows.open('slack', url)
+          : shell.openExternal(url);
+        void opened.catch(() => log.warn('Slack authorization browser could not open'));
       },
       openTelegramUrl: (url) => {
         const safeUrl = validateTelegramExternalUrl(url);
+        if (cloudAuthorizationWindows?.pending('telegram')) return cloudAuthorizationWindows.open('telegram', safeUrl);
         return shell.openExternal(safeUrl);
       },
       openXUrl: (url) => {
         const safeUrl = validateXExternalUrl(url);
+        if (cloudAuthorizationWindows?.pending('x')) return cloudAuthorizationWindows.open('x', safeUrl);
         return shell.openExternal(safeUrl);
       },
       openFeishuUrl: (url) => {
         const safeUrl = validateFeishuExternalUrl(url);
+        if (cloudAuthorizationWindows?.pending('feishu')) return cloudAuthorizationWindows.open('feishu', safeUrl);
+        return shell.openExternal(safeUrl);
+      },
+      openDiscordUrl: (url) => {
+        const safeUrl = validateDiscordExternalUrl(url);
         return shell.openExternal(safeUrl);
       },
       log,
@@ -932,6 +1024,9 @@ type HookControlIpcHandler = (event: IpcMainInvokeEvent, ...args: unknown[]) => 
 
 /** Register one fixed hook-control channel with the shared sender guard. */
 function registerTrustedHookControlHandler(channel: string, handler: HookControlIpcHandler): void {
+  // The cloud settings page reaches the settings subset through its owner-checked channel;
+  // the handlers never read the event, and unlisted channels are not captured.
+  registerCloudDomainCall(channel, (...args) => handler(undefined as unknown as IpcMainInvokeEvent, ...args));
   ipcMain.handle(channel, (event, ...args) => {
     assertTrustedHookControlSender(event);
     return handler(event, ...args);
@@ -954,6 +1049,48 @@ export async function changeXCompanionBinding(botId: string | null, expectedBotI
   return hook;
 }
 
+/** 比较后写入某个官方渠道的伙伴归属(设置 → IM 机器人 → 某平台 →「谁来回复」)。 */
+export async function changeProviderCompanionBinding(
+  provider: OfficialCompanionProvider,
+  botId: string | null,
+  expectedBotId: string | null,
+) {
+  if (provider === 'x') return changeXCompanionBinding(botId, expectedBotId);
+  requireHookControl();
+  const assertAccount = captureChannelAccount();
+  const { store: s, manager: m } = ensureInstances();
+  if (botId !== null) await requireXCompanion(botId);
+  assertAccount();
+  if ((s.get().companionBotIds?.[provider] ?? null) !== expectedBotId) {
+    throwIpcError('PRECONDITION_FAILED', 'Companion assignment changed');
+  }
+  translateValidation(() => s.setCompanionBotId(provider, botId));
+  const hook = m.snapshot();
+  broadcastStatus(hook);
+  return hook;
+}
+
+/** 伙伴被删除时，把官方机器人里指向这位伙伴的「谁来回复」清回普通任务并刷新界面。 */
+export function clearOfficialCompanionAssignments(botId: string): void {
+  if (!botId || !store) return;
+  try {
+    const current = store.get().companionBotIds;
+    if (!current) return;
+    let changed = false;
+    for (const provider of ['slack', 'telegram', 'feishu', 'discord', 'x'] as const) {
+      if (current[provider] === botId) {
+        store.setCompanionBotId(provider, null);
+        changed = true;
+      }
+    }
+    if (changed && manager) {
+      broadcastStatus(manager.snapshot());
+    }
+  } catch (err) {
+    log.warn(`clear official companion assignments on delete failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /** What a teammate's settings page may show of the official X account: no URLs, accounts or tokens. */
 export function readXCompanionSummary(): { available: boolean; visible: boolean; enabled: boolean; connected: boolean; companionBotId: string | null } {
   const x = hookControlAvailable() ? ensureInstances().manager.snapshot().x : disabledHookView().x;
@@ -969,6 +1106,7 @@ export function readXCompanionSummary(): { available: boolean; visible: boolean;
 
 /** 注册 IPC 并按配置 + 登录态拉起连接。bootstrap 里调用一次。 */
 export function registerHookControlIpc(): void {
+  configureCloudHookManagement(() => { requireHookControl(); return ensureInstances().manager; });
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, async () => {
     if (!hookControlAvailable()) {
       const { workspaces } = await readPluginImProjectCatalog();
@@ -1086,6 +1224,13 @@ export function registerHookControlIpc(): void {
     return { hook: m.snapshot() };
   });
 
+  // The cloud settings page opens provider links on the controller's computer, not here.
+  registerCloudDomainCall(CLOUD_HOOK_PROVIDER_ACTION_URL, (payload) => {
+    requireHookControl();
+    const provider = requireNeutralProvider(payload);
+    return providerActionUrlFromIpc(ensureInstances().manager, provider, requireObject(payload).action);
+  });
+
   registerTrustedHookControlHandler(
     HOOK_CONTROL_INVOKE.PROVIDER_OPEN_ACTION,
     async (_e, payload) => {
@@ -1110,7 +1255,8 @@ export function registerHookControlIpc(): void {
           err instanceof Error &&
           (err.name === 'TelegramDeepLinkValidationError' ||
             err.name === 'XLinkValidationError' ||
-            err.name === 'FeishuLinkValidationError')
+            err.name === 'FeishuLinkValidationError' ||
+            err.name === 'DiscordLinkValidationError')
         ) {
           throwIpcError('INVALID_PARAMS', err.message);
         }
@@ -1148,6 +1294,20 @@ export function registerHookControlIpc(): void {
       return { hook: m.snapshot() };
     },
   );
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_PROVIDER_COMPANION, async (_e, payload) => {
+    const p = requireObject(payload);
+    if (typeof p.provider !== 'string' || !(OFFICIAL_COMPANION_PROVIDERS as readonly string[]).includes(p.provider)) {
+      throwIpcError('INVALID_PARAMS', 'provider is invalid');
+    }
+    return {
+      hook: await changeProviderCompanionBinding(
+        p.provider as OfficialCompanionProvider,
+        requireNullableString(p.botId, 'botId'),
+        requireNullableString(p.expectedBotId, 'expectedBotId'),
+      ),
+    };
+  });
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_X_COMPANION, async (_e, payload) => {
     const p = requireObject(payload);
@@ -1415,6 +1575,10 @@ export function registerHookControlIpc(): void {
       if (agentDeviceId && (!/^[A-Za-z0-9_.:-]{1,128}$/.test(agentDeviceId) || !providerId)) {
         throwIpcError('INVALID_PARAMS', 'remote provider route invalid');
       }
+      const modelGroup = p.modelGroup == null ? null : requireString(p.modelGroup, 'modelGroup');
+      if (modelGroup && (modelGroup.length > 128 || !providerId)) {
+        throwIpcError('INVALID_PARAMS', 'workspace modelGroup invalid');
+      }
       // 条目总量上限(codex review): 键合法性校验挡不住海量唯一 teamId 的无限
       // 追加 —— 新增(非替换/删除)且已达上限时拒绝。按精确键判新增(不能用
       // getWorkspaceProviderSource, 它的 teamId null 兜底会把新 team 误判为已存在)。
@@ -1434,7 +1598,7 @@ export function registerHookControlIpc(): void {
       // throwIpcError 协议给稳定错误码, 细节留 main 日志。
       let entries: ReturnType<typeof setWorkspaceProviderSource>;
       try {
-        entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId, agentDeviceId);
+        entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId, agentDeviceId, modelGroup);
         // 用户在设置页亲手换了共用那份的来源: 这个项目的配置不再算「升级时原样并入」。
         if (channel === 'shared') noteSharedPrefEdited(workspace);
       } catch (err) {
@@ -1513,11 +1677,14 @@ export function startHookControlAccount(): void {
 
 /** Close hook ingress before the old account DB is disposed. */
 export async function stopHookControlAccount(): Promise<void> {
+  await closeCloudAuthorizationWindows();
   if (manager) await manager.deactivateAccount();
 }
 
 /** Stop and discard all state tied to the current data owner; IPC stays registered. */
 export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boolean }): void {
+  void closeCloudAuthorizationWindows();
+  cloudAuthorizationWindows = null;
   mirrorWorkspacePrefs.invalidateOwnerBoundary();
   mirrorRowsBeforeSnapshot.clear();
   unregisterSlackToolBridge();

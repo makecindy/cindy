@@ -33,6 +33,7 @@ import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { botLearningTracker } from './botLearningTracker.js';
 import { unlinkedTeammateProjectMemoryDir } from './botProjectMemory.js';
 import { createProjectMemoryReceipts } from './botProjectLearning.js';
+import { joinSharedSkillPreparation } from '../skillhub/sharedSkillPreparation.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -62,8 +63,8 @@ interface BotToolsetCatalogItem {
   version?: string;
 }
 
-/** An owner-access group lane or its Thread lane (not a 分工, queue, AI reply or digest lane). */
-const OWNER_GROUP_LANE = /^group:[^:]+:access:owner:[1-9][0-9]*(?::thread:[^:]+)?$/;
+/** A group conversation lane with tools (owner or member access) or its Thread lane (not a 分工, queue, AI reply or digest lane). */
+const GROUP_CONVERSATION_LANE = /^group:[^:]+:access:(?:owner|tools):[1-9][0-9]*(?::mask:[^:]+)?(?::thread:[^:]+)?$/;
 
 export interface BotProfileRuntimeSnapshot {
   snapshotId: string;
@@ -89,6 +90,9 @@ export interface BotProfileRuntimeSnapshot {
   memoryRefs: BotMemoryRuntimeRef[];
   /** True when the permanent canonical Chat must rebuild its live runtime. */
   runtimeEpochChanged: boolean;
+  /** True only when `runtimeEpochChanged` came from comparing against an
+   * applied/degraded snapshot. Without that baseline "unchanged" is unknown. */
+  runtimeEpochBaseline: boolean;
 }
 
 export interface BotMemoryRuntimeRef {
@@ -104,6 +108,11 @@ export type BotRuntimeFailureStage = 'prepare' | 'agent-start' | 'storage';
 
 export interface BotProfileRuntimeDeps {
   getUserName?: () => string | null | undefined;
+  /**
+   * Joins the shared Skill preparation before `listSkills`. The snapshot is frozen for the
+   * session and is taken before the Agent launch prepares; startup only warms it up.
+   */
+  prepareSharedSkills?: () => Promise<void>;
   listSkills?: (input: {
     agentKind: MakerSessionCreateOpts['agentKind'];
     workingDir: string;
@@ -522,7 +531,8 @@ export async function hydrateBotProfileRuntime(
   if (!row || !['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(row.role)) return null;
   // A private-chat topic is the owner's own conversation, so it carries the main
   // Chat's owner-private abilities (cindy-bots-runtime.md「私聊话题」).
-  const ownerChat = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine';
+  const privateChat = row.role === 'canonical' || row.role === 'thread';
+  const ownerChat = privateChat || row.role === 'routine';
   const [profile] = await db
     .select()
     .from(botProfiles)
@@ -614,19 +624,21 @@ export async function hydrateBotProfileRuntime(
     伙伴身份和它自己的技能。群分工等在别的目录干活的会话按普通任务走那个目录。
   */
   const workspaceDir = botHomeDir ? path.join(path.resolve(botHomeDir), 'workspace') : '';
-  // Only the owner's own chats run as an ordinary project task. IM lanes (other people, groups,
-  // topics) and group lanes keep the existing channel isolation: they never load the owner's
-  // personal instructions, settings, Skills or native memories, only the teammate's project memory.
-  // A V2 teammate answering its owner in a group whose project folder is on this computer works
-  // there like an ordinary task in that folder (bot-group-chat.md §7.5). Other members' requests
-  // keep the isolated lane in Home.
-  const ownerGroupProjectLane = row.role === 'group' && OWNER_GROUP_LANE.test(row.routeKey ?? '')
-    && !!workspaceDir && path.resolve(opts.workingDir) !== workspaceDir
+  const inTeammateWorkspace = !!workspaceDir && path.resolve(opts.workingDir) === workspaceDir;
+  // A group lane working in the group's project folder on this computer (bot-group-chat.md §7.5).
+  // A lane without a project runs in its own dialogue workspace, also outside Home: that is not a
+  // project, so it keeps the teammate's project memory.
+  const groupProjectLane = row.role === 'group' && GROUP_CONVERSATION_LANE.test(row.routeKey ?? '')
+    && opts.workspaceKind !== 'dialogue'
+    && !!workspaceDir && !inTeammateWorkspace
     && !path.resolve(opts.workingDir).startsWith(path.dirname(workspaceDir) + path.sep);
-  const projectContext = !!workspaceDir && readBotProjectMode(config)
-    && (ownerChat ? path.resolve(opts.workingDir) === workspaceDir : ownerGroupProjectLane);
+  // Every session of a V2 teammate runs as an ordinary project task wherever it works: the owner's
+  // chats, IM channel lanes, group lanes (whoever spoke), topics and 分工 (owner 2026-11-22: there is
+  // no "isolated lane"; cindy-bots-runtime.md §6). Who may do what is the permission tier's job
+  // (channelToolPolicy for non-owner turns), not a narrower context. A chat-only group has no tools.
+  const projectContext = !!workspaceDir && readBotProjectMode(config) && !chatOnly;
   // Only the teammate's own working directory discovers its skills and memory natively.
-  const nativeTeammateProject = projectContext && !ownerGroupProjectLane;
+  const nativeTeammateProject = projectContext && inTeammateWorkspace;
   const fullLane = ownerChat;
   // Bot Memory belongs to the Bot Home and is independent from Cindy's global
   // Maker Memory switch. The profile can still explicitly disable its own memory.
@@ -637,9 +649,9 @@ export async function hydrateBotProfileRuntime(
   if (projectMode && opts.id) await botLearningTracker.prepareProjectTeammate(opts.id,
     fullLane && config.memory !== false ? () => createProjectMemoryReceipts(workspaceDir) : undefined);
   // V2 (2026-11-10, owner): one capability set in every session of the teammate — its own chats,
-  // group and IM lanes, 分工 — so the capability selection no longer narrows any of them. Its Skills
-  // are the project's own; lanes still never take the owner's personal Skills, and a chat-only
-  // group stays without tools (that is the group's authorization, not a capability choice).
+  // group and IM lanes, 分工 — so the capability selection no longer narrows any of them. Skills load
+  // as for any ordinary task there, and a chat-only group stays without tools (that is the group's
+  // authorization, not a capability choice).
   if (projectMode && !chatOnly) {
     skillMode = 'inherit';
     mcpMode = 'inherit';
@@ -651,7 +663,9 @@ export async function hydrateBotProfileRuntime(
   if (projectMode) opts.makerMemorySwitchOwned = true;
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
   if (memoryEngineEnabled) opts.makerMemoryScopeKey = botMemoryScopeKey;
-  else if (projectMode && !projectContext && opts.makerMemoryEnabled) {
+  // 分工 and other work outside the teammate's project keep the teammate's one project memory.
+  // A group project lane uses that folder's memory natively and reaches the teammate's by file tools.
+  else if (projectMode && !inTeammateWorkspace && !groupProjectLane && opts.makerMemoryEnabled) {
     opts.makerMemoryScopeKey = await resolveMemoryScopeKey(workspaceDir);
   }
   const memoryActive = memoryEngineEnabled;
@@ -713,6 +727,7 @@ export async function hydrateBotProfileRuntime(
     resolvedSkills = [];
   } else if (deps.listSkills) {
     try {
+      await joinSharedSkillPreparation(deps.prepareSharedSkills, 'bot-runtime');
       catalog = await deps.listSkills({
         agentKind: opts.agentKind,
         workingDir: opts.workingDir,
@@ -839,6 +854,7 @@ export async function hydrateBotProfileRuntime(
   let resolvedMcpServers: string[] = [];
   let unavailableMcpServers: string[] = [];
   let runtimeMcpMode: 'inherit' | 'allowlist' = mcpMode;
+  let mcpCatalogUnreadable = false;
   if (deps.listMcpServers) {
     runtimeMcpMode = 'allowlist';
     try {
@@ -854,8 +870,12 @@ export async function hydrateBotProfileRuntime(
       });
       resolvedMcpServers = resolvedMcp.resolved;
       unavailableMcpServers = resolvedMcp.unavailable;
-    } catch {
-      throw new Error('无法读取伙伴的 MCP 能力目录，请重试；不会以空能力列表启动。');
+    } catch (error) {
+      // A project-context (V2) session mounts the ordinary task's MCP surface; this catalog only
+      // shapes the snapshot, so an unreadable catalog must not keep the teammate from starting.
+      if (!projectContext) throw new Error('无法读取伙伴的 MCP 能力目录，请重试；不会以空能力列表启动。');
+      mcpCatalogUnreadable = true;
+      log.warn('teammate MCP catalog unavailable; ordinary task MCP surface applies', { error: String(error) });
     }
   } else if (mcpMode === 'allowlist') {
     unavailableMcpServers = configuredMcpServers;
@@ -867,6 +887,7 @@ export async function hydrateBotProfileRuntime(
   let unavailableToolsets: string[] = [];
   let disabledToolsets: string[] = [];
   let runtimeToolsetMode: 'inherit' | 'allowlist' = toolsetMode;
+  let toolsetCatalogUnreadable = false;
   if (!chatOnly && deps.listToolsets) {
     runtimeToolsetMode = 'allowlist';
     try {
@@ -884,8 +905,10 @@ export async function hydrateBotProfileRuntime(
       resolvedToolsets = resolvedToolsetsResult.resolved;
       unavailableToolsets = resolvedToolsetsResult.unavailable;
       disabledToolsets = resolvedToolsetsResult.disabled;
-    } catch {
-      throw new Error('无法读取伙伴的工具能力目录，请重试；不会以空能力列表启动。');
+    } catch (error) {
+      if (!projectContext) throw new Error('无法读取伙伴的工具能力目录，请重试；不会以空能力列表启动。');
+      toolsetCatalogUnreadable = true;
+      log.warn('teammate toolset catalog unavailable; ordinary task plugins apply', { error: String(error) });
     }
   } else if (toolsetMode === 'allowlist') {
     unavailableToolsets = configuredToolsets;
@@ -1055,7 +1078,7 @@ export async function hydrateBotProfileRuntime(
     ...(projectContext ? { projectMode: true } : {}),
     ...(teammates.length > 0 ? { teammates } : {}),
     contextSections: [
-      ...(ownerGroupProjectLane && projectContext && opts.makerMemoryEnabled ? [
+      ...(groupProjectLane && projectContext && opts.makerMemoryEnabled ? [
         `Use the current project's memory tools for group project decisions. For this teammate's own preferences and reusable experience, read or update the Markdown records in ${JSON.stringify(unlinkedTeammateProjectMemoryDir(workspaceDir))} with file tools. Read its README.md before maintaining it.`,
       ] : []),
       ...(projectMode && config.memory === false ? [
@@ -1072,6 +1095,11 @@ export async function hydrateBotProfileRuntime(
           // Same local canonical boundary as isBotAuthorizationSession; remote Pi still has plugins.
           pluginAuthorizationCardsEnabled: opts.remoteHostId == null })]
         : []),
+      ...(privateChat ? [
+        'From this private chat you cannot post to a Cindy group or @mention its members there. '
+        + 'If asked, explain that nothing was sent and provide text the user can paste in the target group, '
+        + 'where they can select the member to mention.',
+      ] : []),
     ],
   };
   opts.botProfileContextPrompt = [
@@ -1159,6 +1187,20 @@ export async function hydrateBotProfileRuntime(
     toolsetMode,
     toolsets: configuredToolsets,
   });
+  // An unreadable catalog says nothing new: keep the last known resources so a transient failure
+  // (and its recovery, or a second failure) does not look like a change and rebuild a working session.
+  const mcpResources = mcpCatalogUnreadable && Array.isArray(previousResolved?.mcpResources)
+    ? previousResolved.mcpResources
+    : resolvedMcpServers.map((name) => {
+      const entry = mcpCatalog.find((item) => item.name === name);
+      return { name, generation: entry?.generation ?? null };
+    });
+  const toolsetResources = toolsetCatalogUnreadable && Array.isArray(previousResolved?.toolsetResources)
+    ? previousResolved.toolsetResources
+    : resolvedToolsets.map((id) => {
+      const entry = toolsetCatalog.find((item) => item.id === id);
+      return { id, version: entry?.version ?? null };
+    });
   const runtimeEpochSha256 = createHash('sha256').update(JSON.stringify({
     profileVersion: row.profileVersion,
     profilePrompt: opts.botProfilePrompt ?? '',
@@ -1175,14 +1217,8 @@ export async function hydrateBotProfileRuntime(
     botOwnSkillResources: ownSkills.map((entry) => ({
       name: entry.name, path: entry.path, description: entry.description, updatedAt: entry.updatedAt ?? null,
     })),
-    mcpResources: resolvedMcpServers.map((name) => {
-      const entry = mcpCatalog.find((item) => item.name === name);
-      return { name, generation: entry?.generation ?? null };
-    }),
-    toolsetResources: resolvedToolsets.map((id) => {
-      const entry = toolsetCatalog.find((item) => item.id === id);
-      return { id, version: entry?.version ?? null };
-    }),
+    mcpResources,
+    toolsetResources,
   }), 'utf8').digest('hex');
   const resolvedJson = JSON.stringify({
     schemaVersion: 1,
@@ -1206,14 +1242,8 @@ export async function hydrateBotProfileRuntime(
     // 刻意与 skillResources 分开:下面的漂移检查只认那三个 *Resources 键,
     // 伙伴自己写的技能不该把「刚学会就 resume 不了」变成硬错误。
     botOwnSkillResources: ownSkills.map((entry) => ({ name: entry.name, path: entry.path })),
-    mcpResources: resolvedMcpServers.map((name) => {
-      const entry = mcpCatalog.find((item) => item.name === name);
-      return { name, generation: entry?.generation ?? null };
-    }),
-    toolsetResources: resolvedToolsets.map((id) => {
-      const entry = toolsetCatalog.find((item) => item.id === id);
-      return { id, version: entry?.version ?? null };
-    }),
+    mcpResources,
+    toolsetResources,
     runtimeEpoch: { sha256: runtimeEpochSha256 },
   });
   const previousRuntimeEpoch = previousResolved
@@ -1223,7 +1253,8 @@ export async function hydrateBotProfileRuntime(
           : JSON.stringify(previousResolved.runtimeEpoch ?? {}),
       )
     : null;
-  const runtimeEpochChanged = followsProfile && previousSnapshot !== undefined
+  const runtimeEpochBaseline = followsProfile && previousSnapshot !== undefined;
+  const runtimeEpochChanged = runtimeEpochBaseline && previousSnapshot
     ? previousSnapshot.profileVersion !== row.profileVersion
       || previousRuntimeEpoch?.sha256 !== runtimeEpochSha256
     : false;
@@ -1299,5 +1330,6 @@ export async function hydrateBotProfileRuntime(
     toolsetMode,
     memoryRefs,
     runtimeEpochChanged,
+    runtimeEpochBaseline,
   };
 }

@@ -54,7 +54,7 @@ vi.mock('@/lib/toast', () => ({
 import { MessageActionBar } from '../MessageActionBar';
 import * as usageTooltip from '@/lib/turnUsageTooltip';
 import { PluginUiProvider, usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
-import { ChatMessageActions } from '@/features/bots/ChatServerControls';
+import { GroupReactionFixture } from '@/features/bots/__tests__/GroupReactionFixture';
 import type { GhostMcpApps } from '@cindy/plugin-protocol';
 import { MessageReadAloudContext, type MessageReadAloud } from '../MessageReadAloudContext';
 
@@ -81,7 +81,7 @@ describe('plugin entries in the message More menu', () => {
   };
   const Bar = ({ group = false }: { group?: boolean }) => {
     const pluginUi = usePluginUiMessageCandidates(group ? undefined : 'task-a');
-    return group ? <ChatMessageActions pluginUi={pluginUi} shareScope="group:fixture" message={{ id: 'group-message', content: 'body' } as import('../../../../shared/botGroupChat').BotGroupMessageView} onChanged={vi.fn()} />
+    return group ? <GroupReactionFixture pluginUi={pluginUi} shareScope="group:fixture" message={{ id: 'group-message', content: 'body' } as import('../../../../shared/botGroupChat').BotGroupMessageView} onChanged={vi.fn()} />
       : <MessageActionBar pluginUi={pluginUi} copyText="body" align="left" hovered sessionId="task-a" clientId="message-a" />;
   };
   const renderBar = () => render(<PluginUiProvider><Bar /></PluginUiProvider>);
@@ -578,6 +578,10 @@ describe('MessageActionBar', () => {
           models: ['claude-fable-5[1m]', 'claude-opus-5[1m]'],
           perModelCost: [
             {
+              model: 'own-key',
+              money: { amount: 3, currency: 'USD', approximate: false, kind: 'actual-cost' },
+            },
+            {
               model: 'claude-fable-5',
               money: { amount: 0.75, currency: 'CNY', approximate: false, kind: 'actual-cost' },
             },
@@ -590,7 +594,7 @@ describe('MessageActionBar', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '¥2.00' }));
+    fireEvent.click(screen.getByRole('button', { name: '¥2.00 + $3.00' }));
     const tooltip = screen.getByText(
       (_, element) =>
         element?.classList.contains('whitespace-pre-line') === true &&
@@ -601,6 +605,7 @@ describe('MessageActionBar', () => {
         'chat.messageActionBar.userTurnCostDetailsTitle',
         'usageDetails.costLine',
         'usageDetails.costBreakdownHeader',
+        'usageDetails.modelCostLine',
         'usageDetails.modelCostLine',
         'usageDetails.modelCostLine',
         'usageDetails.tokenLine',

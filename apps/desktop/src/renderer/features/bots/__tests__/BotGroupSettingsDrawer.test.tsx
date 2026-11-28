@@ -191,7 +191,10 @@ describe('BotGroupSettingsDrawer 分工 settings', () => {
     expect(mocks.updateBotGroup).not.toHaveBeenCalled();
   });
 
-  it('changes or clears a chosen folder and reports a folder main rejects', async () => {
+  it.each([
+    ['INVALID_PARAMS', 'projectDirSaveFailed'],
+    ['PROJECT_NOT_REGISTERED', 'projectDirNotRegistered'],
+  ])('changes or clears a chosen folder and explains %s', async (errorCode, hint) => {
     mocks.groups = [group({ projectDir: '/Users/me/old-site' })];
     renderDrawer();
     const row = screen.getByTestId('bot-group-project-dir');
@@ -201,7 +204,7 @@ describe('BotGroupSettingsDrawer 分工 settings', () => {
     fireEvent.click(within(row).getByRole('button', { name: 'bots.groupChat.settings.projectDirClear' }));
     await waitFor(() => expect(mocks.updateBotGroup).toHaveBeenCalledWith({ groupId: 'g1', projectDir: null }));
 
-    mocks.updateBotGroup.mockResolvedValue({ ok: false, errorCode: 'INVALID_PARAMS', message: '' });
+    mocks.updateBotGroup.mockResolvedValue({ ok: false, errorCode, message: '' });
     await waitFor(() =>
       expect(
         (within(row).getByRole('button', { name: 'bots.groupChat.settings.projectDirChange' }) as HTMLButtonElement)
@@ -209,7 +212,7 @@ describe('BotGroupSettingsDrawer 分工 settings', () => {
       ).toBe(false),
     );
     fireEvent.click(within(row).getByRole('button', { name: 'bots.groupChat.settings.projectDirChange' }));
-    expect((await screen.findByRole('alert')).textContent).toBe('bots.groupChat.settings.projectDirSaveFailed');
+    expect((await screen.findByRole('alert')).textContent).toBe(`bots.groupChat.settings.${hint}`);
     expect(mocks.showOpenDirectory).toHaveBeenCalledWith({ defaultPath: '/Users/me/old-site' });
   });
 });

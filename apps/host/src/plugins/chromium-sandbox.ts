@@ -23,8 +23,22 @@ interface Partition {
   id: string;
   origin: string;
   current: () => boolean;
+  retire: () => boolean;
   context: BrowserContext;
+  installingBindings: Set<Promise<unknown>>;
   handler: (request: Request) => Promise<Response>;
+}
+
+const BINDING_CLOSE_GRACE_MS = 3_000;
+
+async function waitForBindings(bindings: Iterable<Promise<unknown>>): Promise<void> {
+  const deadline = Promise.withResolvers<void>();
+  const timer = setTimeout(deadline.resolve, BINDING_CLOSE_GRACE_MS);
+  try {
+    await Promise.race([Promise.allSettled(bindings), deadline.promise]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Real Chromium renderers, with Chromium's OS sandbox explicitly enabled.
@@ -41,9 +55,16 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
     const held = ports.profileHoldMessage?.();
     if (held) throwIpcError('PRECONDITION_FAILED', held);
   };
-  function closeContext(context: BrowserContext) {
-    const pending = context.close().catch(() => undefined).finally(() => closing.delete(pending));
+  function trackClose(work: Promise<unknown>) {
+    const pending = work.catch(() => undefined).finally(() => closing.delete(pending));
     closing.add(pending);
+  }
+  function closePartition(partition: Partition) {
+    if (!partition.retire()) return;
+    const closeContext = () => partition.context.close();
+    trackClose(partition.installingBindings.size
+      ? waitForBindings(partition.installingBindings).then(closeContext)
+      : closeContext());
   }
   function browser() {
     if (closed) return Promise.reject(new Error('PLUGIN_RUNTIME_STOPPED'));
@@ -73,8 +94,10 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
     if (pending) {
       const previous = await pending.catch(() => null);
       if (!previous?.current()) {
-        if (partitions.get(key) === pending) partitions.delete(key);
-        if (previous) closeContext(previous.context);
+        if (partitions.get(key) === pending) {
+          partitions.delete(key);
+          if (previous) closePartition(previous);
+        }
         pending = partitions.get(key);
       }
     }
@@ -86,9 +109,9 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
           acceptDownloads: false, serviceWorkers: 'block', permissions: [],
           bypassCSP: false, ignoreHTTPSErrors: false,
         });
-        let contextClosed = false;
-        context.once('close', () => { contextClosed = true; });
-        const current = () => !closed && !contextClosed && context.browser()?.isConnected() !== false &&
+        let retired = false;
+        context.once('close', () => { retired = true; });
+        const current = () => !closed && !retired && context.browser()?.isConnected() !== false &&
           ports.ownerKey() === owner && ports.isCurrent(ghost, owner);
         try {
           if (!current()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
@@ -96,7 +119,15 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
           // listener or loopback port; another plugin cannot reach its resources.
           const origin = `https://${createHash('sha256').update(key).digest('hex')}.cindy-ghost.invalid`;
           const handler = ports.pageHandler(ghost, origin, current);
-          const partition = { key, id, origin, current, context, handler };
+          const partition: Partition = {
+            key, id, origin, current, context, handler,
+            retire: () => {
+              if (retired) return false;
+              retired = true;
+              return true;
+            },
+            installingBindings: new Set(),
+          };
           await context.route('**/*', async route => {
             if (!current()) { await route.abort('blockedbyclient'); return; }
             const request = route.request();
@@ -156,6 +187,7 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
     create(ghost): SandboxHandle {
       let destroyed = false;
       let page: Page | undefined;
+      let bindingSetup: Promise<unknown> | undefined;
       let stopLoading: (() => void) | undefined;
       let gone: ((details: { reason: string }) => void) | undefined;
       const id = installedGhostStoragePart(ghost);
@@ -170,7 +202,7 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
         page.on('crash', () => { if (!destroyed) gone?.({ reason: 'crashed' }); });
         page.on('close', () => { if (!destroyed) gone?.({ reason: 'closed' }); });
         const valid = () => !destroyed && partition.current() && !livePage.isClosed();
-        await page.exposeBinding('__cindyPluginRequest', async (source, kind, payload) => {
+        const binding = page.exposeBinding('__cindyPluginRequest', async (source, kind, payload) => {
           if (!partition.current() || source.page !== livePage || source.frame !== livePage.mainFrame() ||
               new URL(source.frame.url()).origin !== partition.origin) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
           assertNotHeld();
@@ -181,6 +213,16 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
           if (!valid()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
           return result;
         });
+        // Playwright publishes a child Disposable when binding setup returns.
+        // Wait briefly before closing its parent, including on partition shutdown.
+        bindingSetup = binding;
+        partition.installingBindings.add(binding);
+        try { await binding; }
+        finally {
+          bindingSetup = undefined;
+          partition.installingBindings.delete(binding);
+        }
+        if (!valid()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
         // Initialize the private delivery handle before loading plugin code.
         // Unlike a global callback it cannot be replaced or called by a panel.
         await page.route(`${partition.origin}${GHOST_BOOT_PATH}`, route => route.fulfill({
@@ -211,7 +253,10 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
           destroyed = true;
           stopLoading?.();
           if (logic.get(id)?.page === page) logic.delete(id);
-          if (page) void page.close().catch(() => undefined);
+          const stoppedPage = page;
+          if (!stoppedPage) return;
+          const closePage = () => stoppedPage.close();
+          trackClose(bindingSetup ? waitForBindings([bindingSetup]).then(closePage) : closePage());
         },
         crashForTest() {
           if (page) void page.context().newCDPSession(page).then(cdp => cdp.send('Page.crash')).catch(() => undefined);
@@ -258,17 +303,24 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
     async revokeStale() {
       for (const [key, pending] of partitions) {
         const partition = await pending.catch(() => null);
-        if (partition && !partition.current()) { partitions.delete(key); closeContext(partition.context); }
+        if (partition && !partition.current() && partitions.get(key) === pending) {
+          partitions.delete(key);
+          closePartition(partition);
+        }
       }
       await Promise.all(closing);
     },
     async close() {
       closed = true;
-      const active = await Promise.allSettled(partitions.values());
-      for (const result of active) if (result.status === 'fulfilled') closeContext(result.value.context);
-      partitions.clear(); logic.clear();
-      await Promise.all(closing);
-      await (await browserPromise?.catch(() => undefined))?.close();
+      try {
+        const active = await Promise.allSettled(partitions.values());
+        for (const result of active) if (result.status === 'fulfilled') closePartition(result.value);
+        partitions.clear();
+        logic.clear();
+        await Promise.all(closing);
+      } finally {
+        await (await browserPromise?.catch(() => undefined))?.close();
+      }
     },
   };
 }

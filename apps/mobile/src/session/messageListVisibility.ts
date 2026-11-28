@@ -2,6 +2,19 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 
 /** One store per LegendList lifetime; only rows whose visibility changes are notified. */
 export class MessageListVisibility {
+  private readonly viewportListeners = new Set<() => void>();
+  constructor(readonly viewport?: () => { top: number; bottom: number } | undefined) {}
+
+  // Only quota-blocked inline pages subscribe. Normal list scrolling performs no measurements.
+  onViewportChange(listener: () => void): () => void {
+    this.viewportListeners.add(listener);
+    return () => { this.viewportListeners.delete(listener); };
+  }
+
+  viewportChanged(): void {
+    for (const listener of this.viewportListeners) listener();
+  }
+
   private visibleKeys = new Set<string>();
   private listeners = new Map<string, Set<() => void>>();
 
@@ -68,11 +81,13 @@ export class ScrollViewMessageVisibility extends MessageListVisibility {
   setViewport(offsetY: number, height: number): void {
     this.offsetY = offsetY;
     this.height = height;
+    this.viewportChanged();
     this.refresh();
   }
 
   setHeight(height: number): void {
     this.height = height;
+    this.viewportChanged();
     this.refresh();
   }
 

@@ -40,6 +40,9 @@ export type SessionWorktreeBindingLookup = (sessionId: string) => string | null;
 
 /** From updateSessionInDb: a workspaceKind in the patch is project or dialogue. */
 export function assertSessionWorkspaceKindPatch(p: Record<string, unknown>): void {
+  if (p.projectDir !== undefined) {
+    throwIpcError('INVALID_PARAMS', 'projectDir is derived by the project move');
+  }
   if (p.workspaceKind !== undefined) {
     const value = p.workspaceKind;
     if (value !== 'project' && value !== 'dialogue') {
@@ -96,7 +99,7 @@ export async function assertReviewSessionPatchAllowed({
 
 /**
  * From updateSessionInDb: the row before the move, the worktree ownership guard, and closing an
- * idle local Pi/Codex runtime. Returns the row snapshot the Claude transcript move reads later.
+ * idle local Pi/Codex runtime. Claude's runtime stays available for its transcript move.
  */
 export async function prepareSessionWorkingDirMove({
   db,
@@ -110,8 +113,8 @@ export async function prepareSessionWorkingDirMove({
   sid: string;
   p: Record<string, unknown>;
   moveGuard?: SessionWorkingDirMoveGuard;
-  /** Close a local Pi/Codex runtime only if its current turn is idle (false: it is running). */
-  opts: { closeIdleSessionForMove?: (sessionId: string) => Promise<boolean> };
+  /** Refuse busy tasks. On idle tasks only non-Claude engines close before transcript relocation. */
+  opts: { closeIdleSessionForMove?: (sessionId: string, storedAgentKind: string) => Promise<boolean> };
   /** Installed: its answer is the only ownership source. Null: the old cwd is read instead. */
   sessionWorktreeBindingLookup: SessionWorktreeBindingLookup | null;
 }) {
@@ -131,12 +134,9 @@ export async function prepareSessionWorkingDirMove({
             .where(eq(sessions.id, sid))
         )[0]
       : undefined;
-  // worktree-handoff:worktree 会话的工作区边界就是它绑定的 worktree。只改 workingDir
-  // 会留下「半移动」—— 侧栏按新项目归组,而聊天框底部路径、Git 上下文、worktree
-  // store 归属与回收义务仍留在旧 worktree。完整的 worktree → Local Handoff 是独立
-  // 特性(#2190/#2585,需显式处置未提交改动与 worktree 归属),落地前这里拒绝把会话
-  // 移出 worktree;worktree 创建流程(基线目录 → 自己的 worktree)与同 worktree 内的
-  // no-op 不受影响。拦截发生在关 runtime / 写库 / 转录迁移之前,拒绝不留部分写入。
+  // worktree-handoff: worktree 会话的执行目录边界就是它绑定的 worktree。移动到项目时
+  // 只更新显式 projectDir 归属并保留 workingDir。这里继续拦截真正改变执行目录的请求，
+  // 避免绕过 worktree handoff 的未提交改动与归属处置流程。
   //
   // 归属以 worktreeStore(组合层注入)为真源:旧版允许过的「半移动」会给会话留下
   // working_dir 在普通项目、绑定仍在旧 worktree 的状态,只看 cwd 会漏掉这类存量行;
@@ -162,6 +162,12 @@ export async function prepareSessionWorkingDirMove({
     } else if (beforeMove.workingDir) {
       ownedWorktreeRoot = managedWorktreeRoot(beforeMove.workingDir);
     }
+    if (ownedWorktreeRoot && requestedWorkingDir && p.workspaceKind === 'project') {
+      // The project picker changes membership. Keep the bound cwd for execution and resume.
+      p.projectDir = requestedWorkingDir;
+      delete p.workingDir;
+      return beforeMove;
+    }
     const targetWorktreeRoot = requestedWorkingDir
       ? managedWorktreeRoot(requestedWorkingDir)
       : null;
@@ -171,24 +177,22 @@ export async function prepareSessionWorkingDirMove({
       throwIpcError(WORKTREE_MOVE_BLOCKED_CODE, WORKTREE_MOVE_BLOCKED_MESSAGE);
     }
   }
-  const movingLocalNonClaudeSession =
+  const movingLocalSession =
     beforeMove &&
-    beforeMove.agentKind !== 'cc' &&
     !beforeMove.remoteHostId &&
     beforeMove.workingDir &&
     typeof p.workingDir === 'string' &&
     p.workingDir &&
     normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir;
-  // Pi/Codex keep a live Maker handle whose cwd is fixed at bootstrap. Close it
-  // before persisting the new directory so the next send lazily recreates the
-  // runtime with the moved session's cwd instead of continuing in the old one.
-  if (movingLocalNonClaudeSession) {
+  // Refuse a running turn before any directory or transcript write. An idle Claude
+  // handle supplies the resume id and is closed by transcript relocation.
+  if (movingLocalSession) {
     await moveGuard?.beforeWrite?.();
     moveGuard?.assertCurrent();
     if (!opts.closeIdleSessionForMove) {
       throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
     }
-    const idle = await opts.closeIdleSessionForMove(sid);
+    const idle = await opts.closeIdleSessionForMove(sid, beforeMove.agentKind);
     if (idle === false) {
       throwIpcError('PRECONDITION_FAILED', '运行中的任务不能移动');
     }

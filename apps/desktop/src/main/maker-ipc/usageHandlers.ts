@@ -193,6 +193,7 @@ export function registerMakerUsageHandlers(
       days?: unknown;
       modelDays?: unknown;
       device?: unknown;
+      currency?: unknown;
       includeTasks?: unknown;
       forceRefresh?: unknown;
     };
@@ -215,7 +216,8 @@ export function registerMakerUsageHandlers(
         : typeof raw.device === 'string' && raw.device.length > 0 && raw.device.length <= 128
           ? raw.device
           : undefined;
-    const readOpts = {
+    const readOpts: UsageHistoryReadOptions = {
+      ...(raw.currency === 'USD' || raw.currency === 'CNY' ? { currency: raw.currency } : {}),
       ...(days === undefined ? {} : { days }),
       ...(modelDays === undefined ? {} : { modelDays }),
       ...(device === undefined ? {} : { device }),

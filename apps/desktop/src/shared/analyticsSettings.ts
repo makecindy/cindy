@@ -19,6 +19,12 @@ export interface AnalyticsSettingsPayload {
    * 构建闸的理由见 main/analytics-settings-store.ts。
    */
   allowed: boolean;
+  /**
+   * 是否需要请用户确认更新后的《服务条款》《隐私协议》
+   * = privacyConsentAccepted && 本机记录的同意版本 ≠ 当前版本(shared/legalTermsVersion)。
+   * 只对已同意过旧版的人为 true;renderer 只在个人账号已登录时据此弹出确认。
+   */
+  legalTermsUpdateRequired: boolean;
 }
 
 export const ANALYTICS_SETTINGS_CHANGE_CHANNEL = 'analytics:settings-change';

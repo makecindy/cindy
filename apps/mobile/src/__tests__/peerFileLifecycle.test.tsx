@@ -220,9 +220,16 @@ it("opens lazily, keeps negotiated connection idle and releases the host on back
   expect(closes()).toHaveLength(0);
   expect(await read()).toEqual({ ok: true, result: "preview" });
   expect(offers()).toHaveLength(1);
+  act(() => { state.app = "inactive"; state.change("inactive"); });
+  expect(await read()).toEqual({ ok: true, result: "preview" });
+  act(() => { state.app = "background"; state.change("background"); vi.advanceTimersByTime(2499); });
+  act(() => { state.app = "active"; state.change("active"); });
+  expect(await read()).toEqual({ ok: true, result: "preview" });
+  expect(offers()).toHaveLength(1);
   act(() => {
     state.app = "background";
     state.change("background");
+    vi.advanceTimersByTime(2500);
   });
   expect(closes()).toHaveLength(1);
   expect(state.read).toBeUndefined();
@@ -304,6 +311,7 @@ it("releases a late host answer after backgrounding during setup", async () => {
   act(() => {
     state.app = "background";
     state.change("background");
+    vi.advanceTimersByTime(2500);
   });
   answer({ connection: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", sdp: "v=0" });
   await cancelled;
@@ -342,6 +350,7 @@ it.each([
     if (cause === "background") {
       state.app = "background";
       state.change("background");
+      vi.advanceTimersByTime(2500);
     } else if (cause === "offline") {
       state.status = "reconnecting";
       root.render(createElement(PeerFileTransport));

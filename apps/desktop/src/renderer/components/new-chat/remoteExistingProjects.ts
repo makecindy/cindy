@@ -14,6 +14,9 @@
  */
 
 import { extractDisplayName } from '@/features/cc-agent/lib/projectGrouping';
+import { isDeviceUnresponsiveRemoteError, isTransientRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
 
 export interface ExistingRemoteProject {
@@ -57,6 +60,30 @@ function isRecentWorkdirRow(value: unknown): value is RecentWorkdirRow {
   );
 }
 
+// Recent folders are display data scoped to one owner and one live peer connection.
+interface RecentProjectsSnapshot {
+  epoch: number;
+  rows?: ExistingRemoteProject[];
+  revision: number;
+}
+const snapshots = new WeakMap<ReturnType<typeof getDataOwnerGeneration>, Map<string, RecentProjectsSnapshot>>();
+
+export function recentProjectsSnapshot(deviceId: string): RecentProjectsSnapshot {
+  const owner = getDataOwnerGeneration();
+  let devices = snapshots.get(owner);
+  if (!devices) {
+    devices = new Map();
+    snapshots.set(owner, devices);
+  }
+  const epoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
+  let entry = devices.get(deviceId);
+  if (!entry || entry.epoch !== epoch) {
+    entry = { epoch, revision: 0 };
+    devices.set(deviceId, entry);
+  }
+  return entry;
+}
+
 /** device-link:被控端 recent_workdirs → 已有项目列表(保序,handler 已按 lastUsedAt desc 排好)。 */
 export function recentWorkdirsToProjects(
   rows: readonly RecentWorkdirRow[],
@@ -89,17 +116,28 @@ export function sshExistingProjects(
 export async function loadDeviceLinkExistingProjects(
   deviceId: string,
 ): Promise<ExistingRemoteProject[]> {
-  const rows: unknown = await window.electronAPI.deviceLink.invoke(
-    deviceId,
-    'local-db:recent-workdirs:list',
-    [],
-  );
-  // 只有明确返回数组才是权威结果；null / undefined 是协议或连接异常，不能伪装成
-  // 「对方确实没有项目」的空列表。数组元素也必须完整符合协议，否则整份响应失败。
-  if (!Array.isArray(rows) || !rows.every(isRecentWorkdirRow)) {
-    throw new Error('Invalid recent workdirs response');
+  const snapshot = recentProjectsSnapshot(deviceId);
+  const revision = ++snapshot.revision;
+  try {
+    const rows: unknown = await window.electronAPI.deviceLink.invoke(
+      deviceId,
+      'local-db:recent-workdirs:list',
+      [],
+    );
+    // 只有明确返回数组才是权威结果；null / undefined 是协议或连接异常，不能伪装成
+    // 「对方确实没有项目」的空列表。数组元素也必须完整符合协议，否则整份响应失败。
+    if (!Array.isArray(rows) || !rows.every(isRecentWorkdirRow)) {
+      throw new Error('Invalid recent workdirs response');
+    }
+    const projects = recentWorkdirsToProjects(rows);
+    if (revision === snapshot.revision) snapshot.rows = projects;
+    return projects;
+  } catch (error) {
+    if (revision === snapshot.revision && !isTransientRemoteError(error) && !isDeviceUnresponsiveRemoteError(error)) {
+      snapshot.rows = undefined;
+    }
+    throw error;
   }
-  return recentWorkdirsToProjects(rows);
 }
 
 /** device-link:从被控端最近项目列表移除一条,不删除会话或磁盘目录。 */
@@ -107,7 +145,10 @@ export async function removeDeviceLinkExistingProject(
   deviceId: string,
   path: string,
 ): Promise<void> {
+  const snapshot = recentProjectsSnapshot(deviceId);
   await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:recent-workdirs:remove', [
     { path },
   ]);
+  snapshot.revision++;
+  snapshot.rows = snapshot.rows?.filter(row => row.path !== path);
 }

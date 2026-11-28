@@ -1,10 +1,13 @@
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { useIsFocused, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, Linking, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
+import { cloudComputerEntry } from '@cindy/maker-shared/device-list';
+import { APP_SCHEME, getActiveMobileSessionRealm, getMobileEndpointForRealm } from '@/config/env';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowEmptyState } from '@/components/MobilePrimitives';
 import { toDeviceListItems } from '@/device-link/devices';
@@ -59,6 +62,52 @@ function useRefreshPromise(manager: ReturnType<typeof useDeviceManagement>) {
   }), [finish, refresh]);
 }
 
+function CloudComputerAction() {
+  const {user, apiFetch} = useAuth();
+  const focused = useIsFocused();
+  const {t} = useTranslation();
+  const realm = getActiveMobileSessionRealm();
+  const member = user?.membershipKind === 'org' ? user.id : undefined;
+  const org = user?.orgId;
+  const [foreground,setForeground] = useState(AppState.currentState !== 'background');
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => setForeground(state === 'active'));
+    return () => subscription.remove();
+  },[]);
+  const [entry,setEntry] = useState<ReturnType<typeof cloudComputerEntry>>(null);
+  useEffect(() => {
+    setEntry(null);
+    if (!focused || !foreground || !member || !org) return;
+    const owner = getMobileAuthOwner();
+    const controller = new AbortController();
+    const check = () => {
+      if (controller.signal.aborted || !isMobileAuthOwnerCurrent(owner) || getActiveMobileSessionRealm() !== realm) throw new Error('OWNER_CHANGED');
+    };
+    void (async () => {
+      const baseUrl = getMobileEndpointForRealm(realm,'modelAccessApiBaseUrl');
+      if (!baseUrl) return;
+      const value = await apiFetch<unknown>('/api/model-access/personal/cloud-computer/entry',{
+        baseUrl, timeoutMs:5000, signal:controller.signal, redirect:'error', cache:'no-store', assertCurrent:check,
+      });
+      check();
+      setEntry(cloudComputerEntry(value,member,org));
+    })().catch(() => {});
+    return () => controller.abort();
+  },[apiFetch,focused,foreground,member,org,realm]);
+  if (!focused || !foreground || !entry) return null;
+  const actions = 'canAdd' in entry && entry.canAdd ? [entry.action,'addCloud' as const] : [entry.action];
+  return <>{actions.map(action=><MainWindowActionButton key={action} action={{
+    label:t('devices.management.' + action),
+    onPress:() => {
+      const url = new URL(entry.url);
+      url.searchParams.set('app', APP_SCHEME);
+      if (action==='addCloud') url.searchParams.set('add','1');
+      void Linking.openURL(url.href).catch(() => setEntry(null));
+    },
+    testID:action===entry.action ? 'deviceManagement.cloudComputer' : 'deviceManagement.addCloudComputer',
+  }}/>)}</>;
+}
+
 function DeviceManagementContent() {
   const { apiFetch } = useAuth();
   const manager = useDeviceManagement(apiFetch, useIsFocused());
@@ -83,6 +132,7 @@ function DeviceManagementContent() {
         backTestID="deviceManagement.back"
         onBack={() => goBackGuarded(router)}
       />
+      <CloudComputerAction />
       {manager.error ? (
         <ErrorNotice accessibilityRole="alert" style={styles.errorBlock} message={manager.error}>
           <MainWindowActionButton

@@ -6,7 +6,7 @@ export function BotOpeningPending({ name, bottomInset }: { name: string; bottomI
   const { t } = useBotTranslation();
   return (
     <div
-      className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-center px-6"
+      className="pointer-events-none absolute inset-x-0 top-0 z-raised flex items-center justify-center px-6"
       style={{ bottom: bottomInset }}
     >
       <p

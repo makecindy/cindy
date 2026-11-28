@@ -1,3 +1,5 @@
+import { ACCEPTED_ATTACHMENT_REPLAY } from '../../desktop/src/main/maker-ipc/attachmentReplay.js';
+import { createLogger } from '../../desktop/src/main/logger.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -15,6 +17,7 @@ import { hostBlobStore, hostMediaIngest, hostMediaJournal } from './media-store.
 
 // Owner runtimes have separate temporary roots, even for identical task ids.
 // They share the process identity so orphan recovery never deletes a live peer.
+const log = createLogger('host-attachments');
 const processOwner = { instanceId: randomUUID(), processId: process.pid };
 const unsupportedRemote = () => throwIpcError('UNSUPPORTED_CAPABILITY',
   'Remote attachments require the shared relay transfer service, which Host has not connected yet');
@@ -58,8 +61,7 @@ export function createHostAttachments(deps: {
           return await ingest.ingestMedia({ ...params, assertStillValid: check,
             refCompensationScope: scope }, owner.client.drizzle);
         } catch (error) {
-          // Desktop's legacy materializer can retain a failed local path. Host
-          // must not acknowledge a durable attachment when its ingest failed.
+          // Preserve the owning store's original error across shared preparation and cleanup.
           operation.error = error;
           throw error;
         }
@@ -81,6 +83,13 @@ export function createHostAttachments(deps: {
     materializeRemoteAttachment: async () => unsupportedRemote(),
     removeRemote: async () => unsupportedRemote(),
     captureIO,
+    // Keep Host's pre-dispatch classifications and the original account-bound ingest failure.
+    rejectAttachment: cause => {
+      const failedIngest = operations.getStore()?.error;
+      if (failedIngest) throw failedIngest;
+      if (cause && typeof cause === 'object' && 'code' in cause && cause.code === 'UNSUPPORTED_CAPABILITY') throw cause;
+      throwIpcError('INTERNAL', 'Attachment preparation failed');
+    },
   });
   normalizer.configureTempAttachmentOwner(processOwner);
   let ready: Promise<unknown> | undefined;
@@ -102,34 +111,52 @@ export function createHostAttachments(deps: {
     });
   }
 
-  async function validateRef(ref: string): Promise<void> {
+  async function validateRef(ref: string, allowCleanedImage = false): Promise<boolean> {
     const operation = operations.getStore()!;
     operation.check();
     if (isAttachmentOssRef(ref) || isPeerAttachmentRef(ref)) unsupportedRemote();
     let file = ref;
+    let cachedImage = false;
     if (ref.startsWith('cindy-media://')) {
       const resolved = blobs.resolveSafe(ref);
       if (!await ledger.getBlobInfo(resolved.hash, operation.owner.client.drizzle)) {
         throwIpcError('NOT_FOUND', 'Attachment is not available in this account');
       }
       file = resolved.absPath;
-    } else if (ref.startsWith('xdt-image://')) file = images.resolveSafe(ref).absPath;
-    else if (!path.isAbsolute(ref)) {
+      cachedImage = resolved.mimeType.startsWith('image/');
+    } else if (ref.startsWith('xdt-image://')) {
+      const resolved = images.resolveSafe(ref);
+      file = resolved.absPath;
+      cachedImage = resolved.mimeType.startsWith('image/');
+    } else if (!path.isAbsolute(ref)) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'Host cannot resolve this attachment source');
     }
-    await fs.access(file);
+    try { await fs.access(file); }
+    catch (error) {
+      if (!allowCleanedImage || !cachedImage || (error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+      operation.check();
+      return false;
+    }
     operation.check();
+    return true;
   }
 
   type UserMessage = Parameters<typeof normalizer.normalizeUserMessage>[1];
-  async function validateMessage(message: UserMessage) {
-    if (typeof message === 'string' || typeof message.content === 'string') return;
+  async function validateMessage(message: UserMessage, replaySessionId?: string): Promise<UserMessage> {
+    if (typeof message === 'string' || typeof message.content === 'string') return message;
+    const retained = [];
     for (const block of message.content) {
-      if (block.type !== 'image' && block.type !== 'file') continue;
+      if (block.type !== 'image' && block.type !== 'file') { retained.push(block); continue; }
       const attachment = block as { path?: string; base64?: string };
       // Memory images are materialized by the shared normalizer at dispatch.
-      if (!attachment.base64) await validateRef(attachment.path ?? '');
+      const source = attachment.path ?? '';
+      if (!attachment.base64 && !await validateRef(source, !!replaySessionId && block.type === 'image')) continue;
+      retained.push(block);
     }
+    const count = message.content.length - retained.length;
+    if (!count) return message;
+    log.warn('skipped cleaned cache images during accepted input replay', { sessionId: replaySessionId, count });
+    return { ...message, content: retained };
   }
 
   return {
@@ -148,15 +175,12 @@ export function createHostAttachments(deps: {
         catch (error) { await result.cleanupBeforeAcceptance?.(); throw error; }
       });
     },
-    async prepareUserMessage(id: string, message: UserMessage) {
+    async prepareUserMessage(id: string, message: UserMessage, replay?: typeof ACCEPTED_ATTACHMENT_REPLAY) {
       return run(() => {}, async check => {
-        await validateMessage(message);
+        const validated = await validateMessage(message, replay === ACCEPTED_ATTACHMENT_REPLAY ? id : undefined);
         check();
-        const normalized = await normalizer.normalizeUserMessage(id, message);
+        const normalized = await normalizer.normalizeUserMessage(id, validated);
         check();
-        const count = (value: UserMessage) => typeof value === 'string' || typeof value.content === 'string'
-          ? 0 : value.content.filter(block => block.type === 'image' || block.type === 'file').length;
-        if (count(normalized) !== count(message)) throwIpcError('INTERNAL', 'Attachment preparation failed');
         return normalized;
       });
     },

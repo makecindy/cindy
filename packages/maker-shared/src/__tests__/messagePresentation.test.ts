@@ -74,6 +74,39 @@ describe('messagePresentation', () => {
       label: '查看工作区状态',
       detail: 'git status --short',
     });
+    expect(summarizeToolUseText('collab:wait', {
+      senderThreadId: '019d8f44-1111-7222-8333-444444444444',
+      receiverThreadIds: [],
+      targets: ['scout', 'reviewer'],
+      targetCount: 2,
+    })).toEqual({
+      label: '等待 Subagent scout, reviewer',
+    });
+    expect(summarizeToolUseText('collab:wait', {
+      senderThreadId: '019d8f44-1111-7222-8333-444444444444',
+      receiverThreadIds: ['019d8f44-2222-7222-8333-444444444444', '019d8f44-3333-7222-8333-444444444444'],
+    })).toEqual({
+      label: '等待 2 个 Subagent',
+    });
+    expect(summarizeToolUseText('collab:wait', {
+      senderThreadId: '019d8f44-1111-7222-8333-444444444444',
+      receiverThreadIds: [],
+    })).toEqual({
+      label: '等待 Subagent',
+    });
+    expect(summarizeToolUseText('collab:sendInput', {
+      targets: ['scout'],
+      prompt: 'Inspect the diff',
+    })).toEqual({
+      label: '向 Subagent 发送指令 scout',
+      detail: 'Inspect the diff',
+    });
+    expect(summarizeToolUseText('collab:resumeAgent', { targets: ['scout'] })).toEqual({
+      label: '恢复 Subagent scout',
+    });
+    expect(summarizeToolUseText('collab:closeAgent', { targets: ['scout'] })).toEqual({
+      label: '关闭 Subagent scout',
+    });
   });
 
   it('summarizes message bubble density without adding mobile-only role labels', () => {

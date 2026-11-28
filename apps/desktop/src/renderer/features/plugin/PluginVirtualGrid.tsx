@@ -29,7 +29,8 @@ export function PluginVirtualGrid({ count, scrollRef, renderItem, onRange, cache
     const scroller = scrollRef.current;
     if (!element || !scroller || !active) return;
     const update = () => {
-      setColumns(Math.max(1, Math.min(2, Math.floor((element.clientWidth + 16) / 360))));
+      // The single-column layout begins at a 640px pane with 28px side padding.
+      setColumns((element.parentElement?.clientWidth ?? element.clientWidth) > 584 ? 2 : 1);
       setMargin(element.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop);
     };
     update();
@@ -70,6 +71,7 @@ export function PluginVirtualGrid({ count, scrollRef, renderItem, onRange, cache
   const rows = useVirtualizer({ count: groups?.length ?? Math.ceil(count / columns), getScrollElement: () => scrollRef.current,
     observeElementOffset: offsetObserver, scrollToFn: scrollTo, useCachedMeasurements: !active,
     estimateSize: index => groups?.[index]?.header !== undefined ? 40 : 150, overscan: 2, scrollMargin: margin,
+    isScrollingResetDelay: 120,
     initialOffset: cache?.offset ?? 0,
     onChange: instance => { if (active && cache) cache.offset = instance.scrollOffset ?? 0; },
     initialMeasurementsCache: cache?.measurements });
@@ -89,6 +91,15 @@ export function PluginVirtualGrid({ count, scrollRef, renderItem, onRange, cache
     if (previousColumns.current !== columns) rows.measure();
     previousColumns.current = columns;
   }, [columns, rows]);
+  useLayoutEffect(() => {
+    if (!active || !grid) return;
+    // Hidden rows use cached/estimated sizes. On reveal (or remount), read
+    // the visible rows together before updating the virtualizer; its normal
+    // sync measurement otherwise reuses those estimates until a resize fires.
+    const sizes = [...rows.elementsCache.values()].map(element =>
+      [rows.indexFromElement(element), element.offsetHeight] as const);
+    for (const [index, height] of sizes) if (height > 0) rows.resizeItem(index, height);
+  }, [active, grid, columns, rows]);
   const currentColumns = useRef(columns);
   currentColumns.current = columns;
   useLayoutEffect(() => () => {
@@ -115,10 +126,12 @@ export function PluginVirtualGrid({ count, scrollRef, renderItem, onRange, cache
     const items = visible.flatMap(row => indices(row.index));
     if (active && items.length) range.current?.(items[0]!, items.at(-1)!);
   }, [active, visible[0]?.index, visible.at(-1)?.index, columns, count, cache]);
-  return <div ref={setGrid} style={{ height: rows.getTotalSize(), position: 'relative', width: '100%' }}>
+  return <div ref={setGrid} className="plugin-catalog-virtual-grid"
+    data-plugin-list-scrolling={active && rows.isScrolling ? true : undefined}
+    style={{ height: rows.getTotalSize(), position: 'relative' }}>
     {visible.map(row => <div key={row.key} ref={rows.measureElement} data-index={row.index}
       style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${row.start - margin}px)`,
-        display: 'grid', gridTemplateColumns: groups?.[row.index]?.header !== undefined ? '1fr' : `repeat(${columns}, minmax(0, 1fr))`, gap: 16, paddingBottom: 16 }}>
+        display: 'grid', gridTemplateColumns: groups?.[row.index]?.header !== undefined ? '1fr' : `repeat(${columns}, minmax(0, 1fr))`, columnGap: 'var(--space-8)', paddingBottom: 'var(--space-2)' }}>
       {groups?.[row.index]?.header !== undefined ? renderGroup?.(groups[row.index]!.header!) : indices(row.index).map(index =>
         <div key={index} className="min-w-0">{renderItem(index)}</div>)}
     </div>)}

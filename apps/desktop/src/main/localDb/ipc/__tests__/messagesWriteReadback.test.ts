@@ -176,6 +176,26 @@ describe('message write paths avoid large-content readback', () => {
     expect(page.items.map(item => item.clientId)).toEqual(['second']);
   });
 
+  // Unit: two plugin turns can share one session; the query must exclude other inputs,
+  // tool payloads, failed attempts and the final before applying the page limit.
+  it('reads only the selected run’s completed progress from the persisted history', async () => {
+    for (const [id, role, meta] of [
+      ['draft', 'assistant', {}],
+      ['other', 'assistant', { pluginProgressInputId: 'plugin-task:other' }],
+      ['tool', 'tool_result', { pluginProgressInputId: 'plugin-task:one' }],
+      ['failed', 'assistant', { pluginProgressInputId: 'plugin-task:one', failedSamplingAttempt: { threadId: 't', turnId: 'u', attempt: 1, itemId: 'x' } }],
+      ['progress', 'assistant', { pluginProgressInputId: 'plugin-task:one' }],
+      ['final', 'assistant', { assistantPhase: 'final_answer' }],
+    ] as const) {
+      await createMessage('s1', { clientId: id, role, content: id, agentMeta: meta });
+    }
+    const page = await getMessagesForHistory({ sessionIds: ['s1'], workdir: null, fromMs: null, toMs: null,
+      agentKind: null, roles: null, includeRewound: false, limit: 1, cursor: null, order: 'asc',
+      pluginProgressInputId: 'plugin-task:one' });
+    expect(page.items.map(m => m.clientId)).toEqual(['progress']);
+    expect(page.nextCursor).toBeNull();
+  });
+
   it('keeps View-only MCP App data out of create, reload and owner broadcasts', async () => {
     const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
     vi.mocked(tapWindowBroadcast).mockClear();

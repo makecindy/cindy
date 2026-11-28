@@ -21,10 +21,16 @@ export interface ProviderModelRefreshResult {
   providerId: BuiltinRefreshableProviderId;
 }
 
-/** Renderer 只能上报明确的用户界面时机；前台恢复由 Main 自己判断。 */
+/** Renderer 只能上报明确的用户界面时机与网络恢复；前台恢复由 Main 自己判断。 */
 export const PROVIDER_MODEL_AUTO_REFRESH_RENDERER_TRIGGERS = [
   'providers-open',
   'model-selector-open',
+  /**
+   * 网络恢复（window `online`，或读不到的订阅账号重新读到）。只让**上次失败**的来源跳过
+   * 失败冷却立刻重试；上次成功的来源照常服从 30 分钟冷却，重复上报不会放大请求
+   * （2026-11-20：断网恢复后模型列表要等 5 分钟才回来）。
+   */
+  'network-restored',
 ] as const;
 
 export type ProviderModelAutoRefreshRendererTrigger =
@@ -53,6 +59,13 @@ export function isForcedProviderModelAutoRefreshTrigger(
   trigger: ProviderModelAutoRefreshTrigger,
 ): boolean {
   return PROVIDER_MODEL_FORCED_AUTO_REFRESH_TRIGGERS.includes(trigger);
+}
+
+/** 跳过失败冷却（不跳过成功后的正常冷却）的触发时机。 */
+export function isFailureRetryProviderModelAutoRefreshTrigger(
+  trigger: ProviderModelAutoRefreshTrigger,
+): boolean {
+  return trigger === 'network-restored';
 }
 
 export function isProviderModelAutoRefreshRendererTrigger(

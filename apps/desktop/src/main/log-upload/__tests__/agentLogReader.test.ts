@@ -111,6 +111,21 @@ describe('字段白名单：名单外的键没有出口', () => {
     expect(out).toContain('status=200');
   });
 
+  it('块格式的 WebSocket 结果不把本机关联字段带进上传标题', () => {
+    const msg = [
+      'websocket upgrade result',
+      '  proxyInstanceId : 12345678-90ab-4cde-8123-456789abcdef',
+      '  reqId           : 7',
+      '  attempt         : 2',
+      '  outcome         : cancelled',
+      '  why             : client-close',
+      '  status          : undefined',
+      '  elapsedMs       : 16250',
+    ].join('\n');
+    const result = parse([ndjson({ scope: 'codex-proxy', msg })]);
+    expect(result.records.map(record => record.msg)).toEqual(['websocket upgrade result']);
+  });
+
   it('值的形状不匹配就当没有（不给写日志的人决定「这个值安全」）', () => {
     // status 不是三位数字、reqId 带空格与中文:两条都不该带出。
     const msg = "x { status: 'unknown', reqId: 'r 4 中文' }";

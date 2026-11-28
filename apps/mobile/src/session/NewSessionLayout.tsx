@@ -5,6 +5,7 @@ import {
   useAdaptiveWindow,
 } from "@/platform/AdaptiveWindowContext";
 import { useTheme } from "@/theme";
+import { WallpaperBackdrop } from "@/theme/WallpaperBackdrop";
 import { MessageHistoryOverlay } from "./RecentMessageHistories";
 import { useSessionPaneLayout } from "./ResidentHomeList";
 import { SessionListDrawer } from "./SessionListDrawer";
@@ -43,6 +44,7 @@ export function NewSessionLayout({
 
   return (
     <View style={[styles.root, { backgroundColor: colors.surface }]}>
+      <WallpaperBackdrop />
       <PaneViewportProvider value={viewport}>
         <View
           style={[

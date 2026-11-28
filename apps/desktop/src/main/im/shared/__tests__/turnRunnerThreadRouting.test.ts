@@ -83,7 +83,7 @@ vi.mock('../../../localDb/schema', () => ({ sessions: {} }));
 vi.mock('../../../imageCacheStore.desktop', () => ({ resolveSafe: mocks.resolveXdtImageUrl }));
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) => (kind === 'codex' ? 'codex' : 'claude-code'),
+  toCoreEngineKind: (kind: string) => (kind === 'acp' ? 'acp' : kind === 'codex' ? 'codex' : 'claude-code'),
 }));
 vi.mock('../../messagePersistence', () => ({
   persistUserMessage: mocks.persistUserMessage,
@@ -919,6 +919,30 @@ describe('turnRunner 渠道任务后台结果回传', () => {
       settle(h.session.id, 'exhausted');
       await vi.waitFor(() => expect(delivered()).toHaveLength(3));
       expect(delivered()[2]).toContain(slackUi.agent.runtimeError('检测到空响应，自动续跑已暂停。'));
+    } finally {
+      setSilencedRunProbe(null);
+      await runner.disposeAllSessions();
+    }
+  });
+
+  // Regression (owner 2026-11-22): a teammate's daily summary scheduled in a private-chat channel lane
+  // was marked silent, finished with a summary and never reached the chat. A channel lane exists to
+  // talk in that chat, so its scheduled results are posted; silence only quiets desktop notifications.
+  it('伙伴渠道专线上静默的自动任务轮次照样回传终稿', async () => {
+    const silencedRuns = new Set<string>(['quiet']);
+    setSilencedRunProbe((runId) => silencedRuns.has(runId));
+    try {
+      runner = createTurnRunner({ ...fakeAdapter, output: {
+        kind: 'chunked-text', im: fakeAdapter.im, commitFinal: vi.fn(async () => undefined),
+      } }, fakeRepo, fakeCards);
+      const h = makeSessionHarness('silent-lane');
+      runner.attachSessionOutput(h.session, 'U1', { attached: false, companionChannel: true });
+      const turnOrigin = { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'daily', runId: 'quiet' };
+      h.emit({ type: 'text', data: { text: '今天没有新的重要邮件', isFinal: true }, turnOrigin });
+      h.emit({ type: 'done', data: {}, turnOrigin });
+      await vi.waitFor(() => expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledExactlyOnceWith(
+        'U1', '🤖 自动任务「daily」\n\n今天没有新的重要邮件', { threadTs: undefined },
+      ));
     } finally {
       setSilencedRunProbe(null);
       await runner.disposeAllSessions();

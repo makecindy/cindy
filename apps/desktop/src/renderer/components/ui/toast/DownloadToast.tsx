@@ -42,7 +42,7 @@ export function DownloadToast({ items }: { items: readonly FileTransferToast[] }
             }
           />
           <PopoverContent
-            className="pointer-events-auto z-[10101] w-[440px] max-w-[calc(100vw_-_32px)] p-2"
+            className="pointer-events-auto z-toast-top w-[440px] max-w-[calc(100vw_-_32px)] p-2"
             sideOffset={8}
             aria-label={t('chat.remoteFile.downloadsInProgress', { count: items.length })}
           >

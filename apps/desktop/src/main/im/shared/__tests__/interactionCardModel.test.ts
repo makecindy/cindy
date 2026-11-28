@@ -446,6 +446,18 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
     expect(hook?.decisions.has('perm:always')).toBe(false);
   });
 
+  // PR #11758 / unit: a local executor fallback has no session grant. The existing
+  // auto-review and MCP App cases do not cover an ordinary request marked once-only.
+  it('offers only one approval for a local executor fallback in IM and Hook', () => {
+    const request: PermissionRequest = { ...PERMISSION_RICH, metadata: { permissionScope: 'once' } };
+    expect(cards.buildPermissionCard(request).buttons.map((button) => button.id))
+      .toEqual(['permission:allow:once', 'permission:deny']);
+    const hook = composeInteractionCard(request);
+    expect(hook?.card.buttons.map((button) => button.id)).toEqual(['perm:allow', 'perm:deny']);
+    expect(hook?.decisions.has('perm:always')).toBe(false);
+    expect(buildPermissionAllowAlwaysDecision(request)).toEqual({ kind: 'permission', behavior: 'allow' });
+  });
+
   it('安全默认: IM cancelPending 与 hook defaultDecision 同形(只有 reason 由渠道给)', async () => {
     const reason = 'turn_closed';
     for (const req of [ASK_NO_OPTIONS, PLAN_LONG, PERMISSION_RICH]) {

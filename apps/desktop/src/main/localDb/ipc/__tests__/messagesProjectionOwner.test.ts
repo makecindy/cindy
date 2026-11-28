@@ -55,11 +55,16 @@ vi.mock('../../../device-link/broadcast-tap', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => h.ownerScope?.ownerStamp),
   tapWindowBroadcast: h.broadcast,
 }));
-vi.mock('../../client/current', () => ({
+vi.mock('../../client/current', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../client/current')>()),
   getDbClient: () => h.client,
 }));
 
-import { commitContextRebuild, createMessage, patchMessageAgentMetaWithResult } from '../messages';
+import { broadcastMessageRow, commitContextRebuild, createMessage, patchMessageAgentMetaWithResult } from '../messages';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../client/current';
+import { createDbClientForHandle } from '../../client/createDbClientForHandle';
+import * as schema from '../../schema';
+import { desktopContextRecoveryAbortSignal } from '../../../maker-ipc/contextRecoveryAssembly.desktop';
 import { setTaskChangeListener } from '../../taskEvents';
 import { tx } from '../../worker/opHandlers/tx';
 
@@ -121,6 +126,54 @@ describe('teammate projection owner broadcasts', () => {
     expect(h.sqlite!.prepare('SELECT agent_meta FROM messages WHERE id = ?').get('reply')).toEqual({
       agent_meta: '{"samplingAttemptPending":false}',
     });
+  });
+
+  // L343 / unit with SQLite. A refreshed existing row must reach local IPC,
+  // but the Device Link and task-event paths only see the original insertion.
+  it('publishes a context recovery notice only to the original owner’s local windows', async () => {
+    const owner = { ownerScopeKey: 'original', ownerStamp: { dataOwnerId: 'original', ownerGeneration: 1 } };
+    h.ownerScope = owner;
+    const onTaskMessage = vi.fn();
+    setTaskChangeListener(onTaskMessage);
+    const original = await createMessage('s1', { clientId: 'original', role: 'user', content: '继续' },
+      { broadcastOwnerScope: owner });
+    expect(h.broadcast).toHaveBeenCalledWith('local-db:messages:created', { sessionId: 's1', message: original }, owner.ownerStamp);
+    expect(onTaskMessage).toHaveBeenCalledOnce();
+    h.broadcast.mockClear();
+    h.windowSend.mockClear();
+    onTaskMessage.mockClear();
+
+    const db = createDbClientForHandle({ db: h.sqlite!, drizzle: drizzle(h.sqlite!, { schema }) });
+    setCurrentDbClient(db, 'original');
+    const writes: Promise<unknown>[] = [];
+    try {
+      const signal = desktopContextRecoveryAbortSignal({
+        getCoordinator: () => ({
+          hasPendingQueuedWork: () => true,
+          skippedOversizedInputClientId: (_id, claim) => claim.inputClientId,
+          clearError: vi.fn(), getInputAbortSignal: () => new AbortController().signal,
+        }),
+        resetWireNotes: vi.fn(), isCurrentTurn: () => true, log: { warn: vi.fn() },
+        enqueueDurableWrite: (_label, write) => {
+          const pending = Promise.resolve().then(() => write(owner));
+          writes.push(pending);
+          return pending;
+        },
+        broadcastMessageRow,
+      }, 's1', { inputClientId: 'original', instanceId: 'fixture', generation: 1 });
+      expect(signal.aborted).toBe(true);
+      await Promise.all(writes);
+      expect(h.windowSend).toHaveBeenCalledExactlyOnceWith('local-db:messages:created', {
+        sessionId: 's1',
+        message: { ...original, agentMeta: { ...original.agentMeta, inputNotice: 'oversized-input-skipped' } },
+      }, owner.ownerStamp);
+      expect(h.broadcast).not.toHaveBeenCalled();
+      expect(onTaskMessage).not.toHaveBeenCalled();
+      expect(h.sqlite!.prepare("SELECT id, json_extract(agent_meta, '$.inputNotice') AS notice FROM messages").all())
+        .toEqual([{ id: original.id, notice: 'oversized-input-skipped' }]);
+    } finally {
+      clearCurrentDbClient(db);
+    }
   });
 
   it.each([false, true])('keeps a projected reply on its original owner across message persistence (switch=%s)', async (switchOwner) => {

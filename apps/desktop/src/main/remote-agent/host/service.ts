@@ -16,9 +16,14 @@ import fsp from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { isProviderSharePeer, parseProviderSharePeer, providerShareGuestPeer, REMOTE_AGENT_KINDS, REMOTE_AGENT_PLUGIN_ENGINE_KIND, type RemoteAgentRequest } from '@cindy/device-link';
-import { isPluginEngineOfferedRemotely } from '../../maker-host/pluginEngineRemoteUse.js';
-import type { Maker, StartSessionOptions } from '@cindy/maker-core';
-import { LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
+import {
+  isPluginEngineModelTurnedOff,
+  isPluginEngineOfferedRemotely,
+  isPluginEngineOfferedToGuests,
+} from '../../maker-host/pluginEngineRemoteUse.js';
+import type { Maker } from '@cindy/maker-core';
+import { hostedStartOptions } from './hostedStartOptions.js';
+export { hostedStartOptions } from './hostedStartOptions.js';
 
 import { createLogger } from '../../logger.js';
 import {
@@ -28,9 +33,10 @@ import {
 } from '../../device-link/broadcast-tap.js';
 import { setRemoteAgentHandler } from '../../device-link/dispatch.desktop.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
-import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, providerShareGuestDenial, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
+import { withProviderShareGuestAccessSnapshot, getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, providerShareGuestDenial, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { admitAgentNetProviderStandby, applyProviderShareDelegation, beginAgentNetStandbyTurn, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, releaseUnusedAgentNetStandby, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
 import { agentNetSharingRoute } from '../../device-link/agentNetSharing.js';
+import { hasHostedLinkedProviderShare } from '../../device-link/agentNetLinkedShares.js';
 import { isTemporaryProviderMetadataFailure } from '../../device-link/providerMetadataContinuity.js';
 import { checkProviderShareDelegation, clearProviderShareDelegationChecks, grantProviderShareDelegation as requestDelegationGrant, providerShareOwnerKey, providerShareDelegationRetryAt, revokeProviderShareDelegation as requestDelegationRevoke } from '../../device-link/providerShareApi.js';
 import { startProviderShareDelegationRechecks } from '../../device-link/providerShareDelegationChecks.js';
@@ -66,75 +72,6 @@ import { purgeClaudeHostedSessionArtifacts, purgeClaudeHostedTranscripts, purgeP
 import { captureGeneratedImageStorage, generatedImageErrorCode, handleGeneratedImageArtifacts, prepareGeneratedImageTransport } from '../../cindy-media/generatedImageStorage';
 
 const log = createLogger('remote-agent:host');
-
-/** 对方任务的启动选项 → 本机 Agent 的启动选项(工作目录是影子目录，工具经隧道回到对方)。 */
-export function hostedStartOptions(input: Omit<HostedStartInput, 'kind'>): StartSessionOptions {
-  const { options, workspace } = input;
-  const client = options.localApplication;
-  if (client && (!input.localApplicationStorage || !input.mcpServers.includes(client.mcpName))) {
-    throw new Error('[REMOTE_AGENT_INVALID] Missing isolated application tools or storage.');
-  }
-  return {
-    ...(client ? { [LOCAL_AGENT_CLIENT]: {
-      url: `${input.tunnel.url.replace(/\/+$/, '')}/mcp/${encodeURIComponent(client.mcpName)}`,
-      token: input.tunnel.token,
-      mcpName: client.mcpName, hostToolsOnly: client.hostToolsOnly,
-      storageDirectory: input.localApplicationStorage,
-    } } : {}),
-    sessionId: input.hostSessionId,
-    workingDir: input.shadowDir,
-    model: options.model,
-    ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
-    ...(options.effort ? { effort: options.effort as StartSessionOptions['effort'] } : {}),
-    ...(options.fastMode !== undefined ? { fastMode: options.fastMode } : {}),
-    ...(options.thinkingEnabled !== undefined ? { thinkingEnabled: options.thinkingEnabled } : {}),
-    ...(options.userPrompt ? { userPrompt: options.userPrompt } : {}),
-    ...(options.botProfilePrompt ? { botProfilePrompt: options.botProfilePrompt } : {}),
-    ...(options.botProfileContextPrompt ? { botProfileContextPrompt: options.botProfileContextPrompt } : {}),
-    ...(options.botUserProfilePrompt ? { botUserProfilePrompt: options.botUserProfilePrompt } : {}),
-    ...(options.makerMemoryEnabled !== undefined ? { makerMemoryEnabled: options.makerMemoryEnabled } : {}),
-    ...(options.makerMemorySwitchOwned ? { makerMemorySwitchOwned: true } : {}),
-    ...(options.makerMemoryScopeKey ? { makerMemoryScopeKey: options.makerMemoryScopeKey } : {}),
-    ...(options.makerMemoryProjectDir ? { makerMemoryProjectDir: options.makerMemoryProjectDir } : {}),
-    // 记忆在对方电脑上：没有快照时也给空快照，本机不读自己的记忆库。
-    ...(options.makerMemoryEnabled ? { makerMemoryIndexSnapshot: options.makerMemoryIndexSnapshot ?? '' } : {}),
-    // 插件同理在对方电脑上：Agent 用对方给的花名册快照(空串表示对方没有可用插件，也要原样传下去)。
-    ...(options.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: options.ghostRosterSnapshot } : {}),
-    ...(options.permissionMode ? { permissionMode: options.permissionMode as StartSessionOptions['permissionMode'] } : {}),
-    ...(options.planMode !== undefined ? { planMode: options.planMode } : {}),
-    ...(options.displayReasoning ? { displayReasoning: options.displayReasoning as StartSessionOptions['displayReasoning'] } : {}),
-    ...(options.resumeSessionId ? { resumeSessionId: options.resumeSessionId } : {}),
-    ...(options.codexHistoryHasProductPrompt !== undefined ? { codexHistoryHasProductPrompt: options.codexHistoryHasProductPrompt } : {}),
-    ...(options.vendorOptions ? { vendorOptions: { ...options.vendorOptions } } : {}),
-    extraDirs: [...(input.extraDirs ?? workspace.extraDirs)],
-    writableDirs: [...(input.writableDirs ?? workspace.writableDirs)],
-    deviceHosted: {
-      ...workspace,
-      workingDir: input.virtualWorkspace ? input.shadowDir : workspace.workingDir,
-      // 旧协议把控制端真实路径直接交给 Agent；只有虚拟工作区才采用 Agent 主机的路径风格。
-      pathPlatform: input.virtualWorkspace ? process.platform : workspace.platform,
-      extraDirs: [...(input.extraDirs ?? workspace.extraDirs)],
-      writableDirs: [...(input.writableDirs ?? workspace.writableDirs)],
-      // HOME 属于 Agent 主机；不能把控制端的个人目录带入 Agent 上下文。
-      homeDir: undefined,
-      tunnelUrl: input.tunnel.url,
-      tunnelToken: input.tunnel.token,
-      ...(input.tunnel.linkActivity ? { linkActivity: input.tunnel.linkActivity } : {}),
-      mcpServers: [...input.mcpServers],
-      mirrorRoot: input.mirrorRoot,
-      ...(input.personalInstructions ? { personalInstructions: input.personalInstructions } : {}),
-      ...(input.guest ? { guest: true } : {}),
-      ...(input.guest && input.guestHome ? { guestHome: input.guestHome } : {}),
-      ...(input.guest && input.guestProvider
-        ? { guestProvider: { ...input.guestProvider, modelIds: [...input.guestProvider.modelIds] } }
-        : {}),
-      ...(input.controllerManagedSkills
-        ? { controllerManagedSkills: { claudePluginRoots: [...input.controllerManagedSkills.claudePluginRoots] } }
-        : {}),
-    },
-    ...(input.onInvalidResumeSession ? { onInvalidResumeSession: input.onInvalidResumeSession } : {}),
-  };
-}
 
 let host: RemoteAgentHost | null = null;
 // resetMaker can install a replacement while the previous host is still deleting
@@ -331,7 +268,8 @@ export function installRemoteAgentHost(options: {
       const deviceId = getSelfDeviceId();
       if (peer?.role !== 'guest' || !deviceId) throw new Error('Provider share executor is unavailable');
       return checkProviderShareDelegation({ shareId: peer.shareId, memberId: peer.memberId,
-        guestDeviceId: peer.deviceId, executorDeviceId: deviceId }, first.lease.generation, { background: true });
+        guestDeviceId: peer.deviceId, executorDeviceId: deviceId }, first.lease.generation,
+        { background: true, ...(first.lease.linkedShareAgentNet ? { linkedShareAgentNet: true } : {}) });
     },
     invalidate: item => invalidateProviderShareDelegation(item.peer, item.sessionId, item.lease.nonce),
   });
@@ -340,7 +278,7 @@ export function installRemoteAgentHost(options: {
     providerId: string; groupProviderId: string; memberKey: string; agentKind: string;
     model: string; sessionId: string; expiresAt: number;
     generation: string;
-    load?: GroupRelayLoad; lastStatusAt: number; standbyLimit?: number | null; standbyOnly?: true;
+    load?: GroupRelayLoad; lastStatusAt: number; standbyLimit?: number | null; standbyOnly?: true; linkedShareAgentNet?: true;
   }>();
   // The executor can finish a turn while O's socket is reconnecting. Retry the same
   // receipt ID; O persists recent IDs so an ambiguous acknowledgement is harmless.
@@ -484,7 +422,7 @@ export function installRemoteAgentHost(options: {
     }
   };
   type DirectPairTask = Pick<ProviderShareDirectReceiptRoute,
-    'shareId' | 'memberId' | 'guestDeviceId' | 'executorDeviceId' | 'sessionId' | 'generation'>;
+    'shareId' | 'memberId' | 'guestDeviceId' | 'executorDeviceId' | 'sessionId' | 'generation' | 'linkedShareAgentNet'>;
   const hasValidDirectSibling = (route: DirectPairTask): boolean => {
     const sameGuest = (other: DirectPairTask) => other.shareId === route.shareId
       && other.memberId === route.memberId && other.guestDeviceId === route.guestDeviceId;
@@ -511,6 +449,7 @@ export function installRemoteAgentHost(options: {
     return hasValidDirectSibling(route) ? Promise.resolve() : revokeProviderShareDelegation({
       shareId: route.shareId, memberId: route.memberId, guestDeviceId: route.guestDeviceId,
       executorDeviceId: route.executorDeviceId, generation: route.generation,
+      ...(route.linkedShareAgentNet ? { linkedShareAgentNet: true } : {}),
     });
   };
   /** A new M grant replaces the session lease without closing its run. Restore
@@ -526,13 +465,15 @@ export function installRemoteAgentHost(options: {
     const memberJoinedAt = previous.memberJoinedAt ?? getProviderShareHostLoadedSnapshot()
       ?.find((share) => share.shareId === previous.shareId)?.members.find((member) => member.memberId === previous.memberId)?.joinedAt;
     if (!memberJoinedAt) throw new Error('Previous provider share membership is unavailable');
-    const granted = await grantProviderShareDelegation(delegation, { background: true });
+    const granted = await grantProviderShareDelegation(delegation,
+      { background: true, ...(previous.linkedShareAgentNet ? { linkedShareExecutor: true } : {}) });
     const restored: ProviderShareDirectReceiptRoute = {
       ownerScope: previous.ownerScope, ownerDeviceId: previous.ownerDeviceId, ...delegation, memberJoinedAt,
       sessionId: previous.sessionId, agentKind: previous.agentKind,
       executorProviderId: previous.executorProviderId, providerId: previous.providerId,
       memberKey: previous.memberKey, model: previous.model,
       generation: granted.generation, expiresAt: granted.expiresAt,
+      ...(granted.linkedShareAgentNet ? { linkedShareAgentNet: true as const } : {}),
       ...(previous.standbyOnly ? { standbyOnly: true as const } : {}),
     };
     const { invoke } = groupRelay.connect(previous.executorDeviceId);
@@ -559,6 +500,7 @@ export function installRemoteAgentHost(options: {
       await invoke([{ op: 'delegate', action: 'grant', ...delegation,
         providerId: previous.executorProviderId, model: previous.model,
         sessionId: previous.sessionId, generation: granted.generation, cleanupEpoch,
+        ...(granted.linkedShareAgentNet ? { linkedShareAgentNet: true as const } : {}),
         ...(fastPolicy ? { fastPolicy } : {}), ...(standby ? { standby } : {}) }]);
       if (!previousDirectRouteAllowed(previous)) throw new Error('Previous provider share route is no longer allowed');
       await usage.commitDirectReceiptRoute(restored);
@@ -600,7 +542,7 @@ export function installRemoteAgentHost(options: {
         executorDeviceId: live.executorDeviceId, executorProviderId: live.providerId,
         providerId: live.groupProviderId, memberKey: live.memberKey, agentKind: live.agentKind,
         model: live.model, sessionId: live.sessionId, generation: live.generation,
-        expiresAt: live.expiresAt });
+        expiresAt: live.expiresAt, ...(live.linkedShareAgentNet ? { linkedShareAgentNet: true as const } : {}) });
     }
     const revocations: Promise<void>[] = [];
     for (const route of targets) {
@@ -611,6 +553,7 @@ export function installRemoteAgentHost(options: {
           groupProviderId: route.providerId, memberKey: route.memberKey, agentKind: route.agentKind,
           model: route.model, sessionId: route.sessionId, generation: route.generation,
           expiresAt: route.expiresAt, lastStatusAt: Date.now(),
+          ...(route.linkedShareAgentNet ? { linkedShareAgentNet: true as const } : {}),
         }));
       } catch (error) {
         log.warn('provider group retired direct route remote revocation failed', {
@@ -649,7 +592,8 @@ export function installRemoteAgentHost(options: {
       if (saved.shareId === delegation.shareId && saved.memberId === delegation.memberId
         && saved.guestDeviceId === delegation.guestDeviceId
         && saved.executorDeviceId === delegation.executorDeviceId) {
-        await revokeProviderShareDelegation({ ...delegation, generation: saved.generation });
+        await revokeProviderShareDelegation({ ...delegation, generation: saved.generation,
+          ...(saved.linkedShareAgentNet ? { linkedShareAgentNet: true } : {}) });
         await usage.markDirectReceiptRouteRevoked(saved);
       }
     }
@@ -697,7 +641,8 @@ export function installRemoteAgentHost(options: {
       executorDeviceId: saved.executorDeviceId, providerId: saved.executorProviderId,
       groupProviderId: saved.providerId, memberKey: saved.memberKey, agentKind: saved.agentKind,
       model: saved.model, sessionId: saved.sessionId, expiresAt: saved.expiresAt,
-      generation: saved.generation, load, standbyOnly: saved.standbyOnly, standbyLimit: saved.standbyLimit, lastStatusAt: Date.now() };
+      generation: saved.generation, load, standbyOnly: saved.standbyOnly, standbyLimit: saved.standbyLimit,
+      linkedShareAgentNet: saved.linkedShareAgentNet, lastStatusAt: Date.now() };
     directRoutes.set(key, route);
     return route;
   };
@@ -1008,11 +953,27 @@ export function installRemoteAgentHost(options: {
         return false;
       }
     },
-    // 插件提供的引擎：只给同账号的电脑(分享的受邀者一律不提供)，用引擎自己的登录直连厂商，
-    // 没有 Cindy 的供应商路由、模型范围与速度策略。
+    // 插件提供的引擎：给同账号电脑和声明了 guestWorkspace 的直连分享受邀者使用，用引擎自己的登录直连厂商。
     pluginEngines: {
-      isOffered: (providerId, controller) => !isProviderSharePeer(controller) && isControllerAuthorized(controller)
-        && isPluginEngineOfferedRemotely(providerId),
+      canUse: (controller) => {
+        if (!isProviderSharePeer(controller)) return isControllerAuthorized(controller);
+        const access = ownedProviderShareGuestAccess(controller);
+        return !!access && isControllerAuthorized(controller) && isPluginEngineOfferedToGuests(access.providerId);
+      },
+      isOffered: (providerId, controller, model) => {
+        if (!isControllerAuthorized(controller)) return false;
+        // A model the user turned off here (Settings → Model providers) is off for everyone.
+        if (isPluginEngineModelTurnedOff(providerId, model)) return false;
+        if (isProviderSharePeer(controller)) {
+          const access = ownedProviderShareGuestAccess(controller);
+          return !!access
+            && access.providerId === providerId
+            && isPluginEngineOfferedToGuests(providerId)
+            && (model === undefined || remoteModelAccess.allows(providerId, model, access.memberId));
+        }
+        return isPluginEngineOfferedRemotely(providerId)
+          && (model === undefined || remoteModelAccess.allows(providerId, model));
+      },
       start: (input) => options.getMaker().startHostedAgentSession(REMOTE_AGENT_PLUGIN_ENGINE_KIND,
         hostedStartOptions(input)),
     },
@@ -1030,6 +991,7 @@ export function installRemoteAgentHost(options: {
     ownerModelAllowed: (hostSessionId, providerId, kind, model) => hasHostedSessionModelAccess(hostSessionId)
       && hostedProviderOffersModel(hostSessionId, providerId, kind, model),
     isControllerAuthorized,
+    withPollAuthorizationSnapshot: withProviderShareGuestAccessSnapshot,
     controllerTrust: (controller) => (isProviderSharePeer(controller) ? 'guest' : 'owner'),
     providerAccess: {
       models: async (kind, providerId, controller, sessionId) => {
@@ -1123,7 +1085,7 @@ export function installRemoteAgentHost(options: {
           void recordStandbyUsage({ shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId,
             sessionId, generation: authority.generation }, sample.samples).then(flushStandbyUsage)
             .catch(error => log.warn('standby usage persistence/upload unavailable', { error: String(error) }));
-        } else if (authority && sessionId) {
+        } else if (authority && sessionId && sample.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND) {
           for (let i = 0; i < sample.samples.length; i += 64) {
             const usageId = randomUUID();
             const request: Extract<RemoteAgentRequest, { op: 'direct-usage' }> = {
@@ -1241,7 +1203,9 @@ export function installRemoteAgentHost(options: {
         const { identity, location, joinedAt } = directTaskContext(controller, request.sessionId);
         const old = restoreDirectRoute(controller, request.sessionId) ?? undefined;
         const group = readProviderGroup(access.providerId);
-        const shareRoute = readDeviceLinkSettings().agentNetEnabled && agentNetSharingRoute('provider-share', peer.shareId);
+        const shareRoute = readDeviceLinkSettings().agentNetEnabled
+          && (agentNetSharingRoute('provider-share', peer.shareId)
+            || (request.linkedShareExecutor === true && hasHostedLinkedProviderShare(peer.shareId)));
         if (preparing && (!shareRoute || !group || location || old)) return null;
         if (old?.standbyOnly) return unavailable('history');
         const canPrepare = (selectedDevice?: string) => !!shareRoute && request.op === 'allocate' && request.prepareStandby
@@ -1263,6 +1227,7 @@ export function installRemoteAgentHost(options: {
           : retained ? { agentDeviceId: old.executorDeviceId, providerId: old.providerId,
           memberKey: old.memberKey, sameAccount: true }
           : await groupRelay.plan({ kind: request.agentKind, model: request.model,
+            direct: true,
             providerId: access.providerId,
             exclude: request.op === 'standby-prepare' ? new Set(group!.members.filter(member =>
               member.kind !== 'device' || member.agentDeviceId === request.excludeExecutorDeviceId).map(member => member.key))
@@ -1330,8 +1295,12 @@ export function installRemoteAgentHost(options: {
           const canUseStandby = (error: unknown) => shareRoute && request.op === 'allocate' && request.prepareStandby && !old && !preferred
             && (isTemporaryProviderMetadataFailure(error) || error instanceof TypeError
               || error instanceof Error && error.message === 'AGENT_NET_SHARING_SERVICES_UNAVAILABLE');
+          const allowLinkedExecutor = request.linkedShareExecutor === true && caps.linkedShareExecutor === true;
           let granted;
-          try { granted = await grantProviderShareDelegation(delegation); }
+          try {
+            granted = await grantProviderShareDelegation(delegation,
+              allowLinkedExecutor ? { linkedShareExecutor: true } : undefined);
+          }
           catch (error) {
             if (!canUseStandby(error)) throw error;
             assertCurrent();
@@ -1349,6 +1318,7 @@ export function installRemoteAgentHost(options: {
             executorProviderId: selected.providerId,
             providerId: access.providerId, memberKey: selected.memberKey,
             model: request.model, generation: granted.generation, expiresAt: granted.expiresAt,
+            ...(granted.linkedShareAgentNet ? { linkedShareAgentNet: true as const } : {}),
             ...(preparing ? { standbyOnly: true as const } : {}), standbyLimit,
           };
           let memberGrantAttempted = false;
@@ -1378,6 +1348,7 @@ export function installRemoteAgentHost(options: {
             await invoke([{ op: 'delegate', action: 'grant', shareId: peer.shareId,
               memberId: peer.memberId, guestDeviceId: peer.deviceId, providerId: selected.providerId,
               model: request.model, sessionId: request.sessionId, generation: granted.generation, cleanupEpoch,
+              ...(granted.linkedShareAgentNet ? { linkedShareAgentNet: true as const } : {}),
               ...(fastPolicy ? { fastPolicy } : {}), ...(standby ? { standby } : {}) }]);
             assertCurrent();
             await usage.commitDirectReceiptRoute(receiptRoute);
@@ -1395,6 +1366,7 @@ export function installRemoteAgentHost(options: {
               agentKind: request.agentKind, model: request.model, sessionId: request.sessionId,
               expiresAt: granted.expiresAt, generation: granted.generation,
               load, standbyLimit, standbyOnly: receiptRoute.standbyOnly,
+              ...(granted.linkedShareAgentNet ? { linkedShareAgentNet: true as const } : {}),
               lastStatusAt: effectiveRetained ? effectiveOld!.lastStatusAt : Date.now() });
             const standbyCurrent = standby && standbyLimit === standbyLimitFor(access.providerId, selected.memberKey,
               selected.agentDeviceId, selected.providerId);
@@ -1404,7 +1376,9 @@ export function installRemoteAgentHost(options: {
             if (previousReceipt) await retireDirectReceiptRoutes([previousReceipt]);
             assertCurrent(preparing ? undefined : receiptRoute.generation);
             assertCommittedDirectRoute(receiptRoute);
-            return { deviceId: selected.agentDeviceId, generation: granted.generation, ...(standbyCurrent ? { standby: true as const } : {}),
+            return { deviceId: selected.agentDeviceId, generation: granted.generation,
+              ...(granted.linkedShareAgentNet ? { linkedShareExecutor: true as const } : {}),
+              ...(standbyCurrent ? { standby: true as const } : {}),
               ...(canPrepare(selected.agentDeviceId) ? { canPrepareStandby: true as const } : {}),
               leaseDurationMs: Math.min(30 * 60_000, Math.max(0, Math.floor(granted.expiresAt - Date.now()))) };
           } catch (error) {
@@ -1542,17 +1516,73 @@ export function installRemoteAgentHost(options: {
       },
       switch(controller, request) {
         const key = JSON.stringify([controller, request.sessionId]);
-        const current = restoreDirectRoute(controller, request.sessionId);
+        const resolveSwitchTarget = () => {
+          const live = restoreDirectRoute(controller, request.sessionId);
+          if (live && live.expiresAt > Date.now()) {
+            return {
+              kind: 'live' as const,
+              route: live,
+              shareId: live.shareId,
+              memberId: live.memberId,
+              guestDeviceId: live.guestDeviceId,
+              executorDeviceId: live.executorDeviceId,
+              providerId: live.providerId,
+              groupProviderId: live.groupProviderId,
+              memberKey: live.memberKey,
+              agentKind: live.agentKind,
+              model: live.model,
+              generation: live.generation,
+            };
+          }
+          let ctx: ReturnType<typeof directTaskContext>;
+          try { ctx = directTaskContext(controller, request.sessionId); }
+          catch { return null; }
+          const loc = ctx.location;
+          if (!loc || loc.standbyOnly) return null;
+          const existingLive = directRoutes.get(key);
+          if (existingLive && (existingLive.expiresAt > Date.now()
+            || existingLive.generation !== loc.generation
+            || existingLive.executorDeviceId !== loc.executorDeviceId)) return null;
+          const sameTaskRoutes = usage.listActiveDirectReceiptRoutes(ctx.identity.ownerScope)
+            .filter((route) => route.ownerDeviceId === ctx.identity.ownerDeviceId
+              && route.shareId === ctx.identity.shareId && route.memberId === ctx.identity.memberId
+              && route.guestDeviceId === ctx.identity.guestDeviceId && route.sessionId === request.sessionId)
+            .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+          const committedRoutes = sameTaskRoutes.filter((route) => route.committedAt !== undefined);
+          if (committedRoutes.length && committedRoutes.at(-1)?.generation !== loc.generation) return null;
+          if (sameTaskRoutes.some((route) => route.committedAt === undefined
+            && route.executorDeviceId !== loc.executorDeviceId)) return null;
+          return {
+            kind: 'historical' as const,
+            ownerScope: ctx.identity.ownerScope,
+            ownerDeviceId: ctx.identity.ownerDeviceId,
+            joinedAt: ctx.joinedAt,
+            existingLive,
+            shareId: loc.shareId,
+            memberId: loc.memberId,
+            guestDeviceId: loc.guestDeviceId,
+            executorDeviceId: loc.executorDeviceId,
+            providerId: loc.executorProviderId,
+            groupProviderId: loc.providerId,
+            memberKey: loc.memberKey,
+            agentKind: loc.agentKind,
+            model: loc.model,
+            generation: loc.generation,
+          };
+        };
+        const current = resolveSwitchTarget();
         if (request.generation !== undefined && current?.generation !== request.generation) return Promise.resolve({});
         const pending = directSwitchPending.get(key);
         if (pending) return pending;
         if (allocations.has(key)) return Promise.resolve({});
         const previous = directSwitchIssued.get(key);
-        if (current && previous?.generation === current.generation && Date.now() - previous.at < 2 * 60_000
-          && ownedProviderShareGuestAccess(controller) && current.expiresAt > Date.now()
+        if (current && previous?.generation === current.generation && previous.ownerScope === providerShareOwnerKey()
+          && Date.now() - previous.at < 2 * 60_000
+          && ownedProviderShareGuestAccess(controller)?.providerId === current.groupProviderId
+          && isRemoteProviderInvocationAllowed(current.groupProviderId)
           && remoteModelAccess.allowsDelegatedExecution(current.groupProviderId, current.model, current.memberId)
           && readProviderGroup(current.groupProviderId)?.autoSwitch === true
-          && liveDirectTargetAllowed(current)) {
+          && (current.kind === 'historical' || liveDirectTargetAllowed(current.route))) {
           return Promise.resolve({ token: previous.token, generation: current.generation });
         }
         const lastAttempt = directSwitchAttempts.get(key) ?? 0;
@@ -1564,26 +1594,43 @@ export function installRemoteAgentHost(options: {
         if (directSwitchAttempts.size > 512) directSwitchAttempts.delete(directSwitchAttempts.keys().next().value!);
         const work = (async (): Promise<{ token?: string; generation?: string }> => {
           const peer = parseProviderSharePeer(controller);
-          const route = directRoutes.get(key);
-          if (peer?.role !== 'guest' || !route || route.expiresAt <= Date.now()
-            || route.shareId !== peer.shareId || route.memberId !== peer.memberId
-            || route.guestDeviceId !== peer.deviceId) return {};
+          const target = resolveSwitchTarget();
+          if (peer?.role !== 'guest' || !target
+            || (request.generation !== undefined && target.generation !== request.generation)
+            || target.shareId !== peer.shareId || target.memberId !== peer.memberId
+            || target.guestDeviceId !== peer.deviceId) return {};
           const valid = () => {
-            const live = directRoutes.get(key);
+            if (allocations.has(key)) return false;
             const access = ownedProviderShareGuestAccess(controller);
-            const group = readProviderGroup(route.groupProviderId);
-            return live === route && (request.generation === undefined || live.generation === request.generation)
-              && route.expiresAt > Date.now()
-              && access?.providerId === route.groupProviderId
-              && isRemoteProviderInvocationAllowed(route.groupProviderId)
-              && remoteModelAccess.allowsDelegatedExecution(route.groupProviderId, route.model, route.memberId)
-              && group?.autoSwitch === true
-              && liveDirectTargetAllowed(route);
+            const group = readProviderGroup(target.groupProviderId);
+            if (access?.providerId !== target.groupProviderId
+              || !isRemoteProviderInvocationAllowed(target.groupProviderId)
+              || !remoteModelAccess.allowsDelegatedExecution(target.groupProviderId, target.model, target.memberId)
+              || group?.autoSwitch !== true) return false;
+            if (target.kind === 'live') {
+              const live = directRoutes.get(key);
+              return live === target.route
+                && (request.generation === undefined || live.generation === request.generation)
+                && target.route.expiresAt > Date.now()
+                && liveDirectTargetAllowed(target.route);
+            }
+            const nowTarget = resolveSwitchTarget();
+            return nowTarget?.kind === 'historical'
+              && nowTarget.ownerScope === target.ownerScope
+              && nowTarget.ownerDeviceId === target.ownerDeviceId
+              && nowTarget.joinedAt === target.joinedAt
+              && nowTarget.existingLive === target.existingLive
+              && nowTarget.generation === target.generation
+              && nowTarget.executorDeviceId === target.executorDeviceId
+              && nowTarget.groupProviderId === target.groupProviderId
+              && nowTarget.model === target.model
+              && nowTarget.memberId === target.memberId;
           };
           if (!valid()) return {};
           const issued = directSwitchIssued.get(key);
-          if (issued?.generation === route.generation && Date.now() - issued.at < 2 * 60_000) {
-            return { token: issued.token, generation: route.generation };
+          if (issued?.generation === target.generation && issued.ownerScope === providerShareOwnerKey()
+            && Date.now() - issued.at < 2 * 60_000) {
+            return { token: issued.token, generation: target.generation };
           }
           for (const [id, item] of directSwitchIssued) {
             if (Date.now() - item.at >= (item.confirmed ? 10 : 2) * 60_000) directSwitchIssued.delete(id);
@@ -1591,55 +1638,58 @@ export function installRemoteAgentHost(options: {
           if (directSwitchIssued.size >= 512) return {};
           // The guest's error is only a request to move its own task. It never
           // cools an executor or changes group health without an owner-side signal.
-          const group = readProviderGroup(route.groupProviderId);
-          const exclude = new Set(group?.members.filter((member) => member.kind === 'device'
-            && member.agentDeviceId === route.executorDeviceId).map((member) => member.key) ?? [route.memberKey]);
+          const group = readProviderGroup(target.groupProviderId);
+          const matchedKeys = group?.members.filter((member) => member.kind === 'device'
+            && member.agentDeviceId === target.executorDeviceId).map((member) => member.key) ?? [];
+          const exclude = new Set(matchedKeys.length > 0 ? matchedKeys : [target.memberKey]);
           // O may inspect its own M, but never expose the private account view to G.
           // A blocked bound account plus a real replacement admission allows one
           // fresh, isolated handoff on M. It never resumes the old account's ID.
+          // Historical (expired-lease) restores failed before opening on M, so
+          // always move off M instead of probing M for a same-machine account swap.
           let canChangeAccount = false;
-          if (route.providerId === 'openai' || route.providerId === 'anthropic') {
+          if (target.kind === 'live' && (target.providerId === 'openai' || target.providerId === 'anthropic')) {
             let timer: ReturnType<typeof setTimeout> | undefined;
             try {
               const reply = await Promise.race([
-                remoteBackgroundInvoke(route.executorDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
-                  action: 'session', providerId: route.providerId,
-                  sessionId: hostSessionIdFor(controller, request.sessionId), model: route.model,
+                remoteBackgroundInvoke(target.executorDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
+                  action: 'session', providerId: target.providerId,
+                  sessionId: hostSessionIdFor(controller, request.sessionId), model: target.model,
                 }]),
                 new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 2000); }),
               ]);
-              const view = reply?.ok ? parseSubscriptionSessionAccountView(reply.result, route.providerId) : null;
+              const view = reply?.ok ? parseSubscriptionSessionAccountView(reply.result, target.providerId) : null;
               canChangeAccount = view?.state === 'bound' && view.account.blocked === true
                 && view.account.switchAvailable === true;
             } catch { /* Old/unreachable M: keep the established machine-switch path. */ }
             finally { if (timer) clearTimeout(timer); }
           }
           if (!valid()) return {};
-          const plan = (avoid: ReadonlySet<string>) => groupRelay.plan({ kind: route.agentKind as 'claude-code' | 'codex' | 'pi',
-            model: route.model, providerId: route.groupProviderId,
+          const plan = (avoid: ReadonlySet<string>) => groupRelay.plan({ kind: target.agentKind as 'claude-code' | 'codex' | 'pi',
+            model: target.model, providerId: target.groupProviderId,
             exclude: avoid, reshareKey: reshareKeyForGuest(controller) }).catch(() => null);
           let next = await plan(canChangeAccount ? new Set() : exclude);
           if (canChangeAccount) {
             if (!valid()) return {};
-            if (next?.kind === 'member' && next.agentDeviceId === route.executorDeviceId) {
+            if (next?.kind === 'member' && next.agentDeviceId === target.executorDeviceId) {
               const token = host?.issueDirectGroupSwitchToken(controller, request.sessionId, exclude, true);
               if (token) {
-                directSwitchIssued.set(key, { generation: route.generation,
-                  executorDeviceId: route.executorDeviceId, at: Date.now(), token, ownerScope: providerShareOwnerKey() });
-                return { token, generation: route.generation };
+                directSwitchIssued.set(key, { generation: target.generation,
+                  executorDeviceId: target.executorDeviceId, at: Date.now(), token, ownerScope: providerShareOwnerKey() });
+                return { token, generation: target.generation };
               }
               next = await plan(exclude);
             }
           }
           const canMove = next?.kind === 'member' || (next?.kind === 'local'
-            && options.getMaker().listAvailableAgents().includes(route.agentKind as 'claude-code' | 'codex' | 'pi'));
+            && options.getMaker().listAvailableAgents().includes(target.agentKind as 'claude-code' | 'codex' | 'pi'));
           if (!valid() || !next || !canMove || (next.kind === 'member' && exclude.has(next.memberKey))) return {};
           const token = host?.issueDirectGroupSwitchToken(controller, request.sessionId,
             exclude);
           if (!token) return {};
-          directSwitchIssued.set(key, { generation: route.generation,
-            executorDeviceId: route.executorDeviceId, at: Date.now(), token, ownerScope: providerShareOwnerKey() });
-          return { token, generation: route.generation };
+          directSwitchIssued.set(key, { generation: target.generation,
+            executorDeviceId: target.executorDeviceId, at: Date.now(), token, ownerScope: providerShareOwnerKey() });
+          return { token, generation: target.generation };
         })().finally(() => { directSwitchPending.delete(key); });
         directSwitchPending.set(key, work);
         return work;
@@ -1668,23 +1718,29 @@ export function installRemoteAgentHost(options: {
               && route.guestDeviceId === delegation.guestDeviceId && route.sessionId === sessionId);
           const routes = sameTaskRoutes
             .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+          const committedRoutes = routes.filter((route) => route.committedAt !== undefined);
+          const uncommittedOtherExecutor = routes.some((route) => route.committedAt === undefined
+            && route.executorDeviceId !== issued.executorDeviceId);
           const live = directRoutes.get(key);
           const location = directTaskContext(controller, sessionId).location;
           if ((live && (live.generation !== issued.generation
               || live.executorDeviceId !== issued.executorDeviceId))
-            || (sameTaskRoutes.length && sameTaskRoutes.at(-1)?.generation !== issued.generation)
+            || (committedRoutes.length && committedRoutes.at(-1)?.generation !== issued.generation)
+            || uncommittedOtherExecutor
             || (location && location.generation !== issued.generation)
             || providerShareOwnerKey() !== ownerScope || getSelfDeviceId() !== ownerDeviceId) {
             throw new Error('Provider share direct assignment changed during switch');
           }
-          if (!live && !location && !routes.length) return issued.confirmed === true;
+          if (!live && !location && !committedRoutes.length) return issued.confirmed === true;
           // Disk is the restart boundary. A failed write leaves the token and
           // live route intact, so this open fails and can retry with the token.
-          for (const route of routes) await usage.markDirectReceiptRouteRevoked(route);
+          // Uncommitted provisional routes on the old executor stay queued for
+          // reconcileDirectJournal to finish revoking once that executor is reachable.
+          for (const route of committedRoutes) await usage.markDirectReceiptRouteRevoked(route);
           if (location && !await usage.markDirectTaskRelayed(location, issued.generation)) {
             throw new Error('Provider share direct assignment changed during switch');
           }
-          void revokeRetiredDirectReceiptRoutes(key, routes);
+          void revokeRetiredDirectReceiptRoutes(key, committedRoutes);
           // A lost open response or local placement write must be able to
           // retry the same handoff after this direct route has been retired.
           directSwitchIssued.set(key, { ...issued, confirmed: true });
@@ -1776,7 +1832,7 @@ export function disposeRemoteAgentHost(): void {
   if (host) hostDisposal = Promise.all([hostDisposal, host.dispose()]).then(() => undefined);
   host = null;
   clearProviderShareDelegations();
-  void flushProviderShareUsage();
+  void flushProviderShareUsage().catch(() => log.warn('Provider share usage checkpoint failed during teardown'));
 }
 
 function flushProviderShareUsage(): Promise<void> {

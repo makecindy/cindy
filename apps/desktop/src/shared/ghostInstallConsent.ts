@@ -32,6 +32,13 @@ export type GhostInstallConsentInitiator = 'user' | 'agent';
 /** 安装包从哪里来（只决定确认卡的来源说明）。 */
 export type GhostInstallConsentOrigin = 'market' | 'custom-market' | 'local-file' | 'forge';
 
+export function ghostInstallSourceNoticeKey(origin: GhostInstallConsentOrigin | undefined, communityMarket?: true) {
+  if (origin === 'market' && communityMarket) return 'settings.ghosts.market.communityDisclaimer';
+  if (origin === 'custom-market') return 'settings.ghosts.installConsent.customMarketSourceNotice';
+  if (origin === 'local-file') return 'settings.ghosts.installConsent.localFileSourceNotice';
+  return undefined;
+}
+
 export type GhostInstallConsentFacts =
   | {
       kind: 'install';
@@ -67,6 +74,8 @@ export interface GhostInstallConsentRequest {
   trust?: GhostTrustLevel;
   initiator: GhostInstallConsentInitiator;
   origin: GhostInstallConsentOrigin;
+  /** Host-verified public community publisher, used for installation copy. */
+  communityMarket?: true;
   /** 自定义市场名称（用户添加来源时起的名字，按原样展示）。 */
   originLabel?: string;
   /** Host-generated installation identity and account impact, never package-provided. */

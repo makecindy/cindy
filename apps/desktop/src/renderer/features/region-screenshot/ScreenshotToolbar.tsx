@@ -256,7 +256,7 @@ export function ScreenshotAiMenu(props: ScreenshotAiMenuProps) {
       onMouseDown={(event) => event.preventDefault()}
       onClick={props.onToggleAiMenu}><Sparkles size={14} className="text-[var(--warning-fg)]" />Cindy</Button>
     {props.aiMenuOpen && <div ref={menuRef} role="menu" aria-label={t('regionScreenshot.cindy')}
-      className="absolute right-0 top-full z-20 mt-2 flex w-64 max-w-[calc(100vw-16px)] flex-col rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
+      className="absolute right-0 top-full z-page-float mt-2 flex w-64 max-w-[calc(100vw-16px)] flex-col rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
       onKeyDown={(event) => {
         event.stopPropagation();
         if (event.key === 'Escape') {

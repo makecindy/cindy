@@ -355,7 +355,7 @@ test("root db and guard delegate to the workspace runner", () => {
 	}
 	assert.equal(
 		scripts["test:git-integration"],
-		"pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration",
+		"pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration && node --test scripts/__tests__/dev-migration-policy.git-integration.test.ts",
 	);
 	assert.equal(
 		scripts["test:db"],
@@ -374,6 +374,12 @@ test("client CI owns the complete Desktop Git integration tier", () => {
 	assert.match(
 		job[1],
 		/^\s{6}- name: Run Desktop Git integration tests\n\s{8}run: pnpm test:git-integration$/m,
+	);
+	const windowsChecks = workflow.match(/\n  windows-runner-checks:\n([\s\S]*?)(?=\n  [\w-]+:)/);
+	assert.ok(windowsChecks);
+	assert.match(
+		windowsChecks[1],
+		/^\s{6}- name: Run Desktop to Host Git snapshot chain\n\s{8}run: pnpm --dir apps\/desktop exec vitest run --project git-integration src\/main\/maker-host\/__tests__\/hostGitSnapshotChain\.git-integration\.test\.ts --maxWorkers=1$/m,
 	);
 });
 
@@ -823,6 +829,15 @@ test("desktop real-Git coverage is an explicit coordinated tier outside default 
 		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
 	]);
 	assert.deepEqual(selectFilesForTier(desktop, tier, files), files.slice(0, 2));
+	// #13540: the real Desktop/Host chain must leave the unit pool without
+	// disappearing from CI. Discover its actual filename so a rename back fails.
+	const chainDir = "apps/desktop/src/main/maker-host/__tests__";
+	const chainFiles = fs.readdirSync(path.join(ROOT, chainDir))
+		.filter((file) => file.startsWith("hostGitSnapshotChain.") && file.endsWith(".test.ts"))
+		.map((file) => `${chainDir}/${file}`);
+	assert.equal(chainFiles.length, 1);
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, chainFiles), []);
+	assert.deepEqual(selectFilesForTier(desktop, tier, chainFiles), chainFiles);
 });
 
 test("maker-core real-Git worktree matrix is an explicit tier outside default unit", () => {

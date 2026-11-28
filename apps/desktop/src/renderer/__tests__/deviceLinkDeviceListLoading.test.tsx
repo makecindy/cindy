@@ -35,6 +35,33 @@ describe('useDeviceLinkDeviceList initial request', () => {
     await waitFor(() => expect(result.current?.[0]?.app).toBe('cindy-friend'));
     unmount();
   });
+  // PR #11991 review: a stale fallback (e.g. a read that timed out right after waking) or a
+  // one-leg read is still `ready`, but its online flags are not current evidence, so it must
+  // not settle the first-connection window. Only a complete read is authoritative.
+  it.each([['stale', { stale: true }], ['partial', { partial: true }]] as const)(
+    'marks a %s directory ready but not authoritative until a complete read', async (_source, flag) => {
+      const target: DeviceLinkDeviceView = { deviceId: 'peer', name: 'Mac', platform: 'darwin', appVersion: '1',
+        online: false, busy: false, remoteControlEnabled: false, controlEnabled: true, isSelf: false, lastSeenAt: null };
+      let status!: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void;
+      const listDevices = vi.fn().mockResolvedValueOnce({ devices: [target], ...flag })
+        .mockResolvedValue({ devices: [target] });
+      vi.stubGlobal('electronAPI', { deviceLink: { listDevices, getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(), onStatusChanged: (callback: typeof status) => { status = callback; }, onControlTargetChanged: vi.fn(),
+      } });
+      const { useDeviceLinkDeviceListAuthoritative, useDeviceLinkDeviceListRequestState } =
+        await import('@/features/device-link/useDeviceLinkDeviceList');
+      const { result, unmount } = renderHook(() => ({
+        authoritative: useDeviceLinkDeviceListAuthoritative(), request: useDeviceLinkDeviceListRequestState(),
+      }));
+      await waitFor(() => expect(result.current.request.status).toBe('ready'));
+      expect(result.current.authoritative).toBe(false);
+      act(() => status({ status: 'online' }));
+      await waitFor(() => expect(result.current.authoritative).toBe(true));
+      // Relay stop clears the directory: no authority survives into the next connection.
+      act(() => status({ status: 'stopped' }));
+      expect(result.current.authoritative).toBe(false);
+      unmount();
+    });
   it('silently retries a failed directory request without a later push event', async () => {
     let resolveRetry: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
     let resolvePresenceRefresh: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
@@ -1471,5 +1498,37 @@ it('removes an offline device immediately and ignores a directory reply started 
   expect(result.current).toEqual([]);
   await act(async () => { resolveStale({ devices: [target] }); });
   expect(result.current).toEqual([]);
+  unmount();
+});
+
+// 「全部任务」删除残留回归，unit：单测目录行覆盖不到菜单额外合入的任务缓存和拒绝记录。
+// 先返回不完整目录，再返回行完全相同的完整目录，验证仅成员资格变化也会更新菜单。
+it('reconciles cached and rejected machine options only when the directory confirms absence', async () => {
+  const offline = { deviceId: 'offline', name: 'Offline Mac', platform: 'darwin', appVersion: '1',
+    online: false, busy: false, remoteControlEnabled: false, controlEnabled: true, isSelf: false, lastSeenAt: null,
+  } satisfies DeviceLinkDeviceView;
+  const listDevices = vi.fn()
+    .mockResolvedValueOnce({ devices: [offline], partial: true })
+    .mockResolvedValueOnce({ devices: [offline] })
+    .mockResolvedValue({ devices: [], partial: true });
+  vi.stubGlobal('electronAPI', { deviceLink: { listDevices, getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+    onPresenceChanged: vi.fn(), onStatusChanged: vi.fn(), onControlTargetChanged: vi.fn(),
+  } });
+  const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+  const { revokedDevicesStore } = await import('@/features/device-link/revokedDevicesStore');
+  const { retryDeviceLinkDeviceList } = await import('@/features/device-link/useDeviceLinkDeviceList');
+  const { useSwitcherDevices } = await import('@/features/device-link/useMachineSwitcher');
+  for (const id of ['offline', 'deleted']) {
+    remoteProjectsStore.setDeviceSessions(id, id, []);
+    remoteProjectsStore.markDeviceDisconnected(id);
+  }
+  revokedDevicesStore.markRevoked('deleted-rejected');
+  const { result, unmount } = renderHook(() => useSwitcherDevices().map(device => device.deviceId).sort());
+  await waitFor(() => expect(listDevices).toHaveBeenCalledTimes(1));
+  expect(result.current).toEqual(['deleted', 'deleted-rejected', 'offline']);
+  await act(async () => retryDeviceLinkDeviceList());
+  expect(result.current).toEqual(['offline']);
+  await act(async () => retryDeviceLinkDeviceList());
+  expect(result.current).toEqual(['offline']);
   unmount();
 });

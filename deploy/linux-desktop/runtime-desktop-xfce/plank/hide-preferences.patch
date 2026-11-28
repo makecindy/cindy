@@ -1,0 +1,18 @@
+--- a/lib/Factories/AbstractMain.vala
++++ b/lib/Factories/AbstractMain.vala
+@@ -35 +35 @@
+-			{ "preferences", 0, 0, OptionArg.NONE, null, "Show preferences dialog of the just started or already running instance", null },
++			{ "preferences", 0, OptionFlags.HIDDEN, OptionArg.NONE, null, "Show preferences dialog of the just started or already running instance", null },
+@@ -359,3 +359,3 @@
+-			action.activate.connect (() => {
+-				show_preferences (primary_dock);
+-			});
++			// Cloud images keep layout configuration out of the desktop UI.
++			// Disable the shared action, including CLI and D-Bus activation.
++			action.set_enabled (false);
+--- a/lib/Items/PlankDockItem.vala
++++ b/lib/Items/PlankDockItem.vala
+@@ -83,3 +82,0 @@
+-			item = new Gtk.ImageMenuItem.from_stock (Gtk.Stock.PREFERENCES, null);
+-			item.activate.connect (() => Application.get_default ().activate_action ("preferences", null));
+-			items.add (item);

@@ -3,6 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
+import { receiveHostTaskActivity } from '@/widgets/foregroundTaskActivity';
 import { AgentActivityBridge } from '@/widgets/AgentActivityBridge';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import type { RemoteSession } from '@/session/types';
@@ -55,6 +56,8 @@ beforeEach(() => {
   mock.appStateListeners.clear();
   remoteSessionStore.clear();
   mock.auth = { initialized: true, isAuthenticated: true, user: { id: 'account-a' }, accountGeneration: 1, getAccessToken: async () => 'test-token' };
+  delete mock.native.addListener;
+  delete mock.native.updateForeground;
   delete mock.native.configureAccount; delete mock.native.getPushRegistration;
   mock.link.presenceVersion = 0;
   mock.link.getConnectionState.mockImplementation(() => ({ status: 'online' }));
@@ -325,4 +328,105 @@ it('keeps unconfirmed content until it expires, then ends it instead of leaving 
   expired = true;
   await act(() => vi.advanceTimersByTimeAsync(60_000));
   expect(mock.native.setState).toHaveBeenCalledExactlyOnceWith(null);
+});
+
+// Unit (real bridge): a registered APNs activity used to ignore the host transition after
+// a reply. Keep a second computer outside Home, race its initial read against a push,
+// then background the app before another report arrives.
+it('updates the registered island from complete foreground host reports and releases it in background', async () => {
+  const scope = JSON.stringify(['https://example.test', 'account-a']);
+  setMobileAuthOwner('account-a', 'global');
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
+  mock.native.configureAccount = vi.fn(async () => {});
+  mock.native.getPushRegistration = vi.fn(async () => ({
+    accountScope: scope, enabled: true, startToken: 'start', updateToken: 'update',
+    activityId: 'active', dismissed: false, supportsInputPushToken: true,
+  }));
+  let conflict: (() => void) | undefined;
+  mock.native.addListener = (event, listener) => {
+    if (event === 'foregroundActivityConflict') conflict = listener;
+    return { remove() {} };
+  };
+  const write = mock.native.updateForeground = vi.fn();
+  const report = (device: string, status: 'running' | 'attention', revision: number) => ({
+    schemaVersion: 1, revision, runningCount: Number(status === 'running'),
+    waitingCount: Number(status === 'attention'), unreadCount: 0,
+    selected: { sessionId: device, title: device, status },
+  });
+  let finish!: (report: unknown) => void;
+  const online = ['a', 'b'].map(deviceId => ({ deviceId, online: true, platform: 'darwin', remoteControlEnabled: true }));
+  const reads = vi.fn((id: string) => id === 'a' ? Promise.resolve(report('a', 'attention', 1))
+    : new Promise(resolve => { finish = resolve; }));
+  const untrack = vi.fn(async () => {});
+  Object.assign(mock.link, {
+    readDeviceList: async () => ({ devices: online }), invoke: reads, subscribe: async () => {}, unsubscribe: untrack,
+  });
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(reads).toHaveBeenCalledTimes(2);
+  expect(write).not.toHaveBeenCalled();
+  receiveHostTaskActivity('b', report('b', 'running', 2));
+  expect(JSON.parse(write.mock.calls.at(-1)![1])).toMatchObject({ title: 'a', attentionCount: 1, runningCount: 1 });
+  await act(async () => finish(report('b', 'attention', 1)));
+  expect(write).toHaveBeenCalledTimes(1);
+  receiveHostTaskActivity('a', report('a', 'running', 2));
+  expect(JSON.parse(write.mock.calls.at(-1)![1])).toMatchObject({ status: 'running', count: 2, attentionCount: 0, runningCount: 2 });
+  // A later APNs send may still carry the old task. Re-confirm the two hosts in place.
+  reads.mockImplementation(async id => report(id, 'running', 3));
+  await act(async () => conflict!());
+  expect(reads).toHaveBeenCalledTimes(4);
+  expect(untrack).not.toHaveBeenCalled();
+  expect(JSON.parse(write.mock.calls.at(-1)![1])).toMatchObject({ status: 'running', count: 2 });
+
+  await act(() => {
+    mock.appState.currentState = 'background';
+    for (const listener of mock.appStateListeners) listener('background');
+  });
+  receiveHostTaskActivity('a', report('a', 'attention', 4));
+  expect(write).toHaveBeenCalledTimes(3);
+  expect(untrack).toHaveBeenCalledTimes(2);
+
+  // The known-offline computer may still own the last task. An empty online
+  // report on resume cannot end the activity on that computer's behalf.
+  online[1].online = false;
+  reads.mockResolvedValue({ schemaVersion: 1, revision: 4, waitingCount: 0, unreadCount: 0, runningCount: 0, selected: null });
+  await act(async () => {
+    mock.appState.currentState = 'active';
+    for (const listener of mock.appStateListeners) listener('active');
+  });
+  expect(reads).toHaveBeenCalledTimes(5);
+  expect(write).toHaveBeenCalledTimes(3);
+});
+
+// Unit (real bridge, protocol): the host snapshot's optional companion reaches ContentState so the
+// iPhone island shows the companion like macOS. A malformed companion must not discard the
+// otherwise valid host summary, and an older host without the field keeps the mascot.
+it('passes a valid waiting companion from the host report into the foreground island', async () => {
+  const scope = JSON.stringify(['https://example.test', 'account-a']);
+  setMobileAuthOwner('account-a', 'global');
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
+  mock.native.configureAccount = vi.fn(async () => {});
+  mock.native.getPushRegistration = vi.fn(async () => ({
+    accountScope: scope, enabled: true, startToken: 'start', updateToken: 'update',
+    activityId: 'active', dismissed: false, supportsInputPushToken: true,
+  }));
+  const write = mock.native.updateForeground = vi.fn();
+  const report = (revision: number, companion?: unknown) => ({
+    schemaVersion: 1, revision, runningCount: 0, waitingCount: 1, unreadCount: 0,
+    selected: { sessionId: 'wait', title: 'Lizi', status: 'attention', ...(companion ? { companion } : {}) },
+  });
+  Object.assign(mock.link, {
+    readDeviceList: async () => ({ devices: [{ deviceId: 'a', online: true, platform: 'darwin', remoteControlEnabled: true }] }),
+    invoke: vi.fn(async () => report(1, { hue: 'teal', glyph: 'L', glyphIsInitial: true, imageJpeg: 'AAAA' })),
+    subscribe: async () => {}, unsubscribe: async () => {},
+  });
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(JSON.parse(write.mock.calls.at(-1)![1])).toMatchObject({
+    title: 'Lizi', companion: { hue: 'teal', glyph: 'L', glyphIsInitial: true, imageJpeg: 'AAAA' },
+  });
+  receiveHostTaskActivity('a', report(2, { hue: 'teal', glyph: 'L', glyphIsInitial: 'yes' }));
+  const malformed = JSON.parse(write.mock.calls.at(-1)![1]);
+  expect(malformed).toMatchObject({ title: 'Lizi', attentionCount: 1 });
+  expect(malformed).not.toHaveProperty('companion');
+  receiveHostTaskActivity('a', report(3, { hue: 'teal', glyph: 'L', glyphIsInitial: true, imageJpeg: 'A'.repeat(2052) }));
+  expect(JSON.parse(write.mock.calls.at(-1)![1]).companion).toEqual({ hue: 'teal', glyph: 'L', glyphIsInitial: true });
 });

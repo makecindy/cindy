@@ -9,11 +9,16 @@ import {
 } from '@/lib/sidebarOwnerStorage';
 import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
 import {
+  PLUGIN_ENGINE_AGENT_KIND,
+  PLUGIN_ENGINE_PROVIDER_PREFIX,
+} from '../../../../../shared/pluginEngines';
+import {
   normalizeSidebarPinnedOrder,
   type SidebarPinnedOrderMutation,
   type SidebarSettingsSnapshot,
 } from '../../../../../shared/sidebarSettings';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
+import { isFirstRunOfFreshInstall } from '../../lib/sidebarInstallVintage';
 
 const log = createLogger('SidebarFilterCore');
 /**
@@ -61,8 +66,13 @@ export type FilterStatus = 'active' | 'archived' | 'all';
 export const DIALOGUE_FILTER_KEY = 'dialogue';
 /** 'all' 字符串字面量 = 选中"全部"；string[] = 勾选的 projectKey 和/或 DIALOGUE_FILTER_KEY。 */
 export type FilterProjects = 'all' | string[];
-/** Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。 */
-export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi';
+/**
+ * Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。
+ * 'all' = 不筛选；string[] = 勾选的 Harness 键（见 sessionHarnessKey）。内置 Harness 的键是
+ * 'cc' / 'codex' / 'pi'；插件带来的 Harness 数量不固定，键是任务上的 providerId。
+ */
+export type FilterVendor = 'all' | string[];
+export const BUILTIN_HARNESS_KEYS = ['cc', 'codex', 'pi'] as const;
 /**
  * Sidebar 主列表分组方式(侧边栏重设计 D 期)。
  *   - project: 「按项目分组」开——有项目的任务收进项目行(默认)。
@@ -84,7 +94,7 @@ export type FilterProjectOrder = 'activity' | 'custom';
  * 任务行右侧信息项（复选）。存储数组的顺序 = 用户勾选先后(nextTaskInfoAfterToggle
  * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里选项的排列另有固定顺序。
  */
-export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost';
+export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost' | 'harness' | 'project' | 'teammate';
 export type ManualProjectDropPosition = 'before' | 'after';
 
 const STATUS_VALUES: ReadonlySet<string> = new Set<FilterStatus>(['active', 'archived', 'all']);
@@ -312,8 +322,17 @@ export function removeProjectsFromFilter(
 
 /* ============================== vendor load/persist ============================== */
 
-const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex', 'pi']);
+const BUILTIN_HARNESS_KEY_SET: ReadonlySet<string> = new Set(BUILTIN_HARNESS_KEYS);
 
+function cleanVendorKeys(values: unknown): FilterVendor {
+  if (!Array.isArray(values)) return 'all';
+  const keys = [
+    ...new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0)),
+  ];
+  return keys.length > 0 ? keys : 'all';
+}
+
+/** 旧版单值（含 main 曾提供的通用 'acp'）；多选或具体插件 Harness 存 JSON 数组。 */
 export function loadVendor(mode: TaskListMode = 'tasks'): FilterVendor {
   const storage = safeStorage();
   if (!storage) return 'all';
@@ -324,18 +343,70 @@ export function loadVendor(mode: TaskListMode = 'tasks'): FilterVendor {
     log.warn('[useSidebarFilter] failed to read vendor:', err);
     return 'all';
   }
-  if (raw && VENDOR_VALUES.has(raw)) return raw as FilterVendor;
-  return 'all';
+  if (!raw || raw === 'all') return 'all';
+  if (BUILTIN_HARNESS_KEY_SET.has(raw)) return [raw];
+  // 合入 #13285 后，已保存的通用「插件引擎」筛选应继续包含每一种插件 Harness。
+  if (raw === PLUGIN_ENGINE_AGENT_KIND) return [PLUGIN_ENGINE_AGENT_KIND];
+  if (!raw.startsWith('[')) return 'all';
+  try {
+    return cleanVendorKeys(JSON.parse(raw));
+  } catch {
+    return 'all';
+  }
 }
 
 export function persistVendor(v: FilterVendor, mode: TaskListMode = 'tasks'): void {
   const storage = safeStorage();
   if (!storage) return;
+  // 只选一个内置 Harness 时沿用旧格式：旧版本读到的仍是同一个选择，而不是回退成「全部」。
+  const value =
+    v === 'all' ? 'all' : v.length === 1 && BUILTIN_HARNESS_KEY_SET.has(v[0]) ? v[0] : JSON.stringify(v);
   try {
-    storage.setItem(sidebarModeKey(VENDOR_KEY, mode), v);
+    storage.setItem(sidebarModeKey(VENDOR_KEY, mode), value);
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist vendor:', err);
   }
+}
+
+/** 勾选 / 取消一个 Harness；取消到一个不剩时回到「全部」。 */
+export function nextVendorAfterToggle(previous: FilterVendor, key: string): FilterVendor {
+  if (previous === 'all') return [key];
+  const next = previous.includes(key) ? previous.filter((item) => item !== key) : [...previous, key];
+  return next.length > 0 ? next : 'all';
+}
+
+export function isPluginHarnessKey(key: string): boolean {
+  return key === PLUGIN_ENGINE_AGENT_KIND || key.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX);
+}
+
+/** 任务所属 Harness 的筛选键：插件 Harness 按 providerId 区分，其余按 agentKind。 */
+export function sessionHarnessKey(session: {
+  agentKind?: string | null;
+  providerId?: string | null;
+}): string {
+  const kind = session.agentKind ?? 'cc';
+  if (kind !== PLUGIN_ENGINE_AGENT_KIND) return kind;
+  return session.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
+    ? session.providerId
+    : PLUGIN_ENGINE_AGENT_KIND;
+}
+
+/**
+ * null = 不筛选。只知道 agentKind 的场合（登记过但没有任务的项目）没有 providerId，
+ * 此时 'acp' 匹配任一已勾选的插件 Harness。
+ */
+export function harnessFilterPredicate(
+  vendor: FilterVendor,
+): ((session: { agentKind?: string | null; providerId?: string | null }) => boolean) | null {
+  if (vendor === 'all') return null;
+  const selected = new Set(vendor);
+  const anyPlugin = vendor.some(isPluginHarnessKey);
+  return (session) => {
+    const key = sessionHarnessKey(session);
+    return selected.has(key)
+      || (selected.has(PLUGIN_ENGINE_AGENT_KIND) && isPluginHarnessKey(key))
+      || (key === PLUGIN_ENGINE_AGENT_KIND && anyPlugin);
+  };
 }
 
 /* ============================== groupBy load/persist ============================== */
@@ -446,15 +517,35 @@ export function persistHideAutomations(hide: boolean, mode: TaskListMode): void 
   }
 }
 
+const HIDE_TASK_CREATED_KEYS: Record<TaskListMode, string> = {
+  tasks: 'cc-agent.sidebar.filter.hideTaskCreated',
+  inbox: 'cc-agent.sidebar.filter.inbox.hideTaskCreated',
+};
+
+export function loadHideTaskCreated(mode: TaskListMode): boolean {
+  try { return safeStorage()?.getItem(HIDE_TASK_CREATED_KEYS[mode]) === 'true'; } catch { return false; }
+}
+
+export function persistHideTaskCreated(hide: boolean, mode: TaskListMode): void {
+  try {
+    if (hide) safeStorage()?.setItem(HIDE_TASK_CREATED_KEYS[mode], 'true');
+    else safeStorage()?.removeItem(HIDE_TASK_CREATED_KEYS[mode]);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist task-created filter:', err);
+  }
+}
+
 export function sidebarContentFilterCount(filter: {
   projects: FilterProjects;
   vendor: FilterVendor;
   lastActivity: FilterLastActivity;
   creators: FilterCreators;
   hideAutomations: boolean;
+  hideTaskCreated?: boolean;
 }): number {
   return Number(filter.projects !== 'all') + Number(filter.vendor !== 'all')
-    + Number(filter.lastActivity !== 'all') + Number(filter.creators !== 'all') + (filter.hideAutomations ? 1 : 0);
+    + Number(filter.lastActivity !== 'all') + Number(filter.creators !== 'all')
+    + (filter.hideAutomations ? 1 : 0) + (filter.hideTaskCreated ? 1 : 0);
 }
 
 /* ============================== groupDevice load/persist ============================== */
@@ -683,7 +774,12 @@ export function loadProjectOrder(): FilterProjectOrder {
   if (raw && PROJECT_ORDER_VALUES.has(raw)) return raw as FilterProjectOrder;
   // 旧「手动排序」是 sortBy 的一档,拆开后对应自定义项目顺序。
   if (legacySort === 'manual') return 'custom';
-  return 'activity';
+  // 没存过:默认「手动」(2026-11-28 用户决定),只给全新安装;已经在用的安装沿用「跟随任务」,
+  // 升级不改列表的样子(sidebar-redesign-plan.md §3.0)。新装的结论当场落盘——「全新安装的第一次
+  // 运行」只成立这一次,不落盘的话下次启动就退回「跟随任务」。
+  if (!isFirstRunOfFreshInstall()) return 'activity';
+  persistProjectOrder('custom');
+  return 'custom';
 }
 
 export function persistProjectOrder(projectOrder: FilterProjectOrder): boolean {
@@ -724,15 +820,18 @@ export function migrateLegacyManualSort(): void {
 
 /* ============================== taskInfo load/persist ============================== */
 
+// These identifiers were always visible before version 2 of the preference.
+const ROW_IDENTITY_FIELDS = ['harness', 'project', 'teammate'] as const;
 const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
   'time',
   'pr',
   'worktree',
   'tokens',
   'cost',
+  ...ROW_IDENTITY_FIELDS,
 ]);
-/** 默认仅显示最近活动时间。任务标签不属于可选信息项，始终跟在标题后显示。 */
-export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time'];
+/** 默认显示最近活动时间与行身份标识。任务标签不属于可选信息项，始终跟在标题后显示。 */
+export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time', ...ROW_IDENTITY_FIELDS];
 
 /**
  * 兼容旧 string[] 与带版本号的字段列表，保留字段及顺序（全不选合法）。
@@ -752,7 +851,8 @@ export function loadTaskInfoFields(mode: TaskListMode = 'tasks'): TaskInfoField[
   try {
     const parsed = JSON.parse(raw);
     const legacy = Array.isArray(parsed);
-    const values = legacy ? parsed : parsed?.version === 1 ? parsed.fields : null;
+    if (!legacy && parsed?.version !== 1 && parsed?.version !== 2) return [...DEFAULT_TASK_INFO_FIELDS];
+    const values = legacy ? parsed : parsed.fields;
     if (!Array.isArray(values)) return [...DEFAULT_TASK_INFO_FIELDS];
     const seen = new Set<string>();
     const cleaned: TaskInfoField[] = [];
@@ -760,6 +860,11 @@ export function loadTaskInfoFields(mode: TaskListMode = 'tasks'): TaskInfoField[
       if (typeof value !== 'string' || !TASK_INFO_VALUES.has(value) || seen.has(value)) continue;
       seen.add(value);
       cleaned.push(value as TaskInfoField);
+    }
+    if (legacy || parsed.version === 1) {
+      for (const field of ROW_IDENTITY_FIELDS) {
+        if (!seen.has(field)) cleaned.push(field);
+      }
     }
     return cleaned;
   } catch (err) {
@@ -772,7 +877,7 @@ export function persistTaskInfoFields(fields: readonly TaskInfoField[], mode: Ta
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(sidebarModeKey(TASK_INFO_KEY, mode), JSON.stringify({ version: 1, fields }));
+    storage.setItem(sidebarModeKey(TASK_INFO_KEY, mode), JSON.stringify({ version: 2, fields }));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist taskInfo:', err);
   }

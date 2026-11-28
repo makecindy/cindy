@@ -2,7 +2,7 @@
  * Protects profile separation, bounded subprocess lifetime and sanitized errors, without real credentials.
  */
 import { EventEmitter } from 'node:events';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,14 +41,42 @@ vi.mock('../../maker-host/claude-native-cli.desktop.js', () => ({
 import {
   codexAccountRpc,
   readNativeAccount,
+  readNativeCodexAccountAndRateLimits,
   readNativeAccountUsage,
   loginNativeAccount,
   readNativeCodexTokens,
+  readCodexWebTokens,
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
 } from '../nativeCli.js';
 import { isAccountServiceUnreachable } from '../accountServiceError.js';
-import { refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
+import { readClaudeCliPlanUsage, refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
+import { subscriptionUsageView } from '../usageView.js';
+
+// #12425, standard tier: the native reader previously discarded credits without a time window.
+it('retains an extra-usage-only reading without publishing a synthetic time window', async () => {
+  vi.mocked(readClaudeCliPlanUsage).mockResolvedValueOnce({
+    rateLimits: { extra_usage: { is_enabled: true, used_credits: 0 } },
+  });
+  const { claudeUsage } = await readNativeAccountUsage('anthropic', '/fixture/enterprise');
+  expect(claudeUsage).toMatchObject({
+    extraUsage: { isEnabled: true, usedCredits: 0, monthlyLimit: null, utilization: null },
+    fiveHour: null, sevenDay: null, scoped: [], updatedAt: expect.any(Number),
+  });
+  expect(subscriptionUsageView({
+    provider: 'anthropic', providerId: 'anthropic', accountId: 'fixture',
+    authenticated: true, usage: { claude: claudeUsage ?? undefined },
+  }, Date.now())).toMatchObject({ windows: [], updatedAt: null, usageStatus: 'unavailable' });
+});
+
+it.each([
+  { is_enabled: false, used_credits: 0 },
+  { is_enabled: true, monthly_limit: 10 },
+  { is_enabled: true, used_credits: false, utilization: [] },
+])('ignores disabled or missing standalone readings (%j)', async extra_usage => {
+  vi.mocked(readClaudeCliPlanUsage).mockResolvedValueOnce({ rateLimits: { extra_usage } });
+  await expect(readNativeAccountUsage('anthropic', '/fixture/enterprise')).resolves.toEqual({ claudeUsage: null });
+});
 
 const children: (EventEmitter & {
   stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
@@ -155,9 +183,9 @@ beforeEach(() => {
               request.id === 1
                 ? { id: 1, result: {} }
                 : h.error
-                  ? { id: 2, error: { message: h.errorMessage } }
+                  ? { id: request.id, error: { message: h.errorMessage } }
                   : {
-                      id: 2,
+                      id: request.id,
                       result: h.accountResult ?? {
                         account: {
                           type: 'chatgpt',
@@ -199,6 +227,40 @@ describe('Claude profile renewal', () => {
   });
 });
 describe('official Codex profiles', () => {
+  // #12390, standard: the automatic read used separate CLI startups for identity and
+  // quota. Exercise both writes on one control connection and replace auth between
+  // requests to verify that a connection carrying the earlier login cannot read quota.
+  it.each([false, true])('uses one bounded probe and rejects a replaced credential (%s)', async replace => {
+    const profile = await mkdtemp(path.join(tmpdir(), 'codex-reset-profile-'));
+    const authFile = path.join(profile, 'auth.json');
+    try {
+      await writeFile(authFile, JSON.stringify({
+        tokens: { access_token: 'invalid-fixture', account_id: 'fixture-account' },
+      }));
+      let checks = 0;
+      const read = readNativeCodexAccountAndRateLimits(profile, async () => {
+        if (++checks !== 3 || !replace) return;
+        const next = path.join(profile, 'auth-next.json');
+        await writeFile(next, JSON.stringify({
+          tokens: { access_token: 'invalid-replacement', account_id: 'other-account' },
+        }));
+        await rename(next, authFile);
+      });
+      if (replace) await expect(read).rejects.toThrow('changed before dispatch');
+      else await expect(read).resolves.toMatchObject({
+        identity: { email: profile + '@example.test', accountId: 'fixture-account' },
+      });
+      expect(children).toHaveLength(1);
+      const requests = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method);
+      expect(requests).toEqual(replace
+        ? ['initialize', 'initialized', 'account/read']
+        : ['initialize', 'initialized', 'account/read', 'account/rateLimits/read']);
+      expect(children[0].kill).toHaveBeenCalledOnce();
+    } finally {
+      await rm(profile, { recursive: true, force: true });
+    }
+  });
+
   // #10110 review, unit: legacy auth has no plan. Keep the plan returned by the
   // selected profile's quota RPC; the old test fixtures only read account/read.
   it('preserves the selected profile plan alongside its sanitized Codex quota', async () => {
@@ -288,6 +350,18 @@ describe('official Codex profiles', () => {
       expect(first.canDispatch()).toBe(false);
       const second = await readNativeCodexTokens(dir);
       expect(second.chatgptAccountId).toBe('fixture-account-b');
+      await writeFile(authPath, JSON.stringify({ tokens: { access_token: 'fixture-token-only' } }));
+      expect((await readCodexWebTokens(dir))?.chatgptAccountId).toBeNull();
+      await expect(readNativeCodexTokens(dir)).rejects.toThrow('authentication bridge');
+      await writeFile(authPath, JSON.stringify({ OPENAI_API_KEY: 'fixture-key' }));
+      const apiKey = await readCodexWebTokens(dir);
+      expect(apiKey.accessToken).toBeNull();
+      expect(apiKey.canDispatch()).toBe(true);
+      await writeFile(authPath, JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: 'fixture-old-key', tokens: {} }));
+      expect(apiKey.canDispatch()).toBe(false);
+      await expect(readCodexWebTokens(dir)).rejects.toThrow('authentication bridge');
+      await writeFile(authPath, JSON.stringify({ auth_mode: 'apikey' }));
+      await expect(readCodexWebTokens(dir)).rejects.toThrow('authentication bridge');
       await rm(authPath);
       expect(second.canDispatch()).toBe(false);
     } finally {

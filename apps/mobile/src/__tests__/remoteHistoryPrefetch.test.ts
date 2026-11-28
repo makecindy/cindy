@@ -3,7 +3,8 @@ import { HistoryViewController, projectHistoryView, type HistoryViewPage, type H
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { clearHistoryDisk, fitsHistoryDisk, historyDiskAuthority, readHistoryDisk, writeHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { prefetchRemoteHistories } from '@/session/remoteHistoryPrefetch';
-import { clearRemoteHistoryViews, getRemoteHistoryView, mountRemoteHistoryView } from '@/session/remoteHistoryViews';
+import { clearRemoteHistoryViews, findRemoteHistoryView, getRemoteHistoryView, mountRemoteHistoryView } from '@/session/remoteHistoryViews';
+import { rememberRecentTask } from '@/session/recentTasks';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -250,5 +251,35 @@ describe('history read ahead after a list refresh', () => {
     expect(offline.getSnapshot()).toMatchObject({ hasMore: false, nextCursor: null });
     expect(await offline.locate(earlier.clientId, earlier.createdAt)).toEqual(earlier);
     expect(transport.page).not.toHaveBeenCalled();
+  });
+
+  // 测试价值：验证后台 prefetch 写完磁盘后原地更新 detached 内存 controller 而非删除它，
+  // 防止重进常驻对话时回落到空 controller 导致 60 条短列表闪缩；覆盖缺口：此前仅测离线读盘，未测常驻重进同实例就绪，tier unit。
+  it('updates a detached retained controller in place instead of dropping it back to an empty view', async () => {
+    setMobileAuthOwner('user-1');
+    const first: RemoteMessage = { ...row('u1', 1, 'initial'), role: 'user' };
+    const second = row('a2', 9, 'prefetched reply');
+    const source = {
+      readHistoryView: vi.fn(async () => page([first])),
+      readWorkDetails: vi.fn(async () => ({ version: 1 as const, messages: [], hasMore: false, nextCursor: null })),
+      setHistoryExpanded: vi.fn(async () => undefined),
+    };
+    rememberRecentTask({ pathname: '/sessions/[sessionId]', params: { deviceId: DEVICE, deviceName: 'Mac', sessionId: 's' } });
+    const entry = getRemoteHistoryView(DEVICE, 's', source);
+    const release = mountRemoteHistoryView(entry, source, true);
+    await entry.view.refresh();
+    const firstItemRef = entry.view.getSnapshot().items[0];
+    release();
+
+    remoteSessionStore.setDeviceSessions(DEVICE, 'Mac', [session('s', second.createdAt)]);
+    const prefetchReader = { readHistoryView: vi.fn(async () => page([first, second])) };
+    await prefetchRemoteHistories(DEVICE, prefetchReader, () => true);
+
+    expect(findRemoteHistoryView(DEVICE, 's')).toBe(entry.view);
+    const reopened = getRemoteHistoryView(DEVICE, 's', source);
+    expect(reopened.view).toBe(entry.view);
+    expect(reopened.view.getSnapshot()).toMatchObject({ ready: true, stale: true, loading: false });
+    expect(reopened.view.getSnapshot().items).toHaveLength(2);
+    expect(reopened.view.getSnapshot().items[0]).toBe(firstItemRef);
   });
 });

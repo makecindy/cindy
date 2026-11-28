@@ -94,7 +94,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       "const pinSearch = section === 'scrollable' && search.query.trim().length > 0",
     );
     // 搜索吸顶不改变导航行高度，也不在输入框外绘制额外背景。
-    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-30'");
+    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-page-overlay'");
     expect(topNavSource).toContain("if (section === 'scrollable')");
     expect(sidebarUpperSource).toContain('lastListScrollTopRef.current = el.scrollTop');
     expect(sidebarUpperSource).toContain(
@@ -117,9 +117,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(sidebarUpperSource).toContain("document.addEventListener('focusin', onFocusIn)");
     const inlineSearchSource = read('features', 'cc-agent', 'sidebar', 'SidebarInlineSearch.tsx');
     expect(inlineSearchSource).toContain('inputRef.current?.focus({ preventScroll: true })');
-    expect(sidebarUpperSource).not.toContain('absolute inset-0 z-20');
+    expect(sidebarUpperSource).not.toContain('absolute inset-0 z-page-float');
     expect(sidebarUpperSource).not.toContain(
-      "search.trimmed && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)]'",
+      "search.trimmed && 'sticky top-0 z-page-overlay bg-[var(--cmd-palette-bg)]'",
     );
 
     // 声明语义与 useRegisterSidebarUpper 一致:卸载不复位,避免切到 /settings 时闪变。
@@ -198,8 +198,8 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
 
     // 本轮确认的菜单统一带图标，分组入口直接表达侧栏组标题与缩进任务行。
     expect(filterSource).toContain('Icon={SidebarGroupsIcon}');
+    // 2026-11-28:项目排序并进「排序」子菜单,不再有自己的一级行与行首图标。
     expect(filterSource).toContain('Icon={ArrowDownWideNarrow}');
-    expect(filterSource).toContain('Icon={ListOrdered}');
   });
 
   // 2026-08-12 用户裁决:置顶段头的显示样式按钮显示**当前选中**的模式图标,
@@ -282,9 +282,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     const cardSource = read('features', 'cc-agent', 'sidebar', 'SessionCard.tsx');
     expect(cardSource).toContain('sourceLabel,');
     // Outside the inbox; the inbox leaves the project name to the row's project icon.
-    expect(cardSource).toContain('{sourceLabel && !inboxMode ? (');
+    expect(cardSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
     const itemSource = read('features', 'cc-agent', 'sidebar', 'SessionItem.tsx');
-    expect(itemSource).toContain('{sourceLabel && !inboxMode ? (');
+    expect(itemSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
   });
 
   // 2026-08-12 用户裁决:筛选各维度选中后菜单不关闭(常要连调几项);排序与显示
@@ -297,7 +297,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     );
     expect(selectItem).toMatch(/event\.preventDefault\(\);\s*onSelect\(\);/);
     expect(selectItem).not.toContain('keepOpen');
-    expect(filterSource).toContain('checked={groupDevice}');
+    expect(filterSource).toContain('checked: groupDevice');
     expect(filterSource).not.toContain("disabled={sortBy === 'manual'}");
   });
 
@@ -306,9 +306,10 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
     // 说明挂在选项表上(与 labelKey / Icon 同源),不在渲染处硬编码文案。
     expect(filterSource).toMatch(
-      /value: 'priority',\s*\n\s*labelKey: 'ccAgent\.sidebar\.filterSortBy\.priority',\s*\n\s*tipKey: 'ccAgent\.sidebar\.filterSortByTip\.priority',/,
+      /value: 'priority',\s*\n\s*labelKey: 'ccAgent\.sidebar\.filterSortBy\.priority',\s*\n\s*hintKey: 'ccAgent\.sidebar\.filterSortByHint\.priority',\s*\n\s*tipKey: 'ccAgent\.sidebar\.filterSortByTip\.priority',/,
     );
-    // recency / manual 名字自解释,不配说明——菜单不该变成说明书。
+    // recency / manual 名字自解释,不配悬停说明——菜单不该变成说明书。
+    // (2026-11-28 起每个排序选项行尾另有一句灰字 hintKey,悬停说明仍只给优先级。)
     expect(filterSource).not.toMatch(/filterSortBy\.recency',\s*\n?\s*tipKey/);
     expect(filterSource).not.toMatch(/filterSortBy\.manual',\s*\n?\s*tipKey/);
     // side="right":菜单贴侧栏右缘,提示往上下会压住相邻选项。
@@ -341,7 +342,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(infoMetaSource).toContain("piece.key === 'worktree' ?");
     // 菜单摘要的图标串同样按勾选顺序(遍历 taskInfoFields,不是遍历选项表)。
     const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
-    expect(filterSource).toContain('{taskInfoFields.map((field) => {');
+    expect(filterSource).toContain('{summaryFields.map((field) => {');
   });
 
   // 2026-08-12 用户裁决:任务信息行的当前选中项用图标表示,不再罗列短词。
@@ -357,7 +358,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(filterSource).toContain('Icon={ListChecks}');
     expect(filterSource).toContain('Icon={Folder}');
     expect(filterSource).toContain('Icon={Bot}');
-    expect(filterSource).toContain('Icon={CalendarClock}');
+    // 2026-11-28:最近活跃改为小标题 + 一排分段按钮,不再是带图标的子菜单行。
     expect(filterSource).toContain('Icon={Info}');
   });
 
@@ -371,7 +372,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(projectsSectionSource).not.toMatch(/if \(\s*allProjectKeysForOrder\.length === 0/);
     // 连接中 / 全屏 loading-error 不再把范围标题一起摘掉。设备目录 error 不展示
     // 占位提示，因此不属于这里的标题覆盖分支。
-    const connectingIdx = sidebarUpperSource.indexOf('selectedMachineConnecting ?');
+    const connectingIdx = sidebarUpperSource.indexOf('selectedMachinePlaceholder ?');
     expect(connectingIdx).toBeGreaterThanOrEqual(0);
     expect(sidebarUpperSource.slice(connectingIdx, connectingIdx + 900)).toContain(
       '<MainListScopeHeader',
@@ -384,7 +385,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       'remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent',
       "remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent",
       'remoteSessionBootstrapLoadingDevices.length > 0 && !hasVisibleSidebarContent',
-      'selectedMachineConnecting ?',
+      'selectedMachinePlaceholder ?',
     ];
     for (const marker of placeholderMarkers) {
       const idx = sidebarUpperSource.indexOf(marker);

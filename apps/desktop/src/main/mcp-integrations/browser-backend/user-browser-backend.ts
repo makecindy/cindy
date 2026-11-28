@@ -19,7 +19,6 @@
 
 import { randomUUID } from 'node:crypto';
 import fsSync from 'node:fs';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { RecipeBrowserSessions } from '@cindy/browser-control-runtime';
 import { buildDomReadSource } from '@cindy/browser-control-runtime/dom-read';
@@ -28,7 +27,7 @@ import type {
   BrowserExtensionClientInfo,
   BrowserExtensionJobResult,
 } from '../../browser-extension/bridge.js';
-import { openRecipeInputFileSync, readRecipeInputFileSync, resolveUploadFiles } from './rsb-webview-upload-policy.js';
+import { openRecipeInputFileSync, readRecipeInputFileSync, resolveUploadBatchSync, UploadSizeError } from './rsb-webview-upload-policy.js';
 import type { BackendRequest, BackendResult, BrowserBackend } from './types.js';
 
 export interface UserBrowserPageControl {
@@ -50,11 +49,15 @@ export interface UserBrowserBackendOptions {
     warn(message: string, meta?: unknown): void;
   };
   now?(): number;
-  /** status 时扩展未连接,先等它重连这么久(扩展刷新或更新后会断开几秒);默认 8 秒。 */
+  /** status / ensureConnected 时扩展未连接,先等它重连这么久(扩展休眠或刷新后会断开几秒);默认 8 秒。 */
   reconnectWaitMs?: number;
   /** Only called for actual browser use, never passive status/doctor/settings reads. */
   startBrowser?(): Promise<void>;
+  /** Whether the user's normal-profile browser process is already running (avoids duplicate launch). */
+  isBrowserRunning?(): Promise<boolean>;
   startupWaitMs?: number;
+  /** Cooldown after a timed-out launch before trying startBrowser again; cleared once any client connects. */
+  launchCooldownMs?: number;
 }
 
 interface TargetRecord {
@@ -182,14 +185,12 @@ const UPLOAD_BATCH_BYTES_MAX = 30_000_000;
 /** One piece of a larger upload. All pieces wait in the page's memory, which bounds the whole batch. */
 const UPLOAD_CHUNK_BYTES = 4_000_000;
 const UPLOAD_CHUNKED_BYTES_MAX = 1024 * 1024 * 1024;
-function uploadTooLarge(action: BackendRequest['action'], chunked: boolean): BackendResult {
-  return actionFailed(
-    action,
-    chunked
-      ? '上传文件总大小超过 1 GB,文件要先放进页面内存,扩展处理不了这么大。请告知用户在页面上手动选择文件,或分批上传'
-      : `上传文件总大小超过约 30 MB:这个版本的 Cindy 浏览器扩展只能直接传这么多。请告知用户把扩展更新到 ${USER_BROWSER_CHUNKED_UPLOAD_VERSION} 或更新版本(之后分块传输,最大 1 GB),或分批上传`,
-    'BROWSER_RUNTIME_INVALID_REQUEST',
-  );
+function uploadTooLarge(action: BackendRequest['action'], scope: 'file' | 'batch'): BackendResult {
+  const manual = '请告知用户在原浏览器的当前页面手动选择文件，选好后 Cindy 可以继续操作。';
+  const message = scope === 'file'
+    ? `单个文件超过 1 GiB，扩展无法把它安全地放入页面内存。${manual}`
+    : `这些文件合计超过 1 GiB。如果每个文件都能单独上传，可以按当前扩展支持的大小分批上传。${manual}`;
+  return actionFailed(action, message, 'BROWSER_RUNTIME_INVALID_REQUEST');
 }
 
 const UPLOAD_MIME: Record<string, string> = {
@@ -229,9 +230,16 @@ const NOT_CONFIGURED_MESSAGE =
   '没有已启用的浏览器扩展插件提供页面控制(安装并启用 Cindy Chrome 插件后再选择「我的浏览器」)。';
 const DISCONNECTED_MESSAGE =
   '浏览器扩展尚未连接；start 会尝试启动浏览器并等待连接。自动启动后仍未连接时检查扩展是否启用或需要配对；未连接不代表未安装。';
+const BROWSER_RUNNING_DISCONNECTED_MESSAGE =
+  '检测到用户浏览器已在运行，但 Cindy 扩展尚未连接（可能是扩展休眠、未启用或需要配对）；已跳过重复启动浏览器。请切换到浏览器唤醒或检查 Cindy 扩展状态后再试，不要反复重试，也不要自行切换浏览器模式或通过 shell 启动 Playwright / Chrome。';
+const LAUNCH_COOLDOWN_DISCONNECTED_MESSAGE =
+  '刚刚已尝试启动用户浏览器但 Cindy 扩展仍未连接；请检查浏览器中的 Cindy 扩展是否已启用或需要配对，避免反复重试启动。';
 
 const UNPAIRED_MESSAGE =
   '浏览器扩展已连到 Cindy,但还没完成配对或授权:请让用户在 Cindy Chrome 插件页确认这个浏览器,或重新启用插件后再查询 status。';
+
+const DEFAULT_RECONNECT_WAIT_MS = 8_000;
+const DEFAULT_LAUNCH_COOLDOWN_MS = 60_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -248,7 +256,8 @@ export class UserBrowserBackend implements BrowserBackend {
   private readonly recipePumps = new Map<string, () => Promise<void>>();
   private nextAlias = 1;
   private disposed = false;
-  private preparing: { wantsLaunch: boolean; promise: Promise<void> } | null = null;
+  private lastFailedLaunchAt: number | null = null;
+  private preparing: { wantsLaunch: boolean; promise: Promise<string | undefined> } | null = null;
 
   constructor(private readonly opts: UserBrowserBackendOptions) {}
 
@@ -260,15 +269,19 @@ export class UserBrowserBackend implements BrowserBackend {
         'BROWSER_RUNTIME_UNAVAILABLE',
       );
     try {
+      let disconnectedMessage: string | undefined;
       if (!['status', 'doctor', 'profiles', 'stop'].includes(request.action) &&
           request.proxyServer === undefined && request.proxyAllowedHostnames === undefined) {
-        await this.ensureConnected(request);
+        disconnectedMessage = await this.ensureConnected(request);
       }
       if (this.disposed) return actionFailed(request.action, 'user browser backend disposed', 'BROWSER_RUNTIME_UNAVAILABLE');
-      const result = await this.dispatch(request);
-      this.noteSessionTab(request, result);
+      const result = await this.dispatch(request, disconnectedMessage);
+      if (!this.disposed) this.noteSessionTab(request, result);
       return result;
     } catch (err) {
+      if (request.action === 'upload' && err instanceof UploadSizeError && err.limit === UPLOAD_CHUNKED_BYTES_MAX) {
+        return uploadTooLarge(request.action, err.scope);
+      }
       this.opts.logger.warn('user-browser backend call threw', {
         action: request.action,
         err: err instanceof Error ? err.message : String(err),
@@ -277,49 +290,141 @@ export class UserBrowserBackend implements BrowserBackend {
     }
   }
 
-  private async ensureConnected(req: BackendRequest): Promise<void> {
+  private async checkBrowserRunning(): Promise<boolean> {
+    if (!this.opts.isBrowserRunning) return false;
+    try {
+      return Boolean(await this.opts.isBrowserRunning());
+    } catch {
+      return false;
+    }
+  }
+
+  private async ensureConnected(req: BackendRequest): Promise<string | undefined> {
     const control = this.opts.getPageControl();
-    if (!control || !this.opts.startBrowser || this.connectedClients(control).length > 0) return;
+    if (!control || this.connectedClients(control).length > 0) return undefined;
     // A named connection may belong to a different browser/profile. Never substitute the OS
     // default for it. Requests without a profile may still join a wait that began earlier and
     // ask it to launch the default browser, so the first caller's profile does not decide for all.
     if (!req.profile && this.preparing) this.preparing.wantsLaunch = true;
     if (!this.preparing) {
-      const state: { wantsLaunch: boolean; promise: Promise<void> } = {
+      const state: { wantsLaunch: boolean; promise: Promise<string | undefined> } = {
         wantsLaunch: !req.profile,
-        promise: Promise.resolve(),
+        promise: Promise.resolve(undefined),
       };
+      const now = this.opts.now ?? Date.now;
       const stillCurrent = () => !this.disposed && this.opts.getPageControl()?.bridge === control.bridge;
-      const prepare = async () => {
+      const prepare = async (): Promise<string | undefined> => {
         let status = await control.bridge.status();
+        if (status.ok) {
+          for (const c of status.clients) {
+            if (c.connected) {
+              this.everReady.add(c.id);
+              this.lastFailedLaunchAt = null;
+            }
+          }
+        }
         // Pairing is a separate boundary; opening more browsers cannot resolve it.
-        if (!stillCurrent() || !status.ok || status.clients.some(c => c.connected || c.trusted === false)) return;
+        if (!stillCurrent() || !status.ok || status.clients.some(c => c.connected || c.trusted === false)) {
+          return undefined;
+        }
+
+        // MV3 service workers can sleep past the 35s heartbeat window while Chrome is still alive.
+        // Give previously-connected or already-running browsers a bounded reconnect grace window
+        // before considering launching a new process.
+        const hadConnected = status.hadConnectedClient === true || this.everReady.size > 0;
+        let browserRunning = await this.checkBrowserRunning();
+        if (hadConnected || browserRunning) {
+          const reconnectWaitMs = this.opts.reconnectWaitMs ?? DEFAULT_RECONNECT_WAIT_MS;
+          const reconnectDeadline = now() + reconnectWaitMs;
+          while (
+            stillCurrent() &&
+            this.connectedClients(control).length === 0 &&
+            now() < reconnectDeadline
+          ) {
+            await sleep(500);
+            status = await control.bridge.status();
+            if (!status.ok || status.clients.some(c => c.connected || c.trusted === false)) {
+              if (status.ok) {
+                for (const c of status.clients) {
+                  if (c.connected) {
+                    this.everReady.add(c.id);
+                    this.lastFailedLaunchAt = null;
+                  }
+                }
+              }
+              return undefined;
+            }
+          }
+          if (!stillCurrent() || this.connectedClients(control).length > 0) return undefined;
+          // Re-check whether the target browser is still running after the grace window.
+          browserRunning = await this.checkBrowserRunning();
+        }
+
+        if (browserRunning) {
+          this.opts.logger.info('user-browser already running while extension disconnected; skipping launch');
+          return BROWSER_RUNNING_DISCONNECTED_MESSAGE;
+        }
+        if (!this.opts.startBrowser) return undefined;
+
+        const cooldownMs = this.opts.launchCooldownMs ?? DEFAULT_LAUNCH_COOLDOWN_MS;
+        if (
+          state.wantsLaunch &&
+          this.lastFailedLaunchAt !== null &&
+          cooldownMs > 0 &&
+          now() - this.lastFailedLaunchAt < cooldownMs
+        ) {
+          this.opts.logger.info('user-browser launch skipped during post-timeout cooldown');
+          return LAUNCH_COOLDOWN_DISCONNECTED_MESSAGE;
+        }
+
         let launched = false;
+        let skippedBecauseRunning = false;
         const launchIfWanted = async () => {
-          if (!state.wantsLaunch || launched) return;
+          if (!state.wantsLaunch || launched || skippedBecauseRunning) return;
+          if (await this.checkBrowserRunning()) {
+            skippedBecauseRunning = true;
+            this.opts.logger.info('user-browser detected running before delayed launch; skipping launch');
+            return;
+          }
           launched = true;
           await this.opts.startBrowser!();
         };
         await launchIfWanted();
-        const deadline = (this.opts.now ?? Date.now)() + (this.opts.startupWaitMs ?? 35_000);
-        while (stillCurrent() && this.connectedClients(control).length === 0 && (this.opts.now ?? Date.now)() < deadline) {
+        if (skippedBecauseRunning) return BROWSER_RUNNING_DISCONNECTED_MESSAGE;
+
+        const deadline = now() + (this.opts.startupWaitMs ?? 35_000);
+        while (stillCurrent() && this.connectedClients(control).length === 0 && now() < deadline) {
           await sleep(500);
           await launchIfWanted();
+          if (skippedBecauseRunning) return BROWSER_RUNNING_DISCONNECTED_MESSAGE;
           status = await control.bridge.status();
           // The extension came online but still needs the user's approval: waiting cannot fix that.
-          if (status.ok && status.clients.some(c => c.trusted === false)) return;
+          if (status.ok && status.clients.some(c => c.trusted === false)) return undefined;
         }
+        if (launched && stillCurrent() && this.connectedClients(control).length === 0) {
+          const finalStatus = await control.bridge.status();
+          if (finalStatus.ok && !finalStatus.clients.some(c => c.connected || c.trusted === false)) {
+            this.lastFailedLaunchAt = now();
+          }
+        }
+        return undefined;
       };
       state.promise = prepare().finally(() => { this.preparing = null; });
       this.preparing = state;
     }
-    await this.preparing.promise;
+    return this.preparing.promise;
   }
 
   async dispose(): Promise<void> {
     this.disposed = true;
     this.recipeSessions.dispose();
     this.targets.clear();
+    this.sessionTabs.clear();
+    this.clientBoots.clear();
+    this.everReady.clear();
+    this.recipePumps.clear();
+    this.lastFailedLaunchAt = null;
+    this.preparing = null;
   }
 
   private noteSessionTab(request: BackendRequest, result: BackendResult): void {
@@ -347,14 +452,17 @@ export class UserBrowserBackend implements BrowserBackend {
 
   // ── 分发 ────────────────────────────────────────────────────────────────
 
-  private async dispatch(req: BackendRequest): Promise<BackendResult> {
+  private async dispatch(
+    req: BackendRequest,
+    disconnectedMessage?: string,
+  ): Promise<BackendResult> {
     switch (req.action) {
       case 'status':
         return this.handleStatus(req);
       case 'doctor':
         return this.handleStatus(req, true);
       case 'start':
-        return this.handleStart(req);
+        return this.handleStart(req, disconnectedMessage);
       case 'stop':
         return actionOk(req.action, {
           ready: true,
@@ -364,10 +472,10 @@ export class UserBrowserBackend implements BrowserBackend {
       case 'profiles':
         return this.handleProfiles(req);
       case 'tabs':
-        return this.handleTabs(req);
+        return this.handleTabs(req, disconnectedMessage);
       case 'open':
       case 'navigate':
-        return this.handleOpen(req);
+        return this.handleOpen(req, disconnectedMessage);
       case 'snapshot':
         return this.handleSnapshot(req);
       case 'act':
@@ -423,7 +531,12 @@ export class UserBrowserBackend implements BrowserBackend {
   private connectedClients(control: UserBrowserPageControl): BrowserExtensionClientInfo[] {
     const clients = control.bridge.connectedClients();
     this.forgetRestartedBrowsers(clients);
-    for (const client of clients) if (client.connected) this.everReady.add(client.id);
+    for (const client of clients) {
+      if (client.connected) {
+        this.everReady.add(client.id);
+        this.lastFailedLaunchAt = null;
+      }
+    }
     return clients;
   }
 
@@ -515,12 +628,13 @@ export class UserBrowserBackend implements BrowserBackend {
     action: BackendRequest['action'],
     control: UserBrowserPageControl,
     profile: string | undefined,
+    disconnectedMessage: string = DISCONNECTED_MESSAGE,
   ): { ok: true; clientId: string } | { ok: false; result: BackendResult } {
     const clients = this.connectedClients(control);
     if (clients.length === 0)
       return {
         ok: false,
-        result: actionFailed(action, DISCONNECTED_MESSAGE, 'BROWSER_RUNTIME_UNAVAILABLE'),
+        result: actionFailed(action, disconnectedMessage, 'BROWSER_RUNTIME_UNAVAILABLE'),
       };
     if (profile) {
       // An exact id wins; an abbreviation must match exactly one connection, or the action could land in
@@ -822,7 +936,10 @@ export class UserBrowserBackend implements BrowserBackend {
     });
   }
 
-  private async handleStart(req: BackendRequest): Promise<BackendResult> {
+  private async handleStart(
+    req: BackendRequest,
+    disconnectedMessage: string = DISCONNECTED_MESSAGE,
+  ): Promise<BackendResult> {
     if (req.proxyServer !== undefined || req.proxyAllowedHostnames !== undefined) {
       return actionFailed(
         req.action,
@@ -834,7 +951,7 @@ export class UserBrowserBackend implements BrowserBackend {
     if (!gate.ok) return gate.result;
     const clients = this.connectedClients(gate.control);
     if (clients.length === 0)
-      return actionFailed(req.action, DISCONNECTED_MESSAGE, 'BROWSER_RUNTIME_UNAVAILABLE');
+      return actionFailed(req.action, disconnectedMessage, 'BROWSER_RUNTIME_UNAVAILABLE');
     return actionOk(req.action, { ready: true, backend: this.kind, connected: true });
   }
 
@@ -855,7 +972,10 @@ export class UserBrowserBackend implements BrowserBackend {
     });
   }
 
-  private async handleTabs(req: BackendRequest): Promise<BackendResult> {
+  private async handleTabs(
+    req: BackendRequest,
+    disconnectedMessage: string = DISCONNECTED_MESSAGE,
+  ): Promise<BackendResult> {
     const gate = this.control(req.action);
     if (!gate.ok) return gate.result;
     const connected = this.connectedClients(gate.control);
@@ -874,7 +994,7 @@ export class UserBrowserBackend implements BrowserBackend {
         'BROWSER_RUNTIME_INVALID_REQUEST',
       );
     if (clients.length === 0)
-      return actionFailed(req.action, DISCONNECTED_MESSAGE, 'BROWSER_RUNTIME_UNAVAILABLE');
+      return actionFailed(req.action, disconnectedMessage, 'BROWSER_RUNTIME_UNAVAILABLE');
     const tabs: Array<Record<string, unknown>> = [];
     const seen = new Set<string>();
     // Only a complete listing proves a remembered tab is gone; a truncated one (many tabs, size
@@ -882,12 +1002,19 @@ export class UserBrowserBackend implements BrowserBackend {
     const complete = new Set<string>();
     for (const client of clients) {
       // 新版扩展标出 Cindy 自己窗口里的页签,其余都是用户的;旧版不标,就不猜归属。
-      const knowsOwner = this.parity(gate.control, client.id);
+      const supportsParity = this.parity(gate.control, client.id);
       const listed = await gate.control.bridge.act('tabs', {
         browser: client.id,
         limit: Math.min(100, Math.max(1, req.limit ?? 50)),
       });
-      if (!listed.ok) return this.failureResult(req.action, listed);
+      if (!listed.ok) {
+        const failure = this.failureResult(req.action, listed);
+        if (listed.error !== 'EXTENSION_TIMEOUT' && listed.error !== 'BROWSER_TIMEOUT') return failure;
+        const recovery = supportsParity
+          ? '已知网页地址时，无需先调用 tabs。直接用 read（传 url）读取，或用 open（传 url）打开，再用返回的 targetId 操作。若有多个浏览器连接，先用 profiles 查看连接 id，再传 profile。'
+          : '请在浏览器的扩展管理页更新 Cindy 扩展，再重试 tabs。';
+        return { ...failure, message: `${failure.message} ${recovery}` };
+      }
       if (listed.truncated !== true) complete.add(client.id);
       for (const tab of (Array.isArray(listed.tabs) ? listed.tabs : []) as Array<
         Record<string, unknown>
@@ -913,7 +1040,7 @@ export class UserBrowserBackend implements BrowserBackend {
         seen.add(record.targetId);
         tabs.push({
           ...this.describe(record),
-          ...(knowsOwner ? { owner: tab.cindyWindow === true ? 'cindy' : 'user' } : {}),
+          ...(supportsParity ? { owner: tab.cindyWindow === true ? 'cindy' : 'user' } : {}),
           active: tab.active === true,
           ...(tab.status ? { status: tab.status } : {}),
         });
@@ -931,7 +1058,10 @@ export class UserBrowserBackend implements BrowserBackend {
   }
 
   /** open / navigate:扩展按 URL 复用或新开后台标签页并等待加载;结果映射为 targetId。 */
-  private async handleOpen(req: BackendRequest): Promise<BackendResult> {
+  private async handleOpen(
+    req: BackendRequest,
+    disconnectedMessage?: string,
+  ): Promise<BackendResult> {
     const gate = this.control(req.action);
     if (!gate.ok) return gate.result;
     const url =
@@ -950,7 +1080,12 @@ export class UserBrowserBackend implements BrowserBackend {
         `标签页 ${req.targetId} 已不存在或已失效;用 tabs 重新选择 targetId`,
         'BROWSER_RUNTIME_INVALID_REQUEST',
       );
-    const picked = this.pickClient(req.action, gate.control, req.profile ?? existing?.clientId);
+    const picked = this.pickClient(
+      req.action,
+      gate.control,
+      req.profile ?? existing?.clientId,
+      disconnectedMessage,
+    );
     if (!picked.ok) return picked.result;
     // The target tab belongs to one connection; a profile naming another would open the page there
     // while the tab the agent meant never moves.
@@ -1422,6 +1557,10 @@ export class UserBrowserBackend implements BrowserBackend {
     }
     const begun = await this.pageJob(control, record, 'cdp', { op: 'begin' });
     if (!begun.ok) return this.failureResult(req.action, begun);
+    if (this.disposed) {
+      void this.pageJob(control, record, 'cdp', { op: 'end' }).catch(() => {});
+      return actionFailed(req.action, 'user browser backend disposed', 'BROWSER_RUNTIME_UNAVAILABLE');
+    }
     const listeners = new Set<(method: string, params: Record<string, unknown>) => void>();
     const closers = new Set<() => void>();
     const deliver = (job: BrowserExtensionJobResult) => {
@@ -1472,9 +1611,9 @@ export class UserBrowserBackend implements BrowserBackend {
       typeof sessionId === 'string' && sessionId && this.opts.resolveUploadRoots
         ? await this.opts.resolveUploadRoots(sessionId)
         : [];
-    const paths = await resolveUploadFiles(req.paths, roots, UPLOAD_CHUNKED_BYTES_MAX, UPLOAD_CHUNKED_BYTES_MAX);
-    let total = 0;
-    for (const file of paths) total += (await fs.stat(file)).size;
+    const { files: paths, totalBytes: total } = resolveUploadBatchSync(
+      req.paths, roots, UPLOAD_CHUNKED_BYTES_MAX, UPLOAD_CHUNKED_BYTES_MAX,
+    );
     const chunked = extensionAtLeast(
       this.connectedClients(gate.control).find((c) => c.id === record.clientId)?.version,
       USER_BROWSER_CHUNKED_UPLOAD_VERSION,
@@ -1482,7 +1621,13 @@ export class UserBrowserBackend implements BrowserBackend {
     const ref = req.inputRef ?? req.ref;
     const inputTarget = ref ? { ref } : req.selector ? { selector: req.selector } : { selector: 'input[type=file]' };
     if (total > UPLOAD_BATCH_BYTES_MAX) {
-      if (!chunked || total > UPLOAD_CHUNKED_BYTES_MAX) return uploadTooLarge(req.action, chunked);
+      if (!chunked) {
+        return actionFailed(
+          req.action,
+          `上传文件总大小超过约 30 MB。请告知用户把 Cindy 浏览器扩展更新到 ${USER_BROWSER_CHUNKED_UPLOAD_VERSION} 或更新版本，或在原浏览器的当前页面手动选择文件。`,
+          'BROWSER_RUNTIME_INVALID_REQUEST',
+        );
+      }
       return this.uploadInChunks(req, gate.control, record, inputTarget, paths, roots);
     }
     const files: Array<{ name: string; data: string; mimeType: string }> = [];
@@ -1492,7 +1637,13 @@ export class UserBrowserBackend implements BrowserBackend {
       // cannot pull bytes from outside the allowed roots. One file at a time bounds memory.
       const bytes = readRecipeInputFileSync(file, roots);
       read += bytes.length;
-      if (read > UPLOAD_BATCH_BYTES_MAX) return uploadTooLarge(req.action, chunked);
+      if (read > UPLOAD_BATCH_BYTES_MAX) {
+        return actionFailed(
+          req.action,
+          '读取时文件大小发生变化，请重新上传，或在原浏览器的当前页面手动选择文件。',
+          'BROWSER_RUNTIME_INVALID_REQUEST',
+        );
+      }
       files.push({
         name: path.basename(file),
         data: bytes.toString('base64'),
@@ -1542,7 +1693,7 @@ export class UserBrowserBackend implements BrowserBackend {
             total += count;
             if (total > UPLOAD_CHUNKED_BYTES_MAX) {
               void step({ op: 'abort' }).catch(() => {});
-              return uploadTooLarge(req.action, true);
+              return uploadTooLarge(req.action, offset > UPLOAD_CHUNKED_BYTES_MAX ? 'file' : 'batch');
             }
             const sent = await step({
               op: 'chunk',

@@ -1,7 +1,7 @@
 import type {
   VoiceCallSnapshot,
   VoiceConversationApi,
-  VoiceConversationSelection,
+  VoiceCallSelection,
   VoiceExitDecision,
 } from '@/../shared/voiceConversation';
 import { SPEAKER_FILTER_NOTICE_MS } from '@cindy/voice-input-core';
@@ -66,7 +66,11 @@ export class VoiceConversationController {
   private microphone: Microphone | null = null;
   private player: SpeechPlayer | null = null;
   private unsubscribe?: () => void;
-  private selection?: VoiceConversationSelection;
+  private selection?: VoiceCallSelection;
+  private realtimeItem: string | null = null;
+  private realtimeQueue: string[] = [];
+  private realtimeInputs = new Map<string, { captureVersion: number; question: { pending: boolean; target: VoiceQuestionTarget | null } }>();
+  private get realtime(): boolean { return this.selection?.mode === 'realtime'; }
   private blocked = false;
   private enabled = false;
   private tracker = new VoiceReplyTracker();
@@ -336,7 +340,7 @@ export class VoiceConversationController {
   }
 
   async start(
-    selection: VoiceConversationSelection,
+    selection: VoiceCallSelection,
     sentencePlayback = this.sentencePlayback,
   ): Promise<void> {
     if (this.blocked || this.callId || this.state.phase === 'connecting') return;
@@ -374,6 +378,25 @@ export class VoiceConversationController {
           else this.end('remote_end');
           return;
         }
+        if (event.type === 'realtime-audio') {
+          if (this.blocked || this.deps.isQuestionPending?.()) { this.interrupt(); return; }
+          this.realtimeQueue.push(event.itemId);
+          void this.playRealtime(epoch);
+          return;
+        }
+        if (event.type === 'realtime-interrupt') { this.interrupt('new_utterance', event.throughResponse); return; }
+        if (event.type === 'realtime-thinking') { this.setReplyPhase('thinking'); return; }
+        if (event.type === 'error' && this.realtime) { this.fail('connection'); return; }
+        if (event.type === 'realtime-input-start') {
+          this.realtimeInputs.set(event.itemId, { captureVersion: this.captureVersion, question: this.questionContext() });
+          event = { type: 'speech-started' };
+        } else if (event.type === 'realtime-utterance') {
+          const input = this.realtimeInputs.get(event.itemId);
+          this.realtimeInputs.delete(event.itemId);
+          if (!input || input.captureVersion !== this.captureVersion || event.question !== input.question.pending) return;
+          this.capturedQuestion = input.question;
+          event = { type: 'utterance', id: event.itemId, text: event.text };
+        }
         if (inputGeneration !== this.inputGeneration) return;
         if (this.state.muted) {
           // ASR can disconnect after its resume handshake while getUserMedia is
@@ -394,7 +417,7 @@ export class VoiceConversationController {
             this.speechCandidate = true;
             this.cancelCountdown('speech');
             this.candidateStartedAt = Date.now();
-            this.player?.pause();
+            if (!this.realtime) this.player?.pause();
             this.playback?.pause();
             log.info('reply held for possible speech', { callId, pendingInput: this.pendingInput });
             this.patch({ phase: 'listening', level: 0 });
@@ -468,6 +491,13 @@ export class VoiceConversationController {
             this.patch({ questionDraft: '' });
           }
           const utterance = { text: event.text, id: event.id };
+          if (this.realtime) {
+            this.latestUtterance = utterance;
+            this.speechCandidate = false;
+            this.patch({ transcript: '' });
+            this.setReplyPhase(this.replyPhase);
+            return;
+          }
           this.queued.push(utterance);
           this.latestUtterance = utterance;
           // The finalized draft now belongs to the queue. Do not retain it
@@ -502,6 +532,8 @@ export class VoiceConversationController {
         return;
       }
       this.callId = result.callId;
+      if (this.realtime) await this.deps.api.setRealtimeQuestion?.(result.callId, this.deps.isQuestionPending?.() ?? false);
+      if (!current()) return;
       this.deps.onCallIdChange?.(this.callId);
       this.patch({ phase: 'microphone' });
       try {
@@ -623,6 +655,12 @@ export class VoiceConversationController {
     const pending = this.deps.isQuestionPending?.() ?? false;
     if (pending === this.questionPending) return;
     this.questionPending = pending;
+    if (this.realtime && this.callId) {
+      if (pending) this.interrupt();
+      const epoch = this.epoch;
+      void this.deps.api.setRealtimeQuestion?.(this.callId, pending)
+        .catch(() => { if (this.enabled && epoch === this.epoch) this.fail('connection'); });
+    }
     this.cancelCountdown('activity');
     if (pending) {
       this.player?.pause();
@@ -639,7 +677,7 @@ export class VoiceConversationController {
   }
 
   /** Explicit stop or a committed new utterance permanently relinquishes the old reply. */
-  interrupt(reason: 'user_stop' | 'new_utterance' | 'task_error' | 'task_cancelled' = 'user_stop'): void {
+  interrupt(reason: 'user_stop' | 'new_utterance' | 'task_error' | 'task_cancelled' = 'user_stop', throughResponse?: number): void {
     if (reason === 'user_stop') this.cancelCountdown('control');
     log.info('reply interrupted', {
       callId: this.callId,
@@ -647,6 +685,9 @@ export class VoiceConversationController {
       pendingInput: this.pendingInput,
       ...(this.speechCandidate ? { heldMs: Date.now() - this.candidateStartedAt } : {}),
     });
+    const position = this.realtimeItem ? { itemId: this.realtimeItem, playedMs: this.player?.playedMilliseconds?.() ?? 0 } : undefined;
+    this.realtimeItem = null;
+    this.realtimeQueue = [];
     ++this.speechEpoch;
     this.playback?.cancel();
     this.playback = null;
@@ -658,7 +699,12 @@ export class VoiceConversationController {
     this.pendingInput = null;
     this.player?.cancel();
     this.player?.resume();
-    if (this.callId) void this.deps.api.interrupt(this.callId).catch(() => undefined);
+    if (this.callId) {
+      const epoch = this.epoch;
+      void (throughResponse !== undefined ? this.deps.api.interrupt(this.callId, position, throughResponse)
+        : position ? this.deps.api.interrupt(this.callId, position) : this.deps.api.interrupt(this.callId))
+        .catch(() => { if (this.realtime && epoch === this.epoch) this.fail('connection'); });
+    }
     if (
       this.state.phase === 'speaking' ||
       this.state.phase === 'preparing' ||
@@ -833,6 +879,7 @@ export class VoiceConversationController {
     messages: readonly ChatMessage[],
     failure: VoiceTaskFailure | null = this.latestTaskFailure,
   ): void {
+    if (this.realtime) { this.refreshActivity(); return; }
     if (messages !== this.latestMessages && !this.hasIntentCountdown())
       this.cancelCountdown('activity');
     this.latestMessages = messages;
@@ -898,6 +945,7 @@ export class VoiceConversationController {
   private receiveCallRecord(record: import('@cindy/maker-core').VoiceCallRecord): void {
     const previous = this.state.callRecord;
     this.patch({ callRecord: record });
+    if (this.realtime) return;
     const failed = record.turns.filter(turn => turn.role === 'user' && turn.failed
       && !previous?.turns.some(old => old.id === turn.id && old.failed));
     if (failed.length) {
@@ -910,6 +958,7 @@ export class VoiceConversationController {
   /** A result waits behind the current spoken answer. Project only the owned
    * pair: unrelated turns/results must never supersede the reply tracker. */
   private reconcileCallPlayback(): void {
+    if (this.realtime) return;
     const record = this.state.callRecord;
     if (!record || !this.enabled || !this.callId) return;
     if (record.handoffs.some(task => task.inputId === this.pendingInput
@@ -949,6 +998,24 @@ export class VoiceConversationController {
       assistantPhase: 'final_answer', createdAt: new Date(turn.createdAt).toISOString(),
     }));
     this.updateMessages(turns);
+  }
+
+  private async playRealtime(epoch: number): Promise<void> {
+    if (this.realtimeItem || !this.callId || !this.player || !this.enabled) return;
+    const itemId = this.realtimeQueue.shift();
+    if (!itemId) return;
+    this.realtimeItem = itemId;
+    const callId = this.callId, speechEpoch = this.speechEpoch;
+    const current = () => this.enabled && epoch === this.epoch && speechEpoch === this.speechEpoch;
+    this.setReplyPhase('preparing');
+    try {
+      await this.player.play(() => this.deps.api.readSpeech(callId, itemId), 24_000,
+        () => { if (current()) this.setReplyPhase('speaking'); });
+      if (!current()) return;
+      this.realtimeItem = null;
+      this.setReplyPhase(null);
+      void this.playRealtime(epoch);
+    } catch { if (current()) this.fail('speech'); }
   }
 
   private createPlayback(): SpeechPlaybackQueue | null {
@@ -1196,6 +1263,9 @@ export class VoiceConversationController {
   }
 
   private release(): void {
+    this.realtimeInputs.clear();
+    this.realtimeItem = null;
+    this.realtimeQueue = [];
     this.cancelCountdown('release', false);
     this.clearSpeakerFiltered();
     ++this.epoch;

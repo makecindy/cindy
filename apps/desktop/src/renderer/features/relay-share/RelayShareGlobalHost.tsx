@@ -9,8 +9,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SelfHostedRelayState } from '../../../shared/selfHostedRelay';
 import { RelayApproveDialog } from './RelayApproveDialog';
 import { closeRelayApproval, useRelayApprovalSelection } from './relayApprovalStore';
+import { useLegalTermsGateBlocking } from '@/components/auth/legalTermsGateState';
 
 export function RelayShareGlobalHost({ manualOnly = false }: { manualOnly?: boolean }) {
+  // 协议更新确认挡着时保留待审队列、暂不弹窗,确认后再显示(见 legalTermsGateState)。
+  const legalTermsGateBlocking = useLegalTermsGateBlocking();
   const [state, setState] = useState<SelfHostedRelayState | null>(null);
   const selection = useRelayApprovalSelection();
   // 本次运行已排过队的申请:main 每轮都会推送全部待处理申请,不重复弹。
@@ -76,7 +79,7 @@ export function RelayShareGlobalHost({ manualOnly = false }: { manualOnly?: bool
     setQueue((items) => (items.length > 0 ? items.slice(1) : items));
   }, [selectedId]);
 
-  if (!current || !state?.relay) return null;
+  if (legalTermsGateBlocking || !current || !state?.relay) return null;
   return (
     <RelayApproveDialog
       key={current.requestId}

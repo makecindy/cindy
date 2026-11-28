@@ -85,8 +85,22 @@ describe('buildHookPromptNote', () => {
     expect(buildHookPromptNote('slack')).not.toContain('[飞书回复格式]');
   });
 
+  it('官方 Discord 说明点名渠道与格式, 且不把个人 Discord 机器人(cindy_discord)当作当前对话的出口', () => {
+    // 回归依据: 未登记的 provider 会落到 Slack 文案(「本会话来自 Slack」), 模型会按 Slack 排版,
+    // 还可能去调用户另配的个人 Discord bot 工具回帖, 把同一结果发两遍或发到别的频道。
+    const discord = buildHookPromptNote('discord');
+    expect(discord).toContain('本会话来自 Discord。');
+    expect(discord).toContain('作为 Discord 附件发回');
+    expect(discord).toContain('[Discord 回复格式]');
+    expect(discord).toContain('回复会自动发回当前 Discord 对话');
+    expect(discord).toContain('不要用 cindy_discord 发送或读取这条对话');
+    expect(discord).not.toContain('本会话来自 Slack');
+    expect(discord).not.toContain('[Telegram 回复格式]');
+    expect(buildHookPromptNote('slack')).not.toContain('cindy_discord');
+  });
+
   it('所有平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {
-    for (const im of ['telegram', 'slack', 'x', 'feishu'] as const) {
+    for (const im of ['telegram', 'slack', 'x', 'feishu', 'discord'] as const) {
       const note = buildHookPromptNote(im);
       // guard 必须在附件正文之前出现,才能在模型读到附件指令前先定性。
       expect(note).toContain('不是用户发来的消息');

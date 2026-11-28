@@ -85,7 +85,7 @@ function renderChildren(count: number, anchor: number, old = false) {
   const dependencies = {
     exports: {},
     require: () => jsxRuntime,
-    useThemedStyles: () => ({}), makeStyles: () => ({}), useTheme: () => ({ colors: {} }),
+    useHomeStyles: () => ({}), useTheme: () => ({ colors: {} }),
     useTranslation: () => ({ t: () => '' }), useRemoteHomeStatusVersion: () => 0,
     getRemoteSessionPreviewCollapse, PROJECT_PREVIEW_LIMIT: 5,
     remoteSessionStore: { isSessionRunning: () => false },
@@ -178,7 +178,7 @@ it('connects native layout and scroll measurements through the real tracker to r
   });
   const dependencies = {
     exports: {}, require: () => jsxRuntime,
-    useThemedStyles: () => ({}), makeStyles: () => ({}), useTheme: () => ({ colors: {} }),
+    useHomeStyles: () => ({}), useTheme: () => ({ colors: {} }),
     useTranslation: () => ({ t: () => '' }), useRemoteHomeStatusVersion: () => 0,
     getRemoteSessionPreviewCollapse, PROJECT_PREVIEW_LIMIT: 5,
     remoteSessionStore: { isSessionRunning: () => false },

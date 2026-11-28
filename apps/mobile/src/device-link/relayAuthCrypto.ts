@@ -20,6 +20,28 @@ import type { RelayAuthCrypto } from '@cindy/device-link';
  */
 const verifiedSignatures = new Map<string, true>();
 const VERIFIED_SIGNATURES_LIMIT = 512;
+function signatureKey(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): string {
+  const all = new Uint8Array(publicKey.length + signature.length + message.length);
+  all.set(publicKey); all.set(signature, publicKey.length); all.set(message, publicKey.length + signature.length);
+  return bytesToHex(sha256(all));
+}
+function remember(key: string): void {
+  if (verifiedSignatures.size >= VERIFIED_SIGNATURES_LIMIT) verifiedSignatures.delete(verifiedSignatures.keys().next().value!);
+  verifiedSignatures.set(key, true);
+}
+/**
+ * Records a signature this device verified before as verified, without verifying it again. Only for what comes back from
+ * storage this device itself wrote after verifying and that proves intact with a key only this device holds (the Agent-Net
+ * roster cache, agentNetDirectoryCache.ts): the 24 certificates of one account took about 0.7 s of every cold start to
+ * verify again (2026-11-21, 28 ms each). Never for anything received from a peer or a server.
+ */
+export function rememberVerifiedSignature(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): boolean {
+  if (publicKey.length !== 32 || signature.length !== 64) return false;
+  const key = signatureKey(publicKey, message, signature);
+  verifiedSignatures.delete(key);
+  remember(key);
+  return true;
+}
 
 export const mobileRelayAuthCrypto: RelayAuthCrypto = {
   sha256: (data) => sha256(data),
@@ -28,17 +50,12 @@ export const mobileRelayAuthCrypto: RelayAuthCrypto = {
   ed25519Sign: (seed, message) => ed25519.sign(message, seed),
   ed25519Verify(publicKey, message, signature) {
     if (publicKey.length !== 32 || signature.length !== 64) return false;
-    const all = new Uint8Array(publicKey.length + signature.length + message.length);
-    all.set(publicKey); all.set(signature, publicKey.length); all.set(message, publicKey.length + signature.length);
-    const key = bytesToHex(sha256(all));
+    const key = signatureKey(publicKey, message, signature);
     if (verifiedSignatures.delete(key)) { verifiedSignatures.set(key, true); return true; }
     try {
       // 严格按 RFC 8032 核对(与 node:crypto 一致),不接受 ZIP-215 放宽的写法。
       const valid = ed25519.verify(signature, message, publicKey, { zip215: false });
-      if (valid) {
-        if (verifiedSignatures.size >= VERIFIED_SIGNATURES_LIMIT) verifiedSignatures.delete(verifiedSignatures.keys().next().value!);
-        verifiedSignatures.set(key, true);
-      }
+      if (valid) remember(key);
       return valid;
     } catch {
       return false;

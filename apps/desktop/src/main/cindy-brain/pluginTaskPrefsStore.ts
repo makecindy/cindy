@@ -1,3 +1,6 @@
+import { inspectSettingsJson, isSettingsRecord } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
+import path from 'node:path';
 /**
  * User preferences for plugin-created ordinary tasks. The legacy errand adapter
  * consumes these same preferences; it does not own the model/permission policy.
@@ -49,7 +52,7 @@ export async function relocateGhostErrandPrefs(from: string, to: string): Promis
 }
 
 /** 插件任务可选的 agent 种类(与 sessions.agent_kind 同词汇表)。 */
-export const PLUGIN_TASK_AGENT_KINDS = ['cc', 'codex', 'pi'] as const;
+export const PLUGIN_TASK_AGENT_KINDS = ['cc', 'codex', 'pi', 'acp'] as const;
 export type PluginTaskAgentKind = (typeof PLUGIN_TASK_AGENT_KINDS)[number];
 
 /** 插件任务可选的思考强度(与 worker 同集合;包含 minimal)。 */
@@ -68,6 +71,8 @@ export interface PluginTaskConfig {
    * 默认/errand 复用语义。只随完整模型组合保存,单独出现视为脏数据丢弃。
    */
   agentDeviceId?: string | null;
+  /** 可选智能路由 id；与上面的具体模型字段成对保存，旧插件或路由失效时回落具体模型。 */
+  modelGroup?: string;
   permissionMode?: GhostErrandPermissionMode;
   /** 绝对路径(用户亲选的项目目录);缺省 = 专属对话目录。 */
   workingDir?: string;
@@ -112,12 +117,17 @@ function normalizeConfig(raw: unknown): PluginTaskConfig {
   ) {
     cfg.effort = r.effort as PluginTaskEffort;
   }
-  if ((typeof r.fastMode === 'boolean' || r.fastMode === 'ultrafast')) cfg.fastMode = r.fastMode;
-  if (typeof r.providerId === 'string' && r.providerId.length > 0 && r.providerId.length <= 128) {
+  if ((typeof r.fastMode === 'boolean' || r.fastMode === 'ultrafast')
+    && (cfg.agentKind !== 'acp' || r.fastMode === false)) cfg.fastMode = r.fastMode;
+  if (typeof r.providerId === 'string' && r.providerId.length > 0 && r.providerId.length <= 128
+    && (cfg.agentKind !== 'acp' || r.providerId.startsWith('acp-plugin:'))) {
     cfg.providerId = r.providerId;
   }
   if ((r.agentDeviceId === null || isPluginTaskAgentDeviceId(r.agentDeviceId)) && cfg.agentKind && cfg.model && cfg.providerId) {
     cfg.agentDeviceId = r.agentDeviceId;
+  }
+  if (typeof r.modelGroup === 'string' && r.modelGroup.trim().length > 0 && r.modelGroup.length <= 128 && cfg.agentKind !== 'acp') {
+    cfg.modelGroup = r.modelGroup.trim();
   }
   if (
     typeof r.permissionMode === 'string' &&
@@ -164,6 +174,22 @@ function createStore() {
 
 let store = createStore();
 
+/** Saved Host choices only, never starts an errand or resolves its model connection. */
+export function inspectGhostErrandPrefs(root: string) {
+  return inspectSettingsJson(path.join(root, 'ghost-errand-prefs.json'), raw => {
+    validateOptionalSettingsFields(raw, { errand: isSettingsRecord });
+    if (isSettingsRecord(raw.errand)) for (const config of Object.values(raw.errand)) {
+      if (!isSettingsRecord(config)) throw new Error('invalid errand preferences');
+      const normalized = normalizeConfig(config);
+      for (const key of ['agentKind', 'model', 'effort', 'fastMode', 'providerId', 'modelGroup', 'permissionMode', 'workingDir']) {
+        if (Object.hasOwn(config, key) && !Object.hasOwn(normalized, key)) throw new Error('invalid errand preference');
+      }
+    }
+    // Session mappings are runtime association data, not configuration to inspect.
+    return normalize({ errand: raw.errand });
+  });
+}
+
 // Register owns the runtime catalog; configuration persistence never builds another picker.
 let validateSelection: ((config: PluginTaskConfig) => Promise<void>) | null = null;
 export function setPluginTaskConfigValidator(validator: (config: PluginTaskConfig) => Promise<void>): void {
@@ -172,7 +198,7 @@ export function setPluginTaskConfigValidator(validator: (config: PluginTaskConfi
 export async function validatePluginTaskConfig(raw: unknown): Promise<void> {
   const config = normalizeConfig(raw);
   if (raw && typeof raw === 'object') {
-    for (const key of ['agentKind', 'model', 'providerId', 'agentDeviceId', 'effort', 'fastMode', 'permissionMode', 'workingDir'] as const) {
+    for (const key of ['agentKind', 'model', 'providerId', 'agentDeviceId', 'modelGroup', 'effort', 'fastMode', 'permissionMode', 'workingDir'] as const) {
       if ((raw as Record<string, unknown>)[key] !== undefined && config[key] === undefined) {
         throw new Error(`任务配置 ${key} 无效，请重新选择`);
       }
@@ -315,3 +341,4 @@ export const __testing = {
   sessionMapKey,
   resetLegacyPinMigration: () => legacyPinMigrationDone.clear(),
 };
+export const getHostPluginErrandStore = () => store;

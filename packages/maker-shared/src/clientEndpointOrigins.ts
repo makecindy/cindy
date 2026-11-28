@@ -40,6 +40,7 @@ export const CROSS_REGION_ENDPOINT_KEYS: ReadonlySet<string> = new Set([
   'telegramHookWsUrl',
   'xHookWsUrl',
   'feishuHookWsUrl',
+  'discordHookWsUrl',
 ]);
 
 /** 缓存端点的来源策略:按 key 决定它允许落在哪个域。 */

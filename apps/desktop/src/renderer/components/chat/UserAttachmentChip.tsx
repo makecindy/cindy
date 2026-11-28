@@ -134,7 +134,7 @@ export function UserAttachmentChip({
         className={cn(
           'inline-flex items-center gap-1.5',
           'h-7 px-2.5 py-1.5',
-          'rounded-[9999px]',
+          'rounded-full',
           'bg-[var(--msg-user-bg)]',
           'border border-[var(--msg-user-border)]',
           'text-13 font-medium',

@@ -31,7 +31,12 @@ import {
 import { getActiveControllers } from '../device-link/dispatch.desktop.js';
 import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  pluginEngineKeyFromProviderId,
+} from '../../shared/pluginEngines.js';
 import { inspectAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
+import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
 import { applyNewMakerDraftRoute } from '../maker-ipc/register.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import { emptyMenubarInputs } from '../menubar/collect.js';
@@ -367,6 +372,23 @@ export class QuotaPanelController {
   /** New task preselected on this account: the default model when it already uses it. */
   private async openTaskWith(providerId: string): Promise<void> {
     try {
+      if (pluginEngineKeyFromProviderId(providerId)) {
+        const engine = listPluginEngineViews().find(
+          (item) => item.providerId === providerId && !item.suspended && item.availability.state !== 'unavailable',
+        );
+        const model = engine
+          ? engine.defaultModelAllowed !== false
+            ? PLUGIN_ENGINE_DEFAULT_MODEL
+            : engine.models[0]?.id ?? null
+          : null;
+        if (engine && model) {
+          applyNewMakerDraftRoute({ harness: 'acp', providerId: engine.providerId, model, effort: '', fastMode: false });
+        } else {
+          log.info('no model available for plugin engine quota panel task', { providerId });
+        }
+        this.deps.openNewTask();
+        return;
+      }
       const { current, available } = await inspectAppDefaultModel();
       const route = current && current.providerId === providerId
         ? current

@@ -24,8 +24,8 @@ import type { ProviderView } from '@cindy/model-providers';
 
 type TestProvider = Pick<ProviderView, 'id' | 'openAiAccount' | 'subscriptionAccount'> & {
   name?: string;
-} & Partial<Pick<ProviderView, 'agents' | 'models' | 'routing' | 'connected' | 'suspended' | 'source'>> & {
-  auth?: { native: string };
+} & Partial<Pick<ProviderView, 'agents' | 'models' | 'routing' | 'connected' | 'suspended' | 'source' | 'subscriptionPool' | 'subscriptionAccountPool'>> & {
+  auth?: { method?: string; native?: string };
 };
 
 const mocks = vi.hoisted(() => ({
@@ -60,6 +60,7 @@ const mocks = vi.hoisted(() => ({
     estimatedValueMoney: null,
     totalMoney: null,
   } as SessionUsageMoney,
+  sessionTokens: null as number | null,
   displaySnapshot: {
     messages: [] as Array<Record<string, unknown>>,
   },
@@ -83,6 +84,14 @@ vi.mock('react-i18next', () => ({
         'todaySpend.unit.day': '天',
         'todaySpend.unit.hour': '小时',
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
+        'todaySpend.codex.sessionValueLabel': '本任务价值 {{cost}}',
+        'todaySpend.codex.sessionTokensLine': '本任务已用 {{tokens}} token',
+        'todaySpend.codex.noUsageLabel': '暂无用量',
+        'menubar.detail.apiKey': 'API Key',
+        'todaySpend.codex.openAiApiLabel': 'OpenAI API',
+        'todaySpend.codex.noUsageDetail': '本任务尚未产生用量。',
+        'todaySpend.codex.unavailableLabel': '用量暂不可用',
+        'todaySpend.codex.unavailableDetail': '用量数据暂时不可用。',
         'todaySpend.dailyLimitLabel': '今日 {{spend}}/{{limit}}',
         'todaySpend.monthlyLimitLabel': '本月 {{spend}}/{{limit}}',
         'todaySpend.creditLabel': '额度 {{used}}/{{total}}',
@@ -120,7 +129,7 @@ vi.mock('@/hooks/useClaudeSessionRoute', () => ({
 vi.mock('@/hooks/useSessionUsageMoney', () => ({
   useSessionUsageMoney: () => mocks.sessionUsage,
 }));
-vi.mock('@/hooks/useSessionTokens', () => ({ useSessionTokens: () => null }));
+vi.mock('@/hooks/useSessionTokens', () => ({ useSessionTokens: () => mocks.sessionTokens }));
 vi.mock('@/hooks/useAccountUsage', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/hooks/useAccountUsage')>();
   return {
@@ -260,6 +269,7 @@ beforeEach(() => {
     estimatedValueMoney: null,
     totalMoney: null,
   };
+  mocks.sessionTokens = null;
   mocks.displaySnapshot.messages = [];
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -603,6 +613,47 @@ describe('TodaySpendChip remote Agent account', () => {
     expect(mocks.remoteHookDeviceIds).toContain('device-agent');
   });
 
+  // Unit (#12191): a provider Cindy created for one Claude account copies the built-in entry, so it
+  // has neither the `anthropic` id nor a native marker. Without the subscriptionPool check the chip
+  // did not treat the task as a Claude subscription and never showed the bound account's quota.
+  // Minimal input: one created provider on the Agent's computer and its task-account reply.
+  it('Agent 在另一台电脑用 Cindy 新建的 Claude 订阅供应商:显示任务绑定账号的额度', async () => {
+    mocks.remoteClaudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 90 } };
+    mocks.deviceProviders = [{
+      id: 'anthropic-sub-0000abcd', source: 'builtin', connected: true,
+      auth: { method: 'oauth' }, subscriptionPool: 'anthropic',
+    }];
+    const invoke = vi.fn().mockResolvedValue({
+      providerId: 'anthropic', routeProviderId: 'anthropic-sub-0000abcd', state: 'bound',
+      account: {
+        isDefault: false, number: 1, identity: 'created@example.test', paused: false, status: 'ready',
+        usage: { claude: { source: 'oauth-endpoint', fiveHour: { utilization: 30 } } },
+      },
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        openExternal: mocks.openExternal,
+        deviceLink: { invoke, onPresenceChanged: () => () => {}, onStatusChanged: () => () => {} },
+      },
+    });
+
+    const { container } = render(
+      <SessionSubscriptionAccountProvider providerId="anthropic" routeProviderId="anthropic-sub-0000abcd"
+        deviceId="device-agent" sessionId="session-created" nativeSessionId="sdk-created">
+        <TodaySpendChip vendorKey="cc" providerId="anthropic-sub-0000abcd" modelId="claude-fable-5[1m]"
+          sessionId="session-created" usageAccount={{ kind: 'device', deviceId: 'device-agent' }} />
+      </SessionSubscriptionAccountProvider>,
+    );
+    await act(async () => {});
+
+    expect(container.textContent).toContain('5h 剩余 70%');
+    expect(container.textContent).not.toContain('剩余 10%');
+    expect(invoke).toHaveBeenCalledWith('device-agent', 'maker:subscription-accounts', [expect.objectContaining({
+      action: 'session', providerId: 'anthropic', routeProviderId: 'anthropic-sub-0000abcd',
+    })]);
+  });
+
   it('远程控制的任务把 Agent 放在第三台电脑:读第三台,不读被控电脑', () => {
     mocks.remoteClaudeSnapshot = agentSnapshot;
 
@@ -731,6 +782,71 @@ describe('existing UI with remote account data', () => {
 // computer), not the account the task is pinned to. Existing chip cases have one account per
 // provider. Minimal input: the default/next pick at 90% 5h used, the task's account at 30%.
 describe('TodaySpendChip on a subscription account pool', () => {
+  // Unit: a connected API-only route has no account-pool binding; mixed or
+  // unassigned sources cannot prove which kind of account ran the task.
+  it.each([
+    [false, 'https://api.openai.com/v1', undefined, 'OpenAI API'],
+    [false, 'https://proxy.example/v1', undefined, 'API Key'],
+    [false, 'https://api.openai.com/v1', 'https://proxy.example/v1', 'API Key'],
+    [false, 'https://proxy.example/v1', 'https://api.openai.com/v1', 'OpenAI API'],
+    [true, 'https://api.openai.com/v1', undefined, '暂无用量'],
+  ] as const)('identifies an explicit Codex API source by its endpoint (pool=%s, base=%s, override=%s)', (mixed, upstream, override, label) => {
+    mocks.localProviders = [{ id: 'custom-api', connected: true, auth: { method: 'apiKey' },
+      routing: { codex: { upstream, authStrategy: 'api-key-header' } },
+      models: { codex: [{ id: 'custom-model', name: 'model', contextWindow: 200000, efforts: [], defaultEffort: null,
+        ...(override ? { route: { baseUrl: override, wireProtocol: 'openai-responses' as const } } : {}) }] },
+      ...(mixed ? { subscriptionAccountPool: 'openai' as const } : {}) }];
+    const { container } = render(<TodaySpendChip vendorKey="codex" modelId="custom-model" providerId="custom-api" sessionId="explicit-api" />);
+    expect(container.textContent).toBe(label);
+  });
+
+  // A connected provider's default endpoint alone is not proof of this task's
+  // effective model route or readable authentication state.
+  it.each(['disabled', 'unknown-model', 'loading', 'oauth'] as const)('does not mark an unconfirmed official-looking route (%s)', state => {
+    mocks.localProvidersLoading = state === 'loading';
+    mocks.localProviders = [{ id: 'custom-api', connected: true, auth: { method: 'apiKey' },
+      routing: { codex: { upstream: 'https://api.openai.com/v1',
+        authStrategy: state === 'oauth' ? 'oauth-passthrough' : 'api-key-header',
+        ...(state === 'disabled' ? { disabled: true } : {}) } },
+      models: { codex: [{ id: 'custom-model', name: 'model', contextWindow: 200000, efforts: [], defaultEffort: null }] },
+    }];
+    const { container } = render(<TodaySpendChip vendorKey="codex" providerId="custom-api" sessionId="unknown-api"
+      modelId={state === 'unknown-model' ? 'missing-model' : 'custom-model'} />);
+    expect(container.textContent).toBe('暂无用量');
+  });
+
+  // Mixed pool regression (unit): the same route may run either member. Older hosts
+  // can also return a bound account without identifying its billing type.
+  it.each([
+    ['openai', null, 'apiKey', null, 'OpenAI API'],
+    ['openai', null, 'apiKey', 500, 'OpenAI API本任务已用 500 token'],
+    ['openai', null, 'apiKey', 500, 'OpenAI API本任务 $1.25', 1.25, 'actual-cost'],
+    ['openai', null, 'apiKey', 500, 'OpenAI API本任务价值 $16.31', 16.31, 'value-estimate'],
+    ['mixed-provider', 'peer', 'apiKey', null, 'OpenAI API'],
+    ['mixed-provider', null, 'subscription', null, '5h 剩余 70%'],
+    ['openai', null, undefined, null, '暂无用量'],
+  ] as const)('renders %s on %s with member %s and %s tokens', async (route, deviceId, kind, tokens, label, amount?: number, moneyKind?: 'actual-cost' | 'value-estimate') => {
+    mocks.sessionTokens = tokens;
+    if (amount !== undefined && moneyKind) mocks.sessionUsage.totalMoney = { amount, currency: 'USD', kind: moneyKind, approximate: false };
+    const sessionId = ['mixed', route, deviceId, kind, tokens, amount].join('-');
+    const account = { isDefault: false, number: 2, paused: false, status: 'ready', kind,
+      ...(kind === 'subscription' ? { usage: { codex: { buckets: { codex: {
+        primary: { usedPercent: 30, windowMinutes: 300, resetsAt: null }, secondary: null,
+      } } } } } : {}),
+    };
+    const sessionAccount = async () => ({ providerId: 'openai', routeProviderId: route, state: 'bound', account });
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      subscriptionAccounts: { sessionAccount, onChanged: () => () => {} },
+      deviceLink: { invoke: sessionAccount, onPresenceChanged: () => () => {}, onStatusChanged: () => () => {} },
+    } });
+    const { container } = render(<SessionSubscriptionAccountProvider providerId="openai" routeProviderId={route}
+      deviceId={deviceId} sessionId={sessionId} nativeSessionId={null}>
+      <TodaySpendChip vendorKey="codex" providerId={route} sessionId={sessionId} deviceLinkDeviceId={deviceId ?? undefined} />
+    </SessionSubscriptionAccountProvider>);
+    await act(async () => {});
+    expect(container.textContent).toBe(label);
+  });
+
   // #10111 (unit): old null-route tasks already have a real second-account binding.
   // Existing cases always name the provider, bypassing both null-route gates.
   it.each(['oauth-bearer', null, 'env-key', 'provider-oauth'])(
@@ -985,5 +1101,112 @@ describe('TodaySpendChip on a subscription account pool', () => {
     fireEvent.mouseEnter(screen.getAllByRole('button')[0]);
     act(() => vi.advanceTimersByTime(300));
     expect(screen.getByTestId('quota-hover-card').textContent).not.toContain('a@example.test');
+  });
+});
+
+/**
+ * SSH 远程 Codex 形态的用量回退（#12149）：
+ *   - 远程 Codex 没有账号快照镜像（`remoteHostId` 抑制本机额度读取）、反向隧道计费金额为 0，
+ *     订阅展示分支的额度段与金额段都为空 —— 此时回退显示会话已记录的 token，
+ *     不再渲染孤立的货币符号；
+ *   - 连 token 都没有时，区分「尚无用量」与「数据暂不可用」（与 codex-api 分支同一把尺子）。
+ * 并入本套件而非新开文件：全套件独立耗时由组件图 transform（~5.5s）主导，新开文件必然
+ * 超 §3.2 单文件 5 秒预算，且这些用例与远程会话渲染同属一个被测模块。
+ */
+describe('TodaySpendChip SSH remote Codex usage chip (#12149)', () => {
+  function renderSshCodexChip(props: { providerId?: string | null; modelId?: string } = {}) {
+    return render(
+      <TodaySpendChip
+        vendorKey="codex"
+        providerId={props.providerId ?? null}
+        modelId={props.modelId ?? 'gpt-6.1-sol'}
+        sessionId="session-ssh-codex-1"
+        remoteHostId="ssh-host-1"
+      />,
+    );
+  }
+
+  it('无额度窗口且金额为 0 时回退显示会话 token，不渲染孤立货币符号', () => {
+    mocks.sessionTokens = 500;
+
+    const { container } = renderSshCodexChip();
+
+    expect(container.textContent).toContain('本任务已用 500 token');
+    // 修复前该分支只输出一个货币符号（孤零零的 ¥/$）。
+    expect(container.textContent?.trim()).not.toMatch(/^[¥$]$/);
+    // SSH 远程不读本机 Codex 账号快照（额度事实在远端）。
+    expect(mocks.localCodexReadKinds.length).toBeGreaterThan(0);
+    expect(mocks.localCodexReadKinds.every((kind) => kind !== 'codex')).toBe(true);
+  });
+
+  it('既无会话 token 也无已完成轮次时显示「暂无用量」', () => {
+    mocks.sessionTokens = null;
+
+    const { container } = renderSshCodexChip();
+
+    expect(container.textContent).toContain('暂无用量');
+    expect(container.textContent?.trim()).not.toMatch(/^[¥$]$/);
+  });
+
+  it('有已完成轮次但 token 尚未恢复时显示「用量暂不可用」', () => {
+    mocks.sessionTokens = null;
+    mocks.displaySnapshot.messages = [
+      {
+        role: 'assistant',
+        clientId: 'msg-1',
+        turnUsageDetails: {
+          inputTokens: 1200,
+          outputTokens: 340,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          totalTokens: 1540,
+          cacheHitRate: null,
+        },
+      },
+    ];
+
+    const { container } = renderSshCodexChip();
+
+    expect(container.textContent).toContain('用量暂不可用');
+    expect(container.textContent?.trim()).not.toMatch(/^[¥$]$/);
+  });
+
+  it('有会话金额时保持原展示，不用 token 顶替', () => {
+    mocks.sessionTokens = 500;
+    mocks.sessionUsage = {
+      actualMoney: null,
+      estimatedValueMoney: null,
+      totalMoney: { amount: 1.25, currency: 'USD', kind: 'value-estimate', approximate: false },
+    } as SessionUsageMoney;
+
+    const { container } = renderSshCodexChip();
+
+    expect(container.textContent).toContain('本任务');
+    expect(container.textContent).not.toContain('本任务已用 500 token');
+  });
+
+  // codex 复评 P1：xai 账号 / xai/ 模型的 SSH 远程 Codex 归 usesXaiQuotaForm，远程下
+  // 本机额度读取同样被抑制、反向隧道计费为 0，两手空空——不得只按 usesCodexQuotaForm
+  // 回退而把这类会话漏成孤立货币符号。
+  it('xai 账号或 xai/ 模型的 SSH 远程 Codex 也回退会话 token', () => {
+    mocks.sessionTokens = 500;
+
+    const xaiProvider = renderSshCodexChip({ providerId: 'xai' });
+    expect(xaiProvider.container.textContent).toContain('本任务已用 500 token');
+    expect(xaiProvider.container.textContent?.trim()).not.toMatch(/^[¥$]$/);
+    cleanup();
+
+    const xaiModel = renderSshCodexChip({ modelId: 'xai/grok-4' });
+    expect(xaiModel.container.textContent).toContain('本任务已用 500 token');
+    expect(xaiModel.container.textContent?.trim()).not.toMatch(/^[¥$]$/);
+  });
+
+  it('xai 账号的 SSH 远程 Codex 无 token 时显示「暂无用量」', () => {
+    mocks.sessionTokens = null;
+
+    const { container } = renderSshCodexChip({ providerId: 'xai' });
+
+    expect(container.textContent).toContain('暂无用量');
+    expect(container.textContent?.trim()).not.toMatch(/^[¥$]$/);
   });
 });

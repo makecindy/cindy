@@ -31,10 +31,16 @@ export function cloudCompanionAt(cloud: CompanionCloudSnapshot, deviceId: string
   return cloud.actors.find((actor) => actor.externalId === botId && actor.homeDeviceId === deviceId) ?? null;
 }
 
-/** Read-only cloud rows do not announce a connection, including a rejected local restore. */
+/** A local home is not runnable while this installation is shadowed or its restore was rejected. */
+export function localCompanionNeedsRecovery(cloud: CompanionCloudSnapshot, botId: string | undefined): boolean {
+  const actor = cloudCompanionAt(cloud, cloud.selfDeviceId ?? undefined, botId);
+  return !!actor && (cloud.demotedBotIds.includes(actor.externalId) || !!actor.profileFailure);
+}
+
+/** Read-only cloud rows do not announce a connection, including a pending local restore. */
 export function isCloudCompanionRemote(cloud: CompanionCloudSnapshot, bot: Pick<RemoteBot, 'id' | 'deviceId'>): boolean {
   const actor = cloudCompanionAt(cloud, bot.deviceId, bot.id);
-  return !!actor && (actor.homeDeviceId !== cloud.selfDeviceId || !!actor.profileFailure);
+  return !!actor && (actor.homeDeviceId !== cloud.selfDeviceId || localCompanionNeedsRecovery(cloud, bot.id));
 }
 
 /**
@@ -45,8 +51,8 @@ export function cloudOnlyRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: r
   if (!cloud.enabled) return [];
   return cloud.actors.flatMap((actor) => {
     const home = actor.homeDeviceId;
-    // A rejected local restore still needs a read-only entry with its recovery action.
-    if (!home || (home === cloud.selfDeviceId && !actor.profileFailure)) return [];
+    // Same-device install shadows also need a route to explicit take-over.
+    if (!home || (home === cloud.selfDeviceId && !localCompanionNeedsRecovery(cloud, actor.externalId))) return [];
     if (remoteBots.some((bot) => bot.deviceId === home && bot.id === actor.externalId)) return [];
     return [{
       id: actor.externalId,

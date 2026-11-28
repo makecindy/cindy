@@ -1,4 +1,6 @@
 import type { ProviderView } from '@cindy/model-providers';
+import { MetadataContinuityReader } from '@cindy/device-link';
+import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
 import { MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS } from '../../shared/providerShareInsights.js';
 import type {
   ProviderShareQuotaAccount,
@@ -8,13 +10,16 @@ import {
   MAX_SUBSCRIPTION_ACCOUNTS,
 } from '../../shared/subscriptionAccounts.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getAuthState } from '../authManager.js';
 import { projectModelAccessCreditUsage } from '../billing/projection.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { readPluginEnginePrefs } from '../maker-host/plugin-engine-prefs-store.js';
 import { codexSource, claudeSource, xaiSource } from '../menubar/collect.js';
+import { readPluginEnginePoolAccountUsages } from '../plugin-engine-accounts/runtime.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
 import { invokeProviderManagement } from '../provider-group/managementClient.js';
 import { readProviderGroup } from '../provider-group/store.js';
@@ -35,14 +40,116 @@ import {
 import { remoteBackgroundInvoke } from './index.js';
 
 const FRESH_MS = 30_000;
+const GROUP_FRESH_MS = 15_000;
+/** Short cache on transient unavailable results: still coalesces burst reads without stalling recovery. */
+const UNAVAILABLE_CACHE_MS = 3_000;
+const WEEK_MINUTES = 7 * 24 * 60;
+const SESSION_MAX_MINUTES = 6 * 60;
 const empty = (state: ProviderShareQuotaAccount['state']): ProviderShareQuotaAccount => ({
   state,
   updatedAt: null,
   windows: [],
   balance: null,
 });
-let cacheOwner = '';
-const cache = new Map<string, { until: number; pending: Promise<ProviderShareQuotaAccount> }>();
+// Reuse bounded metadata storage/single-flight, with display-specific ages and
+// no stale-on-failure fallback. Never used for execution permission or quota admission.
+const quotaReader = new MetadataContinuityReader({ retryable: () => false });
+let quotaScope: { key: string } | undefined;
+function captureQuotaScope() {
+  const assertOwner = captureProviderManagementScope();
+  const scopeKey = () => JSON.stringify([activeOwnerScopeKey(),
+    getClientEndpoint('deviceLinkApiBaseUrl'), getClientEndpoint('modelAccessApiBaseUrl')]);
+  const key = scopeKey();
+  if (quotaScope?.key !== key) { quotaReader.clear(); quotaScope = { key }; }
+  const identity = quotaScope;
+  const assertCurrent = () => {
+    assertOwner();
+    if (quotaScope !== identity || scopeKey() !== key) throwIpcError('PRECONDITION_FAILED', 'Quota display scope changed');
+  };
+  return { key, current: () => { try { assertCurrent(); return true; } catch { return false; } },
+    signalingAvailable: () => true, assertCurrent };
+}
+
+function validTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && Number.isFinite(new Date(value).getTime());
+}
+
+function pluginWindowKind(label: string, windowMinutes?: number): 'session' | 'week' | 'scoped' {
+  if (typeof windowMinutes === 'number' && Number.isFinite(windowMinutes) && windowMinutes > 0) {
+    if (windowMinutes >= WEEK_MINUTES) return 'week';
+    if (windowMinutes <= SESSION_MAX_MINUTES) return 'session';
+    return 'scoped';
+  }
+  if (/\b(?:week|weekly|7\s*d)\b/i.test(label)) return 'week';
+  if (/\b(?:5\s*h|session)\b/i.test(label)) return 'session';
+  return 'scoped';
+}
+
+function pluginEngineQuotaAccount(
+  usage: GhostHarnessUsage | null,
+  now: number,
+): ProviderShareQuotaAccount {
+  if (!usage) return empty('unavailable');
+  const windows = (usage.windows ?? [])
+    .filter(
+      (row) =>
+        typeof row.remainingPercent === 'number' &&
+        Number.isFinite(row.remainingPercent) &&
+        (row.resetsAt === undefined || (validTimestamp(row.resetsAt) && row.resetsAt > now)),
+    )
+    .slice(0, 32)
+    .map((row) => ({
+      kind: pluginWindowKind(row.label, row.windowMinutes),
+      label: typeof row.label === 'string' && row.label.trim() ? row.label.slice(0, 128) : null,
+      remainingPercent: Math.min(100, Math.max(0, row.remainingPercent)),
+      resetsAt: validTimestamp(row.resetsAt) ? row.resetsAt : null,
+      windowMinutes:
+        typeof row.windowMinutes === 'number' && Number.isFinite(row.windowMinutes)
+          ? row.windowMinutes
+          : null,
+    }));
+  const balanceRow = (usage.balances ?? []).find(
+    (row) => (row.currency === 'USD' || row.currency === 'CNY') && Number.isFinite(Number(row.amount)),
+  );
+  const balance = balanceRow
+    ? {
+        remaining: Number(balanceRow.amount),
+        total: null,
+        currency: balanceRow.currency as 'USD' | 'CNY',
+        resetsAt: null,
+        pools: [],
+      }
+    : null;
+  const ready = windows.length > 0 || balance !== null;
+  return {
+    state: ready ? 'ready' : 'unavailable',
+    updatedAt: ready && validTimestamp(usage.updatedAt) ? usage.updatedAt : null,
+    windows,
+    balance,
+  };
+}
+
+function pluginEngineSuspended(providerId: string): boolean {
+  const key = pluginEngineKeyFromProviderId(providerId);
+  if (!key) return false;
+  if (readPluginEnginePrefs(key).suspended === true) return true;
+  const tilde = key.indexOf('~');
+  return tilde > 0 && readPluginEnginePrefs(key.slice(0, tilde)).suspended === true;
+}
+
+async function readPluginEngineQuotaAccounts(
+  providerId: string,
+): Promise<ProviderShareQuotaAccount[]> {
+  const assertCurrent = captureProviderManagementScope();
+  if (pluginEngineSuspended(providerId)) return [empty('unavailable')];
+  const entries = await readPluginEnginePoolAccountUsages(providerId);
+  assertCurrent();
+  if (pluginEngineSuspended(providerId)) return [empty('unavailable')];
+  if (entries === 'unsupported') return [empty('unsupported')];
+  if (!entries || entries.length === 0) return [empty('unavailable')];
+  const now = Date.now();
+  return entries.map((entry) => pluginEngineQuotaAccount(entry.usage, now));
+}
 
 function windowsAccount(value: ReturnType<typeof claudeSource>): ProviderShareQuotaAccount {
   const windows = value.windows.filter((window) => window.kind !== 'period').map((window) => ({
@@ -63,28 +170,39 @@ function windowsAccount(value: ReturnType<typeof claudeSource>): ProviderShareQu
 async function readAccount(provider: ProviderView): Promise<ProviderShareQuotaAccount> {
   if (!provider.connected || provider.removed || provider.suspended) return empty('unavailable');
   const source = providerWeeklyQuotaSource(provider);
-  // Kimi account usage is only exposed to the owner, not through provider sharing.
-  if (source === 'kimi') return empty('unsupported');
+  // Kimi and OpenCode Go account usage is only exposed to the owner, not through provider sharing.
+  if (source === 'kimi' || source === 'opencode-go') return empty('unsupported');
   if (source) {
     const now = Date.now();
+    if (source === 'claude') {
+      let value = claudeSource(
+        provider,
+        await readClaudeSubscriptionUsageSnapshotForDeviceLink(provider.id),
+        now,
+      );
+      // Cached-first reads return null/expired while a background refresh is in flight; wait once
+      // through the reader's adaptive throttle & backoff rather than replying unavailable.
+      if (value.windows.length === 0) {
+        value = claudeSource(
+          provider,
+          await readClaudeSubscriptionUsageSnapshotForDeviceLink(provider.id, { fresh: true }),
+          Date.now(),
+        );
+      }
+      return windowsAccount(value);
+    }
     const value =
-      source === 'claude'
-        ? claudeSource(
+      source === 'xai'
+        ? xaiSource(
             provider,
-            await readClaudeSubscriptionUsageSnapshotForDeviceLink(provider.id),
+            await readXaiSubscriptionUsageSnapshotForDeviceLink(provider.id),
             now,
           )
-        : source === 'xai'
-          ? xaiSource(
-              provider,
-              await readXaiSubscriptionUsageSnapshotForDeviceLink(provider.id),
-              now,
-            )
-          : codexSource(
-              provider,
-              (await readCodexRateLimitsForHost(provider.id))?.rateLimits ?? null,
-              now,
-            );
+        : codexSource(
+            provider,
+            (await readCodexRateLimitsForHost(provider.id))?.rateLimits ?? null,
+            now,
+          );
     return windowsAccount(value);
   }
   if (provider.id !== 'xd') return empty('unsupported');
@@ -140,28 +258,32 @@ async function readAccount(provider: ProviderView): Promise<ProviderShareQuotaAc
 export async function readProviderShareQuotaAccount(
   providerId: string,
 ): Promise<ProviderShareQuotaAccount> {
-  const assertCurrent = captureProviderManagementScope();
+  if (pluginEngineKeyFromProviderId(providerId)) {
+    const accounts = await readPluginEngineQuotaAccounts(providerId);
+    return accounts[0] ?? empty('unavailable');
+  }
+  const scope = captureQuotaScope();
+  const { assertCurrent } = scope;
   const provider = (
     await getDesktopProviderService().listProviders({ allowSideEffects: false })
   ).find((item) => item.id === providerId);
   assertCurrent();
   if (!provider) return empty('unavailable');
-  const owner = activeOwnerScopeKey();
-  if (owner !== cacheOwner) {
-    cacheOwner = owner;
-    cache.clear();
-  }
   const key = JSON.stringify(provider);
-  for (const [entry, value] of cache) if (value.until <= Date.now()) cache.delete(entry);
-  let pending = cache.get(key);
-  if (!pending) {
-    pending = {
-      until: Date.now() + FRESH_MS,
-      pending: readAccount(provider).catch(() => empty('unavailable')),
-    };
-    cache.set(key, pending);
-  }
-  const result = await pending.pending;
+  const { value: result } = await quotaReader.read(
+    {
+      ...scope,
+      freshForMs: FRESH_MS,
+      validForMs: FRESH_MS,
+      remainingTrustMs: (value) =>
+        (value as ProviderShareQuotaAccount).state === 'unavailable' ? UNAVAILABLE_CACHE_MS : FRESH_MS,
+    },
+    `account:${key}`,
+    () => readAccount(provider).catch(() => empty('unavailable')),
+  ).catch((error) => {
+    assertCurrent();
+    throw error;
+  });
   assertCurrent();
   const latest = (
     await getDesktopProviderService().listProviders({ allowSideEffects: false })
@@ -177,6 +299,9 @@ export async function readProviderShareQuotaAccount(
 export async function readProviderShareQuotaAccounts(
   providerId: string,
 ): Promise<ProviderShareQuotaAccount[]> {
+  if (pluginEngineKeyFromProviderId(providerId)) {
+    return readPluginEngineQuotaAccounts(providerId);
+  }
   const assertCurrent = captureProviderManagementScope();
   const pooled = await readSubscriptionPoolAccountUsages(providerId);
   assertCurrent();
@@ -188,15 +313,19 @@ export async function readProviderShareQuotaAccounts(
   assertCurrent();
   if (!provider?.connected || provider.removed || provider.suspended)
     return [empty('unavailable')];
-  if (pooled.length === 0) return provider.subscriptionPoolAlias
-    ? [await readProviderShareQuotaAccount(providerId)] : [empty('unavailable')];
+  if (pooled.length === 0) return [empty('unavailable')];
   const now = Date.now();
-  return pooled.map(({ usage }) => windowsAccount(
-    providerWeeklyQuotaSource(provider) === 'claude'
-      ? claudeSource(provider, usage?.claudeUsage ?? null, now)
-      : // Pool buckets omit windows without a percentage; codexSource skips those.
-        codexSource(provider, (usage?.codexUsage ?? null) as unknown as CodexAccountUsagePayload | null, now),
-  ));
+  return pooled.map((entry) => {
+    const isClaude = 'kind' in entry && entry.kind
+      ? entry.kind === 'anthropic'
+      : providerWeeklyQuotaSource(provider) === 'claude';
+    return windowsAccount(
+      isClaude
+        ? claudeSource(provider, entry.usage?.claudeUsage ?? null, now)
+        : // Pool buckets omit windows without a percentage; codexSource skips those.
+          codexSource(provider, (entry.usage?.codexUsage ?? null) as unknown as CodexAccountUsagePayload | null, now),
+    );
+  });
 }
 
 async function readGroupQuota(providerId: string) {
@@ -324,34 +453,29 @@ function sanitizeQuotaAccount(raw: ProviderShareQuotaAccount): ProviderShareQuot
 }
 
 /** 同一账号/组配置共享在途与短缓存，受邀者人数不会放大组内查询频率。 */
-const groupCache = new Map<string, { until: number; pending: ReturnType<typeof readGroupQuota> }>();
-let groupCacheOwner = '';
 export async function readProviderShareQuota(providerId: string) {
-  const assertCurrent = captureProviderManagementScope();
-  const owner = activeOwnerScopeKey();
-  if (owner !== groupCacheOwner) {
-    groupCacheOwner = owner;
-    groupCache.clear();
-  }
+  const scope = captureQuotaScope();
+  const { assertCurrent } = scope;
   const config = JSON.stringify(readProviderGroup(providerId));
   const key = JSON.stringify([providerId, config]);
-  for (const [entry, value] of groupCache) if (value.until <= Date.now()) groupCache.delete(entry);
-  let cached = groupCache.get(key);
-  if (!cached) {
-    const pending = readGroupQuota(providerId);
-    cached = { until: Infinity, pending };
-    groupCache.set(key, cached);
-    const entry = cached;
-    void pending.then(
-      () => {
-        entry.until = Date.now() + 15_000;
-      },
-      () => {
-        if (groupCache.get(key) === entry) groupCache.delete(key);
-      },
-    );
-  }
-  const result = await cached.pending;
+  const { value: result } = await quotaReader.read(
+    {
+      ...scope,
+      freshForMs: GROUP_FRESH_MS,
+      validForMs: GROUP_FRESH_MS,
+      remainingTrustMs: (value) =>
+        (value as { accounts: ProviderShareQuotaAccount[] }).accounts.some(
+          (account) => account.state === 'unavailable',
+        )
+          ? UNAVAILABLE_CACHE_MS
+          : GROUP_FRESH_MS,
+    },
+    `group:${key}`,
+    () => readGroupQuota(providerId),
+  ).catch((error) => {
+    assertCurrent();
+    throw error;
+  });
   assertCurrent();
   if (config !== JSON.stringify(readProviderGroup(providerId)))
     throwIpcError('PRECONDITION_FAILED', 'Provider group changed');

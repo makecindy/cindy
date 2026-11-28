@@ -1,4 +1,4 @@
-import { readdir } from 'node:fs/promises';
+import { opendir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { shell } from 'electron';
@@ -15,14 +15,9 @@ const PROTECTED_PATHS: Record<ProtectedFolderKind, string> = {
   Downloads: path.join(homedir(), 'Downloads'),
 };
 
-const TCC_SETTINGS_URLS: Record<ProtectedFolderKind, string> = {
-  Desktop:
-    'x-apple.systempreferences:com.apple.preference.security?Privacy_DesktopFolder',
-  Documents:
-    'x-apple.systempreferences:com.apple.preference.security?Privacy_DocumentsFolder',
-  Downloads:
-    'x-apple.systempreferences:com.apple.preference.security?Privacy_DownloadsFolder',
-};
+// Desktop, Documents and Downloads are separate switches within this one pane.
+const FILES_AND_FOLDERS_SETTINGS_URL =
+  'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders';
 
 const EPERM_PATTERN_SOURCE = 'operation not permitted|eperm';
 
@@ -120,9 +115,14 @@ export async function probeProtectedFolderAccess(
 ): Promise<ProtectedFolderAccess> {
   if (platform !== 'darwin') return 'granted';
   try {
-    // readdir 是 TCC 实际拦截的读操作;stat 一类元数据访问不会触发授权判定。
-    // 未授权时这里会阻塞到用户回应系统弹窗,因此必须走异步 API。
-    await readdir(PROTECTED_PATHS[kind]);
+    // Reading one entry tests directory access even on an empty folder, without
+    // materializing its contents. macOS may wait for a response to its prompt.
+    const directory = await opendir(PROTECTED_PATHS[kind], { bufferSize: 1 });
+    try {
+      await directory.read();
+    } finally {
+      await directory.close();
+    }
     return 'granted';
   } catch (error) {
     const code = (error as { code?: unknown } | null | undefined)?.code;
@@ -136,7 +136,7 @@ export async function probeProtectedFolderAccess(
 // Shared across agent sessions for this app process. Restarting the app resets it.
 const guidanceShownFor = new Set<ProtectedFolderKind>();
 /**
- * 全进程同时只允许一次探测(不是每个目录一次)。未授权时 readdir 会一直卡到用户回应
+ * 全进程同时只允许一次探测(不是每个目录一次)。未授权时目录读取可能等到用户回应
  * 系统弹窗:并发探测既会同时叠出多个系统弹窗,又会占满 libuv 的默认 4 线程文件池,
  * 拖慢 Main 里其它所有文件操作。被挡掉的目录等下一条命中事件重试即可。
  */
@@ -148,9 +148,8 @@ export async function openFolderPrivacySettings(
   platform: NodeJS.Platform = process.platform,
 ): Promise<void> {
   if (platform !== 'darwin') return;
-  const url = TCC_SETTINGS_URLS[kind];
-  log.info('opening folder privacy settings', { kind, url });
-  await shell.openExternal(url);
+  log.info('opening folder privacy settings', { kind });
+  await shell.openExternal(FILES_AND_FOLDERS_SETTINGS_URL);
 }
 
 /**

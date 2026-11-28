@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDeviceListPresentation,
+  cloudComputerEntry,
   deviceAccessState,
   deviceDisplayName,
   isControllableDevice,
@@ -233,4 +234,21 @@ describe('device display names', () => {
     expect(deviceDisplayName('b', 'Studio', 'Computer', [devices[0], devices[0]])).toBe('Studio');
     expect(devices.map((device) => device.deviceId)).toEqual(['b', 'a']);
   });
+});
+
+// Pilot menu, unit: an allowed reply for another membership must never expose its cloud computer.
+it('shows the cloud computer action only for the authorized owner and a current provisioning state', () => {
+  const url = 'https://auth.example.test/console/orgs/org-a/personal/cloud';
+  const allowed = {enabled:true, membershipId:'member-a', organizationId:'org-a', url, computer:null};
+  const action = (row:unknown) => cloudComputerEntry(row,'member-a','org-a')?.action;
+  expect(action(allowed)).toBe('addCloud');
+  expect(cloudComputerEntry({...allowed,computer:{status:'linked'},canAdd:true},'member-a','org-a')).toMatchObject({action:'manageCloud',canAdd:true});
+  expect(action({...allowed,computer:{status:'awaiting_device'}})).toBe('preparingCloud');
+  for (const status of ['linked', 'deleting', 'reinstalling']) {
+    expect(action({...allowed,computer:{status}})).toBe('manageCloud');
+  }
+  for (const patch of [{enabled:false},{membershipId:'member-b'},{organizationId:'org-b'},
+    {url:url+'?token=demo'},{url:'file:///console/orgs/org-a/personal/cloud'},{computer:{status:'unknown'}}]) {
+    expect(action({...allowed,...patch})).toBeUndefined();
+  }
 });

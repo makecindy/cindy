@@ -3,7 +3,7 @@ import { PLUGIN_COLLECTION, REMOTE_RESOURCE_CHANGED_CHANNEL, REMOTE_RESOURCE_INV
 
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 
-import { __resetGhostCardStoreForTest, ensureRemoteCard, getGhostCardEntry, retainRemoteCardSession } from '../ghostCardStore';
+import { __resetGhostCardStoreForTest, ensureRemoteCard, getGhostCardEntry, ensureSessionCards, retainRemoteCardSession } from '../ghostCardStore';
 import { __resetGhostCardActionsForTest, dispatchGhostCardAction, routeForPicker } from '../ghostCardActions';
 
 // Production entries: MessageStream calls ensureRemoteCard for a remote task's card results, and
@@ -76,6 +76,27 @@ describe('remote plugin cards', () => {
     expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(5);
     expect(getGhostCardEntry('a')).toEqual({ status: 'missing' });
     expect(getGhostCardEntry('b')).toEqual({ status: 'missing' });
+  });
+
+  // Unit: one hidden remote card plus 512 local historical cards crosses the cache budget.
+  // If the next refresh fails, the prior body and its remote action owner must survive.
+  it('preserves an offline remote card and its action owner under cache pressure', async () => {
+    const { api } = stubApi();
+    const release = retainRemoteCardSession('host', 'remote-task');
+    ensureRemoteCard('host', 'remote-task', 'remote-call');
+    await flush();
+    release();
+    Object.assign(api.ghosts, { listCardsBySession: async () => ({ cards:
+      Array.from({ length: 512 }, (_, i) => ({ callId: String(i), ghostId: 'local', html: 'ok', height: 80 })),
+    }) });
+    ensureSessionCards('local-task');
+    await flush();
+    api.ghosts.getRemoteCard.mockRejectedValueOnce(new Error('offline'));
+    retainRemoteCardSession('host', 'remote-task');
+    await flush();
+    expect(getGhostCardEntry('remote-call')).toMatchObject({ html: '<p>remote-call</p>', remote: { deviceId: 'host', revision: 'rev-remote-call' } });
+    expect((await dispatchGhostCardAction('remote-call', 'open')).ok).toBe(true);
+    expect(api.ghosts.dispatchCardAction).not.toHaveBeenCalled();
   });
 
   // Regression #10734, unit: public store + actual change notification.

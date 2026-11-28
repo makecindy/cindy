@@ -82,7 +82,7 @@ export function ChromeActions({
 
   return (
     <div
-      className="absolute top-0 z-20 flex h-[46px] items-center gap-1"
+      className="absolute top-0 z-page-float flex h-[46px] items-center gap-1"
       data-plugin-ui-element="header"
       style={
         {

@@ -18,6 +18,7 @@ import {
 import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionStreamResult } from './sessionEventStream.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
+import { isSilencedSchedulerTurn } from '../scheduler-host/silent-output.js';
 export interface DeliverSessionEventDeps {
   readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly attemptBotCompactRuntimeRefresh: (session: Session, reason: string) => void;
@@ -56,7 +57,7 @@ export interface DeliverSessionEventDeps {
   readonly deferredCodexRestartHolder: Pick<DeferredCodexRestartService, 'onSessionSettled'> | null;
   readonly gatewayCodexRestartHolder?: Pick<DeferredCodexRestartService, 'onSessionSettled'> | null;
   readonly refreshRemoteCodexMcpOnTurnSettledHolder: ((sessionId: string) => void) | null;
-  readonly markTurnEndedAfterPersistDrain: (sessionId: string) => void;
+  readonly markTurnEndedAfterPersistDrain: (sessionId: string, event: AgentEvent) => void;
   readonly gitSnapshotCoordinator: Pick<GitSnapshotCoordinator, 'onTurnEnd' | 'onTurnAbort'> | null;
   /**
    * 智能体回合因 Cindy AI Key 失效终止时调用(按本机当前 Key 上报,触发凭据重新同步)。
@@ -184,9 +185,11 @@ export function deliverSessionEvent(
     const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
     deps.sessionTurnActivityTracker.scheduleIdleAfterStatusBroadcast(session.id);
     // status:isRunning=false 即逻辑 turn 结束(可重试 error 不发这个信号)。
-    deps.markTurnEndedAfterPersistDrain(session.id);
+    deps.markTurnEndedAfterPersistDrain(session.id, event);
     if (
-      wasInTurn && event.turnOrigin?.kind !== 'goal'
+      wasInTurn &&
+      event.turnOrigin?.kind !== 'goal' &&
+      !isSilencedSchedulerTurn(event.turnOrigin)
     ) {
       deps.sessionListActivityTracker.end(session.id, {
         identity: event.sessionTurnGeneration === undefined ? undefined

@@ -8,8 +8,11 @@ import { estimateWordTokens } from '../shared/calibrated-token-speed.js';
  *
  * Events are `[ms since the first event, code, ...]`:
  * `t` turn/started · `b` / `e` item started / completed: id, type · `d` answer
- * delta: item id, estimated words · `u` output tokens, reasoning tokens · `r`
- * turn/completed.
+ * delta: item id, estimated words · `z` reasoning summary delta: item id, estimated
+ * words · `u` output tokens, reasoning tokens · `x` a
+ * model response ended (turn/moderationMetadata) · `s` the provider's own timing
+ * of a response: tokens sampled so far in the turn, sampling milliseconds · `r`
+ * turn/completed. Recordings made before `x` and `s` existed have neither.
  */
 export interface RecordedCodexStream {
   format: 'codex-stream-timing/1';
@@ -23,7 +26,10 @@ export type RecordedCodexEvent =
   | [number, 't']
   | [number, 'b' | 'e', string, string]
   | [number, 'd', string, number]
+  | [number, 'z', string, number]
   | [number, 'u', number, number]
+  | [number, 'x']
+  | [number, 's', number, number]
   | [number, 'r'];
 
 /** One app-server notification with its arrival time. */
@@ -64,11 +70,14 @@ export function compactCodexStream(lines: TimedCodexNotification[], model: strin
         break;
       case 'item/agentMessage/delta': {
         const words = estimateWordTokens(String(params.delta ?? ''));
-        const last = events.at(-1);
-        const itemId = anonymous(params.itemId);
-        // Deltas that arrived in the same millisecond measure the same as one.
-        if (last && last[1] === 'd' && last[0] === at && last[2] === itemId) last[3] += words;
-        else if (words > 0) events.push([at, 'd', itemId, words]);
+        // Keep every delta, even several in one millisecond: a release of held-back output
+        // arrives as many small deltas, and merging them hides it from the speed meter.
+        if (words > 0) events.push([at, 'd', anonymous(params.itemId), words]);
+        break;
+      }
+      case 'item/reasoning/summaryTextDelta': {
+        const words = estimateWordTokens(String(params.delta ?? ''));
+        if (words > 0) events.push([at, 'z', anonymous(params.itemId), words]);
         break;
       }
       case 'thread/tokenUsage/updated': {
@@ -76,6 +85,12 @@ export function compactCodexStream(lines: TimedCodexNotification[], model: strin
         events.push([at, 'u', last?.outputTokens ?? 0, last?.reasoningOutputTokens ?? 0]);
         break;
       }
+      case 'turn/moderationMetadata':
+        events.push([at, 'x']);
+        break;
+      case 'cindy/response/timing':
+        events.push([at, 's', Number(params.sampledTokensTotal), Number(params.samplingMs)]);
+        break;
       case 'turn/completed':
         events.push([at, 'r']);
         break;
@@ -105,6 +120,14 @@ export function expandCodexStream(stream: RecordedCodexStream): TimedCodexNotifi
       case 'u':
         return notify(t, 'thread/tokenUsage/updated', {
           tokenUsage: { last: { outputTokens: recorded[2], reasoningOutputTokens: recorded[3] } },
+        });
+      case 'z':
+        return notify(t, 'item/reasoning/summaryTextDelta', { itemId: recorded[2], summaryIndex: 0, delta: 'w '.repeat(recorded[3]) });
+      case 'x':
+        return notify(t, 'turn/moderationMetadata', {});
+      case 's':
+        return notify(t, 'cindy/response/timing', {
+          responseId: `recorded-response-${recorded[2]}`, sampledTokensTotal: recorded[2], samplingMs: recorded[3],
         });
       case 'r':
         return notify(t, 'turn/completed', { turn: { id: TURN_ID, status: 'completed' } });

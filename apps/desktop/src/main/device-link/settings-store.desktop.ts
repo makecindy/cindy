@@ -25,7 +25,7 @@ import { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolic
 import { app } from 'electron';
 import { createDeviceLinkSettingsStore } from "./settings-store.js";
 export type * from "./settings-store.js";
-export const { readDeviceLinkSettings, onDeviceLinkSettingChanged, updateDeviceLinkSetting, writeDeviceLinkSetting, readLastKnownDeviceNames, writeLastKnownDeviceNames, setDeviceControlEnabled, rememberLastKnownDeviceName, forgetLastKnownDeviceName, normalizeCachedDeviceName, isPlaceholderDeviceName, __testing } = createDeviceLinkSettingsStore({
+export const { inspectDeviceLinkSettings, readDeviceLinkSettings, onDeviceLinkSettingChanged, updateDeviceLinkSetting, writeDeviceLinkSetting, readLastKnownDeviceNames, writeLastKnownDeviceNames, setDeviceControlEnabled, setPeerPathPreference, rememberLastKnownDeviceName, forgetLastKnownDeviceName, normalizeCachedDeviceName, isPlaceholderDeviceName, __testing } = createDeviceLinkSettingsStore({
 getUserDataDir: () => app.getPath('userData'),
 // The availability policy reaches back here through Device Link; forward at call time so
 // entering that cycle from the policy side does not capture an uninitialized binding.

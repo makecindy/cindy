@@ -21,7 +21,22 @@ import {
   registerLocalAgentVisibleRuntime,
 } from './visibleSessions.js';
 import { withSendToSessionLock } from '../maker-ipc/sendToSessionLock.js';
+import {
+  bindHostedSessionProvider,
+  getSessionProvider,
+} from '../maker-host/session-provider-store.js';
 import { buildMessageSourceNote } from '@cindy/maker-shared/message-source';
+
+// Hidden local application sessions never enter Maker's visible task registry.
+const localClaudeSessions = new Map<string, Session>();
+
+export function resolveLocalAgentClaudeSessionId(requestSessionId: string): string | null {
+  if (!requestSessionId || requestSessionId === '<pending>') return null;
+  for (const [id, session] of localClaudeSessions) {
+    if (session.requestSessionId === requestSessionId && getSessionProvider(id)) return id;
+  }
+  return null;
+}
 
 const object = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
@@ -271,7 +286,7 @@ export async function openLocalAgentRuntime(
   let executionRoute: LocalAgentExecutionRoute;
   // Only stable public remote codes cross the API, never peer diagnostics.
   const remoteFailure = (error: unknown): never => {
-    const code = error instanceof Error ? /^\[(REMOTE_AGENT_PEER_TOO_OLD|REMOTE_AGENT_SHARE_PAUSED|REMOTE_AGENT_SHARE_REMOVED|REMOTE_AGENT_SHARE_LEGACY_DISABLED|REMOTE_AGENT_PROVIDER_NOT_ALLOWED|REMOTE_AGENT_UNAVAILABLE)\]/.exec(error.message)?.[1] : undefined;
+    const code = error instanceof Error ? /^\[(REMOTE_AGENT_PEER_TOO_OLD|REMOTE_AGENT_SHARE_PAUSED|REMOTE_AGENT_SHARE_REMOVED|REMOTE_AGENT_SHARE_UNAVAILABLE|REMOTE_AGENT_SHARE_LEGACY_DISABLED|REMOTE_AGENT_PROVIDER_NOT_ALLOWED|REMOTE_AGENT_UNAVAILABLE)\]/.exec(error.message)?.[1] : undefined;
     if (code) throw new LocalAgentError(code, localize(code, '远程供应商暂不可用，请在 Cindy 中检查连接或更新远端版本。'));
     throw error;
   };
@@ -344,16 +359,36 @@ export async function openLocalAgentRuntime(
       },
     };
     resumed = Boolean(resume);
-    const next = visibleHost
-      ? await visibleHost.open({
-          ...opts,
-          agentDeviceId: route.agentDeviceId,
-          id: sessionId,
-          agentKind: input.model.engine,
-          title: input.visibleSession!.title,
-          workspaceKind: 'dialogue',
-        }).catch(remoteFailure)
-      : await maker.startLocalAgentSession(input.model.engine, opts).catch(remoteFailure);
+    // The hidden local path bypasses prepareStartOptions. Bind the actual
+    // execution provider before starting Claude, including local group picks.
+    const providerBinding = !visibleHost && !route.agentDeviceId && input.model.engine === 'claude-code'
+      ? bindHostedSessionProvider(sessionId, route.providerId)
+      : undefined;
+    let next: Session;
+    try {
+      next = visibleHost
+        ? await visibleHost.open({
+            ...opts,
+            agentDeviceId: route.agentDeviceId,
+            id: sessionId,
+            agentKind: input.model.engine,
+            title: input.visibleSession!.title,
+            workspaceKind: 'dialogue',
+          })
+        : await maker.startLocalAgentSession(input.model.engine, opts);
+    } catch (error) {
+      providerBinding?.release();
+      return remoteFailure(error);
+    }
+    if (providerBinding) {
+      const release = () => {
+        if (localClaudeSessions.get(sessionId) === next) localClaudeSessions.delete(sessionId);
+        providerBinding.release();
+      };
+      localClaudeSessions.set(sessionId, next);
+      if (next.getStatus() === 'closed') release();
+      else next.onStatusChange((status) => { if (status === 'closed') release(); });
+    }
     handle = next;
     try {
       assertCurrent(expected);

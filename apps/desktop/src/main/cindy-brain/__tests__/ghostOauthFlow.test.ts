@@ -1264,3 +1264,281 @@ describe('fetchGhostOauthAvatar', () => {
     })).resolves.toBeNull();
   });
 });
+
+/*
+ * 测试价值(设备码登录,RFC 8628)
+ * - 生产入口与可观察结果:startGhostOauthFlow 在声明 deviceAuthorizationUrl 时不起 loopback,
+ *   向设备码端点申请验证码、拉起确认页(远程交给控制端)、按 interval 轮询 tokenUrl,
+ *   返回与授权码模式同形的令牌包或结构化错误。
+ * - 规则依据:plugin-security-and-authoring.md「网络、凭证与资源交接」——授权页只能落在插件
+ *   声明的授权面内、user_code 只在需要手输时交给宿主展示;远程单不得回退到在执行设备开浏览器。
+ * - 现有覆盖缺口:既有用例只覆盖授权码 + loopback,设备码分支此前不存在。
+ * - 最小失败输入:确认页域名不在声明面内、服务商回 slow_down / access_denied / expired_token、
+ *   远程单与轮询中途取消。
+ * - tier:unit(注入 fetchImpl 与假计时器,不起真实网络与 loopback)。
+ * - 实测耗时:见 PR 描述。
+ */
+describe('设备码登录(RFC 8628)', () => {
+  const DEVICE_CONFIG: GhostOauthClientConfig = {
+    ...BASE_CONFIG,
+    deviceAuthorizationUrl: 'https://auth.example.com/device',
+    clientSecret: 'secret-xyz',
+  };
+
+  type Step = { status?: number; body: Record<string, unknown> };
+  function deviceFetch(device: Record<string, unknown>, polls: Step[]) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      if (String(url) === DEVICE_CONFIG.deviceAuthorizationUrl) return jsonResponse(device);
+      const next = polls.shift();
+      if (!next) throw new Error('unexpected poll');
+      return jsonResponse(next.body, next.status ?? (next.body.access_token ? 200 : 400));
+    }) as unknown as typeof fetch;
+    return { fetchImpl, calls };
+  }
+
+  async function runWithTimers(promise: Promise<GhostOauthFlowResult>): Promise<GhostOauthFlowResult> {
+    let settled = false;
+    const markSettled = () => {
+      settled = true;
+    };
+    void promise.then(markSettled, markSettled);
+    for (let i = 0; i < 50 && !settled; i += 1) await vi.advanceTimersByTimeAsync(5_000);
+    return promise;
+  }
+
+  it('带码确认页:Basic 认证申请验证码、直接拉起确认页,pending/slow_down 后领到令牌', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { fetchImpl, calls } = deviceFetch(
+        {
+          device_code: 'dev-code-1',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://auth.example.com/verify',
+          verification_uri_complete: 'https://auth.example.com/verify?user_code=ABCD-EFGH',
+          expires_in: 300,
+          interval: 1,
+        },
+        [
+          { body: { error: 'authorization_pending' } },
+          { body: { error: 'slow_down' } },
+          { body: { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 7200, scope: 'read:a' } },
+        ],
+      );
+      const openExternal = vi.fn();
+      const presentDeviceUserCode = vi.fn();
+      const result = await runWithTimers(
+        startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl, presentDeviceUserCode }),
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        bundle: { accessToken: 'at-1', refreshToken: 'rt-1', grantedScope: 'read:a' },
+      });
+      expect(openExternal).toHaveBeenCalledWith('https://auth.example.com/verify?user_code=ABCD-EFGH');
+      expect(presentDeviceUserCode).not.toHaveBeenCalled();
+      const [deviceCall, ...polls] = calls;
+      expect(new Headers(deviceCall!.init.headers).get('Authorization')).toBe(
+        `Basic ${Buffer.from('client-123:secret-xyz').toString('base64')}`,
+      );
+      expect(Object.fromEntries(new URLSearchParams(String(deviceCall!.init.body)))).toEqual({
+        client_id: 'client-123',
+        scope: 'read:a write:b',
+      });
+      expect(polls).toHaveLength(3);
+      // 两类请求都带 client 凭证,不得跟随重定向把表单带出白名单。
+      expect(calls.every((call) => call.init.redirect === 'error')).toBe(true);
+      expect(Object.fromEntries(new URLSearchParams(String(polls[0]!.init.body)))).toEqual({
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        device_code: 'dev-code-1',
+        client_id: 'client-123',
+        client_secret: 'secret-xyz',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns NETWORK if the device authorization response body is interrupted', async () => {
+    const response = jsonResponse({});
+    vi.spyOn(response, 'text').mockRejectedValueOnce(new Error('response interrupted'));
+    const fetchImpl = vi.fn(async () => response);
+    const openExternal = vi.fn();
+    await expect(startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl }))
+      .resolves.toMatchObject({ ok: false, error: 'NETWORK' });
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it.each(['retry', 'cancel', 'exhausted'])('handles an interrupted token response body: %s', async (outcome) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const openExternal = vi.fn();
+      let pollCount = 0;
+      const poll = vi.fn(async () => {
+        pollCount += 1;
+        const response = jsonResponse({ access_token: 'at-after-retry' });
+        if (outcome === 'retry' && pollCount === 2) return response;
+        vi.spyOn(response, 'text').mockImplementationOnce(async () => {
+          if (outcome === 'cancel') cancelActiveGhostOauthFlow();
+          throw new Error('response interrupted');
+        });
+        return response;
+      });
+      const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+        String(url) === DEVICE_CONFIG.deviceAuthorizationUrl
+          ? jsonResponse({
+              device_code: 'dev-code-1',
+              user_code: 'ABCD-EFGH',
+              verification_uri: 'https://auth.example.com/verify',
+              interval: 1,
+            })
+          : poll(),
+      );
+      const result = await runWithTimers(startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl }));
+      if (outcome === 'retry') {
+        expect(result).toMatchObject({ ok: true, bundle: { accessToken: 'at-after-retry' } });
+        expect(poll).toHaveBeenCalledTimes(2);
+      } else {
+        expect(result).toMatchObject({ ok: false, error: outcome === 'cancel' ? 'CANCELLED' : 'NETWORK' });
+        expect(poll).toHaveBeenCalledTimes(outcome === 'cancel' ? 1 : 3);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['access_denied', { ok: false, error: 'CANCELLED' }],
+    ['expired_token', { ok: false, error: 'TIMEOUT' }],
+    ['invalid_client', { ok: false, error: 'EXCHANGE_FAILED' }],
+  ])('只给通用确认页:交宿主展示验证码,轮询回 %s 后收场并清理展示', async (error, expected) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { fetchImpl } = deviceFetch(
+        {
+          device_code: 'dev-code-2',
+          user_code: 'WXYZ-1234',
+          verification_uri: 'https://auth.example.com/verify',
+          interval: 1,
+        },
+        [{ body: { error } }],
+      );
+      const openExternal = vi.fn();
+      const release = vi.fn();
+      const presentDeviceUserCode = vi.fn(() => release);
+      const result = await runWithTimers(
+        startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl, presentDeviceUserCode }),
+      );
+      expect(result).toMatchObject(expected);
+      expect(openExternal).toHaveBeenCalledWith('https://auth.example.com/verify');
+      expect(presentDeviceUserCode).toHaveBeenCalledWith(
+        expect.objectContaining({ userCode: 'WXYZ-1234', verificationUrl: 'https://auth.example.com/verify' }),
+      );
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('确认页不在插件声明的授权面内:拒绝且不拉起浏览器、不轮询', async () => {
+    const { fetchImpl, calls } = deviceFetch(
+      {
+        device_code: 'dev-code-3',
+        user_code: 'ABCD-EFGH',
+        verification_uri: 'https://phishing.example.net/verify',
+      },
+      [],
+    );
+    const openExternal = vi.fn();
+    const result = await startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl });
+    expect(result).toMatchObject({ ok: false, error: 'EXCHANGE_FAILED' });
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('远程单领到令牌后不取消控制端事务(账号落库前 assertCurrent 仍须有效)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { fetchImpl } = deviceFetch(
+        {
+          device_code: 'dev-code-5',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://auth.example.com/verify',
+          interval: 1,
+        },
+        [{ body: { access_token: 'at-remote', refresh_token: 'rt-remote', expires_in: 3600 } }],
+      );
+      let offerSignal: AbortSignal | undefined;
+      const authorizePlugin = vi.fn(async (_offer: unknown, signal: AbortSignal) => {
+        offerSignal = signal;
+        return { kind: 'device-opened' as const, state: 'x' };
+      });
+      const remote = {
+        scope: 'remote-2',
+        assertCurrent: () => undefined,
+        authorize: vi.fn(),
+        authorizePlugin,
+        finish: vi.fn(),
+      };
+      const result = await runWithTimers(
+        startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal: vi.fn(), fetchImpl, remote: remote as never }),
+      );
+      expect(result).toMatchObject({ ok: true, bundle: { accessToken: 'at-remote' } });
+      expect(offerSignal?.aborted).toBe(false);
+      expect(remote.finish).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('远程单:验证码与确认页交给控制端,不在执行设备开浏览器;轮询中途取消即停', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { fetchImpl, calls } = deviceFetch(
+        {
+          device_code: 'dev-code-4',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://auth.example.com/verify',
+          expires_in: 600,
+          interval: 2,
+        },
+        [{ body: { error: 'authorization_pending' } }, { body: { error: 'authorization_pending' } }],
+      );
+      const authorizePlugin = vi.fn(async () => ({ kind: 'device-opened' as const, state: 'x' }));
+      const remote = {
+        scope: 'remote-1',
+        assertCurrent: () => undefined,
+        authorize: vi.fn(),
+        authorizePlugin,
+        finish: vi.fn(),
+      };
+      const openExternal = vi.fn();
+      const pending = startGhostOauthFlow({
+        config: DEVICE_CONFIG,
+        openExternal,
+        fetchImpl,
+        remote: remote as never,
+      });
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(authorizePlugin).toHaveBeenCalledTimes(1);
+      const offer = (authorizePlugin.mock.calls[0] as unknown[])[0] as {
+        request: { kind: string; url: string; userCode: string; expiresAt: number };
+      };
+      expect(offer.request).toMatchObject({
+        kind: 'device',
+        url: 'https://auth.example.com/verify',
+        userCode: 'ABCD-EFGH',
+      });
+      expect(openExternal).not.toHaveBeenCalled();
+      cancelActiveGhostOauthFlow();
+      const result = await pending;
+      expect(result).toMatchObject({ ok: false, error: 'CANCELLED' });
+      const pollsBefore = calls.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(calls).toHaveLength(pollsBefore);
+      expect(remote.authorize).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

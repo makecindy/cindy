@@ -4,7 +4,8 @@ import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
-import { orcaWorkflowsFor } from '@/lib/makerTransport';
+import { orcaWorkflowsFor, orcaWorkflowsForDevice } from '@/lib/makerTransport';
+import { assertRemoteWorkerModelGroupSupported } from '../remoteCollabHandoff';
 import { extractIpcError } from '@/utils/ipcError';
 import {
   parseConversationSearchJump,
@@ -313,11 +314,14 @@ export function useOrcaWorkerSelection({
       for (let attempt = 0; attempt < 1000; attempt += 1) {
         const label = createWorkerLabel(form.role, allocatedLabels);
         try {
-          await orcaWorkflowsFor(leadSessionId).createWorker({
+          if (deviceId && form.modelGroup) await assertRemoteWorkerModelGroupSupported(deviceId);
+          const workflows = deviceId ? orcaWorkflowsForDevice(deviceId) : orcaWorkflowsFor(leadSessionId);
+          await workflows.createWorker({
             leadSessionId,
             role: form.role,
             agent: form.agent,
             model: form.model,
+            ...(form.modelGroup ? { modelGroup: form.modelGroup } : {}),
             effort: form.effort,
             fast: form.fast,
             // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。

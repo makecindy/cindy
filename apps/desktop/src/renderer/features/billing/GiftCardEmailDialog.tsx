@@ -137,7 +137,7 @@ function GiftCardEmailForm({
 
   return (
     <Dialog.Portal>
-      <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10003]" />
+      <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal-nested" />
       <Dialog.Content
         onPointerDownOutside={(event) => event.preventDefault()}
         onOpenAutoFocus={(event) => {
@@ -145,7 +145,7 @@ function GiftCardEmailForm({
           inputRef.current?.focus();
         }}
         className={cn(
-          'modal-panel fixed left-1/2 top-1/2 z-[10004] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[440px] flex-col',
+          'modal-panel fixed left-1/2 top-1/2 z-modal-nested flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[440px] flex-col',
           '-translate-x-1/2 -translate-y-1/2 overflow-hidden',
           'text-[var(--text-primary)] focus:outline-none',
         )}

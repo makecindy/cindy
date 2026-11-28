@@ -54,11 +54,13 @@ import { withGhostAssistantHookModel } from '../cindy-brain/subscriptionGateway.
 import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionDeliveryResult } from './sessionEventDelivery.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
+import { isSilencedSchedulerTurn } from '../scheduler-host/silent-output.js';
 import {
   captureProductTurnFailureOwner,
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly silentStopAutoResumeGuard: { noteProgress(sessionId: string): void };
   readonly saveRemoteNativeHistory?: (sessionId: string, data: unknown, anchor: string, persisted: Promise<unknown>) => void;
   readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string, inputClientIds?: string[]) => void;
@@ -140,7 +142,7 @@ export interface FinishSessionTerminalEventDeps {
     event: AgentEvent,
   ) => void;
   readonly log: Pick<ReturnType<typeof createLogger>, 'warn'>;
-  readonly markTurnEndedAfterPersistDrain: (sessionId: string) => void;
+  readonly markTurnEndedAfterPersistDrain: (sessionId: string, event: AgentEvent) => void;
   readonly turnModelPromiseBySession: Map<string, Promise<string>>;
   readonly workerTurnStartSequencer: Pick<
     ReturnType<typeof createWorkerTurnStartSequencer>,
@@ -322,7 +324,7 @@ export function finishSessionTerminalEvent(
     const contextRecoveryInput = {
       session, event, attributedEvent, broadcastEvent, eventAgentMeta,
       isPlannedUpgradeClose, isRemoteAuthRetry, isGatewayProxyTokenRecovery,
-      autoResumeSuppressesPersist, persistId,
+      autoResumeSuppressesPersist, persistId, inputClientId: prepared.activeInputId ?? undefined,
     };
     const overflowClaim = claimContextRecoveryTerminal(contextRecoveryPorts, contextRecoveryInput);
     const deferUnsuccessfulProductTurn = (): void => {
@@ -487,21 +489,30 @@ export function finishSessionTerminalEvent(
       );
     }
     if (!isContinuationBoundary) {
-      deps.markTurnEndedAfterPersistDrain(session.id);
+      deps.markTurnEndedAfterPersistDrain(session.id, event);
       if (event.type === 'done' && event.source === 'pi' && turnBoundaryAssistantPersistId) {
         deps.saveRemoteNativeHistory?.(session.id, event.data, turnBoundaryAssistantPersistId, drainPersistQueue());
       }
       if (
         event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal'
       ) {
-        deps.sessionListActivityTracker.end(session.id, {
-          identity: event.sessionTurnGeneration === undefined ? undefined
-            : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`,
-          hold: autoResumeSuppressesPersist || recoveryOwnsUnsuccessfulBoundary ||
-            deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) ||
-            deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) ||
-            (event.type === 'done' && (event.data as { silentStop?: boolean } | null)?.silentStop === true),
-        });
+        if (
+          event.type === 'done' &&
+          !isTerminalTurnErrorEvent(event) &&
+          isSilencedSchedulerTurn(event.turnOrigin)
+        ) {
+          // 静默调度轮正常结束不推进列表活动时间；清掉可能已由 status(false) 排队的 statusOnly 兜底。
+          deps.sessionListActivityTracker.deleteSession(session.id);
+        } else {
+          deps.sessionListActivityTracker.end(session.id, {
+            identity: event.sessionTurnGeneration === undefined ? undefined
+              : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`,
+            hold: autoResumeSuppressesPersist || recoveryOwnsUnsuccessfulBoundary ||
+              deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) ||
+              deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) ||
+              (event.type === 'done' && (event.data as { silentStop?: boolean } | null)?.silentStop === true),
+          });
+        }
       }
       // 逻辑 turn 结束:跨段存活的计划行引用到此回收(continuation boundary
       // 上必须保留,否则最终 done 找不到计划行 → 无章无失败印记 → 胶囊永久
@@ -607,6 +618,12 @@ export function finishSessionTerminalEvent(
       !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
     ) {
+      const result = (event.data as { result?: unknown; silentStop?: boolean } | null)?.result;
+      if (event.turnScope !== 'background' && typeof result === 'string' && result.trim() &&
+          (event.data as { silentStop?: boolean }).silentStop !== true &&
+          (event.source !== 'codex' || isSuccessfulCodexDoneEventData(event.data))) {
+        deps.silentStopAutoResumeGuard.noteProgress(session.id);
+      }
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
         void callback(session.id, terminalOwner).catch(() =>

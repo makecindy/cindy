@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+export BAMF_DESKTOP_FILE_HINT="/usr/share/applications/com.cindy.cloud-chrome.desktop"
+exec /opt/google/chrome/google-chrome --user-data-dir="$HOME/.config/google-chrome-personal" --class=Google-chrome-personal --no-first-run --no-default-browser-check --disable-dev-shm-usage --password-store=gnome-libsecret "$@"

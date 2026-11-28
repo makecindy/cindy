@@ -992,7 +992,7 @@ function PermissionEvidence({
       </Text>)}
       <Text style={styles.companionMeta}><Text style={styles.companionMetaLabel}>{`${t('interaction.companion.operation')}  `}</Text>{presentation.toolName}</Text>
       {presentation.sourceDescription ? <Text selectable style={styles.body}>{presentation.sourceDescription}</Text> : null}
-      {presentation.autoReviewUnavailable ? <Text style={styles.body}>{t('interaction.permission.autoReviewUnavailable')}</Text> : null}
+      {presentation.autoReviewUnavailable ? <Text style={styles.body}>{t(presentation.autoReviewQuotaExhausted ? 'session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA' : 'interaction.permission.autoReviewUnavailable')}</Text> : null}
       {presentation.autoReviewReason ? <Text selectable style={styles.body} testID="interaction.permission.autoReviewReason">
         {t('interaction.permission.autoReviewReason', { reason: presentation.autoReviewReason })}
       </Text> : null}
@@ -1033,7 +1033,7 @@ function PermissionEvidence({
       {presentation.autoReviewUnavailable || presentation.description ? (
         <Text style={styles.permissionDescription}>
           {presentation.autoReviewUnavailable
-            ? t('interaction.permission.autoReviewUnavailable')
+            ? t(presentation.autoReviewQuotaExhausted ? 'session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA' : 'interaction.permission.autoReviewUnavailable')
             : presentation.description}
         </Text>
       ) : null}
@@ -1385,49 +1385,66 @@ function AskUserQuestionForm({
             const selected = isMulti
               ? selectedLabels.has(option.label)
               : existingAnswer === option.label;
+            const optionPreview = option.preview?.trim() ? option.preview : undefined;
             return (
-              <InteractionTouchButton
-                accessibilityLabel={t('interaction.panel.selectAnswer', { label: option.label })}
-                accessibilityHint={busy ? t('interaction.panel.submittingHint') : undefined}
-                disabled={busy || voiceLocked}
-                key={option.label}
-                onPress={() => toggleLabel(option.label)}
-                selected={selected}
-                style={[
-                  styles.optionRow,
-                  {
-                    gap: touchLayout.actionGap,
-                    minHeight: touchLayout.optionRowMinHeight,
-                    paddingHorizontal: touchLayout.cardPadding,
-                  },
-                  selected && styles.optionRowSelected,
-                ]}
-                testID={`interaction.ask.option.${index + 1}`}
-              >
-                {/* 单选也要有指示器:选中反色实底 + 对勾(对齐桌面 ask-checkbox 与登录
-                    radio 的反色勾体系)。此前单选行只靠 surfaceChip 底色,dark 下与卡底
-                    几乎同色,选中态不可见。 */}
-                <View
+              <View key={option.label}>
+                <InteractionTouchButton
+                  accessibilityLabel={t('interaction.panel.selectAnswer', { label: option.label })}
+                  accessibilityHint={busy ? t('interaction.panel.submittingHint') : undefined}
+                  disabled={busy || voiceLocked}
+                  onPress={() => toggleLabel(option.label)}
+                  selected={selected}
                   style={[
-                    styles.optionIndicator,
-                    isMulti ? styles.optionIndicatorSquare : styles.optionIndicatorRound,
-                    selected && styles.optionIndicatorSelected,
+                    styles.optionRow,
+                    optionPreview && styles.optionRowWithPreview,
+                    {
+                      gap: touchLayout.actionGap,
+                      minHeight: touchLayout.optionRowMinHeight,
+                      paddingHorizontal: touchLayout.cardPadding,
+                    },
+                    selected && styles.optionRowSelected,
                   ]}
-                  testID={`interaction.ask.${isMulti ? 'checkbox' : 'radio'}${selected ? '.checked' : ''}`}
+                  testID={`interaction.ask.option.${index + 1}`}
                 >
-                  {selected ? (
-                    <Check
-                      color={colors.ctaText}
-                      size={iconSize.sm}
-                      strokeWidth={iconStroke.bold}
-                    />
-                  ) : null}
-                </View>
-                <View style={styles.optionCopy}>
-                  <Text style={styles.optionTitle}>{option.label}</Text>
-                  {option.description ? <Text style={styles.optionDescription}>{option.description}</Text> : null}
-                </View>
-              </InteractionTouchButton>
+                  {/* 单选也要有指示器:选中反色实底 + 对勾(对齐桌面 ask-checkbox 与登录
+                      radio 的反色勾体系)。此前单选行只靠 surfaceChip 底色,dark 下与卡底
+                      几乎同色,选中态不可见。 */}
+                  <View
+                    style={[
+                      styles.optionIndicator,
+                      isMulti ? styles.optionIndicatorSquare : styles.optionIndicatorRound,
+                      selected && styles.optionIndicatorSelected,
+                    ]}
+                    testID={`interaction.ask.${isMulti ? 'checkbox' : 'radio'}${selected ? '.checked' : ''}`}
+                  >
+                    {selected ? (
+                      <Check
+                        color={colors.ctaText}
+                        size={iconSize.sm}
+                        strokeWidth={iconStroke.bold}
+                      />
+                    ) : null}
+                  </View>
+                  <View style={styles.optionCopy}>
+                    <Text style={styles.optionTitle}>{option.label}</Text>
+                    {option.description ? <Text style={styles.optionDescription}>{option.description}</Text> : null}
+                  </View>
+                </InteractionTouchButton>
+                {optionPreview ? (
+                  <View
+                    style={[
+                      styles.optionPreviewWrap,
+                      { paddingHorizontal: touchLayout.cardPadding },
+                      selected && styles.optionRowSelected,
+                    ]}
+                    testID={`interaction.ask.option.${index + 1}.preview`}
+                  >
+                    <ScrollView nestedScrollEnabled style={styles.optionPreview}>
+                      <Text selectable style={styles.optionPreviewText}>{optionPreview}</Text>
+                    </ScrollView>
+                  </View>
+                ) : null}
+              </View>
             );
           })}
           {!current.answerConstraints?.choices && (showCustomInput ? (
@@ -2628,6 +2645,29 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   optionRowSelected: {
     backgroundColor: colors.surfaceChip,
+  },
+  optionRowWithPreview: {
+    borderBottomWidth: 0,
+  },
+  optionPreviewWrap: {
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  optionPreview: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.control,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxHeight: 192,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  optionPreviewText: {
+    color: colors.textPrimary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
   },
   optionIndicator: {
     alignItems: 'center',

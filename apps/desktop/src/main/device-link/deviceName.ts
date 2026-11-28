@@ -1,3 +1,4 @@
+import { getInstanceConfig } from '../instance-runtime/config.js';
 import { execFile } from 'node:child_process';
 import os from 'node:os';
 import { promisify } from 'node:util';
@@ -16,7 +17,16 @@ export function initializeDeviceName(): Promise<void> {
 
 /** Default name reported to the relay; user-assigned names are handled by the server. */
 export function deviceName(): string {
-  return resolvedName ?? hostnameFallback();
+  return getInstanceConfig()?.deviceName ?? resolvedName ?? hostnameFallback();
+}
+
+/**
+ * Every name this computer may have reported in this process: the hostname before the macOS
+ * ComputerName lookup resolved, and the resolved name after. Used to tell this computer's own
+ * report apart from another computer's.
+ */
+export function localDeviceNameCandidates(): string[] {
+  return [...new Set([deviceName(), hostnameFallback()])];
 }
 
 async function readDeviceName(): Promise<string> {

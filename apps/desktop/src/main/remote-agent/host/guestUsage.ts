@@ -1,7 +1,7 @@
 /**
  * 受邀者(供应商分享)在本机运行的 Agent 用量：优先读取请求级累计回执，旧运行时从 `done` 事件取每轮 token。
  *  - Claude 的 modelUsage 是同一个 SDK 进程内的累计值，按任务实例保存基线后求增量；
- *  - Codex、Pi 的 usage 已是本轮增量，模型取当前会话模型。
+ *  - Codex、Pi 与插件引擎(ACP)的 usage 已是本轮增量，模型取当前会话模型；插件引擎没报 token 的轮次只记轮数。
  * 纯函数，不落盘；落盘与按分享汇总在 device-link/providerShareUsageStore。
  */
 import type { AgentEvent } from '@cindy/maker-core';
@@ -133,7 +133,8 @@ export function createGuestUsageMeter(kind: string) {
       const usage = record(data?.usage);
       const sample = { ...empty(fallbackModel), turns: 1 };
       if (usage) {
-        // Codex: promptTokens / completionTokens / cachedTokens；Pi: inputTokens / outputTokens / cacheReadTokens。
+        // Codex: promptTokens / completionTokens / cachedTokens；Pi: inputTokens / outputTokens / cacheReadTokens；
+        // 插件引擎(ACP): inputTokens / outputTokens / cacheReadTokens / cacheCreationTokens(maker-core acp/protocol)。
         sample.inputTokens = count(usage.promptTokens) || count(usage.inputTokens);
         sample.outputTokens = count(usage.completionTokens) || count(usage.outputTokens);
         sample.cacheReadTokens = count(usage.cachedTokens) || count(usage.cacheReadTokens);

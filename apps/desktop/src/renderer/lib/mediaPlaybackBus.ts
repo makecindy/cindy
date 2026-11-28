@@ -40,6 +40,27 @@ function pauseOthers(active: HTMLMediaElement): void {
 }
 
 /**
+ * 释放已经脱离页面的元素的媒体管线。
+ *
+ * cleanup 可能发生在 React 已经把元素移出 DOM 之后。此时元素不在总线上,
+ * stopAllMedia() 找不到它,Chromium 仍可能继续解码音频。清掉源再 load() 能让
+ * 管线释放。仍挂在页面上的元素不处理:React 重放 effect 时会再次注册同一个
+ * 元素,它需要保留源才能重新播放。
+ */
+function releaseDetachedMedia(el: HTMLMediaElement): void {
+  if (el.isConnected) return;
+  try {
+    el.pause();
+    el.srcObject = null;
+    el.removeAttribute('src');
+    for (const source of el.querySelectorAll('source')) source.removeAttribute('src');
+    el.load();
+  } catch {
+    /* 元素正在被页面销毁 — 静默 */
+  }
+}
+
+/**
  * 注册一个媒体元素到互斥总线。返回 cleanup,必须在 effect cleanup 里调用。
  * 多次注册同一个元素是幂等的(Set 去重 + 同一 listener 重复 add 在
  * 浏览器层也只会挂一份,但稳妥起见 cleanup 逻辑仍按对称形式写)。
@@ -52,8 +73,10 @@ export function registerMedia(el: HTMLMediaElement): () => void {
   el.addEventListener('play', onPlay);
   return () => {
     // Stop playback (including a pending play()) while we still own the player.
-    // Keep its source so React can register the same element again.
     el.pause();
+    // A detached element leaves the bus with this call, so stopAllMedia() can
+    // never reach it again; release its pipeline here instead.
+    releaseDetachedMedia(el);
     el.removeEventListener('play', onPlay);
     registered.delete(el);
   };

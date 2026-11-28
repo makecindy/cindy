@@ -57,7 +57,7 @@
   "remoteHostOfflineNote": "Le partage se ferme lorsque l'ordinateur de l'hôte passe hors ligne. Après la reconnexion, relancez le partage et envoyez une nouvelle invitation.",
   "tabCurrent": "Tâche actuelle",
   "tabOwned": "Partagées par moi",
-  "startIntro": "Invitez un partenaire à consulter tout le contenu de cette tâche et à travailler avec le même Agent.",
+  "startIntro": "Invitez un coéquipier à consulter tout le contenu de cette tâche et à travailler avec le même Agent.",
   "runsOnThisDevice": "S'exécute sur cet appareil",
   "inviteNotice": "Toute personne disposant de l'invitation peut rejoindre la tâche après s'être connectée, avec le même accès à l'Agent que l'hôte.",
   "offlineAutoClose": "Le partage se ferme automatiquement lorsque l'hôte passe hors ligne.",

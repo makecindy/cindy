@@ -27,11 +27,16 @@ import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy
  * 文案走 imText(`imBot.text.shared.*`), 跟随主人的 Cindy 界面语言, 发送时现取。
  */
 
-import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import {
+  hasExplicitPaymentRequiredText,
+  isAccountUsageLimitReachedText,
+  redactSensitiveText,
+} from '@cindy/maker-shared/error-redaction';
 import {
   isAutoReviewConfirmUndeliveredNotice,
   isAutoReviewUnavailableNotice,
   isAutoReviewNoAvailableModelNotice,
+  isAutoReviewQuotaExhaustedNotice,
   parseOverloadError,
   parseOverloadRetryProgress,
   parseTerminalRateLimitRetryProgress,
@@ -55,6 +60,7 @@ import { imText } from './imText';
  * 同名提示同句, 跟随界面语言。
  */
 function autoReviewUnavailableNotice(message: string, channel?: string): string | null {
+  if (isAutoReviewQuotaExhaustedNotice(message)) return imText('imBot.text.shared.retry.autoReviewQuotaExhausted');
   if (isAutoReviewNoAvailableModelNotice(message)) {
     return imText('imBot.text.shared.retry.autoReviewNoAvailableModel');
   }
@@ -212,6 +218,15 @@ function terminalErrorRecord(data: unknown): {
   };
 }
 
+/** Only the subscription backend's token-parse rejection calls for reconnecting ChatGPT. */
+export function openAiSubscriptionReconnectNotice(data: unknown, providerId: string | null): string | null {
+  if (providerId !== 'openai') return null;
+  const { errorStatus, message } = terminalErrorRecord(data);
+  if (!(errorStatus === 401 || (errorStatus === undefined && /\b401\b/.test(message)))) return null;
+  if (!/\bunauthorized_unknown\b|could not parse your authentication token/i.test(message)) return null;
+  return imText('imBot.text.shared.openAiReconnect');
+}
+
 /**
  * 终态错误是不是「供应商账号的额度 / 花费上限 / 余额用完了」。
  *
@@ -222,7 +237,7 @@ function terminalErrorRecord(data: unknown): {
 export function isQuotaExhaustionFailure(data: unknown): boolean {
   if (data === null || data === undefined) return false;
   const e = terminalErrorRecord(data);
-  if (e.reason === 'provider_quota_limit') return true;
+  if (e.reason === 'provider_quota_limit' || e.reason === 'acp-usage-limit') return true;
   if (e.sdkError === 'billing_error') return true;
   if (e.codexErrorInfo === 'usageLimitExceeded') return true;
   if (e.errorStatus === 402) return true;
@@ -251,10 +266,17 @@ export function quotaFailureNotice(
   options: QuotaFailureNoticeOptions,
 ): string | null {
   if (!isQuotaExhaustionFailure(data)) return null;
-  const { message, codexErrorInfo } = terminalErrorRecord(data);
+  const { message, codexErrorInfo, reason, errorStatus, sdkError } = terminalErrorRecord(data);
+  const explicitPaymentError =
+    errorStatus === 402 || sdkError === 'billing_error' || hasExplicitPaymentRequiredText(message);
   const headlineKey = SPEND_CAP_RE.test(message)
     ? 'imBot.text.shared.quota.headlineSpendCap'
-    : codexErrorInfo === 'usageLimitExceeded' || USAGE_LIMIT_RE.test(message)
+    : !explicitPaymentError && (
+          codexErrorInfo === 'usageLimitExceeded'
+          || reason === 'acp-usage-limit'
+          || USAGE_LIMIT_RE.test(message)
+          || isAccountUsageLimitReachedText(message)
+        )
       ? 'imBot.text.shared.quota.headlineUsageLimit'
       : 'imBot.text.shared.quota.headlineBalance';
   const display = (value: string | null | undefined): string =>
@@ -317,6 +339,10 @@ export function terminalErrorText(data: unknown, options?: QuotaFailureNoticeOpt
     toolLoopFailureNotice(data) ??
     overloadFailureNotice(message, errorStatus, codexErrorInfo) ??
     (options ? quotaFailureNotice(data, options) : null) ??
+    (data && typeof data === 'object' && 'reason' in data
+      && (data.reason === 'UPSTREAM_OVERLOADED' || data.reason === 'acp-overloaded')
+      ? imText('imBot.text.shared.retry.overloadFailed')
+      : null) ??
     message
   );
 }

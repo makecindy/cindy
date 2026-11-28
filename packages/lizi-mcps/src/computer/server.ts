@@ -28,9 +28,11 @@ import type { HostToolMcpServer } from '../host-tool-runtime.js';
 import { WindowSnapshotTracker } from "./snapshot-tracker.js";
 import { computerResultOutcome, isUnavailableDesktopObservation, isUnavailableWindowObservation, normalizeInputFailureAdvice, normalizePointerAdvice } from "./result.js";
 import {
+  APP_CONTROL_DENIED_HINT,
   canLocateRunningApp,
   exactInstalledAppBundle,
   exactRunningApp,
+  isAppControlDenied,
   isAppNameResolutionFailure,
   isWindowIdentityFailure,
   readForRecovery,
@@ -713,13 +715,14 @@ export function createComputerMcpServer(
         // identity error (a minimized or other-Space window still has an AX tree).
         const desktop = await deps.describeDesktop?.().catch(() => undefined);
         const screenLocked = desktop?.screen_locked === true;
+        const appControlDenied = isAppControlDenied(data);
         const recovery =
-          !screenLocked &&
+          !screenLocked && !appControlDenied &&
           (isWindowIdentityFailure(data) ||
             (typeof parsedData.pid === 'number' && typeof parsedData.window_id === 'number'))
             ? await rediscoverWindow(parsedData, { ...callContext, signal })
             : undefined;
-        const unavailable = await classifyUnavailableObservation(data, recovery, screenLocked);
+        const unavailable = classifyUnavailableObservation(data, recovery, screenLocked, appControlDenied);
         return textResult(
           {
             ok: false,
@@ -734,6 +737,16 @@ export function createComputerMcpServer(
         );
       }
       let outcome = computerResultOutcome(name, data);
+      if (name !== 'get_window_state' && (!outcome.ok || isWindowIdentityFailure(data)) && isAppControlDenied(data)) {
+        invalidateWindowSnapshot(name, parsedData, sessionId);
+        return textResult({
+          ok: false,
+          tool: name,
+          errorCode: outcome.errorCode ?? 'CUA_UNAVAILABLE',
+          reason: 'app_control_not_allowed',
+          data: { ...(data as Record<string, unknown>), next_step: 'check_permissions', hint: APP_CONTROL_DENIED_HINT },
+        }, true);
+      }
       const recovery =
         name !== "get_window_state" && isWindowIdentityFailure(data)
           ? await rediscoverWindow(parsedData, { ...callContext, signal })
@@ -797,6 +810,7 @@ export function createComputerMcpServer(
           ? (err as { code: string }).code
           : "COMPUTER_DRIVER_ERROR";
       const windowUnresolved = isWindowIdentityFailure(err);
+      const appControlDenied = !signal?.aborted && isAppControlDenied(err);
       invalidateWindowSnapshot(name, parsedData, sessionId);
       if (
         (windowUnresolved ||
@@ -812,19 +826,23 @@ export function createComputerMcpServer(
         );
       }
       const recovery =
-        windowUnresolved && !signal?.aborted
+        windowUnresolved && !signal?.aborted && !appControlDenied
           ? await rediscoverWindow(parsedData, { ...callContext, signal })
           : undefined;
       // A thrown window-identity failure gets the same reason as a degraded read.
       const unresolvedReason = recovery
-        ? await classifyUnavailableObservation(
+        ? classifyUnavailableObservation(
             undefined,
             recovery,
             (await deps.describeDesktop?.().catch(() => undefined))?.screen_locked === true,
+            false,
           )
-        : undefined;
+        : appControlDenied
+          ? { reason: 'app_control_not_allowed' as const, hint: APP_CONTROL_DENIED_HINT }
+          : undefined;
       const shouldObserveUnknownAction =
         !recovery &&
+        !appControlDenied &&
         !signal?.aborted &&
         errorCode !== "REQUEST_CANCELLED" &&
         POSTCHECK_ACTION_TOOLS.has(name as ComputerMcpToolName) &&
@@ -841,6 +859,7 @@ export function createComputerMcpServer(
       const installedDiscovery =
         name === "launch_app" &&
         !signal?.aborted &&
+        !appControlDenied &&
         isAppNameResolutionFailure(parsedData, err)
           ? await readForRecovery(
               deps,
@@ -916,6 +935,7 @@ export function createComputerMcpServer(
       const appDiscovery =
         name === "launch_app" &&
         !signal?.aborted &&
+        !appControlDenied &&
         canLocateRunningApp(parsedData, err)
           ? await readForRecovery(
               deps,
@@ -974,7 +994,11 @@ export function createComputerMcpServer(
             ...((err as { outcomeUnknown?: boolean })?.outcomeUnknown
               ? { outcome_unknown: true, next_step: "fresh_state" }
               : {}),
-            ...(windowUnresolved
+            // macOS refused the call before it reached the app: rediscovering
+            // windows or re-reading state cannot help until permission changes.
+            ...(appControlDenied
+              ? { next_step: "check_permissions", hint: APP_CONTROL_DENIED_HINT }
+              : windowUnresolved
               ? {
                   next_step: "list_windows",
                   hint: unresolvedReason?.hint
@@ -1018,16 +1042,22 @@ export function createComputerMcpServer(
    * Host state (lock screen) is consulted first; the window's own on-screen
    * flag second; anything else stays a driver error.
    */
-  async function classifyUnavailableObservation(
+  function classifyUnavailableObservation(
     data: unknown,
     recovery: { requested_target: { window_id?: unknown } ; discovery: { ok: boolean; data?: unknown } } | undefined,
     screenLocked: boolean,
-  ): Promise<{ reason: 'screen_locked' | 'window_not_on_screen' | 'window_gone' | 'driver_error'; hint: string }> {
+    appControlDenied: boolean,
+  ): { reason: 'screen_locked' | 'app_control_not_allowed' | 'window_not_on_screen' | 'window_gone' | 'driver_error'; hint: string } {
     if (screenLocked) {
       return {
         reason: 'screen_locked',
         hint: 'The screen is locked, so no window can be observed or operated. Do not retry in a loop: tell the person this step needs the screen unlocked, then call get_window_state again after they unlock.',
       };
+    }
+    // The window may well exist and be on screen; window discovery does not need
+    // accessibility, so this must win over the window checks below.
+    if (appControlDenied) {
+      return { reason: 'app_control_not_allowed', hint: APP_CONTROL_DENIED_HINT };
     }
     const windows = recovery?.discovery.ok && recovery.discovery.data && typeof recovery.discovery.data === 'object'
       ? (recovery.discovery.data as { windows?: unknown }).windows

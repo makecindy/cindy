@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -157,6 +158,29 @@ describe("Metro log preload", () => {
       output: "out\n",
       log: "out\nerr\n",
     });
+  });
+
+  // A detached Metro can still have the old cwd after recycle reuses its path.
+  it("exits before serving a replacement checkout even when logging is unavailable", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "metro-recycled-"));
+    try {
+      const replacement = join(cwd, "replacement");
+      mkdirSync(replacement);
+      const script = join(cwd, "expo.cjs");
+      writeFileSync(script, "console.log('serving')");
+      const output = execFileSync(process.execPath, [script, "start"], {
+        cwd,
+        env: {
+          ...process.env,
+          ...metroLogEnv(null),
+          CINDY_METRO_PROJECT_DIR: replacement,
+        },
+        encoding: "utf8",
+      });
+      expect(output).toBe("");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("leaves pnpm and other processes that inherit NODE_OPTIONS alone", () => {

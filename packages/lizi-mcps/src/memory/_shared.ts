@@ -101,8 +101,7 @@ export async function withStore(
     }
     store = await manager.getStore(scopeKey);
   } catch (err) {
-    const { code, message } = classifyMemoryError(err);
-    return buildJsonResult({ ok: false, code, message }, true);
+    return buildJsonResult({ ok: false, ...classifyMemoryError(err) }, true);
   }
   try {
     const data = await fn(store, { store, scopeKey, manager });
@@ -119,7 +118,6 @@ export async function withStore(
     }
     return buildJsonResult({ ok: true, data });
   } catch (err) {
-    const { code, message } = classifyMemoryError(err);
-    return buildJsonResult({ ok: false, code, message }, true);
+    return buildJsonResult({ ok: false, ...classifyMemoryError(err) }, true);
   }
 }

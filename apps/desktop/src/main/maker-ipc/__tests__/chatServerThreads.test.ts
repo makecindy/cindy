@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createThreadProjection, isShareableThreadReply, threadPreviewAttachments, threadPreviewText, type ThreadMessage } from '../chatServerThreads.js';
-import { buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
+import { buildBotGroupQuoteCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 
 const room = '10000000-0000-4000-8000-000000000001';
 const rootA = '20000000-0000-4000-8000-00000000000a';
@@ -482,5 +482,24 @@ describe('one wake-up per room with several failed reads', () => {
     projection[stop]();
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(io.filled).not.toHaveBeenCalled();
+  });
+
+  it('strips quote cards and Markdown link URLs from threadPreviewText', () => {
+    const quoted = message({
+      id: 'quoted-root',
+      content: [
+        buildBotGroupQuoteCard({
+          messageId: rootA,
+          authorName: 'Alice',
+          authorKind: 'user',
+          excerpt: 'Original long quote',
+          attachmentCount: 0,
+          attachmentName: null,
+          sequence: 1,
+        }),
+        { type: 'text', text: '已提交 [PR #13080](https://github.com/makecindy/cindy/pull/13080) 供验收' },
+      ],
+    });
+    expect(threadPreviewText(quoted)).toBe('已提交 PR #13080 供验收');
   });
 });

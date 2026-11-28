@@ -1,5 +1,24 @@
 import type { RemoteDesktopCursor, RemoteDesktopCursorFrame } from '@cindy/device-link';
 import { DESKTOP_MOTION, desktopFrameChange } from '../../../shared/remoteDesktopQuality';
+
+function decodeFrameBytes(jpeg: string): Uint8Array<ArrayBuffer> {
+  const decoder = Uint8Array as Uint8ArrayConstructor & {
+    fromBase64?: (input: string) => Uint8Array<ArrayBuffer>;
+  };
+  if (typeof decoder.fromBase64 === 'function') {
+    try {
+      return decoder.fromBase64(jpeg);
+    } catch (error) {
+      // atob reports malformed frames with the renderer's original DOMException.
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+  }
+  const binary = atob(jpeg);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 /** Converts the bounded native fallback frames into the existing WebRTC video
  * transport. Serial pulls/decode keep both IPC and image memory bounded.
  */
@@ -54,10 +73,7 @@ export async function nativeCaptureStream(
     const frame = await read();
     const jpeg = typeof frame === 'string' ? frame : frame?.jpeg;
     if (!frame || !jpeg || stopped || !alive() || current !== epoch) return false;
-    const binary = atob(jpeg);
-    const bytes = new Uint8Array(binary.length);
-    // Avoid Uint8Array.from's per-character iterator/callback on large frames.
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const bytes = decodeFrameBytes(jpeg);
     const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
     try {
       if (stopped || !alive() || current !== epoch) return false;

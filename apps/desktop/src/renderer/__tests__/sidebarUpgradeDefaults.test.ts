@@ -75,7 +75,7 @@ describe('侧边栏升级兼容性:默认配置', () => {
     expect(loadGroupDevice()).toBe(true);
     expect(loadGroupDialogue()).toBe(true);
     expect(loadSortBy()).toBe('recency');
-    expect(loadTaskInfoFields()).toEqual(['time']);
+    expect(loadTaskInfoFields()).toEqual(['time', 'harness', 'project', 'teammate']);
   });
 
   it('分组默认不分老新:老安装拿到同一套分组默认', () => {

@@ -8,6 +8,17 @@ import {
   type TgChat,
 } from './api.js';
 
+/** Legacy hosts must explicitly read back a missing key to confirm deletion. */
+export function removeTelegramSecret(secrets: IMHost['secrets'], key: string): boolean {
+  try {
+    if (secrets.removeConfirmed) return secrets.removeConfirmed(key);
+    secrets.remove(key);
+    return secrets.readResult?.(key).kind === 'missing';
+  } catch {
+    return false;
+  }
+}
+
 export class TelegramGroupAdmissionStorageError extends Error {}
 
 type GroupDecision = {
@@ -57,6 +68,30 @@ export class TelegramGroupAdmission {
 
   allows(chatId: number): boolean {
     return !!this.ownerId && this.groups[String(chatId)]?.status === 'approved';
+  }
+
+  /** 这个群的准入状态；没有记录返回 null。 */
+  statusOf(chatId: string): GroupDecision['status'] | null {
+    return this.groups[chatId]?.status ?? null;
+  }
+
+  /**
+   * 设置页「群聊」的「群成员也能提问」就是这一项（2026-11-24）：勾上 = 批准，取消 = 拒绝（主人自己照旧可用）。
+   * 换新令牌，私聊里还没点的旧批准卡随之失效；记为已通知，不再为这个群发批准卡。
+   */
+  setApproval(chatId: string, approved: boolean, title?: string | null): boolean {
+    if (!this.ownerId || !/^-\d+$/.test(chatId)) return false;
+    const previous = this.groups[chatId];
+    return this.save({
+      ...this.groups,
+      [chatId]: {
+        ...(previous ?? {}),
+        status: approved ? 'approved' : 'denied',
+        token: randomUUID(),
+        title: previous?.title ?? (title?.trim() || chatId),
+        notified: true,
+      },
+    });
   }
 
   private save(next: Record<string, GroupDecision>): boolean {
@@ -112,12 +147,7 @@ export class TelegramGroupAdmission {
 
   clear(): boolean {
     this.groups = Object.create(null);
-    try {
-      this.secrets.remove(this.key);
-      return this.secrets.readResult?.(this.key).kind === 'missing';
-    } catch {
-      return false;
-    }
+    return removeTelegramSecret(this.secrets, this.key);
   }
 
   private call(

@@ -984,6 +984,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       post({ type: "inputOverflow" });
     }
   }
+  let tapRelease = null;
   function flush() {
     if (!pending.length) return;
     // A paste shortcut waits for the controller to push the local clipboard
@@ -1010,6 +1011,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (pc?.connectionState === "connected" && dc?.readyState === "open" && dc.bufferedAmount >= 16384) return;
     const events = pending.splice(0, 64),
       sequence = ++seq;
+    const fieldTap = tapRelease !== null && events.at(-1) === tapRelease;
+    if (fieldTap) tapRelease = null;
     if (
       pc?.connectionState === "connected" &&
       dc &&
@@ -1018,6 +1021,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     ) {
       try {
         dc.send(JSON.stringify({ sequence, events }));
+        if (fieldTap) post({ type: "fieldTap", sequence });
       } catch {
         pending = [];
         control = false;
@@ -1026,7 +1030,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       }
     } else {
       sending = true;
-      post({ type: "input", sequence, events });
+      post({ type: "input", sequence, events, ...(fieldTap ? { fieldTap: true } : {}) });
     }
   }
   const inputTimer = setInterval(() => {
@@ -1084,12 +1088,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     ["right", 2],
   ]) {
     const el = find("mouse-" + name);
+    let pressPoint = null;
     listenMouse(el, "pointerdown", (e) => {
       e.preventDefault();
       if (!control || !showMouseButtons || heldMouse.has(button)) return;
       clearTimeout(hold);
       if (!e.nativeInput) el.setPointerCapture(e.pointerId);
       heldMouse.set(button, e.pointerId);
+      pressPoint = { x: cx, y: cy };
       queue({ kind: "button", button, down: true, x: cx, y: cy });
       flush();
       updateMouseButtons();
@@ -1098,7 +1104,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       e.preventDefault();
       if (heldMouse.get(button) !== e.pointerId) return;
       heldMouse.delete(button);
-      queue({ kind: "button", button, down: false, x: cx, y: cy });
+      const up = { kind: "button", button, down: false, x: cx, y: cy };
+      if (!config.desktop && button === 0 && e.type === "pointerup" &&
+          pressPoint?.x === cx && pressPoint?.y === cy) tapRelease = up;
+      pressPoint = null;
+      queue(up);
       flush();
       updateMouseButtons();
     };
@@ -1335,7 +1345,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       }, 450);
     }
     queue({ kind: "button", button, down: true, x: cx, y: cy });
-    queue({ kind: "button", button, down: false, x: cx, y: cy });
+    const up = { kind: "button", button, down: false, x: cx, y: cy };
+    if (!config.desktop && control && button === 0) tapRelease = up;
+    queue(up);
   }
   function pan(dx, dy) {
     if (touchAtFit()) return;
@@ -2484,6 +2496,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         mouseControlHandlers.get(
           "mouse-" + message.control + ":" + message.event,
         )?.({
+          type: message.event,
           pointerId: message.id,
           clientY: message.y,
           detail: 0,

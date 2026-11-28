@@ -47,6 +47,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { FormField } from '@/components/ui/form-field';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useProjectInfo } from '../hooks/useProjectInfo';
@@ -397,13 +398,13 @@ export function ProjectSettingsDialog({
         }}
       >
         <Dialog.Portal>
-          <Dialog.Overlay className="modal-scrim fixed inset-0 z-50" />
+          <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
           <Dialog.Content
             onInteractOutside={(event) => event.preventDefault()}
             onOpenAutoFocus={(event) => {
               event.preventDefault();
             }}
-            className="modal-panel fixed left-1/2 top-1/2 z-50 flex max-h-[90vh] w-[calc(100%_-_32px)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden"
+            className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[90vh] w-[calc(100%_-_32px)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden"
           >
             <div className="flex items-center gap-3 px-4 pt-5 pb-4">
               {stage === 'icon' && (
@@ -780,7 +781,7 @@ export function ProjectSettingsDialog({
                   )}
                   {mode === 'symbols' ? (
                     <>
-                      <Input
+                      <SearchInput
                         value={query}
                         onChange={setQuery}
                         placeholder={label('search')}

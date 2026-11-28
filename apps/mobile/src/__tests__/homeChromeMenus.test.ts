@@ -188,8 +188,14 @@ describe("home chrome menus", () => {
     expect(find(actions, "filter")?.subtitle).toBe("devices.list.menu.summaryNone");
     expect(find(actions, "filter.reset")?.disabled).toBe(true);
     expect(find(actions, "view")?.subtitle).toBe("devices.list.menu.view.list");
+    expect(find(actions, "group.device")).toBeUndefined();
+    expect(find(build({ hasDeviceGroups: true, groupDevice: true }), "group.device")?.state).toBe("on");
+    expect(homeDisplayActionPatch("group.device", { ...displayState, groupDevice: true })).toEqual({ groupDevice: false });
     expect(find(actions, "taskInfo")?.subtitle).toBe("devices.list.menu.taskInfo.time");
     expect(find(actions, "taskInfo")?.subactions?.map((item) => [item.id, item.state, item.keepPresented])).toEqual([
+      ["taskInfo.harness", "off", true],
+      ["taskInfo.project", "off", true],
+      ["taskInfo.teammate", "off", true],
       ["taskInfo.time", "on", true],
       ["taskInfo.pr", "off", true],
       ["taskInfo.tokens", "off", true],

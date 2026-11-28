@@ -27,6 +27,11 @@ export const ORIGINAL_DEV_ENV_KEYS = [
   'XDT_DEV_SAFE_STORAGE_BASIC',
   'CINDY_AUTH_REGION',
 ];
+/** Dev-only switches live outside `environment` so older readers ignore them safely. */
+export const ORIGINAL_DEV_ENVIRONMENT_OVERRIDES = {
+  XDT_DISABLE_GLOBAL_SHORTCUTS: true,
+} as const;
+export const DEV_ENVIRONMENT_OVERRIDES_CAPABILITY = 'dev-environment-overrides';
 export interface VersionProfile {
   userData: string;
   appName: string;
@@ -50,6 +55,9 @@ export interface OriginalVersion {
     node: string;
     mode: 'local' | 'remote';
     environment: Record<string, string>;
+    /** Capabilities this origin can record for retained personal versions. */
+    capabilities?: Record<string, boolean>;
+    environmentOverrides?: Record<string, string>;
   };
 }
 export interface PersonalVersion {
@@ -129,7 +137,14 @@ export function readOriginalVersion(profile: string): OriginalVersion | null {
       !value.development.environment ||
       Object.entries(value.development.environment).some(
         ([key, entry]) => !ORIGINAL_DEV_ENV_KEYS.includes(key) || typeof entry !== 'string',
-      ))
+      ) ||
+      (value.development.environmentOverrides !== undefined &&
+        (!value.development.environmentOverrides ||
+          Object.entries(value.development.environmentOverrides).some(
+            ([key, entry]) =>
+              !Object.prototype.hasOwnProperty.call(ORIGINAL_DEV_ENVIRONMENT_OVERRIDES, key) ||
+              typeof entry !== 'string',
+          ))))
   )
     throw versionError('unavailable');
   return value;
@@ -306,11 +321,18 @@ function personalVersionVerification(profile: string, id: string, original: Orig
   )
     throw versionError('incompatible');
   const resources = path.join(root, item.resources);
+  const protocol = readVersionJson<{
+    version: number;
+    capabilities?: unknown;
+  }>(path.join(resources, 'cindy-version-protocol.json'));
+  if (protocol?.version !== CINDY_VERSION_PROTOCOL) throw versionError('unavailable');
   if (
-    readVersionJson<{ version: number }>(path.join(resources, 'cindy-version-protocol.json'))
-      ?.version !== CINDY_VERSION_PROTOCOL
+    hasCapability(protocol.capabilities, DEV_ENVIRONMENT_OVERRIDES_CAPABILITY) &&
+    original.development &&
+    !supportsDevEnvironmentOverrideOrigin(original)
   )
-    throw versionError('unavailable');
+    throw versionError('incompatible');
+  if (!supportsDevEnvironmentOverrides(resources, original)) throw versionError('incompatible');
   return {
     executable: path.join(root, item.executable),
     application: path.join(resources, 'app.asar'),
@@ -385,6 +407,36 @@ export function listPersonalVersions(
   return id ? [describePersonalVersion(profile, id, original)] : [];
 }
 
+function hasCapability(value: unknown, capability: string): boolean {
+  if (Array.isArray(value)) return value.includes(capability);
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    Object.entries(value).some(([key, entry]) => key === capability && entry === true)
+  );
+}
+
+export function supportsDevEnvironmentOverrideOrigin(original: OriginalVersion): boolean {
+  return hasCapability(
+    original.development?.capabilities,
+    DEV_ENVIRONMENT_OVERRIDES_CAPABILITY,
+  );
+}
+
+export function supportsDevEnvironmentOverrides(
+  resources: string,
+  original: OriginalVersion,
+): boolean {
+  const requiresCapability = Object.values(original.development?.environmentOverrides ?? {}).some(
+    (value) => value === '1',
+  );
+  if (!requiresCapability) return true;
+  const protocol = readVersionJson<{ capabilities?: unknown }>(
+    path.join(resources, 'cindy-version-protocol.json'),
+  );
+  return hasCapability(protocol?.capabilities, DEV_ENVIRONMENT_OVERRIDES_CAPABILITY);
+}
+
 /** Old registries have no slot yet; adopt their newest runnable generation on read. */
 export function personalVersionId(profile: string): string | undefined {
   const slot = readVersionJson<{ id: string | null }>(
@@ -425,6 +477,7 @@ export function describePersonalVersion(
   } catch {}
   try {
     const item = readPersonalVersion(profile, id);
+    const resources = path.join(versionDirectory(profile, id), item.resources);
     return {
       id,
       kind: 'personal',
@@ -432,7 +485,10 @@ export function describePersonalVersion(
       builtAt: item.builtAt,
       available: true,
       compatible:
-        item.migrationHash === fingerprint && item.profile.region === original?.profile.region,
+        item.migrationHash === fingerprint &&
+        item.profile.region === original?.profile.region &&
+        !!original &&
+        supportsDevEnvironmentOverrides(resources, original),
     };
   } catch {
     return { id, kind: 'personal', available: false, compatible: false };

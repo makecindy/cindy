@@ -45,7 +45,8 @@ describe('IM session background results', () => {
     }) }));
   });
 
-  it.each(['x:post:1', 'discord:channel-1', 'arbitrary', 'dm:U1:invalid', 'T1:C1:invalid'])(
+  // 官方 Discord 未协商 session-result-v1(服务端丢弃 background 帧), 与未知渠道一样不观察。
+  it.each(['x:post:1', 'discord:dm:100000000000000001:200000000000000002:g0', 'matrix:channel-1', 'arbitrary', 'dm:U1:invalid', 'T1:C1:invalid'])(
     'does not observe unsupported lane %s', (key) => {
       const f = fixture(key);
       f.output.start('session', '/work', 'other-task');
