@@ -35,4 +35,6 @@ export interface RemoteSessionCreated {
   providerId: string | null;
   effort: RemoteSessionCreation['effort'] | null;
   fastMode: boolean | 'ultrafast';
+  /** Set when worktree creation is continuing asynchronously in the background. */
+  worktreeStatus?: 'provisioning';
 }

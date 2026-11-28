@@ -60,6 +60,7 @@ export function createSessionHandoffHandler(deps: {
   send(params: SessionHandoffSendParams): Promise<SessionHandoffSendResult>;
   create?: ReturnType<typeof createRemoteSessionOpener>;
   supportsPluginEngineCreate?: boolean;
+  supportsAsyncWorktreeCreate?: boolean;
   refineTitle?(sessionId: string, subject: string, initialTitle: string): void;
   listProjects?(options: { includeHidden: boolean; offset: number; limit: number }): Promise<unknown>;
   captureAccess?(controllerDeviceId: string): () => void;
@@ -210,6 +211,7 @@ export function registerSessionHandoffHandlers(
       ...SESSION_HANDOFF_CAPABILITY,
       ...(deps.create ? { ordinaryCreateVersion: 1 } : {}),
       ...(deps.create && deps.supportsPluginEngineCreate ? { ordinaryCreatePluginEngine: 1 } : {}),
+      ...(deps.create && deps.supportsAsyncWorktreeCreate ? { ordinaryCreateAsyncWorktree: 1 } : {}),
       ...(deps.create && deps.refineTitle ? { ordinaryCreateAutoTitle: 1 } : {}),
       ...(deps.listProjects ? { projectCatalogVersion: 1 } : {}),
     };

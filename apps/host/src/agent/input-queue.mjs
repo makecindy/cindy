@@ -21,6 +21,7 @@ import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/se
 import { createIpcError } from '../../../desktop/src/shared/ipc-errors.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
 import { normalizeAgentInputClearBoundaryMs } from '../../../desktop/src/shared/agentInputQueue.ts';
+import { WORKTREE_PROVISIONING_LOCK_ID } from '../../../desktop/src/shared/worktreeProvisioning.ts';
 
 const settlementLog = createLogger('host-turn-settlement');
 const attachmentLog = createLogger('host-attachments');
@@ -196,6 +197,9 @@ export function createInputQueue(deps) {
     }
     function holdIfHeld(id) {
       if (profileHold) holdTaskForProfile(coordinator, id);
+      if (deps.isWorktreeProvisioningBlocked?.(id)) {
+        coordinator.setInteractionLock(id, WORKTREE_PROVISIONING_LOCK_ID, true, { preserveOnStop: true });
+      }
     }
     /** The execution pause this module lifts after a write stays while the profile is held. */
     function unpause(id) {
@@ -616,6 +620,9 @@ export function createInputQueue(deps) {
           let accepted = false;
           try {
             state.lastUserActionAt = Date.now();
+            if (deps.isWorktreeProvisioningBlocked?.(id)) {
+              coordinator.setInteractionLock(id, WORKTREE_PROVISIONING_LOCK_ID, true, { preserveOnStop: true });
+            }
             coordinator.setExecutionPaused(id, true);
             // The coordinator may mutate the queue before reporting a failure.
             handoff?.onQueueAcceptanceStarted?.();
@@ -666,6 +673,9 @@ export function createInputQueue(deps) {
       send(id, message, createOpts, sendOpts) {
         return command(id, () => {
           refuseWhileHeld();
+          if (deps.isWorktreeProvisioningBlocked?.(id)) {
+            throwIpcError('PRECONDITION_FAILED', 'Worktree is not ready yet; wait or retry worktree creation first');
+          }
           return executor.send(id, message, createOpts, sendOpts);
         });
       },
@@ -690,6 +700,9 @@ export function createInputQueue(deps) {
       steer(id, item) {
         return command(id, async (state, admission) => {
           refuseWhileHeld();
+          if (deps.isWorktreeProvisioningBlocked?.(id)) {
+            throwIpcError('PRECONDITION_FAILED', 'Worktree is not ready yet; wait or retry worktree creation first');
+          }
           const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
           const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
           const previous = prepared.ownerId
@@ -750,7 +763,21 @@ export function createInputQueue(deps) {
       },
       move: (id, clientId, index) => mutate(id, () => coordinator.move(id, clientId, index)),
       setExpanded: (id, expanded) => command(id, () => coordinator.setExpanded(id, expanded)),
-      setInteractionLock: (id, lock, locked) => command(id, () => coordinator.setInteractionLock(id, lock, locked)),
+      setInteractionLock: (id, lock, locked) => command(id, () => {
+        if (lock === WORKTREE_PROVISIONING_LOCK_ID) {
+          throwIpcError('PRECONDITION_FAILED', 'Worktree provisioning lock is managed by the host');
+        }
+        return coordinator.setInteractionLock(id, lock, locked);
+      }),
+      setWorktreeProvisioningLock: (id, locked) => {
+        coordinator.setInteractionLock(
+          id,
+          WORKTREE_PROVISIONING_LOCK_ID,
+          locked,
+          locked ? { preserveOnStop: true } : undefined,
+        );
+      },
+      updateQueuedWorkingDir: (id, workingDir) => coordinator.updateQueuedWorkingDir(id, workingDir),
       setEditLock: (id, clientId, locked) => command(id, () => coordinator.setEditLock(id, clientId, locked)),
       // This endpoint clears pending inputs, not persisted history. Only the
       // history service may advance the durable conversation clear boundary.

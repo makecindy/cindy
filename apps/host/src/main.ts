@@ -192,9 +192,15 @@ import { bindHostProjectIconRuntime } from './project-icon.ts';
 import { createUserInputEnqueue } from './agent/user-input.ts';
 import { resolveSessionReferencesWithPorts } from '../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
 import { readSwitchOptionsAgentDeviceId, readSwitchOptionsConfirmedContextWindow } from '../../desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts';
-import { setSessionRouteLockImplementation } from '../../desktop/src/main/localDb/sessionRouteLock.ts';
+import { setSessionRouteLockImplementation, withSessionRouteLock } from '../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
-import { createHostWorktreeLifecycle } from './agent/worktree-lifecycle.ts';
+import { createHostWorktreeLifecycle, type HostWorktreeLifecycle } from './agent/worktree-lifecycle.ts';
+import { createHandoffProvisioningService, type HandoffProvisioningService } from '../../desktop/src/main/worktree/handoffProvisioning.js';
+import { shouldUseMultibox } from '../../desktop/src/main/worktree/multibox.js';
+import { isWorktreeCreationQueueBusy } from '../../desktop/src/main/worktree/worktreeConcurrency.js';
+import { prepareHandoffWorktree } from '../../desktop/src/main/maker-ipc/handoffWorktree.js';
+import { resolveFreshSourceBranch } from '../../desktop/src/main/worktree/freshBase.js';
+import { getForSession, listAll } from '../../desktop/src/main/worktree/WorktreeManager.js';
 import { requireBuiltinAgentKind } from '../../desktop/src/main/maker-host/engineKind.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
@@ -851,6 +857,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   };
   configureProvisionalSessions(dataDir, { onSwept: sessionId => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }) });
   await sweepLeftoverProvisionalSessions();
+  await hostWorktreeProvisioning?.reconcileForCurrentOwner().catch(error =>
+    hostLog.warn('worktree provisioning reconcile failed', { error }));
   // As the desktop at startup (bootstrap-electron.ts): Cindy-owned Skill activation and the home-level
   // projections, through the stable-owner boundary. Not awaited: the core logs failures, and every launch
   // and Skill list runs it again before it needs the result, so startup does not wait on its locks.
@@ -1374,7 +1382,11 @@ const hostModelGroups = createHostModelGroups({
   markPendingModelGroupPick: (sessionId, pickedKey) => runtimeSelection.markPendingModelGroupPick(sessionId, pickedKey),
   onBindingChanged: (sessionId) => runtimeSelection.broadcastBindingProjection(sessionId),
 });
+let hostWorktreeLifecycle: HostWorktreeLifecycle | null = null;
+let hostWorktreeProvisioning: HandoffProvisioningService | null = null;
+
 const inputQueue = createInputQueue({
+  isWorktreeProvisioningBlocked: (id: string) => hostWorktreeProvisioning?.isBlocked(id) ?? false,
   readModelGroupAutoSwitchMode: hostModelGroups.readAutoSwitchMode,
   onModelGroupSessionAttached: hostModelGroups.sessionStart.attach,
   onModelGroupDispatched: hostModelGroups.sessionStart.dispatched,
@@ -1478,6 +1490,7 @@ const runtimeSelection = createHostRuntimeSelection({
   },
   getMakerIfReady: () => agentGraph?.maker ?? null,
   publish: event => eventHub.publish(event),
+  cancelWorktreeProvisioning: sessionId => hostWorktreeProvisioning?.cancelProvisioning(sessionId),
   createDbMessage: (sessionId, body) => insertSessionMessage(sessionId, body),
   pendingHandoff,
   listProviderViews: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
@@ -1716,7 +1729,12 @@ const serverDeps = {
     agentAuth?.close();
     await providerConfig?.cancelLogins();
   },
-  listRunningSessions: (options: unknown) => listRunningSessions(agentGraph?.maker, options, deviceLink ? () => deviceLink!.getSessionActivityMap() : undefined),
+  listRunningSessions: (options: unknown) => listRunningSessions(
+    agentGraph?.maker,
+    options,
+    deviceLink ? () => deviceLink!.getSessionActivityMap() : undefined,
+    () => hostWorktreeProvisioning?.listSnapshots() ?? [],
+  ),
   refreshAuth: async () => {
     const ok = await refreshAuthSession();
     return { ok, ...projectAuthState() };
@@ -2199,6 +2217,7 @@ function projectAuthState() {
 
 /** Ordered disposal also runs after partial startup or a failed sign-out. */
 async function disposeOwnerRuntime(): Promise<void> {
+  hostWorktreeProvisioning?.onOwnerChanged();
   const remote = deviceLink;
   deviceLink = null;
   remoteIdentityReady = false;
@@ -2406,13 +2425,107 @@ function startDeviceLink(): void {
   if (deviceLink) return;
   const endpoint = readAuthEndpoints(account.realm === 'cn' ? 'cn' : 'global').deviceLinkApiBaseUrl;
   if (!endpoint) throw new Error('The endpoint manifest does not contain a Device Link relay');
-  const worktree = createHostWorktreeLifecycle(profileDir);
+  const worktree = hostWorktreeLifecycle ?? (hostWorktreeLifecycle = createHostWorktreeLifecycle(profileDir));
+  if (!hostWorktreeProvisioning) {
+    hostWorktreeProvisioning = createHandoffProvisioningService({
+      getUserDataDir: () => profileDir,
+      getOwnerScopeKey: () => getActiveAppSession().dataOwnerId,
+      captureOwnerToken: () => getCurrentDbClientSnapshot(),
+      isOwnerTokenCurrent: (token) =>
+        token !== null &&
+        getCurrentDbClientSnapshot() === token &&
+        !isAppSessionBoundaryPending() &&
+        !inputQueue.profileHoldReason(),
+      readSessionLifecycle: async (sessionId) => {
+        const [row] = await getDbClient()
+          .drizzle.select({ status: sessionTable.status, worktreePath: sessionTable.worktreePath })
+          .from(sessionTable)
+          .where(eq(sessionTable.id, sessionId))
+          .limit(1);
+        if (!row) return { state: 'missing' };
+        if (row.status === 'deleted' || row.status === 'archived') return { state: 'terminal' };
+        return { state: 'active', hasWorktreePath: Boolean(row.worktreePath) };
+      },
+      getRegisteredWorktree: (sessionId) => getForSession(sessionId),
+      bindWorktreeToSession: async (sessionId, meta) => {
+        await withSessionRouteLock(sessionId, async () => {
+          await getDbClient()
+            .drizzle.update(sessionTable)
+            .set({ workingDir: meta.path, worktreePath: meta.path, updatedAt: Date.now() })
+            .where(and(eq(sessionTable.id, sessionId), eq(sessionTable.status, 'active')))
+            .run();
+        });
+      },
+      updateQueuedWorkingDir: (sessionId, worktreePath) => {
+        inputQueue.updateQueuedWorkingDir(sessionId, worktreePath);
+      },
+      setProvisioningLock: (sessionId, locked) => {
+        inputQueue.setWorktreeProvisioningLock(sessionId, locked);
+      },
+      createWorktree: ({ sessionId, workingDir, sourceRef, signal, onStageChange, onNameSelected }) => {
+        const owner = getCurrentDbClientSnapshot();
+        const holdGen = inputQueue.profileHoldGeneration();
+        const assertWriteAllowed = () => {
+          if (!owner || getCurrentDbClientSnapshot() !== owner || isAppSessionBoundaryPending()) {
+            throwIpcError('PRECONDITION_FAILED', 'The Host account is not ready');
+          }
+          const held = inputQueue.profileHoldReason();
+          if (held) throw holdError(held);
+          if (holdGen !== inputQueue.profileHoldGeneration()) {
+            throwIpcError('PRECONDITION_FAILED', 'Host profile ownership changed');
+          }
+        };
+        return prepareHandoffWorktree(
+          {
+            getForSession,
+            listAll,
+            detectCwd: worktree.detect,
+            listBranches: worktree.listBranches,
+            suggestName: worktree.suggestName,
+            createId: () => sessionId,
+            resolveFreshSource: resolveFreshSourceBranch,
+            createWorktree: (request, opts) =>
+              worktree.createWorktree(request, {
+                awaitFullCheckout: true,
+                assertWriteAllowed,
+                ...(opts?.signal ? { signal: opts.signal } : {}),
+                ...(opts?.onStageChange ? { onStageChange: opts.onStageChange } : {}),
+              }),
+          },
+          undefined,
+          workingDir,
+          {
+            ...(sourceRef ? { sourceRef } : {}),
+            signal,
+            onStageChange,
+            onNameSelected,
+          },
+        );
+      },
+      discardOrphanWorktree: async (sessionId, worktreePath) => {
+        await worktree.discardPrecreatedWorktree(sessionId, worktreePath, {
+          canRemove: async () => !inputQueue.profileHoldReason(),
+        });
+      },
+      isQueueBusy: async (baseRepo) =>
+        isWorktreeCreationQueueBusy(baseRepo, await shouldUseMultibox(baseRepo)),
+      onWorktreeBound: (sessionId, meta) => {
+        eventHub.publish({
+          type: 'session_changed',
+          sessionId,
+          patch: { workingDir: meta.path, worktreePath: meta.path },
+        });
+      },
+    });
+    void hostWorktreeProvisioning.reconcileForCurrentOwner().catch(error =>
+      hostLog.warn('worktree provisioning reconcile failed', { error }));
+  }
   if (!inputQueue.profileHoldReason()) {
     void worktree.reconcilePendingSafeDirectoryCleanups().catch(error =>
       hostLog.warn('deferred Worktree safe.directory cleanup failed', { error }));
   }
   const sessionHandoff = (isSelfDeviceId: (id: string) => boolean) => createHostSessionHandoff({
-    input: inputQueue, worktree, isSelfDeviceId, assertProviderExecutionSupported,
+    input: inputQueue, worktree, provisioning: hostWorktreeProvisioning ?? undefined, isSelfDeviceId, assertProviderExecutionSupported,
     readProviders: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
     agents: () => agentGraph?.agents ?? [],
     hasCindyAiApiKey: () => currentGateway() !== null,

@@ -1174,6 +1174,16 @@ function projectInvokeResultForTunnel(
         isTurnRunning: row.isTurnRunning,
         ...(typeof row.activityPhase === 'string' && typeof row.activityAttention === 'boolean'
           ? { activityPhase: row.activityPhase, activityAttention: row.activityAttention } : {}),
+        ...(row.worktreeProvisioningStatus === 'provisioning' || row.worktreeProvisioningStatus === 'failed'
+          ? {
+              worktreeProvisioningStatus: row.worktreeProvisioningStatus,
+              ...(row.worktreeProvisioningStage === 'queued' || row.worktreeProvisioningStage === 'creating'
+                ? { worktreeProvisioningStage: row.worktreeProvisioningStage } : {}),
+              ...(typeof row.worktreeProvisioningStartedAt === 'number'
+                ? { worktreeProvisioningStartedAt: row.worktreeProvisioningStartedAt } : {}),
+              ...(typeof row.worktreeProvisioningError === 'string'
+                ? { worktreeProvisioningError: row.worktreeProvisioningError.slice(0, 300) } : {}),
+            } : {}),
       };
     });
     return complete ? { format: 'active-sessions-v2', sessions: projected } : projected;

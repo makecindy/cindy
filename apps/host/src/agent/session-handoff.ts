@@ -7,10 +7,12 @@ import { getDbClient, getCurrentDbClientSnapshot } from '../../../desktop/src/ma
 import { botProfiles, botSessionLinks, sessions } from '../../../desktop/src/main/localDb/schema.js';
 import { isBotVisibleRemotely } from '../../../desktop/src/main/localDb/ipc/botRemoteVisibility.js';
 import { openSession } from '../../../desktop/src/main/localDb/sessionOpening.js';
+import { deleteUnsentSessionRow } from '../../../desktop/src/main/localDb/provisionalSessions.js';
 import { listProjects, resolveSessionProject } from '../../../desktop/src/main/mcp-integrations/projectManagementCore.js';
 import { getSelectedNewMakerRoute } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.js';
 import { validateHandoffWorkingDir } from '../../../desktop/src/main/maker-ipc/handoffWorkingDir.js';
-import { prepareHandoffWorktree } from '../../../desktop/src/main/maker-ipc/handoffWorktree.js';
+import { prepareHandoffWorktree, resolveHandoffBaseRepo } from '../../../desktop/src/main/maker-ipc/handoffWorktree.js';
+import type { HandoffProvisioningService } from '../../../desktop/src/main/worktree/handoffProvisioning.js';
 import { createRemoteSessionOpener } from '../../../desktop/src/main/maker-ipc/remoteSessionCreation.js';
 import type { SessionHandoffSendParams, SessionHandoffSendResult } from '../../../desktop/src/main/maker-ipc/sessionHandoffCore.js';
 import { resolveSessionExecutionSelection } from '../../../desktop/src/main/maker-ipc/sessionExecutionSelection.js';
@@ -33,6 +35,7 @@ import type { HostWorktreeLifecycle } from './worktree-lifecycle.js';
 export function createHostSessionHandoff(ports: {
   input: ReturnType<typeof createInputQueue>;
   worktree: HostWorktreeLifecycle;
+  provisioning?: HandoffProvisioningService;
   readProviders(): Promise<ProviderView[]>;
   agents(): readonly AgentKind[];
   hasCindyAiApiKey(): boolean;
@@ -96,6 +99,7 @@ export function createHostSessionHandoff(ports: {
           if (!isIpcError(error) && !(error instanceof Error && error.message.startsWith('[UNSUPPORTED_CAPABILITY]'))) throw error;
           return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: (error as Error).message };
         }
+        ports.provisioning?.enforceLockIfBlocked(id);
         const queued = await ports.input.enqueue(id, { clientId, text: message }, {
           ...params,
           taskActionDeliveryGuard: Object.assign(async () => {
@@ -172,6 +176,31 @@ export function createHostSessionHandoff(ports: {
     discardWorktree: (id, path, assertOwner) => ports.worktree.discardPrecreatedWorktree(id, path, {
       canRemove: async () => { assertOwner(); return true; },
     }),
+    ...(ports.provisioning ? {
+      preflightWorktree: async (directory: string) => {
+        const res = await resolveHandoffBaseRepo(
+          { getForSession, listAll, detectCwd: ports.worktree.detect },
+          undefined,
+          directory,
+        );
+        return res.baseRepo !== null
+          ? { ok: true as const, baseRepo: res.baseRepo }
+          : { ok: false as const, errorCode: 'WORKTREE_UNAVAILABLE', message: res.message };
+      },
+      beginAsyncWorktree: async ({ sessionId, baseRepo, workingDir }: { sessionId: string; baseRepo: string; workingDir: string }) => {
+        const outcome = await ports.provisioning!.beginProvisioning({
+          sessionId,
+          baseRepo,
+          workingDir,
+        });
+        if (outcome.state === 'ready') return { state: 'ready' as const, path: outcome.meta.path };
+        if (outcome.state === 'failed') return { state: 'failed' as const, message: outcome.message };
+        return { state: 'provisioning' as const };
+      },
+      rollbackUnsentSession: async (id: string) => {
+        await deleteUnsentSessionRow(id);
+      },
+    } : {}),
     openSessionCommit: async (row, assertCurrent) => {
       const db = getDbClient();
       assertCurrent();
@@ -181,6 +210,7 @@ export function createHostSessionHandoff(ports: {
   });
   return {
     send, create, listProjects,
+    ...(ports.provisioning ? { supportsAsyncWorktreeCreate: true as const } : {}),
     async readModels(request: OrcaRemoteWorkerModelsRequest) {
       const assertOwner = captureOwner();
       assertOwner();

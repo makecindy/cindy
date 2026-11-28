@@ -1,4 +1,8 @@
 import type { ChatMessage } from './makerChatStore';
+import type {
+  WorktreeProvisioningSnapshot,
+  WorktreeProvisioningStage,
+} from '../../shared/worktreeProvisioning';
 import { useSyncExternalStore } from 'react';
 
 /**
@@ -22,8 +26,23 @@ export type WorktreeCreationState =
    * startedAt:进入 creating 的时刻(ms),用于加载卡片的「已等待」计时。调用方不必传,
    * set 时自动补上;同一 session 连续 creating 保留首次时刻,切走再切回视图不会从 0 重计。
    */
-  | { status: 'creating'; name: string; startedAt?: number; message?: ChatMessage }
-  | { status: 'failed'; name: string; error: string };
+  | {
+      status: 'creating';
+      name: string;
+      startedAt?: number;
+      message?: ChatMessage;
+      stage?: WorktreeProvisioningStage;
+      /** True when driven by main-process asynchronous handoff provisioning. */
+      hostManaged?: boolean;
+    }
+  | {
+      status: 'failed';
+      name: string;
+      error: string;
+      /** True when the user can retry main-process worktree provisioning via IPC. */
+      canRetry?: boolean;
+      interruptedOnRestart?: boolean;
+    };
 
 const states = new Map<string, WorktreeCreationState>();
 const listeners = new Set<() => void>();
@@ -73,6 +92,78 @@ export const worktreeCreationStore = {
     if (!states.has(sessionId)) return;
     states.delete(sessionId);
     notify();
+  },
+
+  /** 同步来自 main 进程的单条异步 worktree 创建态快照。 */
+  syncHostProvisioning(sessionId: string, snapshot: WorktreeProvisioningSnapshot | null): void {
+    if (!sessionId) return;
+    if (!snapshot) {
+      const existing = states.get(sessionId);
+      if (!existing) return;
+      const isHostEntry =
+        (existing.status === 'creating' && existing.hostManaged === true) ||
+        (existing.status === 'failed' && existing.canRetry === true);
+      if (isHostEntry) {
+        states.delete(sessionId);
+        notify();
+      }
+      return;
+    }
+    if (snapshot.status === 'provisioning') {
+      states.set(sessionId, {
+        status: 'creating',
+        name: snapshot.name ?? '',
+        startedAt: snapshot.startedAt,
+        stage: snapshot.stage,
+        hostManaged: true,
+      });
+    } else {
+      states.set(sessionId, {
+        status: 'failed',
+        name: snapshot.name ?? '',
+        error: snapshot.error ?? '',
+        canRetry: true,
+        ...(snapshot.interruptedOnRestart ? { interruptedOnRestart: true } : {}),
+      });
+    }
+    notify();
+  },
+
+  /** 全量对齐来自 main 进程的异步 worktree 创建态列表（不触碰 renderer 侧本地草稿条目）。 */
+  replaceHostProvisioningList(snapshots: readonly WorktreeProvisioningSnapshot[]): void {
+    const incomingIds = new Set(snapshots.map((item) => item.sessionId));
+    let changed = false;
+    for (const [id, existing] of states) {
+      const isHostEntry =
+        (existing.status === 'creating' && existing.hostManaged === true) ||
+        (existing.status === 'failed' && existing.canRetry === true);
+      if (isHostEntry && !incomingIds.has(id)) {
+        states.delete(id);
+        changed = true;
+      }
+    }
+    for (const snapshot of snapshots) {
+      if (!snapshot.sessionId) continue;
+      if (snapshot.status === 'provisioning') {
+        states.set(snapshot.sessionId, {
+          status: 'creating',
+          name: snapshot.name ?? '',
+          startedAt: snapshot.startedAt,
+          stage: snapshot.stage,
+          hostManaged: true,
+        });
+      } else {
+        states.set(snapshot.sessionId, {
+          status: 'failed',
+          name: snapshot.name ?? '',
+          error: snapshot.error ?? '',
+          canRetry: true,
+          ...(snapshot.interruptedOnRestart ? { interruptedOnRestart: true } : {}),
+        });
+      }
+      changed = true;
+    }
+    if (changed) notify();
   },
 
   /** 仅供测试 / 登出清理。 */

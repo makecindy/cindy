@@ -29,10 +29,15 @@ export async function listActiveSessions(storage) {
 }
 
 /** Match maker:list-active: persisted task status is not a live turn status. */
-export function listRunningSessions(maker, options, getSessionActivityMap) {
+export function listRunningSessions(maker, options, getSessionActivityMap, listProvisioningSnapshots) {
   const activityMap = getSessionActivityMap ? getSessionActivityMap() : null;
+  const provisioningList = listProvisioningSnapshots ? listProvisioningSnapshots() : [];
+  const provisioningById = new Map(provisioningList.map((snap) => [snap.sessionId, snap]));
+  const activeIds = new Set();
   const sessions = (maker?.listActiveSessions() ?? []).map(session => {
+    activeIds.add(session.id);
     const activity = activityMap ? activityMap.get(session.id) : undefined;
+    const prov = provisioningById.get(session.id);
     return {
       sessionId: session.id,
       agentKind: session.agentKind,
@@ -40,11 +45,35 @@ export function listRunningSessions(maker, options, getSessionActivityMap) {
       capabilities: session.capabilities,
       isTurnRunning: session.isTurnRunning(),
       ...(activityMap ? {
-        activityPhase: activity?.phase ?? 'idle',
-        activityAttention: activity?.attention ?? false,
+        activityPhase: prov
+          ? (prov.status === 'provisioning' ? 'running' : 'error')
+          : (activity?.phase ?? 'idle'),
+        activityAttention: prov ? prov.status === 'failed' : (activity?.attention ?? false),
+      } : {}),
+      ...(prov ? {
+        worktreeProvisioningStatus: prov.status,
+        ...(prov.stage ? { worktreeProvisioningStage: prov.stage } : {}),
+        worktreeProvisioningStartedAt: prov.startedAt,
+        ...(prov.error ? { worktreeProvisioningError: prov.error } : {}),
       } : {}),
     };
   });
+  for (const [sessionId, prov] of provisioningById) {
+    if (activeIds.has(sessionId)) continue;
+    sessions.push({
+      sessionId,
+      agentKind: 'claude-code',
+      workDir: '',
+      capabilities: undefined,
+      isTurnRunning: false,
+      activityPhase: prov.status === 'provisioning' ? 'running' : 'error',
+      activityAttention: prov.status === 'failed',
+      worktreeProvisioningStatus: prov.status,
+      ...(prov.stage ? { worktreeProvisioningStage: prov.stage } : {}),
+      worktreeProvisioningStartedAt: prov.startedAt,
+      ...(prov.error ? { worktreeProvisioningError: prov.error } : {}),
+    });
+  }
   return options?.summary === true && options?.snapshotVersion === 2
     ? { format: 'active-sessions-v2', sessions }
     : sessions;

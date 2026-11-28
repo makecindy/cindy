@@ -532,7 +532,10 @@ import {
   finalizeSessionClose,
   runSessionCloseCleanup,
 } from './sessionBindingLifecycle.js';
-import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
+import {
+  readCanonicalSessionActivity,
+  setSessionActivityProvisioningLookup,
+} from './sessionActivityProjection.js';
 import { snapshotSessionBackgroundTasks } from './sessionBackgroundTasksSnapshot.js';
 import {
   listAtBrowserTabs,
@@ -1114,8 +1117,22 @@ import { consumeWritableDirectoryPickerGrants } from './writableDirectoryPickerG
 import { createTaskWritableDirsUpdater } from '../projectDirectoryRuntime.js';
 import {
   prepareHandoffWorktree,
+  resolveHandoffBaseRepo,
   shouldRecycleHandoffWorktreeOnFailure,
 } from './handoffWorktree.js';
+import { deleteUnsentSessionRow } from '../localDb/provisionalSessions.js';
+import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
+import { shouldUseMultibox } from '../worktree/multibox.js';
+import { isWorktreeCreationQueueBusy } from '../worktree/worktreeConcurrency.js';
+import {
+  createHandoffProvisioningService,
+  WORKTREE_PROVISIONING_LOCK_ID,
+  type HandoffProvisioningService,
+} from '../worktree/handoffProvisioning.js';
+import {
+  WORKTREE_PROVISIONING_CHANNELS,
+  type WorktreeProvisioningSnapshot,
+} from '../../shared/worktreeProvisioning.js';
 import { validateHandoffWorkingDir } from './handoffWorkingDir.js';
 import { registerPluginEnableHandlers } from './pluginEnableHandlers.js';
 import { registerProjectPluginPolicyHandlers } from './projectPluginPolicyHandlers.js';
@@ -2825,14 +2842,16 @@ type SendToSessionInternalResult =
       targetSessionId: string;
       /** 'acp' 只出现在协同内部的派发(插件引擎 Worker)；普通 send_to_session 仍拒绝插件引擎目标。 */
       agentKind: EngineKind;
-      /** created = 本次新建并投递;resumed = 既有 session 被唤醒;already-active = 已在线直送;queued = 目标繁忙时进入输入队列。 */
-      wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
+      /** created = 本次新建并投递;provisioning = 新建任务且 worktree 后台异步准备中;resumed = 既有 session 被唤醒;already-active = 已在线直送;queued = 目标繁忙时进入输入队列。 */
+      wakeKind: 'resumed' | 'already-active' | 'created' | 'provisioning' | 'queued';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
       /** jump 排队时的可寻址句柄；直发 / create 时省略。 */
       queuedMessageId?: string;
-      /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 undefined。 */
+      /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;异步准备中时为 null;其余情况 undefined。 */
       worktreePath?: string | null;
+      /** create + useWorktree 后台异步准备中时为 'provisioning'。 */
+      worktreeStatus?: 'provisioning';
       projectDir?: string | null;
       /** The project was chosen because the requested execution directory is inside it. */
       projectFromWorkingDir?: true;
@@ -4769,6 +4788,15 @@ async function syncLibraryReadonlyExtraDir(
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
+let handoffProvisioningHolder: HandoffProvisioningService | null = null;
+
+export function getHandoffProvisioningService(): HandoffProvisioningService | null {
+  return handoffProvisioningHolder;
+}
+
+onAppSessionInvalidated(() => {
+  handoffProvisioningHolder?.onOwnerChanged();
+});
 export function readLocalTaskQueuePaused(sessionId: string): boolean | undefined {
   return agentInputCoordinatorHolder?.getQueuePausedIfRestored(sessionId);
 }
@@ -7080,9 +7108,99 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return projected ?? undefined;
     },
   }));
+  const broadcastWorktreeProvisioningChanged = (
+    sessionId: string,
+    snapshot: WorktreeProvisioningSnapshot | null,
+  ): void => {
+    const payload = { sessionId, snapshot };
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(WORKTREE_PROVISIONING_CHANNELS.CHANGED, payload);
+      }
+    }
+  };
+  handoffProvisioningHolder = createHandoffProvisioningService({
+    getUserDataDir: () => {
+      try {
+        return app.getPath('userData');
+      } catch {
+        return null;
+      }
+    },
+    getOwnerScopeKey: () => getActiveAppSession().dataOwnerId,
+    captureOwnerToken: () => getCurrentDbClientSnapshot(),
+    isOwnerTokenCurrent: (token) =>
+      token !== null &&
+      getCurrentDbClientSnapshot() === token &&
+      !isAppSessionBoundaryPending(),
+    readSessionLifecycle: async (sessionId) => {
+      const [row] = await getDbClient()
+        .drizzle.select({ status: sessions.status, worktreePath: sessions.worktreePath })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      if (!row) return { state: 'missing' };
+      if (row.status === 'deleted' || row.status === 'archived') return { state: 'terminal' };
+      return { state: 'active', hasWorktreePath: Boolean(row.worktreePath) };
+    },
+    getRegisteredWorktree: (sessionId) => worktreeManager.getForSession(sessionId),
+    bindWorktreeToSession: async (sessionId, meta) => {
+      await withSessionRouteLock(sessionId, async () => {
+        await getDbClient()
+          .drizzle.update(sessions)
+          .set({ workingDir: meta.path, worktreePath: meta.path, updatedAt: Date.now() })
+          .where(and(eq(sessions.id, sessionId), eq(sessions.status, 'active')))
+          .run();
+      });
+    },
+    updateQueuedWorkingDir: (sessionId, worktreePath) => {
+      agentInputCoordinatorHolder?.updateQueuedWorkingDir(sessionId, worktreePath);
+    },
+    setProvisioningLock: (sessionId, locked) => {
+      agentInputCoordinatorHolder?.setInteractionLock(
+        sessionId,
+        WORKTREE_PROVISIONING_LOCK_ID,
+        locked,
+        locked ? { preserveOnStop: true } : undefined,
+      );
+    },
+    createWorktree: ({ sessionId, workingDir, dispatcherSessionId, sourceRef, signal, onStageChange, onNameSelected }) =>
+      prepareHandoffWorktree(
+        {
+          getForSession: worktreeManager.getForSession,
+          listAll: worktreeManager.listAll,
+          detectCwd: worktreeManager.detectCwd,
+          suggestName: worktreeManager.suggestName,
+          listBranches: worktreeManager.listBranches,
+          resolveCommit: worktreeManager.revParseCommit,
+          createWorktree: (req, opts) => worktreeManager.createWorktree(req, opts),
+          createId: () => sessionId,
+          resolveFreshSource: resolveFreshSourceBranch,
+        },
+        dispatcherSessionId,
+        workingDir,
+        {
+          ...(sourceRef ? { sourceRef } : {}),
+          signal,
+          onStageChange,
+          onNameSelected,
+        },
+      ),
+    discardOrphanWorktree: async (sessionId) => {
+      await worktreeManager.removeWorktreeForSession(sessionId);
+    },
+    isQueueBusy: async (baseRepo) =>
+      isWorktreeCreationQueueBusy(baseRepo, await shouldUseMultibox(baseRepo)),
+    onWorktreeBound: (sessionId, meta) => {
+      broadcastSessionPatched(sessionId, { workingDir: meta.path, worktreePath: meta.path });
+    },
+    onChanged: broadcastWorktreeProvisioningChanged,
+  });
+  setSessionActivityProvisioningLookup((sessionId) => handoffProvisioningHolder?.getSnapshot(sessionId) ?? null);
   setSessionRuntimeCleanup(createSessionRuntimeCleanup({
     clearDeferredCredentialSelection: sessionId => pendingCredentialSwitchHolder?.clearDeferredSelection(sessionId),
     cancelPendingRemoteStart,
+    cancelWorktreeProvisioning: (sessionId) => handoffProvisioningHolder?.cancelProvisioning(sessionId),
     discardWorkingDirectoryRecovery: (sessionId) => workingDirectoryRecovery.discard(sessionId),
     broadcastSessionRuntimeProjection,
     log,
@@ -13277,33 +13395,190 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // id 必须用预生成的那个(worktree 绑定已按它登记)。失败硬报 WORKTREE_UNAVAILABLE
           // ——调用方显式要隔离,静默降级会让新 session 落在共享工作树里(dispatcher 若在
           // ephemeral worktree 里跑,新 session 还会随那个 worktree 一起被回收)。
+          let asyncWorktreePreflight: { baseRepo: string; dispatcherSessionId: string | undefined; workingDir: string } | null = null;
           if (useWorktree) {
             if (!resolvedWorkDir) return { ok: false, errorCode: 'INVALID_ARGS',
               message: '不绑项目的任务使用 use_worktree 时需要指定 working_dir。' };
-            const prep = await prepareHandoffWorktree(
-              {
-                getForSession: worktreeManager.getForSession,
-                listAll: worktreeManager.listAll,
-                detectCwd: worktreeManager.detectCwd,
-                suggestName: worktreeManager.suggestName,
-                listBranches: worktreeManager.listBranches,
-                resolveCommit: worktreeManager.revParseCommit,
-                createWorktree: worktreeManager.createWorktree,
-                createId: () => randomUUID(),
-                resolveFreshSource: resolveFreshSourceBranch,
-              },
-              // working_dir 覆盖时不带 dispatcherSessionId:resolveHandoffBaseRepo
-              // 的「dispatcher 自身 worktree」捷径按路径包含判定——覆盖目录若指向
-              // dispatcher worktree 树内的**嵌套独立仓库**,捷径会跳过 detectCwd、
-              // 误用 dispatcher 的 baseRepo。去掉捷径后 detectCwd 按目录自身探测
-              // git 根;覆盖目录落在登记过的 worktree 内时,listAll 反查分支仍生效。
-              workingDirOverride !== undefined ? undefined : dispatcherSessionId,
-              resolvedWorkDir,
-            );
-            if (!prep.ok) {
-              return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prep.message };
+            const effectiveDispatcherId =
+              workingDirOverride !== undefined ? undefined : dispatcherSessionId;
+            if (handoffProvisioningHolder) {
+              // Phase 1 轻量预检：非 git / 未装 git / 未登记 worktree 直接同步报错，不建 DB 行。
+              const preflight = await resolveHandoffBaseRepo(
+                {
+                  getForSession: worktreeManager.getForSession,
+                  listAll: worktreeManager.listAll,
+                  detectCwd: worktreeManager.detectCwd,
+                },
+                effectiveDispatcherId,
+                resolvedWorkDir,
+              );
+              if (preflight.baseRepo === null) {
+                return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: preflight.message };
+              }
+              asyncWorktreePreflight = {
+                baseRepo: preflight.baseRepo,
+                dispatcherSessionId: effectiveDispatcherId,
+                workingDir: resolvedWorkDir,
+              };
+            } else {
+              const prep = await prepareHandoffWorktree(
+                {
+                  getForSession: worktreeManager.getForSession,
+                  listAll: worktreeManager.listAll,
+                  detectCwd: worktreeManager.detectCwd,
+                  suggestName: worktreeManager.suggestName,
+                  listBranches: worktreeManager.listBranches,
+                  resolveCommit: worktreeManager.revParseCommit,
+                  createWorktree: worktreeManager.createWorktree,
+                  createId: () => randomUUID(),
+                  resolveFreshSource: resolveFreshSourceBranch,
+                },
+                // working_dir 覆盖时不带 dispatcherSessionId:resolveHandoffBaseRepo
+                // 的「dispatcher 自身 worktree」捷径按路径包含判定——覆盖目录若指向
+                // dispatcher worktree 树内的**嵌套独立仓库**,捷径会跳过 detectCwd、
+                // 误用 dispatcher 的 baseRepo。去掉捷径后 detectCwd 按目录自身探测
+                // git 根;覆盖目录落在登记过的 worktree 内时,listAll 反查分支仍生效。
+                effectiveDispatcherId,
+                resolvedWorkDir,
+              );
+              if (!prep.ok) {
+                return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prep.message };
+              }
+              handoffWorktree = { sessionId: prep.sessionId, meta: prep.meta };
             }
-            handoffWorktree = { sessionId: prep.sessionId, meta: prep.meta };
+          }
+          if (asyncWorktreePreflight && handoffProvisioningHolder) {
+            const titleOwner = getCurrentDbClientSnapshot();
+            const newTitle = title?.trim() || normalizeAutoTitle(message);
+            const provisionedSessionId = randomUUID();
+            await assertTaskActionCurrent();
+            const { row: openedRow } = await openSession({
+              id: provisionedSessionId,
+              deferGitInit: true,
+              body: {
+                title: newTitle,
+                agentKind: inherited.agentKind === 'claude-code' ? 'cc' : inherited.agentKind,
+                model: inherited.model,
+                providerId: inherited.providerId,
+                effort: inherited.effort,
+                fastMode: (inherited.fastMode ?? false),
+                permissionMode: inherited.permissionMode ?? 'bypassPermissions',
+                workspaceKind: inherited.workspaceKind,
+                projectDir: inherited.projectDir,
+                workingDir: asyncWorktreePreflight.workingDir,
+                ...(inheritedAgentDeviceId ? { agentDeviceId: inheritedAgentDeviceId } : {}),
+                ...(createdBySession ? { createdBySession } : {}),
+              },
+            });
+            const provOutcome = await handoffProvisioningHolder.beginProvisioning({
+              sessionId: provisionedSessionId,
+              baseRepo: asyncWorktreePreflight.baseRepo,
+              workingDir: asyncWorktreePreflight.workingDir,
+              dispatcherSessionId: asyncWorktreePreflight.dispatcherSessionId,
+            });
+            if (provOutcome.state === 'failed') {
+              await deleteUnsentSessionRow(provisionedSessionId).catch(() => undefined);
+              return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: provOutcome.message };
+            }
+            const clientId = createId();
+            try {
+              if (!inheritedAgentDeviceId && params.beforeLocalTaskDispatch) {
+                await params.beforeLocalTaskDispatch(provisionedSessionId);
+              }
+              const targetMeta = await maker.getSessionMeta(provisionedSessionId);
+              const targetRow = await getSessionRowSnapshot(provisionedSessionId);
+              if (!targetMeta || !targetRow) {
+                throw new Error('Created session metadata unavailable');
+              }
+              if (provOutcome.state === 'provisioning') {
+                await enqueueSendToSessionMessage({
+                  targetSessionId: provisionedSessionId,
+                  message,
+                  persistedContent: persistedContent ?? message,
+                  clientId,
+                  meta: targetMeta,
+                  dbRow: targetRow,
+                  origin: queuedOrigin,
+                  sourcePlugin,
+                  autoReviewUserText: params.autoReviewUserText,
+                  taskActionDeliveryGuard: params.taskActionDeliveryGuard,
+                });
+                await awaitAgentInputQueueSnapshotPersistence(provisionedSessionId).catch(() => undefined);
+                broadcastSessionCreated(provisionedSessionId);
+                if (!params.sourcePlugin && !title?.trim() && titleOwner === getCurrentDbClientSnapshot()) {
+                  void refineCreatedTaskTitle(provisionedSessionId, message, { initialTitle: newTitle });
+                }
+                log.info('sendToSession created task with async worktree provisioning', {
+                  dispatcherSessionId,
+                  newSessionId: provisionedSessionId,
+                  agentKind: inherited.agentKind,
+                });
+                return {
+                  ok: true,
+                  targetSessionId: provisionedSessionId,
+                  agentKind: inherited.agentKind,
+                  wakeKind: 'provisioning',
+                  worktreeStatus: 'provisioning',
+                  targetTitle: newTitle,
+                  targetLastUserSendAt: null,
+                  queuedMessageId: clientId,
+                  worktreePath: null,
+                  projectDir: inherited.projectDir ?? null,
+                  workspaceKind: openedRow.workspaceKind,
+                  workingDir: openedRow.workingDir ?? asyncWorktreePreflight.workingDir,
+                  model: openedRow.model,
+                  effort: openedRow.effort || null,
+                  fastMode: openedRow.fastMode,
+                  providerId: openedRow.providerId ?? null,
+                };
+              }
+              // Fast path (<3s): worktree is already created, bound in DB, and unlocked.
+              // Enqueue drains immediately on the bound worktree via lazy-create without
+              // re-inserting the already-committed session row.
+              await enqueueSendToSessionMessage({
+                targetSessionId: provisionedSessionId,
+                message,
+                persistedContent: persistedContent ?? message,
+                clientId,
+                meta: targetMeta,
+                dbRow: targetRow,
+                origin: queuedOrigin,
+                sourcePlugin,
+                autoReviewUserText: params.autoReviewUserText,
+                taskActionDeliveryGuard: params.taskActionDeliveryGuard,
+              });
+              broadcastSessionCreated(provisionedSessionId);
+              if (!params.sourcePlugin && !title?.trim() && titleOwner === getCurrentDbClientSnapshot()) {
+                void refineCreatedTaskTitle(provisionedSessionId, message, { initialTitle: newTitle });
+              }
+              log.info('sendToSession created new session (worktree fast-path)', {
+                dispatcherSessionId,
+                newSessionId: provisionedSessionId,
+                agentKind: inherited.agentKind,
+                worktreePath: provOutcome.meta.path,
+              });
+              return {
+                ok: true,
+                targetSessionId: provisionedSessionId,
+                agentKind: inherited.agentKind,
+                wakeKind: 'created',
+                targetTitle: newTitle,
+                targetLastUserSendAt: null,
+                worktreePath: provOutcome.meta.path,
+                projectDir: inherited.projectDir ?? null,
+                workspaceKind: openedRow.workspaceKind,
+                workingDir: provOutcome.meta.path,
+                model: openedRow.model,
+                effort: openedRow.effort || null,
+                fastMode: openedRow.fastMode,
+                providerId: openedRow.providerId ?? null,
+              };
+            } catch (provErr) {
+              if (provOutcome.state === 'provisioning') {
+                handoffProvisioningHolder.cancelProvisioning(provisionedSessionId);
+              }
+              throw provErr;
+            }
           }
         } else {
           if (useWorktree) {
@@ -13542,6 +13817,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 失败时 shouldQueueNewTurn 仍返回 true(未恢复即入队),消息不丢。
       lockStage = 'queue-restore';
       await inputCoordinator.ensureQueueRestored(targetSessionId).catch(() => undefined);
+      handoffProvisioningHolder?.enforceLockIfBlocked(targetSessionId);
       // Hand-over can finish while restoration/reconciliation awaits, before any
       // turn is running. Recheck before either queue admission or idle dispatch.
       const rejectedAfterRestore = await rejectUnsupportedTarget(targetSessionId);
@@ -13555,7 +13831,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Only Claude Code takes the queued shared reconnect path. Other engines keep the direct failure and manual retry.
       const sharedReconnectTarget = targetAgentKind === 'claude-code' && reconnectTarget?.agentKind === 'claude-code'
         && reconnectTarget.hasReclaimedSharedRun() && !reconnectTarget.isTurnRunning() ? reconnectTarget : undefined;
-      if (sharedReconnectTarget || params.files?.length || params.contextFiles?.length || params.forceQueue || verifiedOwnerRequestText(params.autoReviewUserText) !== undefined || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
+      if (sharedReconnectTarget || params.files?.length || params.contextFiles?.length || params.forceQueue || verifiedOwnerRequestText(params.autoReviewUserText) !== undefined || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId) || handoffProvisioningHolder?.isBlocked(targetSessionId)) {
         lockStage = 'enqueue-queued-message';
         const qClientId = explicitClientId ?? createId();
         const durableScriptDelivery = qClientId.startsWith('schedule-delivery:');
@@ -14158,6 +14434,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 同账号另一台电脑上的任务发来的消息（Agent 的 send_to_session 传 deviceId::sessionId）。
   registerSessionHandoffIpc({
     supportsPluginEngineCreate: true,
+    supportsAsyncWorktreeCreate: true,
     refineTitle: (id, subject, initial) => { void refineCreatedTaskTitle(id, subject, { initialTitle: initial }); },
     listProjects: options => listProjects({ ...options, callerSessionId: undefined }),
     create: createRemoteSessionOpener({
@@ -14191,13 +14468,50 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prepared.message };
       },
       discardWorktree: id => worktreeManager.removeWorktreeForSession(id),
+      preflightWorktree: async (directory) => {
+        const res = await resolveHandoffBaseRepo(
+          {
+            getForSession: worktreeManager.getForSession,
+            listAll: worktreeManager.listAll,
+            detectCwd: worktreeManager.detectCwd,
+          },
+          undefined,
+          directory,
+        );
+        return res.baseRepo !== null
+          ? { ok: true, baseRepo: res.baseRepo }
+          : { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: res.message };
+      },
+      beginAsyncWorktree: async ({ sessionId, baseRepo, workingDir }) => {
+        if (!handoffProvisioningHolder) {
+          return { state: 'failed', message: 'Worktree provisioning service is unavailable' };
+        }
+        const outcome = await handoffProvisioningHolder.beginProvisioning({
+          sessionId,
+          baseRepo,
+          workingDir,
+        });
+        if (outcome.state === 'ready') return { state: 'ready', path: outcome.meta.path };
+        if (outcome.state === 'failed') return { state: 'failed', message: outcome.message };
+        return { state: 'provisioning' };
+      },
+      rollbackUnsentSession: async (id) => {
+        await deleteUnsentSessionRow(id);
+      },
       openSessionCommit: async (row, assertCurrent) => {
         const db = getDbClient(); assertCurrent();
         await db.drizzle.insert(sessions).values(row).run();
       },
       broadcastCreated: broadcastSessionCreated,
     }),
-    send: (params) => sendToSessionInternal(params),
+    send: async (params) => {
+      const res = await sendToSessionInternal(params);
+      if (!res.ok) return res;
+      return {
+        ...res,
+        wakeKind: res.wakeKind === 'provisioning' ? 'queued' as const : res.wakeKind,
+      };
+    },
     validate: async (deviceId, input) => {
       const response = await invokeBotPeer(deviceId, 'maker:session:handoff', [{ action: 'validate-task-action', ...input }]);
       const result = response.ok ? response.result as { valid?: unknown; released?: unknown } | null : null;
@@ -20518,6 +20832,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     {
       sendToAgentAccepted: async (sessionId, message, createOpts, sendOpts) => {
+        if (handoffProvisioningHolder?.isBlocked(sessionId)) {
+          throwIpcError('PRECONDITION_FAILED', 'Worktree is not ready yet; wait or retry worktree creation first');
+        }
         // Only fresh user IPC waits, before taking any send/restart fence.
         // Internal continuations and turn cleanup must remain able to finish.
         const owner = getCurrentDbClientSnapshot();
@@ -20550,6 +20867,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 契约与 maker:send 一致(sessionSendHandler 同样在 IPC 边界剥):**该字段只由 main
       // 盖章**。coordinator 的内部 steerToAgent 调用不经过这里,透传值不受影响。
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      if (handoffProvisioningHolder?.isBlocked(sessionId)) {
+        throwIpcError('PRECONDITION_FAILED', 'Worktree is not ready yet; wait or retry worktree creation first');
+      }
       const deviceLinkInvoke = isDeviceLinkInvoke();
       if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);
       const boundaryStamp = await assertRemoteInputControlBoundary(
@@ -22600,6 +22920,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       } else {
         await restoreQueue.catch(() => undefined);
       }
+      handoffProvisioningHolder?.enforceLockIfBlocked(sid);
       assertCurrentInputGeneration();
       sendTrace?.stage('restore');
       // A concurrent weak-link resend may already own this clientId in the
@@ -22865,6 +23186,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
       } else {
         await restoreQueue.catch(() => undefined);
+      }
+      if (handoffProvisioningHolder?.isBlocked(sid)) {
+        handoffProvisioningHolder.enforceLockIfBlocked(sid);
+        throwIpcError('PRECONDITION_FAILED', 'Worktree is not ready yet; wait or retry worktree creation first');
       }
       assertCurrentInputGeneration();
       const isKnownSteerDuplicate = (): boolean => {
@@ -23446,7 +23771,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     async (_e, sessionId: unknown, lockId: unknown, locked: unknown, opts?: unknown) => {
       const sid = requireSessionId(sessionId);
       await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
-      return inputCoordinator.setInteractionLock(sid, requireClientId(lockId), locked === true);
+      const normalizedLockId = requireClientId(lockId);
+      if (normalizedLockId === WORKTREE_PROVISIONING_LOCK_ID) {
+        throwIpcError('PERMISSION_DENIED', 'Worktree provisioning lock is host-managed');
+      }
+      return inputCoordinator.setInteractionLock(sid, normalizedLockId, locked === true);
     },
   );
 
@@ -23481,6 +23810,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           isRemoteInvoke: remoteInvoke,
         });
         const projection = inputCoordinator.clearSession(sid, clearBoundary);
+        handoffProvisioningHolder?.enforceLockIfBlocked(sid);
         cindyMakeManager.cancelTasksForSession(sid);
         workingDirectoryRecovery.discard(sid);
         resetAutomaticRecoveryForExplicitStop(sid);
@@ -23606,8 +23936,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const activityService = getAgentIslandService();
     const activityById = new Map(activityService?.getSessionActivitySnapshots()
       .map((activity) => [activity.sessionId, activity] as const) ?? []);
-    const sessions = maker.listActiveSessions().map((s) => {
+    const provisioningById = new Map(
+      (handoffProvisioningHolder?.listSnapshots() ?? []).map((snap) => [snap.sessionId, snap] as const),
+    );
+    const activeIds = new Set<string>();
+    const sessionsList: Array<Record<string, unknown>> = maker.listActiveSessions().map((s) => {
+      activeIds.add(s.id);
       const activity = activityById.get(s.id);
+      const prov = provisioningById.get(s.id);
       return {
         sessionId: s.id,
         agentKind: s.agentKind,
@@ -23615,19 +23951,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         capabilities: s.capabilities,
         isTurnRunning: s.isTurnRunning(),
         ...(activityService ? {
-          activityPhase: activity?.phase ?? 'idle',
-          activityAttention: activity?.attention ?? false,
+          activityPhase: prov
+            ? (prov.status === 'provisioning' ? 'running' : 'error')
+            : (activity?.phase ?? 'idle'),
+          activityAttention: prov ? prov.status === 'failed' : (activity?.attention ?? false),
+        } : {}),
+        ...(prov ? {
+          worktreeProvisioningStatus: prov.status,
+          ...(prov.stage ? { worktreeProvisioningStage: prov.stage } : {}),
+          worktreeProvisioningStartedAt: prov.startedAt,
+          ...(prov.error ? { worktreeProvisioningError: prov.error } : {}),
         } : {}),
       };
     });
+    for (const [sessionId, prov] of provisioningById) {
+      if (activeIds.has(sessionId)) continue;
+      sessionsList.push({
+        sessionId,
+        agentKind: 'claude-code',
+        workDir: '',
+        capabilities: undefined,
+        isTurnRunning: false,
+        activityPhase: prov.status === 'provisioning' ? 'running' : 'error',
+        activityAttention: prov.status === 'failed',
+        worktreeProvisioningStatus: prov.status,
+        ...(prov.stage ? { worktreeProvisioningStage: prov.stage } : {}),
+        worktreeProvisioningStartedAt: prov.startedAt,
+        ...(prov.error ? { worktreeProvisioningError: prov.error } : {}),
+      });
+    }
     // Only an opted-in controller may treat an absent runtime as idle. Legacy
     // callers keep the array response and its original absence semantics.
     if (options && typeof options === 'object' && !Array.isArray(options)
       && (options as Record<string, unknown>).summary === true
       && (options as Record<string, unknown>).snapshotVersion === 2) {
-      return { format: 'active-sessions-v2', sessions };
+      return { format: 'active-sessions-v2', sessions: sessionsList };
     }
-    return sessions;
+    return sessionsList;
   });
 
   ipcMain.handle(

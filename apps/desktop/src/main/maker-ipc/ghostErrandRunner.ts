@@ -97,7 +97,7 @@ export interface GhostErrandRunnerDeps {
   isSessionBusy(sessionId: string): boolean;
   /** 统一投递通路(sendToSessionInternal 的窄化面)。 */
   dispatch(params: { targetSessionId: string; message: string; ghostId: string }): Promise<
-    | { ok: true; wakeKind: 'resumed' | 'already-active' | 'created' | 'queued' }
+    | { ok: true; wakeKind: 'resumed' | 'already-active' | 'created' | 'queued' | 'provisioning' }
     | { ok: false; errorCode: string; message: string }
   >;
   getObservableSession(sessionId: string): ObservableSession | null;
@@ -263,7 +263,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
       }
       return failure('INTERNAL', dispatched.message);
     }
-    if (dispatched.wakeKind === 'queued') {
+    if (dispatched.wakeKind === 'queued' || dispatched.wakeKind === 'provisioning') {
       // 忙检后的窄竞态窗口:消息已进队(会在当前轮后执行,但结果不取回)。
       // 如实告知并留日志——这是已知边界,不装作没发生。
       deps.log.warn('ghost errand message queued behind a foreign turn', {

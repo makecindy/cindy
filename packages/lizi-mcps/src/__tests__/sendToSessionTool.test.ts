@@ -755,3 +755,78 @@ describe('send_to_session → 另一台电脑上的任务', () => {
     expect(s.sendToSession).not.toHaveBeenCalled();
   });
 });
+
+// P1-1 async worktree provisioning contract (unit): when a large/Multibox repo yields after the
+// 3s fast-path, send_to_session returns wake_kind='provisioning' and worktree_status='provisioning'
+// with a guidance note pointing to get_task_digest, instead of timing out as DELIVERY_UNKNOWN.
+describe('send_to_session · async worktree provisioning', () => {
+  it('returns wake_kind=provisioning and worktree_status=provisioning for local async worktree', async () => {
+    const { registry } = setup({
+      result: {
+        ok: true,
+        targetSessionId: 'prov-local-1',
+        agentKind: 'codex',
+        wakeKind: 'provisioning',
+        worktreeStatus: 'provisioning',
+        worktreePath: null,
+        targetTitle: '大仓修复',
+        targetLastUserSendAt: null,
+        projectDir: '/repo',
+        workingDir: '/repo',
+        workspaceKind: 'project',
+      },
+    });
+    const res = parse(await registry.call('send_to_session', {
+      project_path: '/repo',
+      message: '修一下编译错误',
+      use_worktree: true,
+    }));
+    expect(res).toMatchObject({
+      ok: true,
+      target_session_id: 'prov-local-1',
+      wake_kind: 'provisioning',
+      worktree_status: 'provisioning',
+      worktree_path: null,
+    });
+    expect(String(res.note)).toContain('get_task_digest');
+    expect(String(res.note)).toContain('worktree');
+  });
+
+  it('surfaces wake_kind=provisioning and worktree_status=provisioning for remote async worktree create', async () => {
+    const { registry, sendToSession } = setup({
+      result: {
+        ok: true,
+        targetSessionId: 'mac-mini::prov-remote-1',
+        targetDeviceId: 'mac-mini',
+        agentKind: 'codex',
+        wakeKind: 'provisioning',
+        worktreeStatus: 'provisioning',
+        worktreePath: null,
+        targetTitle: '远端大仓任务',
+        targetLastUserSendAt: null,
+        projectDir: '/remote/xdt',
+        workingDir: '/remote/xdt',
+      },
+    });
+    const res = parse(await registry.call('send_to_session', {
+      device: 'mac-mini',
+      project_path: '/remote/xdt',
+      message: '查下 Unity 资源问题',
+      use_worktree: true,
+    }));
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({
+      device: 'mac-mini',
+      projectDir: '/remote/xdt',
+      useWorktree: true,
+    }));
+    expect(res).toMatchObject({
+      ok: true,
+      target_session_id: 'mac-mini::prov-remote-1',
+      target_device_id: 'mac-mini',
+      wake_kind: 'provisioning',
+      worktree_status: 'provisioning',
+      worktree_path: null,
+    });
+    expect(String(res.note)).toContain('get_task_digest');
+  });
+});

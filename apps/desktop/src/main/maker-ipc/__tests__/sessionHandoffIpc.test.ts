@@ -420,6 +420,114 @@ describe('maker:session:handoff (receiving computer)', () => {
     expect(insert).toHaveBeenCalledOnce();
     expect(send).toHaveBeenCalledOnce();
   });
+
+  // P1-1 unit/protocol: two-phase async worktree provisioning on remote creation.
+  // Existing opener tests only covered synchronous prepareWorktree. Verify preflight rejection
+  // before DB insert, fast-path failure rollback (zero orphan row), fast-path ready, and async
+  // provisioning preserving wire wakeKind='created' + additive worktreeStatus='provisioning'.
+  it('supports two-phase async worktree creation, preflight rejection, fast-path rollback, and capability advertisement', async () => {
+    // 1. Capability advertises ordinaryCreateAsyncWorktree: 1 when wired.
+    const capSend = vi.fn(async (): Promise<SessionHandoffSendResult> => ({
+      ok: true, agentKind: 'codex', wakeKind: 'queued', targetTitle: null, targetLastUserSendAt: null,
+    }));
+    registerSessionHandoffIpc({
+      send: capSend,
+      create: createRemoteSessionOpener(creationFixture().deps),
+      supportsAsyncWorktreeCreate: true,
+      validate: async () => true,
+    });
+    const handler = handlers.get(DL_SESSION_HANDOFF_CHANNEL)!;
+    setRemoteBotSessionLookup(async () => 'ordinary');
+    try {
+      const cap = await runDeviceLinkInvokeContext(
+        { controllerDeviceId: 'device-A', channel: DL_SESSION_HANDOFF_CHANNEL } as DeviceLinkInvokeContext,
+        () => handler({}, { action: 'task-action-capability' }),
+      );
+      expect(cap).toMatchObject({ ordinaryCreateVersion: 1, ordinaryCreateAsyncWorktree: 1 });
+    } finally {
+      setRemoteBotSessionLookup(null);
+    }
+
+    // 2. Preflight failure rejects BEFORE inserting any DB row.
+    {
+      const { id, deps, insert, rows } = creationFixture();
+      deps.preflightWorktree = vi.fn(async () => ({ ok: false as const, errorCode: 'WORKTREE_UNAVAILABLE', message: 'Not a git repository' }));
+      deps.beginAsyncWorktree = vi.fn();
+      const send = vi.fn();
+      const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
+      const res = await handle('source-device', {
+        ...request, sessionId: id, action: 'create', create: { permissionMode: 'ask', useWorktree: true },
+      });
+      expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: 'Not a git repository' });
+      expect(insert).not.toHaveBeenCalled();
+      expect(rows.size).toBe(0);
+      expect(deps.beginAsyncWorktree).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+    }
+
+    // 3. Fast-path failure rolls back the unsent DB row and never broadcasts or sends.
+    {
+      const { id, deps, rows } = creationFixture();
+      deps.preflightWorktree = vi.fn(async () => ({ ok: true as const, baseRepo: '/destination/project' }));
+      deps.beginAsyncWorktree = vi.fn(async () => ({ state: 'failed' as const, message: 'git worktree add failed' }));
+      deps.rollbackUnsentSession = vi.fn(async (sid) => { rows.delete(sid); });
+      const send = vi.fn();
+      const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
+      const res = await handle('source-device', {
+        ...request, sessionId: id, action: 'create', create: { permissionMode: 'ask', useWorktree: true },
+      });
+      expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: 'git worktree add failed' });
+      expect(deps.rollbackUnsentSession).toHaveBeenCalledWith(id);
+      expect(rows.size).toBe(0);
+      expect(deps.broadcastCreated).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+    }
+
+    // 4. Async provisioning keeps wire wakeKind='created' + additive worktreeStatus='provisioning',
+    // queues the first message, and createRemoteSessionHandoff preserves worktreeStatus end-to-end.
+    {
+      const { id, deps, rows } = creationFixture();
+      deps.preflightWorktree = vi.fn(async () => ({ ok: true as const, baseRepo: '/destination/project' }));
+      deps.beginAsyncWorktree = vi.fn(async () => ({ state: 'provisioning' as const }));
+      const send = vi.fn(async () => ({
+        ok: true as const, agentKind: 'codex', wakeKind: 'queued' as const,
+        targetTitle: 'Big repo fix', targetLastUserSendAt: null,
+      }));
+      const receive = createSessionHandoffHandler({
+        create: createRemoteSessionOpener(deps),
+        supportsAsyncWorktreeCreate: true,
+        send,
+        validate: async (_source, input) => validateRemoteTaskActionReceipt('target-device', input),
+      });
+      const remoteSend = createRemoteSessionHandoff({
+        captureAccess: () => () => {},
+        invoke: async (_device, _channel, args) => {
+          const req = args[0] as { action?: string };
+          if (req.action === 'task-action-capability') {
+            return { ok: true, result: { taskActionVersion: 1, plainRequestBody: 1, ordinaryCreateVersion: 1, ordinaryCreateAsyncWorktree: 1 } };
+          }
+          return { ok: true, result: await receive('source-device', args[0]) };
+        },
+      });
+      const result = await remoteSend(
+        { deviceId: 'target-device', sessionId: id },
+        {
+          message: 'Fix build',
+          sender: async () => ({ sessionId: 'sender-1', title: 'Lead' }),
+          create: async () => ({ permissionMode: 'ask', projectDir: '/destination/project', useWorktree: true }),
+        },
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        wakeKind: 'created',
+        worktreeStatus: 'provisioning',
+        workingDir: '/destination/project',
+      });
+      expect(rows.size).toBe(1);
+      expect(deps.broadcastCreated).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ forceQueue: true }));
+    }
+  });
 });
 
 // Review regression, unit/protocol: successful queued deliveries used to exhaust

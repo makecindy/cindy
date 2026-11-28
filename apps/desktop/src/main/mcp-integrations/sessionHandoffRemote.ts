@@ -290,6 +290,7 @@ export function createRemoteSessionHandoff(deps: {
         workspaceKind: result.workspaceKind === 'project' ? 'project' as const : 'dialogue' as const,
         workingDir: typeof result.workingDir === 'string' ? result.workingDir : '',
         worktreePath: typeof result.worktreePath === 'string' ? result.worktreePath : null,
+        ...(result.worktreeStatus === 'provisioning' ? { worktreeStatus: 'provisioning' as const } : {}),
         model: typeof result.model === 'string' ? result.model : undefined,
         providerId: typeof result.providerId === 'string' ? result.providerId : null,
         effort: remoteSessionCreationSchema.shape.effort.safeParse(result.effort).data ?? null,

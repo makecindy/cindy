@@ -153,6 +153,8 @@ export interface HostRuntimeSelectionDeps {
   getMakerIfReady(): Maker | null;
   /** Publishes a Host event (the event hub). */
   publish(event: Record<string, unknown>): void;
+  /** Cancel any in-flight worktree provisioning when a task is archived or deleted. */
+  cancelWorktreeProvisioning?(sessionId: string): void;
   /** Writes a message row of a task (the Host's message store). */
   createDbMessage(sessionId: string, body: Record<string, unknown>): Promise<unknown>;
   /** The pending handoff summary registry (one for the Host process). */
@@ -322,6 +324,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     // The desktop stops a start still in progress on another computer; the Host starts no task on
     // another computer (send-preflight.ts refuses remote tasks), so none is ever waiting.
     cancelPendingRemoteStart: () => {},
+    cancelWorktreeProvisioning: sessionId => deps.cancelWorktreeProvisioning?.(sessionId),
     discardWorkingDirectoryRecovery: sessionId => deps.inputQueue.discardWorkingDirectoryRecovery(sessionId),
     broadcastSessionRuntimeProjection,
     log: deps.log,

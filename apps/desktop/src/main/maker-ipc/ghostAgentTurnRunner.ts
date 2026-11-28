@@ -3,7 +3,7 @@ import { sanitizeSourceName } from '@cindy/maker-shared/message-source';
 import type { GhostAgentTurnRunner, GhostAgentTurnRunResult } from '../cindy-brain/agentSlot.js';
 
 type GhostAgentSendResult =
-  | { ok: true; targetSessionId: string; wakeKind: 'created' | 'resumed' | 'already-active' | 'queued' }
+  | { ok: true; targetSessionId: string; wakeKind: 'created' | 'resumed' | 'already-active' | 'queued' | 'provisioning' }
   | Extract<GhostAgentTurnRunResult, { ok: false }>;
 
 export interface GhostAgentTurnRunnerDeps {
@@ -66,6 +66,7 @@ export function createGhostAgentTurnRunner(deps: GhostAgentTurnRunnerDeps): Ghos
     ): 'created' | 'resumed' | 'active' | 'queued' => {
       switch (wakeKind) {
         case 'created':
+        case 'provisioning':
           return 'created';
         case 'resumed':
           return 'resumed';

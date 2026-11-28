@@ -4431,6 +4431,34 @@ export class AgentInputCoordinator {
   }
 
   /**
+   * Update queued messages' workingDir after asynchronous worktree provisioning binds
+   * a freshly created worktree onto the session. Keeps queue snapshots & UI projections
+   * aligned alongside DB `preferDbWorkingDir` reconciliation at lazy-create drain time.
+   */
+  updateQueuedWorkingDir(sessionId: string, workingDir: string): void {
+    const state = this.states.get(sessionId);
+    if (!state || state.pendingQueue.length === 0) return;
+    let changed = false;
+    state.pendingQueue = state.pendingQueue.map((entry) => {
+      if (entry.workingDir === workingDir && entry.createOpts.workingDir === workingDir) {
+        return entry;
+      }
+      changed = true;
+      return this.preserveRestoredQueueProvenance(entry, {
+        ...entry,
+        workingDir,
+        createOpts: {
+          ...entry.createOpts,
+          workingDir,
+        },
+      });
+    });
+    if (changed) {
+      this.emit(sessionId);
+    }
+  }
+
+  /**
    * 整条内容替换(文本 + 附件 + mentions),排队消息「复用 composer 编辑」的保存入口。
    * 与 updateText 同一套守卫:steering 中的条目不可改;内容合并规则(clientId/createdAt/
    * origin/createOpts 锚定原条目)收敛在 updateQueuedMessageContent。空内容(无文本且无

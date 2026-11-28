@@ -25,6 +25,7 @@ import { readAttachedWorktreeBranch } from './attachedBranch';
 import { gitExec, GitExecError } from './gitExec';
 import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
 import { buildMultiboxRestoreArgs, deferCarriedMultiboxConfig, logMultiboxAddResult, shouldUseMultibox } from './multibox';
+import { withMultiboxHeavyOpQueue } from './worktreeConcurrency';
 import { applyWorktreeIncludeFile } from './includePatternsEngine';
 import { pathKey } from './liveSessionRefs';
 import {
@@ -263,7 +264,9 @@ async function addRestoredWorktree(
   // that path, defer only the just-copied base-identical config until snapshot apply.
   // Errors stay visible, never retried as a plain `git worktree add`.
   if (await shouldUseMultibox(baseRepo)) {
-    const { stdout } = await gitExec(buildMultiboxRestoreArgs(worktreePath, branch), baseRepo);
+    const { stdout } = await withMultiboxHeavyOpQueue(() =>
+      gitExec(buildMultiboxRestoreArgs(worktreePath, branch), baseRepo),
+    );
     logMultiboxAddResult(worktreePath, stdout);
     if (snapshot) await deferCarriedMultiboxConfig(baseRepo, worktreePath, snapshot);
     return;

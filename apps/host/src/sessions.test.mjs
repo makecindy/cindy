@@ -5,6 +5,8 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getTableColumns, getTableName } from 'drizzle-orm';
 
 import { listActiveSessions, listRunningSessions } from './sessions.mjs';
+import { createInputQueue } from './agent/input-queue.mjs';
+import { WORKTREE_PROVISIONING_LOCK_ID } from '../../desktop/src/shared/worktreeProvisioning.ts';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { createHostMessageStore, createHostMessageRecovery } from './message-store.ts';
 import { createHostEventPersistence } from './agent/event-persistence.ts';
@@ -46,6 +48,118 @@ test('restores runtime state using session identities and the negotiated snapsho
   ]);
   assert.deepEqual(listRunningSessions(maker, { summary: true, snapshotVersion: 2 }), { format: 'active-sessions-v2', sessions });
   assert.deepEqual(listRunningSessions(null), []);
+});
+
+// P1-1 unit: Node Host listRunningSessions must surface provisioning/failed worktree
+// sessions with mobile-compatible activityPhase plus additive worktreeProvisioning* fields,
+// without duplicating sessions already live in Maker.
+test('listRunningSessions surfaces worktree provisioning and failure entries without duplicating live sessions', () => {
+  const maker = { listActiveSessions: () => [
+    { id: 'live-1', agentKind: 'codex', workDir: '/w', capabilities: {}, isTurnRunning: () => true },
+  ] };
+  const snapshots = () => [
+    { sessionId: 'live-1', status: 'provisioning', stage: 'creating', startedAt: 100 },
+    { sessionId: 'prov-1', status: 'provisioning', stage: 'queued', startedAt: 200 },
+    { sessionId: 'fail-1', status: 'failed', startedAt: 300, error: 'git multibox add failed' },
+  ];
+  const v2 = listRunningSessions(maker, { summary: true, snapshotVersion: 2 }, () => new Map(), snapshots);
+  assert.equal(v2.format, 'active-sessions-v2');
+  assert.deepEqual(v2.sessions.map((s) => s.sessionId), ['live-1', 'prov-1', 'fail-1']);
+  assert.equal(v2.sessions[0].worktreeProvisioningStatus, 'provisioning');
+  assert.deepEqual(v2.sessions[1], {
+    sessionId: 'prov-1',
+    agentKind: 'claude-code',
+    workDir: '',
+    capabilities: undefined,
+    isTurnRunning: false,
+    activityPhase: 'running',
+    activityAttention: false,
+    worktreeProvisioningStatus: 'provisioning',
+    worktreeProvisioningStage: 'queued',
+    worktreeProvisioningStartedAt: 200,
+  });
+  assert.deepEqual(v2.sessions[2], {
+    sessionId: 'fail-1',
+    agentKind: 'claude-code',
+    workDir: '',
+    capabilities: undefined,
+    isTurnRunning: false,
+    activityPhase: 'error',
+    activityAttention: true,
+    worktreeProvisioningStatus: 'failed',
+    worktreeProvisioningStartedAt: 300,
+    worktreeProvisioningError: 'git multibox add failed',
+  });
+});
+
+// P1-1 unit: Node Host createInputQueue holds worktree-provisioning locks across commands,
+// refuses direct send/steer and external unlock attempts, and updates queued workingDir on ready.
+test('Host input queue enforces worktree-provisioning lock, blocks direct send, and rewrites queued workingDir', async () => {
+  const owner = { userId: 'u1', clientEpoch: 1 };
+  let blocked = true;
+  let workingDir = '/repo';
+  const sent = [];
+  const queue = createInputQueue({
+    getOwner: () => owner,
+    getMaker: () => ({
+      getSession: () => null,
+      createSession: async (opts) => {
+        sent.push(opts.workingDir);
+        return {
+          id: opts.id,
+          agentKind: opts.agentKind,
+          workDir: opts.workingDir,
+          isTurnRunning: () => false,
+          send: async () => ({ accepted: true }),
+          setEventListener: () => {},
+          setInteractionListener: () => {},
+        };
+      },
+    }),
+    readSession: async (id) => ({
+      id,
+      agentKind: 'codex',
+      model: 'gpt-5',
+      workingDir,
+      permissionMode: 'ask',
+      planModeEnabled: false,
+      status: 'active',
+    }),
+    isWorktreeProvisioningBlocked: (id) => id === 'prov-task' && blocked,
+    loadQueueSnapshot: async () => [],
+    persistQueueSnapshot: async () => {},
+    getPersistedClientIds: async () => new Set(),
+  });
+
+  // External unlock of worktree-provisioning must be refused.
+  await assert.rejects(
+    queue.setInteractionLock('prov-task', WORKTREE_PROVISIONING_LOCK_ID, false),
+    /Worktree provisioning lock is managed by the host/,
+  );
+
+  // Direct send while blocked must be refused before reaching the executor.
+  await assert.rejects(
+    queue.send('prov-task', 'hi', {}, {}),
+    /Worktree is not ready yet/,
+  );
+
+  // Enqueue holds the item without starting the agent while provisioning is blocked.
+  const proj = await queue.enqueue('prov-task', { clientId: 'c1', text: 'first task prompt' });
+  assert.equal(proj.pendingQueue.length, 1);
+  assert.equal(proj.pendingQueue[0].workingDir, '/repo');
+  assert.deepEqual(sent, []);
+
+  // Host updates workingDir on completion and lifts the provisioning lock cleanly.
+  workingDir = '/repo/.cindy-worktrees/fresh-wt';
+  queue.updateQueuedWorkingDir('prov-task', workingDir);
+  const afterRewrite = queue.projection('prov-task');
+  assert.equal(afterRewrite.pendingQueue[0].workingDir, workingDir);
+  assert.equal(afterRewrite.pendingQueue[0].createOpts.workingDir, workingDir);
+
+  blocked = false;
+  queue.setWorktreeProvisioningLock('prov-task', false);
+  const unlocked = queue.projection('prov-task');
+  assert.ok(!unlocked.queueInteractionLocks.includes(WORKTREE_PROVISIONING_LOCK_ID));
 });
 
 function sessionListDb(t) {

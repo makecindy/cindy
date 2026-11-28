@@ -33,6 +33,8 @@ export interface TaskDigestActivity {
   lastActivityAtMs?: number | null;
   runtimeGeneration?: number | null;
   route?: TaskDigestCurrentRoute | null;
+  /** Redacted error from asynchronous worktree provisioning failure (not a model error). */
+  provisioningError?: string | null;
 }
 
 export interface TaskDigestExchange {
@@ -85,6 +87,8 @@ export interface TaskDigestDeps {
 /** 观察层没有状态行时的保守推断:与 phase.ts 同一方向,不猜 usage-limit。 */
 export function fallbackDigestPhase(activity: TaskDigestActivity | null): TaskDigestPhase {
   switch (activity?.phase) {
+    case 'provisioning':
+      return 'provisioning';
     case 'running':
       return 'running';
     case 'needs-interaction':
@@ -245,7 +249,8 @@ export function createTaskDigestReader(deps: TaskDigestDeps) {
       ? await settle(() => deps.local.readError?.(key, activity, facts) ?? Promise.resolve(null), null)
       : null;
     // 换模型只用来救出错和用量上限(跟进规则也只在这两种相位用它);其余相位不给建议。
-    const suggestedRoute = current && current.harness !== 'acp' && (phase === 'errored' || phase === 'usage-limit')
+    // worktree 准备失败属于环境/仓库问题，换模型无济于事，不给换模型建议。
+    const suggestedRoute = current && current.harness !== 'acp' && !activity?.provisioningError && (phase === 'errored' || phase === 'usage-limit')
       ? await settle(() => deps.local.suggestRoute({
         callerSessionId: args.callerSessionId,
         targetSessionId: key,

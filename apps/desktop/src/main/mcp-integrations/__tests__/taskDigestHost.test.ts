@@ -316,3 +316,101 @@ it('reports the pause of a stopped ordinary task in its registered digest', asyn
     duringTurn: false, stopped: true, resumed: false, empty: false,
   });
 });
+
+// P1-1 unit: local and remote get_task_digest must surface phase='provisioning' during
+// background worktree creation and phase='errored' with redacted error + no model route
+// suggestion when worktree provisioning fails.
+describe('desktop task digest worktree provisioning visibility', () => {
+  it('reports local provisioning phase and failed provisioning error without suggesting a model switch', async () => {
+    const { host, deps, read } = setup('completed', null);
+    const suggestRoute = vi.spyOn(deps.local, 'suggestRoute').mockReturnValue({
+      harness: 'codex', providerId: 'alt', model: 'alt-model', reason: 'should-not-run',
+    } as never);
+    const startedAt = Date.now() - 120_000;
+    host.readWorktreeProvisioning = () => ({
+      sessionId: 'task',
+      status: 'provisioning',
+      stage: 'creating',
+      startedAt,
+      updatedAt: startedAt,
+    });
+    const prov = await read({ sessionId: 'task' });
+    expect(prov).toMatchObject({
+      ok: true,
+      digest: { phase: 'provisioning', error: null, suggested_route: null },
+    });
+    if (prov.ok) {
+      expect(prov.digest.elapsed_minutes).toBeGreaterThanOrEqual(2);
+    }
+    expect(host.readRuntimeFacts).not.toHaveBeenCalled();
+    expect(suggestRoute).not.toHaveBeenCalled();
+
+    host.readWorktreeProvisioning = () => ({
+      sessionId: 'task',
+      status: 'failed',
+      startedAt,
+      updatedAt: Date.now(),
+      error: 'git multibox add failed Authorization: Bearer secret-tok /Users/test/repo',
+    });
+    const failed = await read({ sessionId: 'task' });
+    expect(failed).toMatchObject({
+      ok: true,
+      digest: { phase: 'errored', suggested_route: null },
+    });
+    if (failed.ok) {
+      expect(failed.digest.error).toContain('git multibox add failed');
+      expect(failed.digest.error).not.toContain('secret-tok');
+      expect(failed.digest.error).not.toContain('/Users/test');
+    }
+    expect(suggestRoute).not.toHaveBeenCalled();
+  });
+
+  it('reports remote provisioning and failed provisioning from maker:list-active additive fields', async () => {
+    const { host, read } = setup('completed', null);
+    const startedAt = Date.now() - 180_000;
+    vi.mocked(host.invokeRemote).mockImplementation(async (_device, channel) => ({
+      ok: true,
+      result: channel === 'local-db:sessions:get' ? row :
+        channel === 'maker:list-active' ? {
+          format: 'active-sessions-v2',
+          sessions: [{
+            sessionId: 'task',
+            isTurnRunning: false,
+            activityPhase: 'running',
+            worktreeProvisioningStatus: 'provisioning',
+            worktreeProvisioningStage: 'creating',
+            worktreeProvisioningStartedAt: startedAt,
+          }],
+        } : [],
+    }));
+    const prov = await read({ sessionId: 'mac-mini::task' });
+    expect(prov).toMatchObject({
+      ok: true,
+      digest: { phase: 'provisioning', error: null, suggested_route: null },
+    });
+    if (prov.ok) {
+      expect(prov.digest.elapsed_minutes).toBeGreaterThanOrEqual(3);
+    }
+
+    vi.mocked(host.invokeRemote).mockImplementation(async (_device, channel) => ({
+      ok: true,
+      result: channel === 'local-db:sessions:get' ? row :
+        channel === 'maker:list-active' ? {
+          format: 'active-sessions-v2',
+          sessions: [{
+            sessionId: 'task',
+            isTurnRunning: false,
+            activityPhase: 'error',
+            worktreeProvisioningStatus: 'failed',
+            worktreeProvisioningStartedAt: startedAt,
+            worktreeProvisioningError: 'multibox failed: disk full',
+          }],
+        } : [],
+    }));
+    const failed = await read({ sessionId: 'mac-mini::task' });
+    expect(failed).toMatchObject({
+      ok: true,
+      digest: { phase: 'errored', error: 'multibox failed: disk full', suggested_route: null },
+    });
+  });
+});

@@ -61,6 +61,7 @@ import {
   recordBackgroundCheckoutFailure,
 } from './backgroundCheckoutFailure';
 import { withWorktreeResourceLock } from './resourceLock';
+import { withMultiboxHeavyOpQueue, withRepoWorktreeQueue } from './worktreeConcurrency';
 import {
   acquireWorktreeRuntimeLease,
   recordWorktreeRuntimeLeaseChild,
@@ -354,7 +355,6 @@ async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-const createWorktreeQueues = new Map<string, Promise<void>>();
 const precreatedWorktreeOperationQueues = new Map<string, Promise<void>>();
 interface ActivePrecreatedCreate {
   controller: AbortController;
@@ -421,40 +421,6 @@ async function isWorktreeDirectoryAbsentOnDisk(...candidates: Array<string | und
     }
   }
   return true;
-}
-
-async function withCreateWorktreeQueue<T>(
-  baseRepo: string,
-  fn: (releaseQueue: () => void) => Promise<T>,
-): Promise<T> {
-  const key = path.resolve(baseRepo);
-  const previous = createWorktreeQueues.get(key) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.then(
-    () => current,
-    () => current,
-  );
-  createWorktreeQueues.set(key, queued);
-
-  let released = false;
-  const release = () => {
-    if (released) return;
-    released = true;
-    releaseCurrent();
-    if (createWorktreeQueues.get(key) === queued) {
-      createWorktreeQueues.delete(key);
-    }
-  };
-
-  await previous.catch(() => {});
-  try {
-    return await fn(release);
-  } finally {
-    release();
-  }
 }
 
 /**
@@ -1078,11 +1044,23 @@ export interface CreateWorktreeOptions {
   assertWriteAllowed?: () => void;
   /** Local task creation can become stale while queued or while Git is running. */
   assertCurrent?: () => void;
+  /** External abort signal (e.g. task deleted/archived during async provisioning). */
+  signal?: AbortSignal;
+  /** Optional stage updates while waiting in queue vs executing Git creation. */
+  onStageChange?: (stage: 'queued' | 'creating') => void;
 }
 
 export async function createWorktree(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
   options?.assertWriteAllowed?.();
   const controller = new AbortController();
+  const onExternalAbort = () => controller.abort(options?.signal?.reason);
+  if (options?.signal) {
+    if (options.signal.aborted) {
+      controller.abort(options.signal.reason);
+    } else {
+      options.signal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+  }
   const normalizedRecoveryKey = typeof req.recoveryKey === 'string' && req.recoveryKey.trim()
     ? req.recoveryKey.trim()
     : undefined;
@@ -1091,13 +1069,33 @@ export async function createWorktree(req: CreateWorktreeReq, options?: CreateWor
     ...(normalizedRecoveryKey ? { recoveryKey: normalizedRecoveryKey } : {}),
   };
   activePrecreatedCreates.set(req.sessionId, activeEntry);
-  const create = () => withCreateWorktreeQueue(req.baseRepo, (releaseRepoQueue) => {
-    worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
-    return createWorktreeInner(req, options, releaseRepoQueue, activeEntry);
-  });
+  const create = async (): Promise<CreateWorktreeResp> => {
+    try {
+      return await withRepoWorktreeQueue(
+        req.baseRepo,
+        (releaseRepoQueue) => {
+          worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
+          return createWorktreeInner(req, options, releaseRepoQueue, activeEntry);
+        },
+        {
+          signal: controller.signal,
+          onQueueWaitStart: () => options?.onStageChange?.('queued'),
+          onQueueAcquired: () => options?.onStageChange?.('creating'),
+        },
+      );
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return { ok: false, error: classifyError(classifyAny(err)) };
+      }
+      throw err;
+    }
+  };
   try {
     return await withPrecreatedWorktreeOperationQueue(req.sessionId, create);
   } finally {
+    if (options?.signal) {
+      options.signal.removeEventListener('abort', onExternalAbort);
+    }
     if (activePrecreatedCreates.get(req.sessionId) === activeEntry) {
       activePrecreatedCreates.delete(req.sessionId);
     }
@@ -1269,7 +1267,15 @@ async function createWorktreeInner(
       if (useMultibox) {
         try {
           const added = await timed('git multibox add', () =>
-            gitExec(buildMultiboxAddArgs(branch, worktreePath, sourceBranch), baseRepo, createGitOpts));
+            withMultiboxHeavyOpQueue(
+              () => gitExec(buildMultiboxAddArgs(branch, worktreePath, sourceBranch), baseRepo, createGitOpts),
+              {
+                signal,
+                onQueueWaitStart: () => options?.onStageChange?.('queued'),
+                onQueueAcquired: () => options?.onStageChange?.('creating'),
+              },
+            ),
+          );
           logMultiboxAddResult(worktreePath, added.stdout);
         } catch (err) {
           return { ok: false, error: classifyError(classifyAny(err)) };
