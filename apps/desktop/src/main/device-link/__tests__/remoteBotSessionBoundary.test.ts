@@ -153,6 +153,35 @@ it('filters batch detail reads using the shared fresh visibility lookup', async 
   expect(batch).toHaveBeenCalledTimes(2);
 });
 
+// Unit, plugin-readonly-project-tasks: a repeated status reply must recheck the task itself.
+// Ordinary detail rows can carry an origin and preview. Neither belongs in this projection.
+it.each([false, true])('delivers only id and status for currently ordinary tasks (batch=%s)', async (useBatch) => {
+  let access: 'ordinary' | 'visible' | 'background' | 'hidden' | 'missing' = 'ordinary';
+  const single = vi.fn(async () => access);
+  const batch = vi.fn(async (ids: readonly string[]) => new Map(ids.map(id => [id, access])));
+  setRemoteBotSessionLookup(single, useBatch ? batch : null);
+  const status = { id: 's', status: 'awaiting' };
+  const row = {
+    ...status,
+    get messagePreview(): never { throw new Error('read message preview'); },
+    get createdBySession(): never { throw new Error('read task origin'); },
+  };
+  const project = () => projectRemoteSessionResult('local-db:sessions:get-many', { sessions: [row] });
+  expect(await project()).toEqual({ sessions: [status] });
+  for (const denied of ['visible', 'background', 'hidden', 'missing'] as const) {
+    access = denied;
+    expect(await project()).toEqual({ sessions: [] });
+  }
+  if (useBatch) {
+    expect(batch).toHaveBeenLastCalledWith(['s'], 'sidebar-status');
+    expect(single).not.toHaveBeenCalled();
+  } else {
+    expect(single).toHaveBeenLastCalledWith('s', 'sidebar-status');
+  }
+  setRemoteBotSessionLookup(null);
+  await expect(project()).rejects.toThrow('HOST_NOT_READY');
+});
+
 it('checks every target of a label batch and filters only task rows in label results', async () => {
   setRemoteBotSessionLookup(async (id) => (id === 'hidden' ? 'hidden' : 'ordinary'));
   await expect(

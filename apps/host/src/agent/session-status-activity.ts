@@ -18,6 +18,7 @@ import {
   getNextAgentIslandTimerAt,
   patchAgentIslandMetadata,
   pruneAgentIslandSessions,
+  readSessionActivityFlags,
   removeAgentIslandSession,
   resetAgentIslandState,
   setAgentIslandSessionDisplaySuppressed,
@@ -558,8 +559,8 @@ export function createHostSessionActivityTracker(ports: HostSessionActivityTrack
       return buildActivityMap().get(sessionId) ?? null;
     },
 
-    getSessionActivityMap(): Map<string, HostSessionActivitySummary> {
-      return buildActivityMap();
+    getSessionActivityMap(ids?: Iterable<string>): Map<string, HostSessionActivitySummary> {
+      return ids ? readSessionActivityFlags(state, ids) : buildActivityMap();
     },
 
     getForegroundTaskActivity(onlyIfChanged = false): ForegroundHostTaskActivity | null {

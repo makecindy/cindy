@@ -38,6 +38,8 @@ import { getDbClient } from '../../desktop/src/main/localDb/client/current.js';
 import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.js';
 import { TASK_TAG_CHANNEL } from '../../desktop/src/main/localDb/ipc/taskTagService.js';
 import { createRemoteHistoryHandler } from '../../desktop/src/main/localDb/ipc/history.js';
+import { listPluginSessionStatuses } from '../../desktop/src/main/maker-ipc/pluginObserveTasks.js';
+import { parseSessionStatusIds, SESSION_STATUS_PROJECTION } from '../../desktop/src/shared/pluginObserve.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from '../../desktop/src/main/localDb/ipc/botRemoteSessionAccess.js';
 import { createInteractionProjection, projectInteractionDismissedForRemote } from '../../desktop/src/main/cindy-brain/interactionProjection.js';
 import { RECOVERY_CHECKPOINT_MARKER } from '../../desktop/src/main/maker-ipc/recoveryMarker.js';
@@ -180,7 +182,8 @@ export interface HostDeviceLinkPorts {
   hasPendingQueuedWork?(sessionId: string): boolean;
   readSessionActivityMeta?(sessionId: string): Promise<{ title: string | null; workingDir: string | null; agentKind: string | null } | null>;
   getHistoryToolName?(sessionId: string, toolUseId: string): string;
-  sessionInTurn(sessionId: string): boolean;
+  sessionInTurn(sessionId: string, options?: { excludeSettling?: boolean }): boolean;
+  hasPendingInteraction(sessionId: string): boolean;
   onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
@@ -252,6 +255,7 @@ function readGitSafetyWire() {
   };
 }
 
+const SESSION_BATCH_CHANNEL = 'local-db:sessions:get-many';
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUntil', 'discardWorktreeChanges', 'deleteTarget', 'archiveSideChatParentId']);
 
 export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
@@ -321,6 +325,28 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   registry.register('local-db:messages:around-client-id', ([sessionId, clientId, opts]) => {
     assertSameAccountHistoryAccess();
     return call('/api/messages/around-client-id', { sessionId, clientId, opts });
+  });
+  registry.register(SESSION_BATCH_CHANNEL, async ([request]) => {
+    assertSameAccountHistoryAccess();
+    const ids = parseSessionStatusIds(requireObject(request).ids);
+    if (!ids) throwIpcError('INVALID_PARAMS', 'Invalid session status ids');
+    const sessions = await listPluginSessionStatuses(ids, knownIds => {
+      const sessionIds = [...knownIds];
+      const flags = activityTracker.getSessionActivityMap(sessionIds);
+      for (const id of sessionIds) {
+        const tracked = flags.get(id);
+        if (tracked?.phase === 'needs-interaction' || (tracked?.phase === 'error' && tracked.attention)) continue;
+        if (deps.hasPendingInteraction(id)) {
+          flags.set(id, { phase: 'needs-interaction', attention: true });
+        } else if (!tracked && deps.sessionInTurn(id, { excludeSettling: true })) {
+          // An explicit read can clear the terminal while the queue still holds the turn for history writes.
+          flags.set(id, { phase: 'running', attention: false });
+        }
+      }
+      return flags;
+    });
+    if (!current()) throwIpcError('PERMISSION_DENIED', 'Host account changed');
+    return { sessions };
   });
   registry.register('maker:usage:model-pricing', async () => toLegacyUsdModelPricing(await call('/api/usage/model-pricing', {})));
   // Coexistence plan A: while a desktop uses this profile, a new task's runtime and a plugin page's
@@ -818,7 +844,13 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     dispatchLocalInvoke: invoke,
     // Registration above is synchronous, before either link starts. A retiring owner
     // leaves the verdict unknown, including for a late request after stop clears the registry.
-    hasLocalChannel: channel => current() ? registry.has(channel) : undefined,
+    hasLocalChannel: (channel, args) => {
+      if (!current()) return undefined;
+      if (channel !== SESSION_BATCH_CHANNEL) return registry.has(channel);
+      // Older controllers fall back to single-session GETs on CHANNEL_NOT_ALLOWED for an array request.
+      const request = args?.[0];
+      return !!request && typeof request === 'object' && 'projection' in request && request.projection === SESSION_STATUS_PROJECTION;
+    },
     assertRemoteBotInvocationAllowed: botBoundary.assertRemoteBotInvocationAllowed,
     projectRemoteSessionResult: botBoundary.projectRemoteSessionResult,
     projectRemoteBotPush: botBoundary.projectRemoteBotPush,
@@ -1165,7 +1197,15 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify'].includes(event.channel))
           emit(event.channel, event.payload);
         break;
-      case 'interaction_request': emit(MAKER_PUSH.INTERACTION_REQUEST, { sessionId: id, request: event.request }); break;
+      case 'interaction_request':
+        emit(MAKER_PUSH.INTERACTION_REQUEST, { sessionId: id, request: event.request });
+        // The file confirmation bridge supplies the pending flag directly.
+        if (event.request?.kind === 'ghost_grant_confirm') return;
+        if (event.request?.kind === 'plugin_setup' && event.request.terminal === true) {
+          activityTracker.handleEvent({ type: 'interaction_dismissed', sessionId: id, requestId: event.request.requestId });
+          return;
+        }
+        break;
       case 'interaction_dismissed': emit(MAKER_PUSH.INTERACTION_DISMISSED, { sessionId: id, requestId: event.requestId, reason: event.reason }); break;
       case 'input_projection': emit(MAKER_PUSH.INPUT_PROJECTION, event.projection); break;
       case 'message_created':

@@ -297,8 +297,8 @@ export class GhostSetupInteractionBridge {
   }> {
     return Array.from(this.pending.values())
       .filter(
-        (entry) => !entry.completed && entry.isTargetCurrent?.() !== false &&
-          (sessionId === undefined || entry.sessionId === sessionId),
+        (entry) => !entry.completed && (sessionId === undefined || entry.sessionId === sessionId) &&
+          entry.isTargetCurrent?.() !== false,
       )
       .map((entry) => ({ sessionId: entry.sessionId, request: entry.snapshot }));
   }

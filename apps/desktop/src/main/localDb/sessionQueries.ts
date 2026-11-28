@@ -4,7 +4,7 @@ import { normalizeTaskTags } from '@cindy/maker-shared';
 import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient';
 import { imBindings, sessions } from './schema';
-import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource';
+import { ordinaryTaskSourceFilter } from './sessionVisibility.js';
 import { LIST_PREVIEW_EXTRACT_SQL, LATEST_VISIBLE_PREVIEW_FILTER_SQL } from './sessionListProjection';
 import { sessionToCamel, type SessionRowWithCount } from './mapper';
 import { projectSessionContextWindow, type ContextWindowSession } from '../../shared/sessionContextWindow';
@@ -19,8 +19,7 @@ const OUTER_SESSION_CLEARED_AT_SQL = sql`${sql.identifier('sessions')}.${sql.ide
 /** Main task list: exact teammate lanes join ordinary sources; private chat lanes keep their own entry. */
 export function ordinaryTaskListFilter(): SQL | undefined {
   return and(
-    or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
-      and(eq(sessions.source, 'side-chat'), eq(sessions.sideChatPromoted, true)),
+    or(ordinaryTaskSourceFilter(),
       and(eq(sessions.source, 'bot'), sql`EXISTS (
         SELECT 1 FROM bot_session_links task_link
         JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id

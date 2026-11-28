@@ -31,7 +31,8 @@ beforeEach(() => {
   beforeReply = undefined;
   sqlite = new Database(':memory:');
   sqlite.exec(`
-    CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, hidden_at INTEGER);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, hidden_at INTEGER,
+      status TEXT NOT NULL DEFAULT 'active', orca_role TEXT, side_chat_promoted INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, hidden_at INTEGER, status TEXT);
     CREATE TABLE bot_session_links (session_id TEXT UNIQUE, bot_id TEXT);
     INSERT INTO bot_profiles VALUES ('visible', NULL, 'active'), ('hidden', 1, 'active'), ('archived', NULL, 'archived');
@@ -93,6 +94,33 @@ describe('remote visibility batch SQL', () => {
       .toEqual({ format: 'active-sessions-v2', sessions: [] });
     expect(await projectRemoteSessionResult('local-db:sessions:get', { id: 'background' })).toEqual({ id: 'background' });
     expect(await projectRemoteSessionResult('local-db:sessions:get-many', rows)).toEqual(rows);
+  });
+
+  // Integration: a queued sidebar-status reply loses access if the task is no longer observable.
+  it('rechecks the same task scope on every status delivery in one database read', async () => {
+    const ids = ['archived-task', 'removed', 'hidden-task', 'linked', 'worker', 'review', 'side-chat'];
+    const insert = sqlite.prepare("INSERT INTO sessions(id, source) VALUES (?, 'desktop')");
+    for (const id of ids) insert.run(id);
+    const reply = { sessions: ids.map(id => ({ id, status: 'idle' })) };
+    const deliver = () => projectRemoteSessionResult('local-db:sessions:get-many', reply);
+    expect(await deliver()).toEqual(reply);
+    sqlite.exec(`
+      UPDATE sessions SET status = 'archived' WHERE id = 'archived-task';
+      UPDATE sessions SET status = 'deleted' WHERE id = 'removed';
+      UPDATE sessions SET hidden_at = 1 WHERE id = 'hidden-task';
+      INSERT INTO bot_session_links VALUES ('linked', 'visible');
+      UPDATE sessions SET orca_role = 'worker' WHERE id = 'worker';
+      UPDATE sessions SET source = 'review' WHERE id = 'review';
+      UPDATE sessions SET source = 'side-chat' WHERE id = 'side-chat';
+    `);
+    expect(await deliver()).toEqual({ sessions: [{ id: 'archived-task', status: 'idle' }] });
+    expect(calls).toHaveLength(2);
+    sqlite.exec("UPDATE sessions SET side_chat_promoted = 1 WHERE id = 'side-chat'");
+    expect(await deliver()).toEqual({ sessions: [
+      { id: 'archived-task', status: 'idle' }, { id: 'side-chat', status: 'idle' },
+    ] });
+    beforeReply = () => { state.owner++; };
+    expect(await deliver()).toEqual({ sessions: [] });
   });
 
   it('discards already read chunks and stops issuing SQL if the data owner changes', async () => {

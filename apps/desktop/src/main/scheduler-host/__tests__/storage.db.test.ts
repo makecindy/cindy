@@ -12,7 +12,7 @@ import { mkdtempSync, rmdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import * as schema from '../../localDb/schema';
@@ -23,6 +23,7 @@ import { applyAgentSwitchToSessionRowWithPorts } from '../../localDb/agentSwitch
 import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
 import { DrizzleScheduleStorage as CoreDrizzleScheduleStorage } from '../storage';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
+import { scheduleUnreadSessionStatus } from '../scheduleUnread.js';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
   return {
@@ -222,6 +223,7 @@ const SCHEDULER_DDL = [
     )
   `,
   'CREATE INDEX idx_schedule_runs_schedule ON schedule_runs(schedule_id, fired_at)',
+  'CREATE INDEX idx_schedule_runs_session_latest ON schedule_runs(session_id, fired_at, id) WHERE session_id IS NOT NULL',
   `CREATE INDEX idx_schedule_runs_unread_terminal ON schedule_runs(schedule_id, status, fired_at)
     WHERE read_at IS NULL AND status IN ('success', 'failed', 'aborted', 'interrupted')`,
   `
@@ -783,6 +785,45 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  // DB tier: direct status reads must share the native 200-row window for historical unread runs.
+  // One unrelated schedule makes a global window read observable without depending on a query plan string.
+  it('opens the native unread window only for historical candidates and only once per batch', async () => {
+    const { sqlite, db, storage, close } = createStorageHarness();
+    try {
+      for (const id of ['result', 'failure', 'noise']) await storage.insert(baseSchedule({ id }));
+      sqlite.exec(`INSERT INTO sessions (id, title) VALUES ('plain',''), ('latest',''), ('failed',''), ('a',''), ('b','');
+        INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at, status, read_at) VALUES
+          ('old-success', 'result', 'latest', 1, 'success', 0),
+          ('old-failure', 'failure', 'failed', 1, 'failed', NULL),
+          ('new-skip', 'failure', 'failed', 2, 'skipped', NULL),
+          ('tie-a', 'failure', 'a', 3, 'interrupted', NULL),
+          ('read-failure', 'failure', 'a', 4, 'failed', 5),
+          ('tie-b', 'result', 'b', 3, 'success', NULL),
+          ('read-success', 'result', 'b', 4, 'success', 5);
+        WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 199)
+        INSERT INTO schedule_runs (id, schedule_id, fired_at, status)
+        SELECT 'noise-' || x, 'noise', 10 + x, 'aborted' FROM n;`);
+      let windowReads = 0;
+      sqlite.function('observe_source', (id, source) => {
+        if (id === 'noise') windowReads++;
+        return source;
+      });
+      sqlite.exec('CREATE TEMP VIEW schedules AS SELECT id, observe_source(id, source) AS source FROM main.schedules');
+      const read = (ids: string[]) => db.select({ status: scheduleUnreadSessionStatus }).from(schema.sessions)
+        .where(inArray(schema.sessions.id, ids)).orderBy(schema.sessions.id);
+      expect(await read(['failed', 'latest', 'plain'])).toEqual([{ status: 'error' }, { status: 'done' }, { status: null }]);
+      expect(windowReads).toBe(0);
+      expect(await read(['b'])).toEqual([{ status: 'done' }]);
+      const oneScan = windowReads;
+      expect(oneScan).toBeGreaterThan(0);
+      windowReads = 0;
+      expect(await read(['a', 'b'])).toEqual([{ status: null }, { status: 'done' }]);
+      expect(windowReads).toBe(oneScan);
+      sqlite.exec("UPDATE schedule_runs SET read_at = 1000 WHERE id = 'noise-1'");
+      expect(await read(['a'])).toEqual([{ status: 'error' }]);
+    } finally { close(); }
+  });
+
   // #10011, DB tier: the existing cap test only checks returned rows. One extra
   // eligible row must not have its hook parsed by listSidebarIndexRuns. Delegate
   // the instrumented function to native SQLite so JSON semantics stay unchanged.
@@ -1030,6 +1071,37 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(readRows.some((r) => r.runId === 'legacy-check')).toBe(false);
       expect(readRows.some((r) => r.runId === 'execution')).toBe(true);
       expect((await harness.storage.listRuns('sch-1', 50)).some((r) => r.id === 'legacy-check')).toBe(true);
+    } finally { harness.close(); }
+  });
+
+  // DB tier: the full sidebar snapshot cannot catch an uncorrelated single-table projection.
+  // This reads one known ID through error, recovered legacy check, success and read receipt.
+  it('projects public unread runs for the requested session and observes recovery on the same automation', async () => {
+    const harness = createStorageHarness();
+    try {
+      harness.sqlite.exec("INSERT INTO sessions (id, title) VALUES ('task', 'Task'), ('other', 'Other')");
+      await harness.storage.insert(baseSchedule({ id: 'public' }));
+      await harness.storage.insert(baseSchedule({ id: 'legacy' }));
+      await harness.storage.insert(baseSchedule({ id: 'routine', source: 'bot' }));
+      harness.sqlite.exec(`UPDATE schedules SET source = NULL WHERE id = 'legacy';
+        INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at, status, error_msg, pre_run_hook_result) VALUES
+          ('result', 'public', 'task', 1, 'success', NULL, NULL),
+          ('check', 'legacy', 'task', 2, 'failed', 'pre-run hook failed: old format', '{broken'),
+          ('aborted', 'public', 'task', 3, 'aborted', NULL, NULL),
+          ('private', 'routine', 'task', 4, 'failed', NULL, NULL),
+          ('unrelated', 'public', 'other', 5, 'interrupted', NULL, NULL)`);
+      const read = async () => {
+        const [row] = await harness.db.select({ status: scheduleUnreadSessionStatus }).from(schema.sessions)
+          .where(eq(schema.sessions.id, 'task'));
+        return row.status;
+      };
+      expect(await read()).toBe('error');
+      // Same timestamp, later run ID. The check can recover a failure in another session.
+      harness.sqlite.exec(`INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at, status, pre_run_hook_result)
+        VALUES ('recheck', 'legacy', 'other', 2, 'skipped', '{"checkSucceeded":true}')`);
+      expect(await read()).toBe('done');
+      await harness.storage.markRunRead('result');
+      expect(await read()).toBeNull();
     } finally { harness.close(); }
   });
 
@@ -2609,6 +2681,8 @@ it('tracks transient precheck outage duration in SQLite, skips session bump for 
       )
       .run('sess-pr', 'PR #1', 'claude-code', '/tmp/proj', 1_000, 1_000);
     await storage.insert(baseSchedule({ targetSessionId: 'sess-pr' }));
+    const sessionUnread = h.db.select({ status: scheduleUnreadSessionStatus }).from(schema.sessions)
+      .where(eq(schema.sessions.id, 'sess-pr'));
 
     const rateLimitHook = {
       status: 'failed' as const,
@@ -2640,6 +2714,7 @@ it('tracks transient precheck outage duration in SQLite, skips session bump for 
     expect(sessionAfterQuiet.updated_at).toBe(1_000);
     expect(broadcastSessionPatched).not.toHaveBeenCalled();
     expect(await storage.getUnreadRunCount()).toBe(0);
+    expect(sessionUnread.get()).toEqual({ status: null });
     const indexAfterQuiet = await storage.listSidebarIndexRuns();
     expect(indexAfterQuiet.find((r) => r.runId === 'rl-1')).toMatchObject({
       runId: 'rl-1',
@@ -2698,6 +2773,7 @@ it('tracks transient precheck outage duration in SQLite, skips session bump for 
       updatedAt: new Date(escalatedAt + 500).toISOString(),
     });
     expect(await storage.getUnreadRunCount()).toBe(1);
+    expect(sessionUnread.get()).toEqual({ status: 'error' });
     expect(await storage.getTransientPrecheckOutageState('sch-1', 'rl-after')).toEqual({
       firstUnrecoveredFiredAt: 10_000,
       lastEscalatedFiredAt: escalatedAt,
@@ -2724,6 +2800,13 @@ it('tracks transient precheck outage duration in SQLite, skips session bump for 
         preRunHookResult: rateLimitHook,
       }),
     ).toBe(false);
+    // A newer born-read retry leaves the earlier unread escalation visible for this session.
+    await storage.insertRun({
+      id: 'rl-quiet-retry', scheduleId: 'sch-1', sessionId: 'sess-pr', status: 'failed',
+      firedAt: escalatedAt + 2_000, finishedAt: escalatedAt + 2_500, readAt: escalatedAt + 2_500,
+      preRunHookResult: quietHook,
+    });
+    expect(sessionUnread.get()).toEqual({ status: 'error' });
     // Non-transient failures (e.g. auth) keep full unrecovered dedup even beyond 24h.
     const authHook = {
       ...rateLimitHook,
@@ -2763,5 +2846,6 @@ it('tracks transient precheck outage duration in SQLite, skips session bump for 
       firstUnrecoveredFiredAt: null,
       lastEscalatedFiredAt: null,
     });
+    expect(sessionUnread.get()).toEqual({ status: null });
   } finally { h.close(); }
 });

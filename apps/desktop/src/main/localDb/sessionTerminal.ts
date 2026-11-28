@@ -7,6 +7,7 @@
  * 判定,避免两端语义分叉。
  */
 import { and, desc, eq, gt, isNull, sql, type SQL } from 'drizzle-orm';
+import type { DbClient } from './client/DbClient';
 import { getDbClient } from './client/current';
 import { messages } from './schema';
 
@@ -61,4 +62,30 @@ export async function readLatestSessionTerminal(
     status: 'error',
     ...(Number.isFinite(latest.createdAt) ? { createdAt: latest.createdAt } : {}),
   };
+}
+
+/** Shared with the native sidebar's unresolved-error query. */
+export function undismissedSidebarError() {
+  return sql`CASE WHEN json_valid(${messages.content})
+    THEN json_extract(${messages.content}, '$.dismissed') IS NOT 1 ELSE 1 END`;
+}
+
+/** Check just the candidate rows on their owning host and return IDs across the DB worker boundary. */
+export async function readSidebarErrorTailIds(
+  db: DbClient['drizzle'],
+  boundaries: ReadonlyArray<readonly [sessionId: string, clearedAt: number | null]>,
+): Promise<Set<string>> {
+  if (boundaries.length === 0) return new Set();
+  // One bound parameter also accommodates the workers of all requested leads.
+  const requested = sql`json_each(${JSON.stringify(Object.fromEntries(boundaries))}) AS requested`;
+  const rows = await db.select({ id: messages.sessionId })
+    .from(requested)
+    .innerJoin(messages, sql`${messageRowid} = (
+      SELECT tail.rowid FROM messages tail
+      WHERE tail.session_id = requested.key AND tail.rewind_at IS NULL
+        AND tail.created_at > COALESCE(requested.value, 0)
+      ORDER BY tail.created_at DESC, tail.rowid DESC LIMIT 1
+    )`)
+    .where(sql`CASE WHEN ${messages.role} = 'error' THEN ${undismissedSidebarError()} ELSE 0 END`);
+  return new Set(rows.map(row => row.id));
 }

@@ -1,4 +1,5 @@
 import { PROJECT_ARCHIVE_CHANNEL } from '../../shared/projectArchive.js';
+import { isPluginObserveTaskStatus, parseSessionStatusIds, SESSION_STATUS_PROJECTION } from '../../shared/pluginObserve.js';
 import { DL_HISTORY_QUERY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
 import { currentDbRpcAdmissionClass, type DbRpcAdmissionClass } from '../localDb/client/rpcAdmission.js';
 
@@ -15,8 +16,9 @@ const BACKGROUND_EXCLUDED_LIST_CHANNELS = new Set([
   'local-db:sessions:list',
   'maker:list-active',
 ]);
-type Lookup = (sessionId: string, kind?: 'session' | 'bot') => Promise<RemoteBotSessionAccess>;
-export type RemoteBotSessionBatchLookup = (ids: readonly string[], kind: 'session' | 'bot') => Promise<ReadonlyMap<string, RemoteBotSessionAccess>>;
+export type RemoteSessionLookupKind = 'session' | 'bot' | typeof SESSION_STATUS_PROJECTION;
+type Lookup = (sessionId: string, kind?: RemoteSessionLookupKind) => Promise<RemoteBotSessionAccess>;
+export type RemoteBotSessionBatchLookup = (ids: readonly string[], kind: RemoteSessionLookupKind) => Promise<ReadonlyMap<string, RemoteBotSessionAccess>>;
 let lookup: Lookup | null = null;
 let batchLookup: RemoteBotSessionBatchLookup | null = null;
 
@@ -44,17 +46,17 @@ interface PushAccessRound {
 const pendingPushAccess = new Map<DbRpcAdmissionClass, PushAccessRound>();
 
 function readSessionAccess(
-  single: Lookup, batch: RemoteBotSessionBatchLookup | null, ids: readonly string[],
+  single: Lookup, batch: RemoteBotSessionBatchLookup | null, ids: readonly string[], kind: RemoteSessionLookupKind = 'session',
 ): ReadonlyMap<string, Promise<RemoteBotSessionAccess>> {
   const access = new Map<string, Promise<RemoteBotSessionAccess>>();
   if (batch) {
-    const rows = batch(ids, 'session');
+    const rows = batch(ids, kind);
     for (const id of ids) access.set(id, rows.then((map) => map.get(id) ?? 'hidden'));
   } else {
     // Injected single-lookup consumers keep the previous one-at-a-time read shape.
     let previous: Promise<unknown> = Promise.resolve();
     for (const id of ids) {
-      const current = previous.then(() => single(id, 'session'));
+      const current = previous.then(() => single(id, kind));
       access.set(id, current);
       previous = current.catch(() => undefined);
     }
@@ -292,6 +294,21 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
       // Hidden results must not reveal their content, metadata or candidate count.
       pool_size: undefined,
     };
+  }
+  // Status replies contain only the requested tasks. Recheck them on each delivery before
+  // the full-row projection, which also reads and authorizes originating sessions and bots.
+  const statusRows = channel === 'local-db:sessions:get-many' ? record(value)?.sessions : undefined;
+  if (Array.isArray(statusRows)) {
+    if (!lookup) throw new Error('[HOST_NOT_READY] Task visibility is not ready');
+    if (!statusRows.length) return { sessions: [] };
+    const rows = statusRows.map(row => ({ id: row?.id, status: row?.status }));
+    const ids = parseSessionStatusIds(rows.map(row => row.id));
+    if (!ids || rows.some(row => !isPluginObserveTaskStatus(row.status))) {
+      throw new Error('[INVALID_PARAMS] Invalid session status result');
+    }
+    const access = readSessionAccess(lookup, batchLookup, ids, SESSION_STATUS_PROJECTION);
+    const visibility = await Promise.all(rows.map(row => access.get(row.id)));
+    return { sessions: rows.filter((_, index) => visibility[index] === 'ordinary') };
   }
   if (!lookup || ![
       PROJECT_ARCHIVE_CHANNEL, 'local-db:task-tags:execute',
