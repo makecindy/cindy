@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, Eye, EyeOff, Send, Trash2 } from 'lucide-react';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useWecomBot } from '@/hooks/useWecomBot';
 import { useWecomGroupNotificationSettings } from '@/hooks/useWecomGroupNotificationSettings';
@@ -17,6 +18,18 @@ import {
   useImChannelSettingsSummary,
 } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import {
+  ImBotBlockCard,
+  ImBotPersonalWay,
+  ImBotStatusText,
+  ImBotSubPage,
+  ImCompanionBotsSection,
+  useImBotNav,
+  type ImBotStatusTone,
+} from './ImBotPageParts';
+import { ImChatSettingsCard } from './ImChatSettingsSection';
+import { ImChannelProjectRows } from './ImChannelProjectRows';
+import { ImReplyTargetField, useImReplyTarget } from './ImReplyTargetField';
 
 const STATUS_KEY: Record<WecomBotTransportStatus['kind'], string> = {
   idle: 'settings.wecomBot.status.needsConfig',
@@ -422,6 +435,174 @@ export function WecomGroupNotificationSectionView({
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+const STATUS_TONE: Record<WecomBotTransportStatus['kind'], ImBotStatusTone> = {
+  idle: 'off',
+  connecting: 'progress',
+  connected: 'connected',
+  conflict: 'attention',
+  error: 'error',
+};
+
+export function useWecomListStatus(): { configured: boolean; tone: ImBotStatusTone; labelKey: string } {
+  const { status, botId } = useWecomBot();
+  return { configured: !!botId || status.kind !== 'idle', tone: STATUS_TONE[status.kind], labelKey: STATUS_KEY[status.kind] };
+}
+
+/** 设置 → IM 机器人 → 企业微信。只有「你自己的机器人」一种方式; 群通知(群机器人 Webhook)与机器人连接相互独立。 */
+export function WecomBotSettings() {
+  const bot = useWecomBot();
+  const { ownerUserId, status, isDisconnecting, disconnect } = bot;
+  const nav = useImBotNav();
+  const replyTarget = useImReplyTarget('wecom');
+  const toCompanion = replyTarget.supported && !!replyTarget.companionBotId;
+  const wecomGroup = useWecomGroupNotificationSettings();
+  const { confirm } = useConfirmDialog();
+  const { t } = useTranslation();
+  const name = t('settings.imBot.apps.wecom');
+
+  const handleDisconnect = useCallback(async () => {
+    const approved = await confirm({
+      title: t('settings.wecomBot.disconnectConfirm.title'),
+      description: t('settings.wecomBot.disconnectConfirm.description'),
+      confirmText: t('settings.wecomBot.disconnectConfirm.confirm'),
+      cancelText: t('settings.wecomBot.disconnectConfirm.cancel'),
+    });
+    if (approved) await disconnect();
+  }, [confirm, disconnect, t]);
+
+  if (nav.page === 'model') {
+    return (
+      <ImBotSubPage title={t('settings.imBot.rows.model')} description={name}>
+        <ImBotBlockCard><ImDefaultSettingsSection channel="wecom" embedded /></ImBotBlockCard>
+      </ImBotSubPage>
+    );
+  }
+  if (nav.page === 'groupNotify') {
+    return (
+      <ImBotSubPage title={t('settings.notifications.wecomGroupLabel')} description={name}>
+        <ImBotBlockCard><WecomGroupNotificationSectionView wecomGroup={wecomGroup} /></ImBotBlockCard>
+      </ImBotSubPage>
+    );
+  }
+
+  const groupNotifyRow = (
+    <SettingsRow
+      title={t('settings.notifications.wecomGroupLabel')}
+      value={t(wecomGroup.configured && wecomGroup.enabled ? 'settings.imBot.rows.on' : 'settings.imBot.rows.off')}
+      chevron
+      onClick={() => nav.open('groupNotify')}
+    />
+  );
+
+  if (status.kind !== 'connected') {
+    return (
+      <>
+        <ImBotPersonalWay id={imBotSettings.wecom.targetId}>
+          <ImBotBlockCard><WecomSetupForm bot={bot} onDisconnect={handleDisconnect} /></ImBotBlockCard>
+          <SettingsCard>{groupNotifyRow}</SettingsCard>
+        </ImBotPersonalWay>
+        <ImCompanionBotsSection channel="wecom" />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <ImBotPersonalWay id={imBotSettings.wecom.targetId}>
+        <SettingsCard>
+          <ImReplyTargetField target={replyTarget} setting="wecom" />
+          {toCompanion ? null : <ImChannelProjectRows channel="wecom" appName={t('settings.imBot.apps.wecom')} settingId={imBotSettings.wecom.id} />}
+        </SettingsCard>
+        {toCompanion ? null : <ImChatSettingsCard channel="wecom" />}
+        <SettingsCard>{groupNotifyRow}</SettingsCard>
+        <SettingsCard>
+          <SettingsRow
+            title={bot.botId}
+            hint={<ImBotStatusText tone="connected">
+              {[t(STATUS_KEY.connected), ownerUserId
+                ? t('settings.wecomBot.connected.ownerBound', { ownerUserId })
+                : t('settings.wecomBot.connected.awaitingOwner')].join(' · ')}
+            </ImBotStatusText>}
+          />
+          <SettingsRow data-setting-id={imBotSettings.wecom.id} danger title={t('settings.imBot.rows.unbind')}
+            disabled={isDisconnecting} onClick={() => void handleDisconnect()} />
+        </SettingsCard>
+      </ImBotPersonalWay>
+      <ImCompanionBotsSection channel="wecom" />
+    </>
+  );
+}
+
+function WecomSetupForm({ bot, onDisconnect }: { bot: ReturnType<typeof useWecomBot>; onDisconnect: () => Promise<void> }) {
+  const { botId, setBotId, secret, setSecret, status, validationError, isSaving, isDisconnecting, canConnect, canReconnect, connect, reconnect } = bot;
+  const [showSecret, setShowSecret] = useState(false);
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-12 leading-[1.6] text-[var(--settings-section-desc)]">{t('settings.wecomBot.setupHint')}</p>
+      <label className="text-12 font-medium text-[var(--settings-section-desc)]">{t('settings.wecomBot.botIdLabel')}</label>
+      <input data-setting-id={imBotSettings.wecom.id}
+        type="text"
+        aria-label={t('settings.wecomBot.botIdLabel')}
+        value={botId}
+        onChange={(event) => setBotId(event.target.value)}
+        placeholder={t('settings.wecomBot.botIdPlaceholder')}
+        spellCheck={false}
+        autoComplete="off"
+        className={fieldClassName}
+      />
+      <label className="text-12 font-medium text-[var(--settings-section-desc)]">{t('settings.wecomBot.secretLabel')}</label>
+      <div className="relative">
+        <input data-setting-id={imBotSettings.wecom.id}
+          type={showSecret ? 'text' : 'password'}
+          aria-label={t('settings.wecomBot.secretLabel')}
+          value={secret}
+          onChange={(event) => setSecret(event.target.value)}
+          placeholder={t('settings.wecomBot.secretPlaceholder')}
+          spellCheck={false}
+          autoComplete="new-password"
+          className={cn(fieldClassName, 'pr-10')}
+        />
+        <button data-setting-id={imBotSettings.wecom.id}
+          type="button"
+          onClick={() => setShowSecret((shown) => !shown)}
+          className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] hover:text-[var(--settings-eye-icon-hover)]"
+          aria-label={showSecret ? t('settings.wecomBot.hideSecret') : t('settings.wecomBot.showSecret')}
+        >
+          {showSecret ? <Eye size={18} /> : <EyeOff size={18} />}
+        </button>
+      </div>
+      {validationError ? (
+        <p className="text-12 text-[var(--settings-error-text)]" role="alert">{validationError}</p>
+      ) : status.kind === 'error' ? (
+        <ImConnectionError details={status.reason} />
+      ) : (
+        <p className="text-12 text-[var(--settings-source-meta)]">{t('settings.wecomBot.ownerHint')}</p>
+      )}
+      <div className="flex flex-col gap-2 sm:flex-row">
+        {botId.trim() && !secret.trim() ? (
+          <ImReconnectButton variant="cta" size="lg" loading={isSaving || status.kind === 'connecting'}
+            onReconnect={reconnect} disabled={!canReconnect} className="flex-1">
+            {t('settings.wecomBot.reconnect')}
+          </ImReconnectButton>
+        ) : (
+          <Button data-setting-id={imBotSettings.wecom.id} variant="cta" size="lg" loading={isSaving || status.kind === 'connecting'}
+            type="button" onClick={() => void connect()} disabled={!canConnect} className="flex-1">
+            {t('settings.wecomBot.connect')}
+          </Button>
+        )}
+        {botId.trim() ? (
+          <Button data-setting-id={imBotSettings.wecom.id} variant="secondary" size="lg" loading={isDisconnecting}
+            type="button" onClick={() => void onDisconnect()} disabled={isDisconnecting} className="flex-1">
+            <Trash2 size={13} />
+            {t('settings.wecomBot.disconnect')}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
