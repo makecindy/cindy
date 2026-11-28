@@ -124,7 +124,89 @@ describe('handleRemoteMedia', () => {
     await reader.cancel();
     expect(cancel).toHaveBeenCalledOnce();
     expect(releaseStream).toHaveBeenCalledOnce();
-    expect(openMediaStream).toHaveBeenCalledWith('video', undefined, signal);
+    const upstreamSignal = openMediaStream.mock.calls[0][2] as AbortSignal;
+    expect(upstreamSignal).not.toBe(signal);
+    expect(upstreamSignal.aborted).toBe(true);
+    expect(signal.aborted).toBe(false);
+  });
+
+  // Regression: Electron 42 can keep the native HTTP connection after a body
+  // reader is cancelled. The production handler must abort its own upstream
+  // request, not just cancel the Web stream or decrement the cache lease.
+  // Existing tests only checked reader.cancel(); these unit cases distinguish
+  // cancellation, EOF/error, and caller abort (including late response headers).
+  it.each(['eof', 'error'] as const)('aborts the upstream request when its body reaches %s', async (ending) => {
+    lookup.mockReturnValue({ kind: 'stream', ossKey: 'video', mimeType: 'video/mp4', size: 32 });
+    openMediaStream.mockResolvedValue(new Response(new ReadableStream({
+      start(controller) {
+        if (ending === 'error') controller.error(new Error('upstream failed'));
+        else { controller.enqueue(new Uint8Array([1])); controller.close(); }
+      },
+    })));
+
+    const response = await handleRemoteMedia(URL_VID, null);
+    if (ending === 'error') await expect(response.arrayBuffer()).rejects.toThrow('upstream failed');
+    else expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1]));
+    expect((openMediaStream.mock.calls[0][2] as AbortSignal).aborted).toBe(true);
+    expect(releaseStream).toHaveBeenCalledOnce();
+  });
+
+  it('cancels one upstream without interrupting another range request for the same video', async () => {
+    lookup.mockReturnValue({ kind: 'stream', ossKey: 'video', mimeType: 'video/mp4', size: 32 });
+    openMediaStream.mockImplementation(async () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array([1])); },
+    })));
+    const [first, second] = await Promise.all([
+      handleRemoteMedia(URL_VID, 'bytes=0-1'),
+      handleRemoteMedia(URL_VID, 'bytes=2-3'),
+    ]);
+    await first.body!.cancel();
+    expect((openMediaStream.mock.calls[0][2] as AbortSignal).aborted).toBe(true);
+    expect((openMediaStream.mock.calls[1][2] as AbortSignal).aborted).toBe(false);
+    const reader = second.body!.getReader();
+    expect((await reader.read()).value).toEqual(new Uint8Array([1]));
+    await reader.cancel();
+    expect(releaseStream).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases an idle response immediately when the caller aborts without reading it', async () => {
+    lookup.mockReturnValue({ kind: 'stream', ossKey: 'video', mimeType: 'video/mp4', size: 32 });
+    openMediaStream.mockResolvedValue(new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array([1])); },
+    })));
+    const caller = new AbortController();
+    const response = await handleRemoteMedia(URL_VID, null, caller.signal);
+    caller.abort();
+    expect((openMediaStream.mock.calls[0][2] as AbortSignal).aborted).toBe(true);
+    expect(releaseStream).toHaveBeenCalledOnce();
+    await response.body!.cancel();
+    expect(releaseStream).toHaveBeenCalledOnce();
+  });
+
+  it('does not open an upstream request for an already aborted caller', async () => {
+    lookup.mockReturnValue({ kind: 'stream', ossKey: 'video', mimeType: 'video/mp4', size: 32 });
+    const caller = new AbortController();
+    caller.abort();
+    expect((await handleRemoteMedia(URL_VID, null, caller.signal)).status).toBe(502);
+    expect(openMediaStream).not.toHaveBeenCalled();
+    expect(releaseStream).toHaveBeenCalledOnce();
+  });
+
+  it('discards a response that arrives after its caller has already aborted', async () => {
+    lookup.mockReturnValue({ kind: 'stream', ossKey: 'video', mimeType: 'video/mp4', size: 32 });
+    let opened!: (response: Response) => void;
+    let started!: () => void;
+    const opening = new Promise<void>((resolve) => { started = resolve; });
+    openMediaStream.mockImplementation(() => new Promise<Response>((resolve) => { opened = resolve; started(); }));
+    const caller = new AbortController();
+    const pending = handleRemoteMedia(URL_VID, null, caller.signal);
+    await opening;
+    caller.abort();
+    const cancel = vi.fn();
+    opened(new Response(new ReadableStream({ cancel })));
+    expect((await pending).status).toBe(502);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(releaseStream).toHaveBeenCalledOnce();
   });
 
   it('streams a locally owned blob through its verified handle instead of reading the whole file', async () => {
@@ -429,7 +511,7 @@ describe('handleRemoteMedia', () => {
       'video/mp4',
       1000,
     );
-    expect(openMediaStream).toHaveBeenCalledWith('oss/v.mp4', 'bytes=0-1', undefined);
+    expect(openMediaStream).toHaveBeenCalledWith('oss/v.mp4', 'bytes=0-1', expect.any(AbortSignal));
     expect(downloadToBuffer).not.toHaveBeenCalled();
     expect(removeRemote).not.toHaveBeenCalled(); // 流式保活
     expect(r.status).toBe(206);
@@ -573,7 +655,7 @@ describe('handleRemoteMedia', () => {
       { url: 'xdt-image://s/a.png', skipCache: true },
     ]);
     expect(evictEntry).toHaveBeenCalledWith('dev-1', 'xdt-image://s/a.png', 'oss/stale.png'); // 只逐出失败的那把 key
-    expect(openMediaStream).toHaveBeenNthCalledWith(2, 'oss/fresh.png', undefined, undefined);
+    expect(openMediaStream).toHaveBeenNthCalledWith(2, 'oss/fresh.png', undefined, expect.any(AbortSignal));
     expect(r.status).toBe(200);
   });
 
@@ -675,7 +757,7 @@ describe('handleRemoteMedia', () => {
     const r = await handleRemoteMedia(URL_IMG, null);
     expect(evictEntry).toHaveBeenCalledWith('dev-1', 'xdt-image://s/a.png', 'oss/stale.png');
     expect(remoteInvoke).toHaveBeenCalledTimes(1); // 不再触发第二次上传
-    expect(openMediaStream).toHaveBeenNthCalledWith(2, 'oss/fresh.png', undefined, undefined);
+    expect(openMediaStream).toHaveBeenNthCalledWith(2, 'oss/fresh.png', undefined, expect.any(AbortSignal));
     expect(r.status).toBe(200);
   });
 

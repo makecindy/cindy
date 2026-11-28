@@ -10,6 +10,7 @@ import { setMainLocale } from '../../../i18n.desktop';
 
 import {
   isQuotaExhaustionFailure,
+  openAiSubscriptionReconnectNotice,
   overloadFailureNotice,
   overloadRetryNotice,
   quotaFailureNoticePrefix,
@@ -426,6 +427,32 @@ describe('额度类终态错误', () => {
       { ...PERSONAL, taskLabel: 'key sk-abcdefghijklmnop' });
     expect(text).not.toContain('sk-abcdefghijklmnop');
   });
+
+  // Plugin-engine usage limits must produce periodic usage-limit notices (not billing/balance) and never leak raw upstream text.
+  it('explains plugin-engine usage limits and overload in IM notices', () => {
+    const raw = 'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.';
+    const quotaText = terminalErrorText(
+      { reason: 'acp-usage-limit', message: raw },
+      { ...PERSONAL, providerLabel: 'Antigravity' },
+    );
+    expect(quotaText.startsWith(quotaFailureNoticePrefix())).toBe(true);
+    expect(quotaText).toContain('账号用量已达上限');
+    expect(quotaText).not.toContain('余额');
+    expect(quotaText).not.toContain('Individual quota reached');
+    expect(terminalErrorText({ message: raw }, { ...PERSONAL, providerLabel: 'Antigravity' })).toContain(
+      '账号用量已达上限',
+    );
+    expect(terminalErrorText({ message: 'HTTP 402: Usage limit reached' }, { ...PERSONAL, providerLabel: 'Custom' })).toContain(
+      '账号余额或配额不足',
+    );
+
+    const overloadText = terminalErrorText(
+      { reason: 'acp-overloaded', message: 'Upstream busy' },
+      { ...PERSONAL, providerLabel: 'Antigravity' },
+    );
+    expect(overloadText).toContain('繁忙');
+    expect(overloadText).not.toContain('Upstream busy');
+  });
 });
 
 describe('output-limit usage guidance', () => {
@@ -490,4 +517,12 @@ it.each(['telegram', 'wechat'])('explains review quota to %s and strips the fall
     metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' } };
   expect(autoReviewUnavailablePromptLine(request)).toBe(text);
   expect(permissionPromptDescription(request)).toBe('Source');
+});
+
+it('keeps unrelated providers, status codes and generic 401s out of subscription recovery', () => {
+  const data = { errorStatus: 401, message: 'unauthorized_unknown' };
+  expect(openAiSubscriptionReconnectNotice(data, 'openai')).toContain('ChatGPT');
+  expect(openAiSubscriptionReconnectNotice(data, 'custom-openai')).toBeNull();
+  expect(openAiSubscriptionReconnectNotice({ ...data, errorStatus: 403 }, 'openai')).toBeNull();
+  expect(openAiSubscriptionReconnectNotice({ ...data, message: 'invalid API key' }, 'openai')).toBeNull();
 });

@@ -28,6 +28,7 @@ import {
   Platform,
   Pressable,
   StatusBar,
+  ToastAndroid,
   StyleSheet,
   useWindowDimensions,
   View,
@@ -739,6 +740,25 @@ export const ImageLightbox = memo(function ImageLightbox({
   const activeMimeType = ((activeResolveState?.status === 'ready'
     ? activeResolveState.media.mimeType
     : undefined) ?? activeImage?.payload.media.mimeType)?.split(';', 1)[0].trim().toLowerCase();
+  const saveVisible = Platform.OS === 'android' && !!activeImage && !activeIsVideo && !isAnnotating;
+  const saveEnabled = !!activeImage && loadedImageKeys.has(activeImage.key)
+    && activeActionsReady && !sharing && !annotationSubmitting;
+  const handleSave = async () => {
+    if (!activeUri || !saveEnabled || sharingRef.current || submittingRef.current) return;
+    sharingRef.current = true;
+    setSharing(true);
+    try {
+      const { savePreviewImage } = await import('./savePreviewImage');
+      if (await savePreviewImage(activeUri, activeMimeType, activeImage?.title)) {
+        ToastAndroid.show(t('message.lightbox.imageSaved'), ToastAndroid.SHORT);
+      }
+    } catch {
+      Alert.alert(t('message.lightbox.saveFailed'));
+    } finally {
+      sharingRef.current = false;
+      setSharing(false);
+    }
+  };
   // 取件未完成时按原始地址判断格式,让画笔从打开起就在(置灰到可画)。
   const activeFormatUri = activeUri ?? activeImage?.payload.media.url ?? '';
   const activeLooksGif = /\.gif(?:[?#]|$)/i.test(activeFormatUri.split('?')[0] ?? activeFormatUri);
@@ -969,6 +989,7 @@ export const ImageLightbox = memo(function ImageLightbox({
         {/* 单击收起顶栏与底栏(与系统相册一致),再点一下出来;视频与标注时常驻。 */}
         {chromeShown ? (
           <PreviewHeader
+            sheetMenu={Platform.OS === "android"}
             name={
               activeImage?.title ||
               previewSourceName(
@@ -994,6 +1015,12 @@ export const ImageLightbox = memo(function ImageLightbox({
                     },
                   ]
                 : []),
+              ...(saveVisible ? [{
+                key: "save",
+                label: t("message.lightbox.saveImage"),
+                onPress: handleSave,
+                disabled: !saveEnabled,
+              }] : []),
               ...(shareVisible
                 ? [
                     {
@@ -1092,6 +1119,17 @@ export const ImageLightbox = memo(function ImageLightbox({
               </>
                     ) : (
                       <>
+                {saveVisible ? (
+                  <PreviewIconButton
+                    testID="message.imageLightboxSave"
+                    label={t("message.lightbox.saveImage")}
+                    title={t("message.lightbox.saveImage")}
+                    icon={Download}
+                    systemImage="arrow.down.to.line"
+                    onPress={handleSave}
+                    disabled={!saveEnabled}
+                  />
+                ) : null}
                 {annotateVisible ? (
                   <PreviewIconButton
                     testID="message.imageLightboxAnnotateButton"

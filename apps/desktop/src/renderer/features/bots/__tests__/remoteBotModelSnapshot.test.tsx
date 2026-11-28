@@ -12,6 +12,7 @@ vi.mock('react-router-dom', () => ({ useLocation: () => ({ search: '', state: nu
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => null,
   useDeviceLinkDeviceListRequestState: () => ({ status: 'ready', error: null }),
+  useDeviceLinkDeviceListAuthoritative: () => true,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../useRemoteBots', () => ({

@@ -48,6 +48,7 @@ import {
   hostKeyId,
   RemoteHost,
   type AddHostInput,
+  type ConnectOpts,
   type CodexAuthState,
   type HostConfig,
   type HostSnapshot,
@@ -67,7 +68,7 @@ import { isIpcErrorCode } from '../../shared/ipc-errors.js';
 // 轮 42 P1(codex-connector):remove host 的 DB 引用检查改**顶部静态导入** ——
 // 之前动态 await import() 把 drizzle/localDb 的打包/加载失败推迟到用户
 // remove host 时才暴露, 违反 main-process 依赖规则(须静态 import)。
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getRemoteClaudeEnv } from './claude-env.js';
@@ -396,7 +397,7 @@ export async function isRemoteHostKeyKnown(hostname: string, port: number): Prom
  * first message after launch because pool hydrate only happens lazily when
  * the user visits Settings → Remote.
  */
-export async function ensureRemoteHostReady(id: string): Promise<void> {
+export async function ensureRemoteHostReady(id: string, options?: ConnectOpts): Promise<void> {
   await ensureHydrated();
   const pool = getPool();
   const host = pool.get(id);
@@ -405,7 +406,8 @@ export async function ensureRemoteHostReady(id: string): Promise<void> {
   }
   if (host.getStatus() === 'ready') return;
   try {
-    await pool.connect(id);
+    if (options) await pool.connect(id, options);
+    else await pool.connect(id);
   } catch (err) {
     const { code, msg } = classifyConnectFailure(err);
     throwIpcError(code, redactHostLocalPaths(host.config, msg) ?? msg);
@@ -861,6 +863,7 @@ type RendererHostConfig = Pick<HostConfig,
   | 'authMethod'
   | 'source'
   | 'managedByCindy'
+  | 'managedAliasConflict'
 > & {
   /** Renderer only needs to know whether an owned identity exists. */
   identityFileConfigured: boolean;
@@ -903,6 +906,7 @@ function toRendererHostConfig(config: HostConfig): RendererHostConfig {
       : {}),
     source: config.source,
     managedByCindy: config.managedByCindy,
+    ...(config.managedAliasConflict ? { managedAliasConflict: true } : {}),
   };
 }
 
@@ -1069,7 +1073,7 @@ async function assertHostHasNoSessionReferences(
     const refs = await getDbClient().drizzle
       .select({ id: sessions.id })
       .from(sessions)
-      .where(eq(sessions.remoteHostId, id))
+      .where(and(eq(sessions.remoteHostId, id), ne(sessions.status, 'deleted')))
       .limit(1);
     if (refs.length > 0) {
       throwIpcError(

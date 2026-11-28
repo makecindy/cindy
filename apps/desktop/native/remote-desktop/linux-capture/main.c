@@ -1,6 +1,11 @@
 #define _GNU_SOURCE
 #include "cursor.h"
+#include "encode.h"
+#include "jpeg.h"
 #include "wlr-screencopy-unstable-v1.h"
+#ifdef CINDY_X11
+#include "x11.h"
+#endif
 #include <errno.h>
 #include <signal.h>
 #include <stdint.h>
@@ -8,13 +13,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <turbojpeg.h>
 #include <unistd.h>
 #include <wayland-client.h>
 
 /* Private, serial protocol: one 'f' request, one bounded base64 JPEG line.
  * The connection and shm buffer survive requests, but no frame history does.
  * Unsupported output layouts exit so the parent can use grim's composition.
+ * An `x11:<x>,<y>,<width>,<height>` output selects root-window capture of that
+ * pixel rectangle on an X11 session instead (see x11.h).
  */
 struct output_info {
   struct wl_output *output;
@@ -34,7 +40,7 @@ struct capture {
   void *pixels;
   unsigned char *scaled, *oriented;
   size_t size;
-  int overlay, quality, cursor_free;
+  int overlay, quality, cursor_free, x11;
   struct output_info output_info[32];
   const char *requested_output;
 };
@@ -192,63 +198,11 @@ static const struct zwlr_screencopy_frame_v1_listener frame_listener = {
     .flags = frame_flags,
     .ready = frame_ready,
     .failed = frame_failed};
-/* Match the normal desktop video's 1920-pixel long-edge cap before IPC and
- * decoding. Bilinear sampling preserves aspect ratio and supports padded rows.
- * The one scratch buffer is reused for the lifetime of this capture child. */
+/* Scaling lives in encode.h, shared with the GNOME capture helper. */
 static const unsigned char *video_pixels(struct capture *c, int *width,
                                          int *height, int *stride) {
-  *width = (int)c->width;
-  *height = (int)c->height;
-  *stride = (int)c->stride;
-  uint32_t edge = c->width > c->height ? c->width : c->height;
-  if (edge <= 1920)
-    return c->pixels;
-  *width = (int)(c->width * 1920 / edge);
-  *height = (int)(c->height * 1920 / edge);
-  if (*width < 1)
-    *width = 1;
-  if (*height < 1)
-    *height = 1;
-  *stride = *width * 4;
-  if (!c->scaled)
-    c->scaled = malloc(1920 * 1920 * 4);
-  if (!c->scaled)
-    return NULL;
-  uint32_t xs[1920], weights[1920];
-  for (int x = 0; x < *width; x++) {
-    uint32_t pos =
-        *width > 1
-            ? (uint32_t)((uint64_t)x * (c->width - 1) * 256 / (*width - 1))
-            : 0;
-    xs[x] = pos >> 8;
-    weights[x] = pos & 255;
-  }
-  for (int y = 0; y < *height; y++) {
-    uint32_t pos =
-        *height > 1
-            ? (uint32_t)((uint64_t)y * (c->height - 1) * 256 / (*height - 1))
-            : 0;
-    uint32_t sy = pos >> 8, wy = pos & 255;
-    uint32_t next = sy + 1 < c->height ? sy + 1 : sy;
-    const unsigned char *a = (const unsigned char *)c->pixels + sy * c->stride;
-    const unsigned char *b =
-        (const unsigned char *)c->pixels + next * c->stride;
-    unsigned char *dest = c->scaled + y * *stride;
-    for (int x = 0; x < *width; x++) {
-      uint32_t sx = xs[x], wx = weights[x],
-               nx = sx + 1 < c->width ? sx + 1 : sx;
-      for (int channel = 0; channel < 3; channel++) {
-        uint32_t top =
-            a[sx * 4 + channel] * (256 - wx) + a[nx * 4 + channel] * wx;
-        uint32_t bottom =
-            b[sx * 4 + channel] * (256 - wx) + b[nx * 4 + channel] * wx;
-        dest[x * 4 + channel] =
-            (unsigned char)((top * (256 - wy) + bottom * wy + 32768) >> 16);
-      }
-      dest[x * 4 + 3] = 255;
-    }
-  }
-  return c->scaled;
+  return cindy_scale_pixels(c->pixels, c->width, c->height, c->stride,
+                            &c->scaled, width, height, stride);
 }
 /* Screencopy buffers use output-buffer coordinates. Rotate into the displayed
  * orientation after bounded scaling, applying Y_INVERT in buffer coordinates.
@@ -287,17 +241,13 @@ static const unsigned char *oriented_pixels(struct capture *c, int *width,
   }
   return c->oriented;
 }
-static int send_jpeg(struct capture *c, tjhandle encoder) {
+static int send_jpeg(struct capture *c) {
   unsigned char *jpeg = NULL;
   unsigned long length = 0;
-  int format = (c->format == WL_SHM_FORMAT_XRGB8888 ||
-                c->format == WL_SHM_FORMAT_ARGB8888)
-                   ? TJPF_BGRX
-                   : TJPF_RGBX;
-  int flags = TJFLAG_FASTDCT;
-  if (c->transform == WL_OUTPUT_TRANSFORM_NORMAL &&
-      (c->flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT))
-    flags |= TJFLAG_BOTTOMUP;
+  int bgrx = c->format == WL_SHM_FORMAT_XRGB8888 ||
+             c->format == WL_SHM_FORMAT_ARGB8888;
+  int bottom_up = c->transform == WL_OUTPUT_TRANSFORM_NORMAL &&
+                  (c->flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT);
   int width, height, stride;
   const unsigned char *pixels = oriented_pixels(c, &width, &height, &stride);
   if (!pixels)
@@ -305,8 +255,9 @@ static int send_jpeg(struct capture *c, tjhandle encoder) {
   int status = -1;
   for (int quality = c->quality ? c->quality : 65; quality >= 25;
        quality -= 20) {
-    if (tjCompress2(encoder, pixels, width, stride, height, format, &jpeg,
-                    &length, TJSAMP_420, quality, flags))
+    jpeg_release(jpeg);
+    if (jpeg_encode(pixels, width, stride, height, bgrx, bottom_up, quality,
+                    &jpeg, &length))
       goto done;
     if (length <= 1000000)
       break;
@@ -333,7 +284,12 @@ static int send_jpeg(struct capture *c, tjhandle encoder) {
   line[count] = 0;
   if (c->overlay) {
     printf("{\"jpeg\":\"%s\",\"cursor\":", line);
-    if (c->cursor_free)
+#ifdef CINDY_X11
+    if (c->x11)
+      x11_cursor_json();
+    else
+#endif
+        if (c->cursor_free)
       cursor_json(c->width, c->height);
     else
       fputs("null", stdout);
@@ -345,17 +301,95 @@ static int send_jpeg(struct capture *c, tjhandle encoder) {
   status = ferror(stdout) || fflush(stdout) ? -1 : 0;
   free(line);
 done:
-  tjFree(jpeg);
+  jpeg_release(jpeg);
   return status;
 }
+#ifdef CINDY_X11
+/* Same serial request loop as the Wayland path, over the X root window. */
+static int x11_main(struct capture *c) {
+  int status = 1;
+  if (x11_open(c->requested_output + 4) || jpeg_open())
+    goto done;
+#ifdef CINDY_XCOMPOSITE
+  if (xc.excluded_count && x11_redirect())
+    goto done;
+#endif
+  xc.scale = cc.scale;
+  c->x11 = 1;
+  c->transform = WL_OUTPUT_TRANSFORM_NORMAL;
+  c->format = xc.bgrx ? WL_SHM_FORMAT_XRGB8888 : WL_SHM_FORMAT_XBGR8888;
+  for (;;) {
+    alarm(10);
+    char command;
+    ssize_t n = read(STDIN_FILENO, &command, 1);
+    if (!n) {
+      status = 0;
+      break;
+    }
+    if (n != 1 || command != 'f')
+      break;
+    alarm(3);
+#ifdef CINDY_XCOMPOSITE
+    if (x11_frame_local())
+      break;
+#else
+    if (x11_frame())
+      break;
+#endif
+    if (c->overlay)
+      x11_cursor();
+    c->pixels = xc.image->data;
+    c->width = (uint32_t)xc.width;
+    c->height = (uint32_t)xc.height;
+    c->stride = (uint32_t)xc.image->bytes_per_line;
+    if (send_jpeg(c))
+      break;
+  }
+done:
+  /* The X image owns its pixels; never munmap them as a Wayland buffer. */
+  c->pixels = NULL;
+  free(c->scaled);
+  x11_close();
+  jpeg_close();
+  return status;
+}
+#endif
 int main(int argc, char **argv) {
-  if (argc != 1 && argc != 4 && argc != 5 && argc != 2)
+  if (argc != 1 && argc != 4 && argc != 5 && argc != 6 && argc != 2)
     return 2;
   struct capture c = {0};
+  if (argc == 2 && !strcmp(argv[1], "--x11-check")) {
+#ifdef CINDY_X11
+    /* Probe only: no image, cursor read or frame. */
+    alarm(3);
+    int ready = !x11_open(NULL) && !jpeg_open();
+    x11_close();
+    jpeg_close();
+    if (ready)
+      puts("ready");
+    return ready ? 0 : 1;
+#else
+    return 1; /* Built without X11 development headers. */
+#endif
+  }
+  if (argc == 2 && !strcmp(argv[1], "--x11-local-check")) {
+#if defined(CINDY_X11) && defined(CINDY_XCOMPOSITE)
+    /* Probe only: whether X11 capture can keep local-only windows out. */
+    alarm(3);
+    int ready = !x11_open(NULL) && x11_composite_ready() && !jpeg_open();
+    x11_close();
+    jpeg_close();
+    if (ready)
+      puts("ready");
+    return ready ? 0 : 1;
+#else
+    return 1; /* Built without X11 Composite development headers. */
+#endif
+  }
   int probe = argc == 2 && !strcmp(argv[1], "--cursor-check");
   if (argc == 2 && !probe)
     return 2;
-  if (argc == 4 || argc == 5) {
+  if (argc == 4 || argc == 5 || argc == 6) {
     c.overlay = !strcmp(argv[1], "cursor-overlay");
     if (!c.overlay && strcmp(argv[1], "video"))
       return 2;
@@ -364,8 +398,27 @@ int main(int argc, char **argv) {
     if (!isfinite(cc.scale) || cc.scale < 0.25 || cc.scale > 8 ||
         c.quality < 25 || c.quality > 95)
       return 2;
-    if (argc == 5)
+    if (argc >= 5)
       c.requested_output = argv[4];
+  }
+  /* Only X11 capture takes a sixth, local-only window argument. */
+  if (argc == 6 && strncmp(c.requested_output, "x11:", 4))
+    return 2;
+  if (c.requested_output && !strncmp(c.requested_output, "x11:", 4)) {
+#ifdef CINDY_X11
+    if (argc == 6) {
+#ifdef CINDY_XCOMPOSITE
+      if (x11_parse_excluded(argv[5]))
+        return 2;
+#else
+      return 1; /* Cannot keep the local-only windows out: never capture them. */
+#endif
+    }
+    alarm(3);
+    return x11_main(&c);
+#else
+    return 1;
+#endif
   }
   /* Bound compositor stalls, blocked writes and orphaned idle children. No
    * files survive a signal exit: memfd and Wayland objects belong to this
@@ -377,7 +430,6 @@ int main(int argc, char **argv) {
   struct wl_registry *registry = wl_display_get_registry(c.display);
   wl_registry_add_listener(registry, &registry_listener, &c);
   int status = 1;
-  tjhandle encoder = NULL;
   if (wl_display_roundtrip(c.display) < 0 ||
       wl_display_roundtrip(c.display) < 0 || !c.shm || !c.manager || c.failed)
     goto done;
@@ -401,8 +453,7 @@ int main(int argc, char **argv) {
     goto done;
   if (c.overlay && cursor_begin(c.shm, c.output))
     goto done;
-  encoder = tjInitCompress();
-  if (!encoder)
+  if (jpeg_open())
     goto done;
   for (;;) {
     alarm(10);
@@ -438,13 +489,12 @@ int main(int argc, char **argv) {
       if (c.output_info[i].id == c.output_name &&
           c.output_info[i].transform != c.transform)
         c.failed = 1; // Layout changed during this capture; obtain fresh geometry.
-    if (c.failed || send_jpeg(&c, encoder))
+    if (c.failed || send_jpeg(&c))
       break;
   }
 done:
   cursor_destroy();
-  if (encoder)
-    tjDestroy(encoder);
+  jpeg_close();
   release_buffer(&c);
   free(c.scaled);
   free(c.oriented);

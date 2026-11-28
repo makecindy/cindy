@@ -224,11 +224,10 @@ export function useAutomationScheduleSessionIndex(
       publishIndex(next);
       retryAttemptRef.current = 0;
     } catch (error) {
+      if (refreshSeqRef.current !== seq || cancelledRef.current) return;
       log.warn('failed to build automation schedule session index', {
         error: error instanceof Error ? error.message : String(error),
       });
-      // 卸载后到达的 rejection 不再排新定时器,见 cancelledRef。
-      if (cancelledRef.current) return;
       // 见 REFRESH_RETRY_DELAYS_MS:这次拉取也是标记对账的载体,失败不能只 log。
       // 退避档位用尽后:仍有标记待对账就按最后一档持续重试(否则 scheduler / IPC / DB
       // 连续不可用超过三档窗口、且此后再无事件时,标记会永久残留);没有标记则停手,
@@ -315,7 +314,7 @@ export function useAutomationScheduleSessionIndex(
         }
       } else if (event.type === 'failed' || event.type === 'deferred') {
         clearSilencedRun(event.runId);
-        if (event.type === 'failed' && event.sessionId && event.error !== 'aborted') {
+        if (event.type === 'failed' && event.sessionId && event.error !== 'aborted' && !event.silenced) {
           rememberOptimisticUnread(event.sessionId, event.runId, 'failed');
         }
       }
@@ -332,7 +331,10 @@ export function useAutomationScheduleSessionIndex(
         event.type === 'failed' ||
         event.type === 'session-bound' ||
         event.type === 'read' ||
-        event.type === 'all-read'
+        event.type === 'all-read' ||
+        // The skip is already committed in the local DB. Use the same refresh
+        // sequence as every other terminal event so earlier reads cannot win.
+        event.type === 'skipped'
       ) {
         void refresh();
       }

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { expect, it, vi } from 'vitest';
 import ts from 'typescript';
 import { PluginTaskError, readPluginTaskPlanReceipt } from '../pluginTaskService.js';
+import type { PluginEngineView } from '../../../shared/pluginEngines.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
 import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
@@ -13,7 +14,12 @@ import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTas
 import { createSessionExecutionResolver } from '../sessionExecutionSelection';
 import { createGhostProductionCallbacks } from '../../cindy-brain/__tests__/ghostProductionCallbacksFixture.js';
 import { clampPluginTaskPermissionMode } from '../../cindy-brain/pluginTaskPrefsStore.js';
-import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
+import {
+  applyPluginTaskModelRoute,
+  resolvePluginTaskReadRoute,
+  resolveRemotePluginTaskRoute,
+  savedPluginTaskRemoteRoute,
+} from '../pluginTaskModelRoute.js';
 import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog.js';
 import * as sessionAgentSwitch from '../sessionAgentSwitchHandler.js';
 import { getSessionRuntimeControlSnapshot } from '../sessionRuntimeControl.js';
@@ -51,6 +57,41 @@ it.each(['other-computer', 'share:provider'])('admits %s only against its author
   await expect(resolveRemotePluginTaskRoute(route, deps)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
 });
 
+it.each(['other-computer', 'share:provider'])('admits remote plugin-engine (acp) routes on %s only against live offered engines', async agentDeviceId => {
+  const route: PluginTaskRoute = {
+    agentKind: 'acp',
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    effort: 'high',
+    fastMode: false,
+    agentDeviceId,
+  };
+  let engine: PluginEngineView = {
+    key: 'antigravity:agy',
+    providerId: 'acp-plugin:antigravity:agy',
+    ghostId: 'antigravity',
+    harnessId: 'agy',
+    name: 'Antigravity',
+    availability: { state: 'available' },
+    models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'high'] }],
+    permissionModes: [],
+    defaultPermissionMode: 'ask',
+  };
+  const deps = {
+    assertCurrent: vi.fn(),
+    readProviders: vi.fn(async () => []),
+    readPluginEngines: vi.fn(async () => [engine]),
+  };
+  expect(await resolveRemotePluginTaskRoute(route, deps)).toEqual(route);
+  expect(deps.readPluginEngines).toHaveBeenCalledWith(agentDeviceId);
+  expect(deps.readProviders).not.toHaveBeenCalled();
+  for (const changed of [{ providerId: 'acp-plugin:other:x' }, { model: 'other' }, { effort: 'xhigh' }, { fastMode: true }]) {
+    await expect(resolveRemotePluginTaskRoute({ ...route, ...changed }, deps)).rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+  }
+  engine = { ...engine, suspended: true };
+  await expect(resolveRemotePluginTaskRoute(route, deps)).rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+});
+
 it.each(['other-computer', 'share:provider'])('forwards %s from the production task creator into ordinary Session storage', async agentDeviceId => {
   const creatorSource = readFileSync(new URL('../../localDb/ipc/pluginWorkspaceSessions.ts', import.meta.url), 'utf8');
   const tree = ts.createSourceFile('creator.ts', creatorSource, ts.ScriptTarget.Latest, true);
@@ -67,8 +108,24 @@ it.each(['other-computer', 'share:provider'])('forwards %s from the production t
   }));
 });
 function compile(text: string, deps: Record<string, unknown>) {
-  // The production route resolver reads the saved run location through this pure helper.
-  deps = { readProviderGroupBinding: () => null, providerGroupService: null, savedPluginTaskRemoteRoute, ...deps };
+  // The production route resolver and runtime readers share these pure helpers.
+  const defaultQuery = {
+    from: () => defaultQuery,
+    where: () => defaultQuery,
+    limit: async () => [{ agentKind: 'codex', providerId: 'old', agentDeviceId: null }],
+  };
+  deps = {
+    readProviderGroupBinding: () => null,
+    providerGroupService: null,
+    savedPluginTaskRemoteRoute,
+    applyPluginTaskModelRoute,
+    resolvePluginTaskReadRoute,
+    agentSwitchPending: { get: () => undefined },
+    snapshot: { client: { drizzle: { select: () => defaultQuery } } },
+    sessions: {},
+    eq: () => true,
+    ...deps,
+  };
   return new Function(...Object.keys(deps), ts.transpileModule(text, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText)(...Object.values(deps));
@@ -137,6 +194,26 @@ it('reads remote output from its own task history and withholds it after plugin 
   expect(read).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: ['own-remote-task'] }));
   revokeOnRead = true;
   await expect(run('p', { kind: 'readMessages', taskId: 'own-remote-task' })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+});
+
+// Unit: a plugin may own two chats. A run from one cannot select or label the
+// other's history, and an ordinary read must never look like a scoped progress page.
+it('ties the progress page to the authorized run and its own task', async () => {
+  const epoch = {};
+  const read = vi.fn(async () => ({ items: [], nextCursor: null }));
+  const run = handler('readMessages', 'getRun', {
+    service: { get: async () => ({}), getRun: async () => ({
+      runId: 'r', taskId: 'chat-a', inputMessageId: 'plugin-task:r', acceptedAt: 123,
+    }) },
+    getCurrentDbClientSnapshot: () => epoch, getMessagesForHistory: read, drainPersistQueue: async () => {}, PluginTaskError,
+  });
+  await expect(run('p', { kind: 'readMessages', taskId: 'chat-b', progressForRun: 'r' }))
+    .rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  expect(read).not.toHaveBeenCalled();
+  expect(await run('p', { kind: 'readMessages', taskId: 'chat-a', progressForRun: 'r' }))
+    .toEqual({ progressForRun: 'r', items: [], nextCursor: null });
+  expect(read).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: ['chat-a'],
+    pluginProgressInputId: 'plugin-task:r', fromMs: 123 }));
 });
 
 // PR #10988: the old live Agent must not veto a permission supported by the
@@ -357,6 +434,40 @@ it.each(['codex', 'claude-code'] as const)('keeps the accepted next-input route 
   expect(applied.revision).toBe(accepted.revision);
 });
 
+it('keeps the accepted next-input route and revision stable when a deferred switch crosses an acp boundary', async () => {
+  const start = source.indexOf('      readSession: async taskId =>');
+  const property = source.slice(start, source.indexOf('      scheduleAutoTitle:', start)).trim().replace(/,$/, '');
+  const old = { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.4', effort: 'medium', fastMode: false, agentDeviceId: null as string | null };
+  const next = { agentKind: 'acp' as const, providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-pro', effort: 'high', fastMode: false, agentDeviceId: 'mac-mini' };
+  const row = { id: 'task', source: 'plugin', status: 'active', permissionMode: 'ask', planModeEnabled: false, ...old };
+  let pending: Record<string, unknown> | undefined = {
+    targetAgentKind: 'acp',
+    providerId: next.providerId,
+    model: next.model,
+    effort: next.effort,
+    fastMode: false,
+    targetAgentDeviceId: next.agentDeviceId,
+    runtimeSource: 'agent',
+  };
+  const query = { from: () => query, where: () => query, limit: async () => [row] };
+  const read = compile(`return ({${property}}).readSession;`, {
+    assertCurrent: () => {},
+    snapshot: { client: { drizzle: { select: () => query } } },
+    sessions: {},
+    eq: () => true,
+    pluginTaskConfigHash: createHash,
+    agentSwitchPending: { get: () => pending },
+    readSessionRuntimeProfiles: async () => (row.agentKind === 'acp' ? null : { effective: old, pendingMutation: null }),
+  });
+  const beforeSend = await read('task');
+  expect(beforeSend.resolvedConfig).toEqual(next);
+  pending = undefined;
+  Object.assign(row, next);
+  const afterSend = await read('task');
+  expect(afterSend.resolvedConfig).toEqual(beforeSend.resolvedConfig);
+  expect(afterSend.revision).toBe(beforeSend.revision);
+});
+
 it('freezes the directory returned by admission without mutating the caller plan', async () => {
   const epoch = {};
   const save = vi.fn();
@@ -435,7 +546,17 @@ it.each(['provider', 'receipt', 'directory', 'creator'])('keeps default-route co
       }),
       routeUnavailable: () => { throw Error('unavailable'); },
       // These configurations name a complete route, so the auxiliary-chain default never applies.
-      pluginTaskSelectionIsOpen, pluginTaskRouteAttempts,
+      pluginTaskSelectionIsOpen, pluginTaskRouteAttempts, savedPluginTaskRemoteRoute,
+      readRemotePluginEngines: async () => [],
+      admitLocalPluginEngineTaskRoute: (sel: Record<string, unknown>) => ({
+        agentKind: 'acp' as const,
+        providerId: String(sel.providerId ?? ''),
+        model: String(sel.model ?? ''),
+        effort: typeof sel.effort === 'string' ? sel.effort : '',
+        fastMode: false as const,
+      }),
+      isPluginEngineKind: (kind: unknown) => kind === 'acp',
+      maker: { getSessionMeta: async () => null },
       getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
       auxiliaryChainSessionCandidates: () => [],
       resolvePluginWorkerDirectory: async () => { if (phase === 'directory') change(); return '/root'; },

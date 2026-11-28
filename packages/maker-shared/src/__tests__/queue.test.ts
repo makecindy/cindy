@@ -332,6 +332,25 @@ describe('shared queue presentation model', () => {
     expect(isAutoSentQueueItem({ origin: { kind: 'orca', senderLabel: 'Lead' } })).toBe(false);
     expect(isAutoSentQueueItem({})).toBe(false);
   });
+
+  it('disables only steer when projection.steerUnsupported is true', () => {
+    const row = buildQueueRowPresentation({
+      item: { ...queued('q-1'), text: '普通消息' },
+      originalIndex: 0,
+      queueLength: 2,
+      projection: {
+        steeringQueueClientIds: [],
+        queueEditLocks: [],
+        queueInteractionLocks: [],
+        steerUnsupported: true,
+      },
+    });
+    expect(row.actions.steer.disabled).toBe(true);
+    expect(row.actions.steer.disabledReason).toContain('不支持插话');
+    expect(row.actions.edit.disabled).toBe(false);
+    expect(row.actions.moveDown.disabled).toBe(false);
+    expect(row.actions.remove.disabled).toBe(false);
+  });
 });
 
 describe('queueItemVisibleText', () => {

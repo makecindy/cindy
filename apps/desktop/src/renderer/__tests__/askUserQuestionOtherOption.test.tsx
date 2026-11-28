@@ -221,7 +221,7 @@ describe('AskUserQuestionPrompt model-authored "Other" options', () => {
     fireEvent.change(view.getByPlaceholderText('Type your answer…'), {
       target: { value: 'Approach C' },
     });
-    fireEvent.click(view.getByRole('button', { name: 'Submit' }));
+    fireEvent.click(view.getByRole('button', { name: 'Send answer' }));
 
     expect(onAnswer).toHaveBeenCalledWith('req-other-multi', {
       'Which approaches?': JSON.stringify(['Approach A', 'Approach C']),

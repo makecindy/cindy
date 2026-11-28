@@ -11,6 +11,7 @@ export const awayFromComputerSettings = defineSettings({
     sectionKey: 'settings.awayFromComputer.title',
     descriptionKey: 'settings.devices.keepAwakeHint',
     aliases: ['休眠', '睡眠', 'sleep'],
+    isVisible: ({ managedCloudInstance }) => !managedCloudInstance,
   },
   awayGuard: {
     id: 'settings.windowBehavior.awayGuard.label',

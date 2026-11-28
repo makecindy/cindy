@@ -148,7 +148,9 @@ describe('model Orca cleanup authority', () => {
       events.push('workers archived');
       return [];
     });
+    const revokeLeadBriefing = vi.fn();
     const run = compile({
+      acpLeadBriefings: { revoke: revokeLeadBriefing },
       getActiveTeamByLead: async () => ({ id: 'team-1' }),
       listWorkersByLead: async () => [createWorker()],
       maker: { getSession: () => ({ isTurnRunning: () => false, setVendorOptions: vi.fn() }), closeSession },
@@ -167,8 +169,10 @@ describe('model Orca cleanup authority', () => {
     releaseDelivery();
     await expect(first).rejects.toThrow('close failed');
     expect(events).toEqual(['worker locks held']);
+    expect(revokeLeadBriefing).not.toHaveBeenCalled();
     await expect(run('lead-1', undefined, true)).resolves.toEqual({ ok: true });
     expect(events).toEqual(['worker locks held', 'worker locks held', 'close', 'team ended', 'workers archived']);
+    expect(revokeLeadBriefing).toHaveBeenCalledExactlyOnceWith('lead-1');
   });
   it.each(['idleWorker', 'archiveWorker'].flatMap(action => ['revoked', 'close-error', 'healthy'].map(outcome => ({ action, outcome }))))(
     'preserves $action close semantics after abort: $outcome', async ({ action, outcome }) => {
@@ -283,7 +287,8 @@ describe('model Orca cleanup authority', () => {
         listWorkersByLead: async () => { if (phase === 'lookup') allowed = false; return [createWorker()]; },
         maker: { getSession: () => ({ isTurnRunning: () => false, setVendorOptions: vi.fn() }), closeSession: close },
         orcaTeamService: { clearAutoBridgeState: vi.fn(() => { if (phase === 'before-close') allowed = false; }) },
-                setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
+        setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
+        acpLeadBriefings: { revoke: vi.fn() },
         reconcileInactiveTeamWorkersForLead: vi.fn(async () => { if (phase === 'before-close') allowed = false; return ['worker-session-1']; }),
         recycleSessionWorktreeForStatusChange: vi.fn(), captureSessionRecycleScope: vi.fn(),
         cleanupPendingInteractionsForSession: vi.fn(), forgetKnownOrcaWorkerSession: vi.fn(),

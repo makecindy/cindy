@@ -6,7 +6,7 @@ import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import type { SubscriptionAccountUsage } from '../../../shared/subscriptionAccounts';
 import { useModelPickerAccount, type ModelPickerAccountInfo } from './ModelPickerAccount';
 import type { ProviderView } from '@cindy/model-providers';
-import { providerWeeklyQuotaSource } from '../../../shared/providerQuotaSource';
+import { providerUsageReaderSource, providerWeeklyQuotaSource } from '../../../shared/providerQuotaSource';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
@@ -150,7 +150,7 @@ export function codexWeeklyQuota(
   return null;
 }
 
-export { providerWeeklyQuotaSource };
+export { providerUsageReaderSource, providerWeeklyQuotaSource };
 
 export function pickerAccountWeeklyQuota(providerId: string, account: ModelPickerAccountInfo, now: number) {
   return providerId === 'openai'
@@ -177,6 +177,9 @@ export function useProviderUsageSnapshots(
   { web = false }: { web?: boolean } = {},
 ): ProviderUsageSnapshots {
   const source = providerWeeklyQuotaSource(provider);
+  // Per-provider readers do not resolve accounts of providers Cindy created; those come from
+  // the picker's account-pool read below.
+  const reader = providerUsageReaderSource(provider);
   // A can be an explicit source in B's catalog. Reading A's own quota is local,
   // even though its catalog remains routed through B for visibility checks.
   // Normalize here so rail rows, model details and group members agree.
@@ -184,10 +187,10 @@ export function useProviderUsageSnapshots(
   const local = scope.deviceId === null || scope.deviceId === selfDeviceId;
   const remoteDeviceId = local ? null : scope.deviceId;
   const pickerAccount = useModelPickerAccount(provider.id, scope.deviceId);
-  const { snapshot: localCodex } = useCodexRateLimits(local && source === 'codex' && !pickerAccount, provider.id);
+  const { snapshot: localCodex } = useCodexRateLimits(local && reader === 'codex' && !pickerAccount, provider.id);
   const localWeb = useAccountUsage(
     undefined,
-    local && web && source === 'codex' && !pickerAccount ? 'codex' : undefined,
+    local && web && reader === 'codex' && !pickerAccount ? 'codex' : undefined,
     'openai-web',
     undefined,
     provider.id,
@@ -197,15 +200,15 @@ export function useProviderUsageSnapshots(
     undefined,
     remoteDeviceId,
   );
-  const localClaude = useClaudeSubscriptionUsage(local && source === 'claude' && !pickerAccount, provider.id);
+  const localClaude = useClaudeSubscriptionUsage(local && reader === 'claude' && !pickerAccount, provider.id);
   const localXai = useXaiSubscriptionUsage(local && source === 'xai', provider.id);
   const remoteCodex = useRemoteCodexAccountUsage(
-    source === 'codex' && !pickerAccount ? remoteDeviceId : null,
+    reader === 'codex' && !pickerAccount ? remoteDeviceId : null,
     provider.id,
     { live: true, web },
   );
   const remoteClaude = useRemoteClaudeSubscriptionUsage(
-    source === 'claude' && !pickerAccount ? remoteDeviceId : null,
+    reader === 'claude' && !pickerAccount ? remoteDeviceId : null,
     provider.id,
   );
   const remoteXai = useRemoteXaiSubscriptionUsage(

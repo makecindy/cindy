@@ -99,7 +99,7 @@ export function VoiceCallTranscript({
               <p className="voice-call-turn-body whitespace-pre-wrap text-[var(--text-primary)]">
                 {turn.text}
               </p>
-              {turn.failed && !handoff && (
+              {turn.role === 'user' && turn.failed && !handoff && (
                 <p className="mt-1 text-12 text-[var(--text-secondary)]">
                   {t('bots.voiceMode.callSendFailed')}
                 </p>

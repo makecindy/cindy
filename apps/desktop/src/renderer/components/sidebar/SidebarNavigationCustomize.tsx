@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, GripVertical, Puzzle } from 'lucide-react';
+import { GripVertical, Puzzle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useGhostMainViews } from '@/cindy-brain/ghostMainViews';
@@ -7,7 +7,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
-import { cn } from '@/lib/utils';
 
 import { MAIN_VIEW_ICONS } from './GhostMainViewNavEntries';
 import {
@@ -27,6 +26,8 @@ import {
   useSidebarNavigationPrefs,
 } from './sidebarNavigationPrefs';
 import { SortableList } from './SortableList';
+import { Checkbox } from '@/components/ui/checkbox';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 interface SidebarNavigationCustomizeProps {
   onDone: () => void;
@@ -186,34 +187,26 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
         }
         reducedMotion={reducedMotion}
         // Rows drag from their label or handle; only the checkbox stays a plain click.
-        filter="[role='checkbox']"
+        filter="input[type='checkbox']"
         className="flex flex-col gap-0.5"
         renderItem={(id) => {
           const visible = isChecked(id);
           const Icon = iconFor(id);
           return (
-            // The whole row toggles; the checkbox stays the focusable control, and its
-            // keyboard activation bubbles here as the same click.
+            // The whole row toggles; the shared Checkbox (DESIGN.md §4, B-10) stays the
+            // focusable control and handles its own click and Space, so it stops the bubble.
             <div
               onClick={() => toggle(id)}
               className="group/nav-entry flex h-9 cursor-pointer items-center gap-2 rounded-lg px-1 hover:bg-sidebar-item-hover"
             >
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={visible}
-                aria-label={labelFor(id)}
-                // Same round selection mark as ShareMessageCheckbox: inverse fill when
-                // checked, a neutral outline otherwise. Blue stays reserved for focus.
-                className={cn(
-                  'grid size-5 shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  visible
-                    ? 'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]'
-                    : 'border border-[var(--border-default)] group-hover/nav-entry:border-[var(--text-secondary)]',
-                )}
-              >
-                {visible && <Check size={12} strokeWidth={2.5} aria-hidden />}
-              </button>
+              <span className="grid size-5 shrink-0 place-items-center">
+                <Checkbox
+                  checked={visible}
+                  aria-label={labelFor(id)}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={() => toggle(id)}
+                />
+              </span>
               <Icon
                 aria-hidden="true"
                 size={15}
@@ -248,11 +241,7 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
           );
         }}
       />
-      <Button
-        variant="primary"
-        tone="quiet"
-        size="sm"
-        compact
+      <ResetGroupButton
         className="mt-2"
         onClick={() => {
           setDraft({
@@ -263,9 +252,8 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
           });
           setResetting(true);
         }}
-      >
-        {t('sidebar.navigation.customize.reset')}
-      </Button>
+        label={t('sidebar.navigation.customize.reset')}
+      />
     </div>
   );
 }

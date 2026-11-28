@@ -25,6 +25,8 @@
 
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import {
+  isRemoteDeviceMarkedDisconnected,
+  remoteProjectsStore,
   useRemoteBootstrapFailedDeviceIds,
   useRemoteBootstrapLoadingDeviceIds,
   useRemoteDevices,
@@ -47,7 +49,7 @@ import {
   type MachineSelection,
 } from './selectedMachineStore';
 
-export interface SelectedMachineConnectingInput {
+export interface SelectedMachinePlaceholderInput {
   rawSelection: MachineSelection;
   devices: readonly SwitcherDevice[];
   syncedDevices: readonly RemoteDeviceSummary[];
@@ -152,29 +154,28 @@ export function shouldWaitForRemoteSessionBootstrap({
   );
 }
 
-/**
- * 只有「勾选集里全是连接中设备(不含本机)且没有任何缓存会话可显示」时才显示连接中占位。
- * 离线但已有 cached sessions 的设备仍会被 buildSwitcherDevices 标成 connecting
- * (chip 保持重连视觉),但侧边栏列表应该展示缓存会话,不能被 loading 占位盖掉;
- * 勾选里含本机 / 任一已连接设备时同理(有真实会话可展示)。
- */
-export function shouldShowSelectedMachineConnectingPlaceholder({
+/** 显式选中的远端均无任务可展示时，区分连接中和已离线。 */
+export function getSelectedMachinePlaceholder({
   rawSelection,
   devices,
   syncedDevices,
   bootstrapFailedDeviceIds,
-}: SelectedMachineConnectingInput): boolean {
+}: SelectedMachinePlaceholderInput): 'connecting' | 'offline' | null {
   const effective = normalizeSelectedMachineId(rawSelection, selectableDeviceIds(devices));
-  if (effective === MACHINE_ALL || effective.includes(MACHINE_LOCAL)) return false;
+  if (effective === MACHINE_ALL || effective.includes(MACHINE_LOCAL)) return null;
+  let allOffline = true;
   for (const deviceId of effective) {
-    const selectedDevice = devices.find((d) => d.deviceId === deviceId);
-    if (selectedDevice?.status !== 'connecting') return false;
-    if (bootstrapFailedDeviceIds.has(deviceId)) return false;
+    const selectedDevice = devices.find((device) => device.deviceId === deviceId);
+    if (selectedDevice?.status !== 'connecting' || bootstrapFailedDeviceIds.has(deviceId)) {
+      return null;
+    }
     const cachedSessionCount =
-      syncedDevices.find((d) => d.deviceId === deviceId)?.sessionCount ?? 0;
-    if (cachedSessionCount > 0) return false;
+      syncedDevices.find((device) => device.deviceId === deviceId)?.sessionCount ?? 0;
+    if (cachedSessionCount > 0) return null;
+    // Relay 重连期间分片也可能暂不可用；只有明确断线才显示离线。
+    allOffline &&= !selectedDevice.online && isRemoteDeviceMarkedDisconnected(deviceId);
   }
-  return true;
+  return allOffline ? 'offline' : 'connecting';
 }
 
 /** 三态设备列表(已连接 / 连接中 / 被拒,已排序)。综合共享设备列表 + 已同步集 + 被拒集。 */
@@ -241,21 +242,18 @@ export function useEffectiveSelectedMachineId(): MachineSelection {
   return useMemo(() => normalizeSelectedMachineId(raw, selectable), [raw, selectable]);
 }
 
-/**
- * 当前选择是否只覆盖「连接中」(在线可控但会话尚未同步)的远程机器。
- * 侧边栏据此把空列表的「暂无对话」换成「连接中」提示(选了它们但还没拉到会话时)。
- */
-export function useSelectedMachineConnecting(): boolean {
-  const raw = useSelectedMachineId();
+/** 设备选择作用域内的空列表占位。 */
+export function useSelectedMachinePlaceholder(): ReturnType<typeof getSelectedMachinePlaceholder> {
+  const rawSelection = useSelectedMachineId();
   const devices = useSwitcherDevices();
-  const synced = useRemoteDevices();
-  const bootstrapFailedDeviceIds = useRemoteBootstrapFailedDeviceIds();
-  return shouldShowSelectedMachineConnectingPlaceholder({
-    rawSelection: raw,
-    devices,
-    syncedDevices: synced,
-    bootstrapFailedDeviceIds,
-  });
+  return useSyncExternalStore(remoteProjectsStore.subscribe, () =>
+    getSelectedMachinePlaceholder({
+      rawSelection,
+      devices,
+      syncedDevices: remoteProjectsStore.getDeviceList(),
+      bootstrapFailedDeviceIds: remoteProjectsStore.getBootstrapFailedDeviceIds(),
+    }),
+  );
 }
 
 /**

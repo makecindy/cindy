@@ -549,5 +549,14 @@
   },
   "navigation": {
     "unavailable": "Não foi possível abrir as configurações do computador de destino. Verifique se está online e permite controle remoto; atualize o Cindy se estiver em uma versão antiga."
+  },
+  "qrLogin": {
+    "scanTitle": "Escanear para entrar",
+    "hintLogin": "Escaneie o código que o Cindy mostra no computador",
+    "hintLoginDetail": "No computador: ícone de celular ao lado do avatar → Controlar Cindy remotamente",
+    "cameraNeeded": "O Cindy precisa da câmera para escanear",
+    "grantCamera": "Permitir câmera",
+    "openSettings": "Abrir Ajustes",
+    "wrongCode": "Este não é um código de entrada do Cindy"
   }
 }

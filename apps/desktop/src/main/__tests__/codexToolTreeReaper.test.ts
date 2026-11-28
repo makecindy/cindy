@@ -1,146 +1,143 @@
 /**
- * codexToolTreeReaper.test.ts
- * ---------------------------------------------------------------------------
- * 只验证归属判定与杀树范围；ps / kill 全部 mock，不碰本机进程。
+ * Unit tier. Inject the process table through the production reaper interface;
+ * the Host diagnostics integration sends real signals to owned test processes.
+ * A valid ancestry alone cannot authorize a signal if the app-server's
+ * registration was retired while the reaper checked that ancestry.
  */
+import { ChildProcess } from 'node:child_process';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { reapCodexToolTreesSync, type CodexProcessSampler } from '../codex-tool-tree-reaper';
+import {
+  _resetCodexProcessRegistryForTests,
+  registerCodexProcessRole,
+} from '../process-monitor/codex-process-registry';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn() }));
+vi.mock('../logger', () => ({ createLogger: () => logger }));
 
-const logger = {
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  fatal: vi.fn(),
-};
+const platform = process.platform;
+const root = 900100;
+const tool = 900101;
+const child = 900102;
+const neighbour = 900103;
 
-const originalPlatform = process.platform;
-
-function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+function spawned(pid: number): ChildProcess {
+  return Object.assign(new ChildProcess(), { pid, spawnfile: 'unit-fixture' });
 }
 
-async function importReaper(options: {
-  platform: NodeJS.Platform;
-  spawnSync: ReturnType<typeof vi.fn>;
-}) {
-  vi.resetModules();
-  setPlatform(options.platform);
-  vi.doMock('../logger', () => ({ createLogger: () => logger }));
-  vi.doMock('node:child_process', () => ({
-    execFileSync: vi.fn(),
-    spawnSync: options.spawnSync,
-  }));
-  const registry = await import('../process-monitor/codex-process-registry');
-  const reaper = await import('../codex-tool-tree-reaper');
-  return { ...registry, ...reaper };
-}
-
-function psSpawn(rows: Array<[number, number]>) {
-  return vi.fn((file: string) => {
-    if (file === 'ps') {
-      return { status: 0, stdout: rows.map(([pid, ppid]) => `  ${pid}   ${ppid}`).join('\n') };
-    }
-    return { status: 0, stdout: '' };
+function processTable(
+  allRows: ReadonlyArray<readonly [number, number]>,
+  currentRows = allRows,
+): ReturnType<typeof vi.fn<CodexProcessSampler>> {
+  return vi.fn<CodexProcessSampler>(query => {
+    const rows = query.kind === 'all' ? allRows : query.kind === 'parents'
+      ? currentRows.filter(([pid]) => query.pids.includes(pid))
+      : currentRows.filter(([, ppid]) => ppid === query.parentPid);
+    const stdout = query.kind === 'children' ? rows.map(([pid]) => pid).join('\n')
+      : rows.map(([pid, ppid]) => pid + ' ' + ppid).join('\n');
+    return { stdout, status: 0, signal: null };
   });
-}
-
-function killedPids(spawnSync: ReturnType<typeof vi.fn>): number[][] {
-  return spawnSync.mock.calls
-    .filter(([file]) => file === 'kill')
-    .map(([, args]) =>
-      (args as string[])
-        .slice(1)
-        .map(Number)
-        .sort((a, b) => a - b),
-    );
 }
 
 describe('reapCodexToolTreesSync', () => {
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+  });
+
   afterEach(() => {
-    vi.doUnmock('../logger');
-    vi.doUnmock('node:child_process');
-    setPlatform(originalPlatform);
-    logger.debug.mockReset();
-    logger.info.mockReset();
+    _resetCodexProcessRegistryForTests();
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    vi.restoreAllMocks();
+    logger.warn.mockClear();
   });
 
-  it('kills tool trees below own app-servers but keeps app-server itself for EOF close', async () => {
-    const self = process.pid;
-    const spawnSync = psSpawn([
-      [100, self], // registered app-server
-      [101, 100], // xcodebuild
-      [102, 101], // build service
-      [103, 102], // swift-frontend
-      [104, 100], // MCP server
-      [200, self], // unregistered sibling (e.g. claude)
-      [201, 200],
+  it('uses the live spawned handle as the root and rechecks the tail before each signal', () => {
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const rows = [[tool, root], [child, tool], [neighbour, process.pid]] as const;
+    const sample = processTable(rows, [...rows, [root, process.pid]]);
+    registerCodexProcessRole(root, 'task-host', spawned(root));
+
+    expect(reapCodexToolTreesSync(sample)).toMatchObject({
+      appServers: 1, killedToolTrees: 1, scanFailed: false, fallbackUsed: false, unreapedAppServers: 0,
+    });
+    expect(sample.mock.calls.map(([query]) => query)).toEqual([
+      { kind: 'all' },
+      { kind: 'parents', pids: [child, tool, root] },
+      { kind: 'parents', pids: [tool, root] },
     ]);
-    const { registerCodexProcessRole, reapCodexToolTreesSync } = await importReaper({
-      platform: 'darwin',
-      spawnSync,
-    });
-    registerCodexProcessRole(100, 'task-host');
-
-    const result = reapCodexToolTreesSync();
-
-    expect(result).toMatchObject({ appServers: 1, killedToolTrees: 2 });
-    expect(killedPids(spawnSync)).toEqual([[101, 102, 103], [104]]);
+    expect(kill.mock.calls).toEqual([[child, 'SIGKILL'], [tool, 'SIGKILL']]);
   });
 
-  it('ignores an exited app-server whose pid is reused by another own child', async () => {
-    const spawnSync = psSpawn([
-      [100, process.pid], // e.g. quit watchdog shell reusing the old app-server pid
-      [101, 100],
+  it('withholds signals when the re-read loses an ancestor', () => {
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const sample = processTable([[tool, root], [child, tool]],
+      [[tool, neighbour], [child, tool], [root, process.pid]]);
+    registerCodexProcessRole(root, 'task-host', spawned(root));
+
+    expect(reapCodexToolTreesSync(sample)).toMatchObject({ killedToolTrees: 0, unreapedAppServers: 1 });
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('withholds signals if the registration is retired during the parent re-read', () => {
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const unregister = registerCodexProcessRole(root, 'task-host', spawned(root));
+    const readTable = processTable([[tool, root], [root, process.pid]]);
+    const sample: CodexProcessSampler = (query, timeoutMs) => {
+      const result = readTable(query, timeoutMs);
+      if (query.kind === 'parents') unregister();
+      return result;
+    };
+
+    expect(reapCodexToolTreesSync(sample)).toMatchObject({ killedToolTrees: 0, unreapedAppServers: 1 });
+    expect(readTable.mock.calls.map(([query]) => query.kind)).toEqual(['all', 'parents']);
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an empty handle', new ChildProcess()],
+    ['a PID without a handle', undefined],
+    ['an exited child with a reused PID', Object.assign(spawned(root), { exitCode: 0 })],
+    ['a child with a different PID', spawned(neighbour)],
+  ])('does not scan for %s', (_name, handle) => {
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const sample = processTable([[tool, root], [root, process.pid]]);
+    registerCodexProcessRole(root, 'task-host', handle);
+
+    expect(reapCodexToolTreesSync(sample)).toMatchObject({ appServers: 0, killedToolTrees: 0, unreapedAppServers: 1 });
+    expect(sample).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('keeps Windows shutdown unchanged', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const sample = processTable([]);
+    registerCodexProcessRole(root, 'task-host', spawned(root));
+    expect(reapCodexToolTreesSync(sample)).toMatchObject({ appServers: 0, killedToolTrees: 0, unreapedAppServers: 0 });
+    expect(sample).not.toHaveBeenCalled();
+  });
+
+  it('reserves time for a scoped fallback and reports scoped inspection failures', () => {
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const sample = vi.fn<CodexProcessSampler>((query, timeout) => {
+      if (query.kind === 'all') {
+        expect(timeout).toBeLessThanOrEqual(750);
+        return { stdout: '', status: null, signal: 'SIGKILL', error: Object.assign(new Error(), { code: 'ETIMEDOUT' }) };
+      }
+      expect(timeout).toBeLessThanOrEqual(120);
+      return { stdout: '', status: 2, signal: null };
+    });
+    registerCodexProcessRole(root, 'task-host', spawned(root));
+
+    expect(reapCodexToolTreesSync(sample)).toMatchObject({
+      appServers: 1, scanFailed: true, fallbackUsed: true, killedToolTrees: 0, unreapedAppServers: 1,
+    });
+    expect(sample.mock.calls.map(([query]) => query.kind)).toEqual(['all', 'children']);
+    expect(logger.warn.mock.calls.map(([, event]) => event)).toEqual([
+      expect.objectContaining({ code: 'CODEX_REAPER_SCAN_FAILED', query: 'all', durationMs: expect.any(Number),
+        exitCode: null, signal: 'SIGKILL', reason: 'ETIMEDOUT' }),
+      expect.objectContaining({ code: 'CODEX_REAPER_SCAN_FAILED', query: 'children', durationMs: expect.any(Number),
+        exitCode: 2, signal: null }),
     ]);
-    const { registerCodexProcessRole, reapCodexToolTreesSync } = await importReaper({
-      platform: 'darwin',
-      spawnSync,
-    });
-    const dispose = registerCodexProcessRole(100, 'task-host');
-    dispose(); // transport confirmed the app-server exited
-
-    reapCodexToolTreesSync();
-    expect(spawnSync).not.toHaveBeenCalled();
-  });
-
-  it('skips a registered pid whose parent is no longer this process (pid reuse)', async () => {
-    const spawnSync = psSpawn([
-      [100, 1],
-      [101, 100],
-    ]);
-    const { registerCodexProcessRole, reapCodexToolTreesSync } = await importReaper({
-      platform: 'darwin',
-      spawnSync,
-    });
-    registerCodexProcessRole(100, 'task-host');
-
-    expect(reapCodexToolTreesSync()).toMatchObject({ appServers: 0, killedToolTrees: 0 });
-    expect(killedPids(spawnSync)).toEqual([]);
-  });
-
-  it('does not scan without registered app-servers or on Windows', async () => {
-    const spawnSync = psSpawn([]);
-    const first = await importReaper({ platform: 'darwin', spawnSync });
-    first.reapCodexToolTreesSync();
-    expect(spawnSync).not.toHaveBeenCalled();
-
-    const second = await importReaper({ platform: 'win32', spawnSync });
-    second.registerCodexProcessRole(100, 'task-host');
-    second.reapCodexToolTreesSync();
-    expect(spawnSync).not.toHaveBeenCalled();
-  });
-
-  it('does not throw when scanning fails', async () => {
-    const spawnSync = vi.fn(() => ({ error: new Error('ps missing') }));
-    const { registerCodexProcessRole, reapCodexToolTreesSync } = await importReaper({
-      platform: 'darwin',
-      spawnSync,
-    });
-    registerCodexProcessRole(100, 'task-host');
-
-    expect(() => reapCodexToolTreesSync()).not.toThrow();
-    expect(logger.debug).toHaveBeenCalledWith('failed to scan processes', { error: 'ps missing' });
+    expect(kill).not.toHaveBeenCalled();
   });
 });

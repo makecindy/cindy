@@ -30,12 +30,18 @@ export const providersSettings = defineSettings({
     sectionKey: 'settings.tabs.providers',
     keywordKeys: [
       'subscriptionAccounts.add',
-      'subscriptionAccounts.strategy',
+      'subscriptionAccounts.existing.connect',
+      'subscriptionAccounts.existing.choose',
+      'modelGroups.auto.adjust',
       'settings.providers.detail.sameAccountConnections',
       'settings.providers.detail.sameAccountConnectionsHint',
     ],
     aliases: [
       '多账号',
+      'Claude 路径',
+      '配置目录',
+      'CLAUDE_CONFIG_DIR',
+      'CODEX_HOME',
       '订阅账号',
       '并发上限',
       '权重',
@@ -80,7 +86,7 @@ export const providersSettings = defineSettings({
       'providerGroup.section.title',
       'settings.providers.detail.runLocation.label',
     ],
-    aliases: ['供应商分享', '供应商组', 'provider group', 'provider sharing', '运行于', '借用', 'run on', 'borrow'],
+    aliases: ['供应商分享', '电脑组', '供应商组', 'computer group', 'provider group', 'provider sharing', '运行于', '借用', 'run on', 'borrow'],
   },
   modelCompaction: {
     id: 'model-compaction',
@@ -96,7 +102,8 @@ export const providersSettings = defineSettings({
     targetId: 'settings-panel-providers',
     titleKey: TAB_LABEL_KEY['providers'],
     sectionKey: 'settings.sections.providers',
-    keywordKeys: ['settings.providers.remote.modelsTitle'],
+    keywordKeys: ['settings.providers.remote.modelsTitle', 'settings.providers.menu.appearance',
+      'settings.providers.menu.icon', 'settings.providers.menu.ownImage', 'settings.providers.wizard.nameLabel'],
   },
   pluginProviders: {
     id: 'providers.pluginProviders',
@@ -106,7 +113,13 @@ export const providersSettings = defineSettings({
     descriptionKey: 'settings.providers.plugin.note',
     sectionKey: 'settings.tabs.providers',
     // 其他电脑开放的插件引擎也列在这一页(OwnRemotePluginEngines)，行的悬停提示是「引擎 · 电脑名」。
-    keywordKeys: ['settings.providers.remote.rowLabel'],
+    keywordKeys: [
+      'settings.providers.remote.rowLabel',
+      'settings.providers.models.advanced.defaultEffort',
+      'settings.providers.models.advanced.defaultEffortHint',
+      'settings.providers.models.advanced.antigravityHydrogenDescription',
+      'settings.providers.models.advanced.providerLabel',
+    ],
     aliases: [
       '插件供应商', '插件引擎', '其他电脑的插件引擎', 'plugin provider', 'plugin engine', 'plugin engine on another computer',
     ],
@@ -136,6 +149,8 @@ export const providersSettings = defineSettings({
       'settings.providers.local.title',
       'settings.providers.llamacpp.title',
       'settings.providers.custom.nameSearchHint',
+      'settings.providers.wizard.officialModelPlugins',
+      'settings.ghosts.detail.settingsTitle',
     ],
     sectionKey: 'settings.tabs.providers',
   },

@@ -1,15 +1,13 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
+import { useWideChatWidth } from './useChatLayoutPreference';
+
 /**
  * 主区域内容宽度 hook
  *
- * 同时返回两个宽度：
- *   messageWidth = min(maxWidth, containerWidth - sidePadding*2)   // 普通模式 50px/侧
- *   inputWidth   = messageWidth + INPUT_OUTSET (输入框每侧少 10px)
- *
- * maxWidth 为内容封顶宽（首参）：容器再宽,内容列也不超过它,超出部分靠 mx-auto
- * 居中留白。不传时回落到 MAX_MESSAGE_WIDTH(1200) 的历史默认。新建对话页与进行中
- * 对话页传同一个值(914),保证发送首条消息时输入框宽度不跳变,同时左右留出呼吸空间。
+ * maxWidth 为标准模式的内容上限（首参）。不传时回落到 MAX_MESSAGE_WIDTH(1200) 的历史默认。新建任务、普通任务、
+ * 伙伴私聊和群聊以 914px 为标准上限。宽屏模式按留白后的可用宽度取比例，小窗保留紧凑栏能提供的行宽。
+ * 正文、表格与代码使用同一列，气泡内的内容仍受气泡宽度约束。
  *
  * - 消息流侧 (50px)：MessageStream 是 overflow-y-auto 的原生滚动容器,占满
  *   全宽 containerWidth，内部 contentRef `mx-auto` + `maxWidth=messageWidth`
@@ -20,7 +18,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  *   用 inputWidth 完整填满
  *
  * 关系：inputWidth = messageWidth + 20，即输入框始终比消息流每侧多出 10px
- *   （padding 更小 = 更宽）。容器够宽时两者都封顶，超出部分由 mx-auto
+ *   （padding 更小 = 更宽）。标准模式下容器够宽时两者都封顶，超出部分由 mx-auto
  *   居中留白。
  *
  * compact 模式 (messagePad 50→20 / inputPad 40→10):
@@ -35,6 +33,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  */
 // 内容封顶宽的历史默认值:调用方不传首参时回落到它(旧行为)。
 const MAX_MESSAGE_WIDTH = 1200;
+const SHORT_TABLE_FIT_PANE_WIDTH = 1600;
 const INPUT_OUTSET = 20; // 输入框比消息流每侧宽 10px（共 20px）
 const DEFAULT_MESSAGE_PAD = 50;
 // compact 之前用 10/0 太贴边了,input 完全没呼吸空间。20/10 仍比默认紧凑 60%,
@@ -46,7 +45,30 @@ const COMPACT_MESSAGE_PAD = 20;
 // 之前 padding 就先收紧,过渡顺序自然(padding 收紧 → 必要时 toolbar dense
 // → 必要时 toolbar compact)。
 const AUTO_COMPACT_THRESHOLD = 700;
-const DEFAULT_INPUT_PAD = Math.max(0, DEFAULT_MESSAGE_PAD - INPUT_OUTSET / 2);
+const ROOMY_PADDING_THRESHOLD = 820;
+const COMPACT_COLUMN_WIDTH = AUTO_COMPACT_THRESHOLD - 2 * COMPACT_MESSAGE_PAD;
+
+export const STANDARD_CHAT_MESSAGE_WIDTH = 914;
+
+export function getChatColumnWidths(containerWidth: number, standardCap: number, widePercent: number | null, compact = false) {
+  // Increase padding more slowly than the pane grows, so crossing the compact
+  // breakpoint cannot make the same conversation column narrower.
+  const paddingProgress = compact ? 0 : Math.min(1, Math.max(0,
+    (containerWidth - AUTO_COMPACT_THRESHOLD) / (ROOMY_PADDING_THRESHOLD - AUTO_COMPACT_THRESHOLD),
+  ));
+  const messagePad = COMPACT_MESSAGE_PAD + (DEFAULT_MESSAGE_PAD - COMPACT_MESSAGE_PAD) * paddingProgress;
+  const available = Math.max(0, containerWidth - messagePad * 2);
+  const standardWidth = Math.min(standardCap, available);
+  const messageWidth = widePercent === null
+    ? standardWidth
+    : Math.min(available, Math.max(COMPACT_COLUMN_WIDTH, available * widePercent / 100));
+  return {
+    messageWidth,
+    inputWidth: messageWidth + INPUT_OUTSET,
+    inputPad: messagePad - INPUT_OUTSET / 2,
+    widerThanStandard: messageWidth > standardWidth,
+  };
+}
 
 export interface UseProportionalWidthOptions {
   /** 紧凑模式 (workdir-browse rail / 主会话右栏打开等窄容器场景),两侧 padding 由 50→20。 */
@@ -66,6 +88,7 @@ export interface UseProportionalWidthOptions {
 }
 
 export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWidthOptions = {}) {
+  const wideWidthPercent = useWideChatWidth();
   const containerRef = useRef<HTMLDivElement>(null);
   const messageWidthRef = useRef(0);
   // effective compact 标志:= opts.compact || containerWidth < AUTO_COMPACT_THRESHOLD。
@@ -84,27 +107,30 @@ export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWid
       // 主消息流不显式传 compact,靠 auto 触发;doc rail 显式传 true,与 auto 取 OR
       // 后仍恒 compact(行为不变)。
       const useCompact = opts.compact || containerWidth < AUTO_COMPACT_THRESHOLD;
-      const messagePad = useCompact ? COMPACT_MESSAGE_PAD : DEFAULT_MESSAGE_PAD;
-      const nextInputPad = Math.max(0, messagePad - INPUT_OUTSET / 2);
-      const messageAvailable = Math.max(0, containerWidth - messagePad * 2);
-      // 首参 maxWidth 为内容封顶宽;非法/未传时回落到历史默认 1200。
-      const cap = maxWidth && maxWidth > 0 ? maxWidth : MAX_MESSAGE_WIDTH;
-      const nextMessage = Math.min(cap, messageAvailable);
-      let nextInput = nextMessage + INPUT_OUTSET;
+      // 非法或未传的标准上限回落到历史默认 1200。
+      const baseCap = maxWidth && maxWidth > 0 ? maxWidth : MAX_MESSAGE_WIDTH;
+      const widths = getChatColumnWidths(containerWidth, baseCap, wideWidthPercent, opts.compact);
+      let nextInput = widths.inputWidth;
       if (opts.minWidth && opts.minWidth > nextInput) {
         // 地板夹到实测容器宽以内:窄窗仍是"填满容器",不会溢出/裁切。
         nextInput = Math.min(opts.minWidth, containerWidth);
       }
-      messageWidthRef.current = nextMessage;
+      messageWidthRef.current = widths.messageWidth;
 
       // These inherited variables update the already-mounted layout directly. Keeping the
       // continuously changing pixel values out of React avoids a second full session render and
       // layout pass on every BrowserWindow resize frame.
       const el = containerRef.current;
       if (el) {
-        el.style.setProperty('--cindy-message-width', `${nextMessage}px`);
+        el.style.setProperty('--cindy-message-width', `${widths.messageWidth}px`);
+        // Keep spacing between short table columns tied to their contents on large panes.
+        el.style.setProperty(
+          '--cindy-markdown-table-width',
+          containerWidth >= SHORT_TABLE_FIT_PANE_WIDTH || widths.widerThanStandard
+            ? 'fit-content' : '100%',
+        );
         el.style.setProperty('--cindy-input-width', `${nextInput}px`);
-        el.style.setProperty('--cindy-input-pad', `${nextInputPad}px`);
+        el.style.setProperty('--cindy-input-pad', `${widths.inputPad}px`);
         el.style.setProperty(
           '--cindy-input-half-width',
           `${Math.max(0, (nextInput - 16) * 0.5)}px`,
@@ -119,7 +145,7 @@ export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWid
           : { isCompact: useCompact, inputWidthBand: resolvedBand },
       );
     },
-    [maxWidth, opts.compact, opts.minWidth, opts.responsiveBreakpoints],
+    [maxWidth, opts.compact, opts.minWidth, opts.responsiveBreakpoints, wideWidthPercent],
   );
 
   // useLayoutEffect + 同步量一次:在首次 paint 前写好 CSS 变量，消除 width=0 的坏帧。

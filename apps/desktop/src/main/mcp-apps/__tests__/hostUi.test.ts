@@ -52,6 +52,85 @@ it('keeps legacy appearance writes within the newly approved field list', async 
 });
 afterEach(() => { releasePluginUiRegions('plugin'); vi.restoreAllMocks(); });
 
+// Unit: only the approved renderer-bound entry gets v1. Context, page arguments
+// and a sidebar-only window cannot claim another click or editor.
+it('binds the composer action to the declared task view and opening window', async () => {
+  const { host } = boundary.entry as { host: { contributions: object[] } };
+  host.contributions = [{ id: 'apply', title: 'Apply', position: 'composer.toolbar',
+    view: 'task', composerAction: 'inline' }];
+  const source = { id: 'click-id', contributionId: 'apply', openId: 'opening-1' };
+  const context = { cindy: { composerAction: { version: 99 }, input: { id: 'spoofed' } } };
+  const ordinary = bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'task', () => 'rev');
+  expect(ordinary.projectContext!(context)).not.toHaveProperty('composerAction');
+  expect(ordinary.hostTools?.map(tool => tool.name)).not.toContain('cindy.ui.composerAction');
+  expect(() => bindPluginUiResource('renderer:2', 'task-a', 'plugin', 'task', () => 'rev',
+    undefined, undefined, source)).toThrow('MCP_APP_SOURCE_UNAVAILABLE');
+  expect(() => bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'task', () => 'rev',
+    undefined, undefined, { ...source, contributionId: 'other' })).toThrow('MCP_APP_SOURCE_UNAVAILABLE');
+
+  const binding = bindPluginUiResource('renderer:4', 'task-a', 'plugin', 'task', () => 'rev',
+    undefined, undefined, source);
+  expect(binding.projectContext!(context)).toMatchObject({ composerAction: { version: 1, dynamicItems: true, draftDocument: true, queuedActions: true }, input: { id: 'spoofed' } });
+  expect(binding.projectContext!(context)).not.toHaveProperty('composerAction.id');
+  expect(binding.hostTools?.find(tool => tool.name === 'cindy.ui.draft')?.inputSchema.properties)
+    .not.toHaveProperty('skipDuplicate');
+  const signal = new AbortController().signal;
+  await expect(binding.callHostTool!('cindy.ui.composerAction', { phase: 'start', id: 'other' }, signal))
+    .rejects.toThrow('MCP_APP_INVALID_REQUEST');
+  expect(boundary.send).not.toHaveBeenCalled();
+
+  for (const reply of [{ started: 'true' }, { started: true }]) {
+    const pending = binding.callHostTool!('cindy.ui.composerAction', { phase: 'start' }, signal);
+    // Handle rejection while waiting for the request to reach the intended renderer.
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledExactlyOnceWith('plugin-ui:action',
+      expect.objectContaining({ kind: 'composer-action-start', sessionId: 'task-a', composerAction: { ...source, instanceId: 'plugin' } })));
+    const { requestId } = boundary.send.mock.calls[0][1];
+    expect(() => finishPluginUiAction('renderer:1', requestId, reply)).toThrow('MCP_APP_ACTION_UNAVAILABLE');
+    finishPluginUiAction('renderer:4', requestId, reply);
+    if (reply.started === true) {
+      await expect(pending).resolves.toEqual({ content: [{ type: 'text', text: '{"started":true}' }] });
+    } else {
+      await expect(pending).rejects.toThrow('MCP_APP_ACTION_UNAVAILABLE');
+    }
+    boundary.send.mockClear();
+  }
+  const writing = binding.callHostTool!('cindy.ui.draft', { mode: 'append', text: 'Example', composerAction: { id: 'spoofed' } }, signal);
+  await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledExactlyOnceWith('plugin-ui:action',
+    expect.objectContaining({ kind: 'draft', mode: 'append', composerAction: { ...source, instanceId: 'plugin' } })));
+  finishPluginUiAction('renderer:4', boundary.send.mock.calls[0][1].requestId, { revision: '2' });
+  await writing;
+  // Presentation is independent of draft permission: tools that do other work
+  // still get a click lifetime, with no draft API added to their authority.
+  (boundary.entry as { host: { capabilities: string[] } }).host.capabilities = [];
+  const nonDraft = bindPluginUiResource('renderer:4', 'task-a', 'plugin', 'task', () => 'rev',
+    undefined, undefined, source);
+  expect(nonDraft.hostTools?.map(tool => tool.name)).toContain('cindy.ui.composerAction');
+  await expect(nonDraft.callHostTool!('cindy.ui.draft', { mode: 'read' }, signal)).rejects.toThrow('MCP_APP_TOOL_NOT_VISIBLE');
+});
+
+// Unit: text and structured content share the existing draft tool and authority.
+// Invalid or ambiguous payloads must be rejected before reaching the editor.
+it('forwards a structured draft without mixing it with a text replacement', async () => {
+  const binding = bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'task', () => 'rev');
+  const signal = new AbortController().signal;
+  const document = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Edited' }] }] };
+  for (const body of [{}, { text: 'Text', document }, { document: null },
+    { document: { type: 'paragraph', content: [] } }, { document: { type: 'doc', content: 'bad' } },
+    { document: { type: 'doc', content: [], attrs: { oversized: 'x'.repeat(128000) } } }]) {
+    await expect(binding.callHostTool!('cindy.ui.draft', { mode: 'replace', revision: 'one', ...body }, signal))
+      .rejects.toThrow('MCP_APP_INVALID_REQUEST');
+  }
+  expect(boundary.send).not.toHaveBeenCalled();
+  const pending = binding.callHostTool!('cindy.ui.draft', { mode: 'replace', document, revision: 'one' }, signal);
+  await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledExactlyOnceWith('plugin-ui:action',
+    expect.objectContaining({ kind: 'draft', document, revision: 'one' })));
+  const request = boundary.send.mock.calls[0][1];
+  expect(request).not.toHaveProperty('text');
+  finishPluginUiAction('renderer:1', request.requestId, { revision: 'two' });
+  await expect(pending).resolves.toMatchObject({ content: [{ type: 'text', text: '{"revision":"two"}' }] });
+});
+
 // 旧版支持单独隐藏界面区域，整窗 hide 不能替代；仅显式调用走一次所属布局桥。tier: unit。
 it('changes individual layout regions without hiding the whole application window', async () => {
   (boundary.entry as {host: {capabilities: string[]}}).host.capabilities = ['visibility'];

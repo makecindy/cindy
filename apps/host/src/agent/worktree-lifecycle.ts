@@ -9,6 +9,7 @@ import {
   discardPrecreatedWorktreeByRecoveryKey,
   detectCwd,
   getForSession,
+  getRemovalPreview,
   listBranches,
   reconcilePendingSafeDirectoryCleanups,
   suggestName,
@@ -61,6 +62,10 @@ export function createHostWorktreeLifecycle(profileDir: string) {
     discardPrecreatedWorktree,
     discardPrecreatedWorktreeByRecoveryKey,
     cancelPrecreatedWorktree,
+    async getRemovalPreview(sessionId: string) {
+      const { canDiscardChanges: _discard, ...preview } = await getRemovalPreview(sessionId);
+      return preview;
+    },
     /** A precreated Worktree is registered before its session row exists. */
     async backfillWorktreePath(sessionId: string): Promise<void> {
       const meta = getForSession(sessionId);

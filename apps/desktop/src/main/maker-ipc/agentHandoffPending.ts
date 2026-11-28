@@ -72,11 +72,11 @@ export function createAgentHandoffPending(deps: {
     // 这里用 findForkParentSessionId 而**不是** findPendingForkOrigin:这两条路径重建的是
     // 新的原生上下文,交接正文纯按 messages 拼出、不含 fork 信息。fork 是会话的永久属性,
     // 不该随首发那一次性标记被消费掉——否则首轮跑完再切引擎,新上下文就不知道自己是分叉。
-    async (sessionId, handoff) => {
+    async (sessionId) => {
       const forkParentSessionId = await findForkParentSessionId(sessionId);
       return forkParentSessionId
-        ? composeForkOriginHandoff(forkParentSessionId, handoff)
-        : handoff;
+        ? (handoff: string) => composeForkOriginHandoff(forkParentSessionId, handoff)
+        : undefined;
     },
   );
 }

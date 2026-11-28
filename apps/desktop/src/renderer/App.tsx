@@ -17,6 +17,7 @@ import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { CloudInstanceAccessProvider } from '@/features/cloud-settings/CloudInstanceAccess';
 import { PluginReviewUpdatesProvider } from '@/contexts/PluginReviewUpdatesContext';
 import { AppShellCoverProvider, useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { LoginHandoffProvider } from '@/contexts/LoginHandoffContext';
@@ -175,6 +176,7 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
   window.electronAPI.syncNewMakerDraft({
     ...(appDefaultModelRequestId ? { appDefaultModelRequestId } : {}),
     ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
+    selectedPluginEngine: draft.pluginEngine ?? undefined,
     selectedRoute: {
       ...(draft.agentDeviceId ? { agentDeviceId: draft.agentDeviceId } : {}),
       harness: draft.vendor === 'cc' || draft.vendor === 'orca' ? 'claude' : draft.vendor,
@@ -276,7 +278,9 @@ function OwnerScopedRouter() {
   return (
     <PluginUiProvider enabled={canEnterApp} host={<Suspense fallback={null}><PluginUiHost /></Suspense>}>
     <MainViewHistoryProvider ownerKey={ownerKey} locationKey={router.state.location.key}>
-      <RouterProvider key={ownerKey} router={router} />
+      <CloudInstanceAccessProvider>
+        <RouterProvider key={ownerKey} router={router} />
+      </CloudInstanceAccessProvider>
     </MainViewHistoryProvider>
     </PluginUiProvider>
   );

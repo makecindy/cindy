@@ -47,22 +47,19 @@ export function resolveLocalCollabPolicyWorkingDir(
  * 这是主进程的最终授权边界；Renderer 的入口状态只是用户体验层，
  * 不能替代这里的校验。
  */
-export function assertCollabProjectEnabled(
+export function collabProjectUnavailableReason(
   context: CollabProjectPolicyContext,
   isPluginEnabled: (pluginId: 'collab', workingDir?: string) => boolean,
   isManagedDialogueWorkspace: (workingDir: string) => boolean,
-): void {
+): string | null {
   const workingDir = typeof context.workingDir === 'string' ? context.workingDir : null;
   if (context.workspaceKind !== 'project' && context.workspaceKind !== 'dialogue') {
-    throwIpcError(
-      'PRECONDITION_FAILED',
-      'collaboration requires a supported lead session',
-    );
+    return 'collaboration requires a supported lead session';
   }
   // 正常 dialogue 在 createSession 时已经拿到 app 托管的运行目录。这里仍要求非空,
   // 防止损坏/legacy 行把空 cwd 带进 Worker bootstrap;区别只在它不参与项目级策略查询。
   if (workingDir === null || workingDir.trim() === '') {
-    throwIpcError('PRECONDITION_FAILED', 'collaboration requires a session working directory');
+    return 'collaboration requires a session working directory';
   }
 
   // 远端会话的 workingDir 是远端机器上的路径, 在本机 fs 上查项目级插件配置
@@ -74,10 +71,7 @@ export function assertCollabProjectEnabled(
   // TODO(follow-up): 远端项目级 collab 开关 (远端 fs 的 .cindy/plugins.json
   // 或 per-host 设置) 有需求时再做。
   if (context.remoteHostId) {
-    if (!isPluginEnabled('collab')) {
-      throwIpcError('PRECONDITION_FAILED', 'collaboration is disabled for this session');
-    }
-    return;
+    return isPluginEnabled('collab') ? null : 'collaboration is disabled for this session';
   }
 
   // Main 按 dialogue kind + 路径归属解析策略作用域,不信任 workspaceKind 单独裁决。这个判据也被
@@ -87,7 +81,14 @@ export function assertCollabProjectEnabled(
     context.workspaceKind,
     isManagedDialogueWorkspace,
   );
-  if (!isPluginEnabled('collab', policyWorkingDir)) {
-    throwIpcError('PRECONDITION_FAILED', 'collaboration is disabled for this session');
-  }
+  return isPluginEnabled('collab', policyWorkingDir) ? null : 'collaboration is disabled for this session';
+}
+
+export function assertCollabProjectEnabled(
+  context: CollabProjectPolicyContext,
+  isPluginEnabled: (pluginId: 'collab', workingDir?: string) => boolean,
+  isManagedDialogueWorkspace: (workingDir: string) => boolean,
+): void {
+  const reason = collabProjectUnavailableReason(context, isPluginEnabled, isManagedDialogueWorkspace);
+  if (reason) throwIpcError('PRECONDITION_FAILED', reason);
 }

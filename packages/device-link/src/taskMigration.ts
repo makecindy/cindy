@@ -68,6 +68,7 @@ export interface TaskMigrationView {
   projectMove?: {
     sessionId: string;
     workingDir: string | null;
+    projectDir?: string | null;
     workspaceKind: string;
   };
   stage?:
@@ -102,7 +103,12 @@ export interface TaskMigrationView {
    */
   skipped?: { total: number; entries: Array<{ path: string; code: string }> };
   projects?: string[];
-  agents?: Array<"cc" | "codex" | "pi">;
+  agents?: Array<"cc" | "codex" | "pi" | "acp">;
+  /**
+   * Available ACP plugin engine provider ids (`acp-plugin:<ghostId>:<harnessId>`)
+   * on the target computer. Absent on older hosts.
+   */
+  acpProviders?: string[];
   /** Entire Orca graph, native contexts and per-member workspaces. Absence means unsupported. */
   teamMigration?: true;
   /** Accepts `files.transcripts` (large native transcripts streamed outside the package). */

@@ -24,3 +24,4 @@ export {
   isProviderAccessDeniedError,
   readProviderMetadataContinuity,
 } from '../../../../../../packages/device-link/src/metadataContinuity';
+export { PROVIDER_SHARE_GROUP_STATUS_REQUEST } from '../../../../../../packages/device-link/src/providerShareCatalog';

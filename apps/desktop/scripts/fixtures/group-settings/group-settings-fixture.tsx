@@ -19,6 +19,8 @@ interface Data {
   spare?: number;
   /** A server with the group's own Cindy (bot-group-chat.md §9): on, or switched off. */
   assistant?: 'on' | 'off';
+  computers?: boolean;
+  unregisteredFolder?: boolean;
 }
 
 const data = ctx.data as unknown as Data;
@@ -51,8 +53,10 @@ const group = {
   replyMode: data.assistant ? 'all' : 'mentioned', speakingMode: 'auto', singleSpeaker: !!data.assistant, members,
   ...(data.assistant ? { supportsGroupAssistant: true, assistantEnabled: data.assistant === 'on', supportsGroupProject: true,
     project: { kind: 'github', repo: 'makecindy/cindy' } } : {}),
-  organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
+  ...(data.computers ? { assistantDeviceId: null, assistantComputers: [{ id: 'mac', name: 'QA-Mac.local' }, { id: 'windows', name: 'Windows' }, { id: 'a'.repeat(64), name: 'a'.repeat(64) }] } : {}),
+  organizerBotId: data.alone ? null : 'aster', projectDir: data.unregisteredFolder || data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
   supportsMentionAudiences: true, allowMentionAllBots: true,
+  supportsMemberMentionAll: true, allowMemberMentionAll: false,
   supportsMemberInvites: true, allowMemberInvites: data.memberInvites === true,
   supportsDissolve: true, supportsGroupLeave: true, supportsListRemoval: true, supportsMemberAvatar: true,
   canInvite: data.role !== 'member', archived: !!data.archived, dissolvedAt: data.dissolved ? '2026-10-29T08:00:00Z' : null,
@@ -68,14 +72,14 @@ void mountPage({
       listBotGroups: async () => ({ ok: true, groups: [group] }),
       getBotGroup: async () => ({ ok: true, group }),
       onBotGroupChanged: subscription('botGroupChanged'),
-      updateBotGroup: forbid('maker.updateBotGroup'),
+      updateBotGroup: data.unregisteredFolder ? async () => ({ ok: false, errorCode: 'PROJECT_NOT_REGISTERED' }) : forbid('maker.updateBotGroup'),
       chatServer: {
         ownedBots: async () => ({ ok: true, bots: [{ actorId: 'aster', botId: 'aster', name: 'Aster' }, { actorId: 'pico', botId: 'pico', name: 'Pico' }, ...spare] }),
         manage: forbid('maker.chatServer.manage'),
         createInvite: forbid('maker.chatServer.createInvite'),
       },
     },
-    dialog: { showOpenDirectory: forbid('dialog.showOpenDirectory') },
+    dialog: { showOpenDirectory: data.unregisteredFolder ? async () => ({ success: true, path: '/work/site' }) : forbid('dialog.showOpenDirectory') },
     profileGetState: forbid('profileGetState'),
     profileUpdate: forbid('profileUpdate'),
   },

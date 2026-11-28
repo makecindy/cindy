@@ -300,6 +300,28 @@ await cindy.tasks.send({ taskId, requestKey, expectedRevision, text, context, re
   不带 `relay` 的请求与旧版完全一样，已有 requestKey 照常重放。
 - 旧 Host 没有 `messageRelay` 时不要传 `relay`（会被当作未知字段拒绝）；照旧只发 `text` 和 `context`，消息显示为普通插件消息。
 
+### 后续轮次：它开出的任务发回结果（可选）
+
+IM 里的一个提问，Agent 常常用 `send_to_session` 开一件任务去做，自己先简短回一句；那件任务做完把结果发回来时，
+任务里会再起一轮，但这一轮不是插件发的，插件原本读不到它，结果就停在 Cindy 里。
+`tasks.capabilities().followUps === true` 时，`tasks.send` 可以另传 `followUps: true`（只接受 `true`）：
+
+- 这一轮里用 `send_to_session` **新开**的任务会被记下。它之后发回本任务的每条消息，宿主都排成单独的一轮，
+  并为本插件记一条**后续轮次**：`getRun` / `listRuns` 照常能读到，带 `followUpOf`（开出那件任务的 runId），
+  进展（`progressForRun`）和最终回答（`outputMessageId`）的读法与普通 run 相同。
+- 只认那件任务的来信：用户在 Cindy 里对本任务说的话、别的任务发来的消息、这一轮之外开的任务都不会变成后续轮次。
+  记录 7 天有效（从开出那件任务算起）；插件卸载、停用或不再拥有本任务时不再产生。
+- 开出了任务的 run 在 `getRun` 里带 `followUps: { tasks, until }`：`tasks` 是这一轮开出的任务数，`until` 之后不会再有
+  新的后续轮次。插件据此用 `listRuns({taskId, after})` 低频查看新的 run（例如 10 秒一次），`followUpOf` 有值的才是后续轮次；
+  后续轮次自己也带 `followUps`，它再开的任务同样会回来。
+- Agent 在这一轮开始时就从 `[消息来源]` 得知：这一轮最后的回答会由本插件发回原提问所在的地方；不需要发的话，
+  整条回答只写 `NO_REPLY`。插件读到 `NO_REPLY` 时什么都不发。
+- 后续轮次的输入是别的任务的话，不由插件决定：插件不能 `cancel` 它（返回 `INVALID_REQUEST`），插件自己的派发检查
+  （权限上限、配置变化）也不会拦下这条消息。它跑在任务当时的设置下，插件要不要为某类提问开启，按提问者的权限自己判断
+  （例如只为主人本人的提问开启）。
+- `followUps` 只在为 `true` 时参与幂等摘要，不带它的请求与旧版一样。旧 Host 没有该能力时不要传（会被当作未知字段拒绝），
+  这时结果仍只留在 Cindy。
+
 ### 新建任务的权限选择（可选）
 
 先检查 `tasks.capabilities().createPermissionMode === true`。`tasks.create` 和 project 的
@@ -420,6 +442,12 @@ const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
 // 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
 ```
 
+**转发本轮进展**：当 `capabilities().runProgress === true` 时，调用
+`readMessages({taskId, progressForRun: runId, after?, limit?})`。结果带有相同的
+`progressForRun`，按时间返回这次输入已落库的用户可见进展。使用消息 ID 去重。
+Codex 使用已结束的 commentary，Claude 和 Pi 使用明确以调用工具结束的助手文本。
+没有明确进展的轮次可以只发最终答复。旧宿主继续按原有的 outputMessageId 读取最终答复。
+
 **边生成边显示（新增接口，尚未发布）**：`capabilities().runPreview === true` 时，`getRun` 在
 `status === 'running'` 且任务当前执行的正是这次输入时，可额外返回 `preview: { text }`：
 Agent 正在输出的那一段回答（最多 32768 个 UTF-16 字符，超出只保留开头），已去掉内部引用标记。
@@ -511,9 +539,11 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
   返回 `{tasks:[{id,title,agentKind,archived,status,lastActivityAt}]}`，按最近活动倒序，最多 200 条；包含已归档任务和该项目 worktree 下的任务。
   `status` 为 `running | awaiting | error | done | idle`，与侧边栏右侧状态同源（团队主任务同样带上本机 Worker 的出错/待处理）；`lastActivityAt` 为毫秒时间戳。
   用户拒绝首次确认后，可在插件详情页点「确认任务查看权限」重新允许；插件不要反复调用来触发确认。
-  不含消息、计划、文件或费用；不含对话、伙伴、Worker、隐藏、远程及其他电脑上的任务。未登记或已删除的项目返回 `TARGET_UNAVAILABLE`。
+  不含消息、计划、文件或费用；不含对话、伙伴、Worker、隐藏、SSH 远程及记录在其他电脑上的任务。只把 Agent 执行来源换到其他电脑或供应商分享的本机任务照常列出。未登记或已删除的项目返回 `TARGET_UNAVAILABLE`。
 - `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
 - 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
+
+`openSession({sessionId, deviceId?})` 可在桌面主窗口打开本机或同账号其他电脑上的可见普通会话，包括独立对话。除 `agent.observe` 外，还需声明并获批 `agent.hostTools: ['history']`。先检测 `typeof cindy.observe?.openSession === 'function'`。远程目标传设备 ID 和原始会话 ID 两个字段。如 `list_sessions` 返回 `deviceId::sessionId`，取该设备组的 ID 并移除会话 ID 的设备前缀。省略设备或传 `local` 表示本机。宿主按指定设备核验目标，返回 `{opened:true}` 表示已交给原生导航；不可见或不存在返回 `TARGET_UNAVAILABLE`，远程连接不可用返回 `REMOTE_UNAVAILABLE`。本方法只导航，不返回会话数据。
 
 ## 4.11.9 查看伙伴和状态
 

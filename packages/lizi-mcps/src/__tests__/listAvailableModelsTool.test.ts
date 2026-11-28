@@ -111,4 +111,51 @@ describe('list_available_models tool', () => {
 
     expect(result).toMatchObject({ ok: false, errorCode: 'REMOTE_AGENT_SHARE_PAUSED' });
   });
+
+  // 2026-11-27: callers discovering plugin engines for send_to_session can filter directly with agent="acp"
+  // and receive plugin_engines (including an explicit empty array when none are offered).
+  it('filters plugin engines with agent="acp" and documents send_to_session usage', async () => {
+    const listAvailableModels = vi.fn(async () => ({
+      ok: true as const,
+      agentDeviceId: null,
+      pluginEngines: [{
+        providerId: 'acp-plugin:antigravity:antigravity',
+        name: 'Antigravity',
+        available: true,
+        models: [
+          { id: 'default', label: 'Default (the engine chooses)' },
+          { id: 'gemini-4-neon', label: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'] },
+        ],
+      }],
+    }));
+    const registry = new XdtHelperToolRegistry();
+    registerListAvailableModelsTool(registry, { listAvailableModels });
+
+    const filtered = parse(await registry.call('list_available_models', { agent: 'acp' }));
+    expect(listAvailableModels).toHaveBeenCalledWith({ agent: 'acp' });
+    expect(filtered).toMatchObject({
+      ok: true,
+      provider_device_id: 'local',
+      plugin_engines: [{
+        provider_id: 'acp-plugin:antigravity:antigravity',
+        name: 'Antigravity',
+        available: true,
+        models: [
+          { id: 'default', label: 'Default (the engine chooses)' },
+          { id: 'gemini-4-neon', label: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'] },
+        ],
+      }],
+    });
+    expect(filtered.codex).toBeUndefined();
+    expect(filtered.claude_code).toBeUndefined();
+    expect(filtered.pi).toBeUndefined();
+
+    listAvailableModels.mockResolvedValueOnce({ ok: true as const, agentDeviceId: null, pluginEngines: [] });
+    const empty = parse(await registry.call('list_available_models', { agent: 'acp' }));
+    expect(empty.plugin_engines).toEqual([]);
+
+    const description = registry.get('list_available_models')!.description;
+    expect(description).toContain('send_to_session');
+    expect(description).toContain('agent_kind');
+  });
 });

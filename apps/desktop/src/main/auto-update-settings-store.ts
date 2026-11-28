@@ -21,7 +21,16 @@ import {
   type OverrideSettingsState,
 } from './maker-host/override-settings-file.js';
 
+import { inspectSettingsFile, isSettingBoolean, validateOptionalSettingsFields } from './maker-host/settings-inspection.js';
+
 const log = desktopMakerLogger.child('auto-update-settings-store');
+
+/** 只读偏好，不检查、下载、应用更新，也不探测系统空闲状态。 */
+export function inspectAutoUpdateSettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+    validate: (raw) => validateOptionalSettingsFields(raw, { autoRelaunchOnIdle: isSettingBoolean }),
+  });
+}
 
 export interface AutoUpdateSettings {
   autoRelaunchOnIdle: boolean;

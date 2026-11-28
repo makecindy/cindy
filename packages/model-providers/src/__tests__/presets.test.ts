@@ -1183,15 +1183,15 @@ describe('官方渠道预设契约', () => {
   });
 
   it.each(['zhipu-coding-plan-cn', 'zai-coding-plan-global'])(
-    '%s 只推荐官方支持的 GLM-5.3 / GLM-5.3-Flash（5.2、5.1 已路由到 5.3）',
+    '%s 的 Coding Plan 按引擎推荐 GLM-5.4 和已有的 5.3 系列',
     (id) => {
       const recommended = (agent: 'claude-code' | 'codex' | 'pi') =>
         preset(id)?.runtimes[agent]?.models
           .filter((model) => model.defaultEnabled !== false)
           .map((model) => model.id);
-      expect(recommended('claude-code')).toEqual(['glm-5.3[1m]', 'glm-5.3-flash[1m]']);
-      expect(recommended('codex')).toEqual(['glm-5.3', 'glm-5.3-flash']);
-      expect(recommended('pi')).toEqual(['glm-5.3', 'glm-5.3-flash']);
+      expect(recommended('claude-code')).toEqual(['glm-5.4[1m]', 'glm-5.3[1m]', 'glm-5.3-flash[1m]']);
+      expect(recommended('codex')).toEqual(['glm-5.4', 'glm-5.3', 'glm-5.3-flash']);
+      expect(recommended('pi')).toEqual(['glm-5.4', 'glm-5.3', 'glm-5.3-flash']);
     },
   );
 

@@ -29,8 +29,8 @@
 - **设置页常驻**：「辅助模型」区显示提示卡片，说明受影响的功能、每个候选不可用的原因，以及
   插件任务临时改用的模型；操作为「打开模型供应商」（配置问题时）与「自定义辅助模型」（尚未
   自定义时）。保存候选链或修复供应商与凭证后，会刷新已显示的配置问题，问题消失后卡片随之消失。
-- **弹一次**：问题第一次出现时在主窗口弹一次警告提示，带「去设置」按钮直达该设置区。同一个
-  问题、同样的原因不再重复弹；原因变化或恢复后再次出问题才会再弹。
+- **对话内提醒**：仅当本次请求用了已保存的自定义链、所有候选都失败或仍在冷却，且每个候选均达到告警条件时，在该会话标题下提示具体受影响的操作。自动推荐、配置探测和备用成功时保持安静。配套轻通知有冷却。关闭后，同一会话的这次故障保持收起，真实请求恢复后发生的新故障可以再提示。
+- **模型诊断**：确定性的认证、权限或余额等拒绝立即暂停该模型。其余运行错误按最近十次实际请求统计，三次失败提醒、五次暂停。暂停满 60 秒后，下次真实请求才可重试。保存自定义链时按顺序测试每个模型，全部拿到可用短标题才替换当前配置。
 - 手机、IM 渠道与 Node Host 暂不提示；Host 的共用请求主体留了可选上报端口，没有接。
 
 ## 插件任务的退回
@@ -48,5 +48,4 @@
   `maker:auxiliary-model-health:get`，变化经现有 app-settings 推送的
   `auxiliary-model-health` 分区通知）。
 - 请求结果上报：`oneShotCandidatesCore.ts` 的 `reportAuxiliaryChainOutcome` 端口。
-- 界面：`renderer/hooks/useAuxiliaryModelHealth.ts`（含一次性提示，挂在 `MainLayout`）、
-  `renderer/components/settings/AuxiliaryModelHealthNotice.tsx`。
+- 设置诊断：`renderer/hooks/useAuxiliaryModelHealth.ts` 与 `AuxiliaryModelHealthNotice.tsx`。会话内提醒及关闭：`utility-model/auxiliary-model-health.ts` 与 `AuxiliaryModelHealthBanner.tsx`。

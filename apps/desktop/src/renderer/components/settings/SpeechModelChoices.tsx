@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Plus, AudioLines } from 'lucide-react';
+import { Plus, AudioLines } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { SettingsTextInput } from './SettingsTextInput';
 
 export interface SpeechModelChoice {
@@ -19,14 +20,19 @@ export function SpeechModelChoices({
   choices,
   onToggle,
   onAdd,
+  sessionConfirmed = false,
   loading = false,
+  mode = 'audio_speech',
 }: {
   choices: SpeechModelChoice[];
   onToggle: (id: string) => void;
-  onAdd: (id: string) => void;
+  onAdd?: (id: string) => void;
+  sessionConfirmed?: boolean;
   loading?: boolean;
+  mode?: 'audio_speech' | 'realtime';
 }) {
   const { t } = useTranslation();
+  const title = t(mode === 'realtime' ? 'bots.voiceMode.realtime.title' : 'settings.providers.speechSetup.title');
   const [expanded, setExpanded] = useState(false);
   const [manual, setManual] = useState(false);
   const [id, setId] = useState('');
@@ -35,17 +41,17 @@ export function SpeechModelChoices({
     : choices.filter((choice, index) => index < 2 || choice.checked);
   const hidden = choices.length - visible.length;
   const add = () => {
-    if (loading || !id.trim()) return;
+    if (!onAdd || loading || !id.trim()) return;
     onAdd(id.trim());
     setId('');
   };
   return (
-    <section className="flex flex-col gap-3" aria-label={t('settings.providers.speechSetup.title')}>
+    <section className="flex flex-col gap-3" aria-label={title}>
       <div className="flex items-center gap-2 text-13 font-medium text-[var(--text-primary)]">
         <AudioLines size={16} aria-hidden="true" />
-        {t('settings.providers.speechSetup.title')}
+        {title}
       </div>
-      <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
+      {!sessionConfirmed && <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
         {t(
           choices.some((choice) => choice.reference)
             ? 'settings.providers.speechSetup.referenceHint'
@@ -53,26 +59,21 @@ export function SpeechModelChoices({
               ? 'settings.providers.speechSetup.discoveryHint'
               : 'settings.providers.speechSetup.manualHint',
         )}
-      </p>
+      </p>}
       {choices.length > 0 && (
         <div className="overflow-hidden rounded-xl border border-[var(--border-default)]">
           {visible.map((choice) => (
-            <button
+            <label
               key={choice.id}
-              type="button"
-              role="checkbox"
-              aria-checked={choice.checked || choice.saved === true}
-              disabled={loading || choice.saved}
-              onClick={() => onToggle(choice.id)}
-              className="flex min-h-11 w-full items-center gap-3 border-b border-[var(--border-default)] px-3.5 py-3 text-left last:border-b-0 enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)] disabled:opacity-60"
+              className={`flex min-h-11 w-full items-center gap-3 border-b border-[var(--border-default)] px-3.5 py-3 text-left last:border-b-0 ${loading || choice.saved ? 'opacity-60' : 'cursor-pointer hover:bg-[var(--settings-menu-bg-hover)]'}`}
             >
-              <span
-                className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${choice.checked || choice.saved ? 'border-[var(--accent-cta-bg)] bg-[var(--accent-cta-bg)] text-[var(--surface-on-card)]' : 'border-[var(--text-tertiary)]'}`}
-              >
-                {(choice.checked || choice.saved) && (
-                  <Check size={11} strokeWidth={3} aria-hidden="true" />
-                )}
-              </span>
+              <Checkbox
+                data-settings-search-action="Choose whether this discovered speech model is added to the provider"
+                checked={choice.checked || choice.saved === true}
+                disabled={loading || choice.saved}
+                onChange={() => onToggle(choice.id)}
+                className="disabled:opacity-100"
+              />
               <span className="min-w-0 flex-1">
                 <span
                   className="block truncate text-13 text-[var(--text-primary)]"
@@ -96,29 +97,29 @@ export function SpeechModelChoices({
                       ? t('settings.providers.speechSetup.reference')
                       : choice.manual
                         ? t('settings.providers.speechSetup.manualSource')
-                        : t('settings.providers.speechSetup.discovered')}
+                        : t(sessionConfirmed ? 'settings.providers.speechSetup.realtimeConfirmed' : 'settings.providers.speechSetup.discovered')}
               </span>
-            </button>
+            </label>
           ))}
         </div>
       )}
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      {(onAdd || hidden > 0) && <div className="flex flex-wrap items-center justify-between gap-2">
         {hidden > 0 && (
           <Button variant="secondary" tone="quiet" onClick={() => setExpanded(true)}>
             {t('settings.providers.speechSetup.more', { count: hidden })}
           </Button>
         )}
-        <Button
+        {onAdd && <Button
           variant="secondary"
           tone="quiet"
           onClick={() => setManual((value) => !value)}
           disabled={loading}
         >
           <Plus size={14} aria-hidden="true" />
-          {t('settings.providers.speechSetup.manual')}
-        </Button>
-      </div>
-      {manual && (
+          {t(mode === 'realtime' ? 'bots.voiceMode.realtime.add' : 'settings.providers.speechSetup.manual')}
+        </Button>}
+      </div>}
+      {onAdd && manual && (
         <div className="flex items-center gap-2">
           <SettingsTextInput
             aria-label={t('settings.providers.speechSetup.modelId')}
@@ -138,9 +139,11 @@ export function SpeechModelChoices({
           </Button>
         </div>
       )}
-      <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-        {t('settings.providers.speechSetup.modelsHint')}
-      </p>
+      {mode === 'audio_speech' && (
+        <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+          {t('settings.providers.speechSetup.modelsHint')}
+        </p>
+      )}
     </section>
   );
 }

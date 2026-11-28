@@ -19,7 +19,14 @@ import type { TodoItem } from './TodoListCard';
 import type { ToolMediaItem } from './AgentActionRow';
 import type { BotStartedTask } from './BotStartedTasks';
 
-export type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage; pending?: true };
+export type MessageRenderItem = {
+  type: 'message';
+  key: string;
+  message: ChatMessage;
+  pending?: true;
+  /** Hidden duplicates that still resolve to this row for history navigation. */
+  collapsedClientIds?: readonly string[];
+};
 type AgentPlanRenderItem = {
   type: 'agent_plan';
   key: string;

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 import { act, cleanup, fireEvent, render, screen, waitFor, type RenderResult } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const mockUpdate = vi.fn();
 const mockGetModelsForVendor = vi.fn();
@@ -241,6 +242,7 @@ function renderChip(
 }
 
 beforeEach(() => {
+  setDataOwnerGeneration('test-owner');
   mockNavigate.mockReset();
   mockUpdate.mockReset();
   mockUpdate.mockResolvedValue({ id: SESSION_ID });
@@ -262,6 +264,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setDataOwnerGeneration(null);
 });
 
 describe('ContextWindowBudgetChip', () => {

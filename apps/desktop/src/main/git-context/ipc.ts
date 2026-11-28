@@ -1,6 +1,16 @@
 import { readGithubTokenDetailed } from './githubToken.desktop.js';
 import { glabCliTokenSource } from './glabCliTokenSource';
-import { fetchGitlabMr } from './gitlabPrSummary';
+import { createGitlabTokenChain, gitlabPluginToken } from './gitlabTokenChain';
+import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
+import { createPluginLogicalIdentity, pluginInstallStoragePart, pluginNewInstallRelId } from '../../shared/pluginIdentity.js';
+import {
+  activeOwnerScopeKey,
+  getActiveDataOwnerPushStamp,
+  isAppSessionBoundaryPending,
+  onAppSessionInvalidated,
+} from '../appSessionState.js';
+import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
+import { fetchGitlabMrStatus } from './gitlabPrSummary';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { setGithubReadRuntime } from './githubReadRuntime';
 import { manageSessionPrs } from './manageSessionPrs';
@@ -16,8 +26,9 @@ import { manageSessionPrs } from './manageSessionPrs';
  *   git-context:pr-status     (queries[]) → PrStatusResult[]
  *
  * Channels(push,main → all windows):
- *   git-context:changed         { workdir, head }
- *   git-context:pr-refs-changed { sessionId }
+ *   git-context:changed           { workdir, head }
+ *   git-context:pr-refs-changed   { sessionId }
+ *   git-context:pr-status-changed PrStatusResult (metadata stripped)
  *
  * GitHub token 只用本地 gh CLI 登录态(`gh auth token`,零配置)——agent 干活
  * 本来就靠 gh,凭证天然就有;拿不到时按原因降级 gh-missing / gh-not-logged-in,
@@ -25,8 +36,9 @@ import { manageSessionPrs } from './manageSessionPrs';
  */
 
 import { app, BrowserWindow, ipcMain } from 'electron';
+import type { Schedule } from '@cindy/maker-scheduler';
 import { GithubClient } from '@cindy/github-client';
-import { prStatusKey, isPrHost, sessionPrUrl } from '@cindy/maker-shared';
+import { prStatusKey, isPrHost, parseSessionPrUrl, sessionPrUrl } from '@cindy/maker-shared';
 import { getScheduleWebhookHost } from '../scheduler-host/webhook/runtime';
 import { GITHUB_EVENT_CACHE_TTL_MS, type GithubPrRefresh } from '../scheduler-host/webhook/github';
 import { cachedGithubPrHeads, refreshGithubPrEvents } from './githubPrEvents';
@@ -40,6 +52,7 @@ import {
   githubReadScope,
   githubStatusFetch,
   githubTransport,
+  resolveGithubItem,
 } from './githubReadHost';
 import type { GithubReadService } from './githubReadService';
 import type { GithubReadMethod } from '@cindy/maker-shared';
@@ -69,6 +82,7 @@ import {
   setPrRefsChangedListener,
 } from './prRefsStore.js';
 import {
+  createPrStatusBroadcastGate,
   filterPrStatusQueriesForRefs,
   PrStatusService,
   withoutPrMetadata,
@@ -77,10 +91,11 @@ import {
   type PrRemoteState,
 } from './prStatusService.js';
 
-import { fetchPrSummary } from './prSummary';
-import { PrFollowWatch } from './prFollowWatch';
+import { fetchPrRemoteWithFallback } from './prSummary';
+import { changesBetween, PrFollowWatch } from './prFollowWatch';
 import { getSchedulerIfInitialized, getScheduleStorageIfInitialized } from '../scheduler-host/index.desktop.js';
 
+const gitlabSetupSubscriptions: Array<() => void> = [];
 const log = createLogger('git-context/ipc');
 
 export const GIT_CONTEXT_INVOKE = {
@@ -98,13 +113,19 @@ export const GIT_CONTEXT_INVOKE = {
 export const GIT_CONTEXT_PUSH = {
   CHANGED: 'git-context:changed',
   PR_REFS_CHANGED: 'git-context:pr-refs-changed',
+  PR_STATUS_CHANGED: 'git-context:pr-status-changed',
 } as const;
 
-function broadcastToAllWindows(channel: string, payload: unknown): void {
+function broadcastToAllWindows(
+  channel: string,
+  payload: unknown,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send(channel, payload);
+      if (ownerStamp !== undefined) win.webContents.send(channel, payload, ownerStamp);
+      else win.webContents.send(channel, payload);
     } catch (e) {
       log.warn(`broadcast failed: ${String(e)}`);
     }
@@ -118,6 +139,9 @@ async function readGithubToken() {
   return readGithubTokenDetailed();
 }
 
+const ADAPTIVE_LOW_QUOTA_TTL_MS = 5 * 60_000;
+const ADAPTIVE_CRITICAL_QUOTA_TTL_MS = 15 * 60_000;
+
 async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteState> {
   // fetchImpl:api.github.com 是境外端点,走吃系统代理的通道(见 maker-host/outbound-fetch)。
   const client = new GithubClient({
@@ -126,48 +150,7 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
     repo: q.repo,
     fetchImpl: githubStatusFetch(token),
   });
-  // 核心状态走 REST(所有 token 类型通用);未解决数走 GraphQL 增强信号,
-  // 失败(老 fine-grained PAT 不支持 GraphQL 等)降级 null,不拖垮整条状态。
-  const [pr, summary] = await Promise.all([
-    client.getPullRequest(q.prNumber),
-    fetchPrSummary(client, q).catch((err) => {
-      log.debug('PR summary query failed (degrade to null)', { err: String(err) });
-      return null;
-    }),
-  ]);
-  const metadata = pr as typeof pr & {
-    mergeable?: boolean | null;
-    mergeable_state?: string;
-    updated_at?: string;
-    labels?: unknown[];
-    requested_reviewers?: unknown[];
-  };
-  return {
-    metadata: {
-      body: pr.body,
-      author: pr.user,
-      base_sha: pr.base.sha ?? null,
-      mergeable: metadata.mergeable ?? null,
-      merge_state: metadata.mergeable_state ?? null,
-      updated_at: metadata.updated_at ?? null,
-      merged_at: pr.merged_at ?? null,
-      labels: metadata.labels ?? [],
-      review_requests: metadata.requested_reviewers ?? [],
-    },
-    state: pr.state,
-    draft: pr.draft,
-    merged: pr.merged,
-    merged_at: pr.merged_at,
-    title: pr.title,
-    html_url: pr.html_url,
-    branch: pr.head.ref,
-    head_sha: pr.head.sha,
-    base_branch: pr.base.ref,
-    review_decision: summary && summary.headOid === pr.head.sha ? (summary.reviewDecision ?? null) : null,
-    unresolved_count: summary?.unresolved ?? null,
-    checks: summary && summary.headOid === pr.head.sha ? summary.checks : null,
-    merge_state: summary && summary.headOid === pr.head.sha ? (summary.mergeState ?? null) : null,
-  };
+  return fetchPrRemoteWithFallback(client, q, log);
 }
 
 let gitContextService: GitContextService | null = null;
@@ -179,22 +162,42 @@ const prFollowWatch = new PrFollowWatch({
   autoRunAllowed: () => getSchedulerIfInitialized()?.isPassive() === false,
   listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
   hasSuccessfulPrRunSince: async (id, since) => (await getScheduleStorageIfInitialized()?.hasSuccessfulPrRunSince(id, since)) ?? false,
+  lastSuccessfulMrObservation: async id => (await getScheduleStorageIfInitialized()?.lastSuccessfulMrObservation(id)) ?? null,
   inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
   hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
-  runNow: async (id, trigger, expectedSchedule) => {
+  runNow: async (id, trigger, expectedSchedule, mrObservation) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger, expectedSchedule, deferToCaller: Boolean(expectedSchedule.prTrigger) });
+    // PrFollowWatch owns the single pending doorbell for every watched schedule (both
+    // explicit prTrigger and legacy hook URLs), so busy deferrals must not clobber nextFireAt.
+    return scheduler.runNow(id, { trigger, mrObservation, expectedSchedule, deferToCaller: true });
   },
   log,
 });
 /** Re-read current facts before running the existing follow-up gate. No new agent task. */
-export async function refreshSchedulePr(url: string): Promise<void> {
+export async function refreshSchedulePr(url: string, schedule?: Schedule): Promise<void> {
   if (!prStatusService) throw new Error('HOST_NOT_READY');
-  const [, owner, repo, , number] = new URL(url).pathname.split('/');
-  const [result] = await prStatusService.getStatuses([{ owner: owner!, repo: repo!, prNumber: Number(number) }],
-    { waitForFresh: true, refresh: true });
-  if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+  // GitHub PR or GitLab MR: the same host-qualified identity the status reader and follow watcher use.
+  const ref = parseSessionPrUrl(url);
+  if (!ref) throw new Error('INVALID_PR_URL');
+  const before = prFollowWatch.observedSignature(ref);
+  const { url: link, ...query } = ref;
+  void link;
+  const [result] = await prStatusService.getStatuses([query], { waitForFresh: true, refresh: true });
+  if (!result?.ok) {
+    // The run history shows this message: say what the user can fix, keep the stable code first.
+    const reason = (result as { reason?: unknown } | undefined)?.reason;
+    const host = query.host ?? 'this GitLab instance';
+    const hint = reason === 'glab-missing'
+      ? `no GitLab account for ${host}: glab is not installed and the GitLab plugin has no connection for it`
+      : reason === 'glab-not-logged-in'
+        ? `no GitLab account for ${host}: glab is not signed in and the GitLab plugin has no connection for it`
+        : typeof reason === 'string' ? reason : undefined;
+    throw new Error(hint ? `PR_VERIFICATION_FAILED: ${hint}` : 'PR_VERIFICATION_FAILED');
+  }
+  if (schedule && ref.provider === 'gitlab' && !changesBetween(before, prFollowWatch.observedSignature(ref), ref.provider).length) {
+    await prFollowWatch.reconcileInitialMrWork(schedule, result);
+  }
 }
 
 export async function githubPrHeads(urls: readonly string[]): Promise<Record<string, string>> {
@@ -233,25 +236,65 @@ export async function readGithub(
 }
 
 /** main 启动期注册(bootstrap-electron 调一次)。 */
-export function registerGitContextIpc(): void {
+export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: string) => string | null }): void {
+  const gitlabTokens = createGitlabTokenChain({
+    glab: glabCliTokenSource,
+    pluginToken: deps?.readGitlabPluginToken ?? gitlabPluginToken,
+    ownerScope: activeOwnerScopeKey,
+  });
   gitContextService = new GitContextService({
     onChanged: (snapshot) => broadcastToAllWindows(GIT_CONTEXT_PUSH.CHANGED, snapshot),
   });
+  const prStatusBroadcaster = createPrStatusBroadcastGate((status) => {
+    if (isAppSessionBoundaryPending()) return;
+    const ownerStamp = getActiveDataOwnerPushStamp();
+    if (ownerStamp.dataOwnerId === null) return;
+    broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_STATUS_CHANGED, status, ownerStamp);
+  });
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
-    readGitlabToken: (host) => glabCliTokenSource.readTokenDetailed(host),
-    fetchGitlab: (token, query) => fetchGitlabMr(token, query, outboundFetch),
-    rejectGitlabToken: (host) => glabCliTokenSource.rejectToken(host),
-    invalidateGitlabTokenFailures: () => glabCliTokenSource.invalidateNegativeCache(),
+    // Account configured for the instance in the GitLab plugin first, then local glab sign-in.
+    readGitlabToken: (host) => gitlabTokens.readTokenDetailed(host),
+    fetchGitlab: (token, query) => fetchGitlabMrStatus(token, query, outboundFetch),
+    rejectGitlabToken: (host) => gitlabTokens.rejectToken(host),
+    invalidateGitlabTokenFailures: () => gitlabTokens.invalidateNegativeCache(),
     scope: githubReadScope,
     fetchPr: fetchPrRemote,
     // The renderer keeps its last value while awaiting fresh counts; no delayed second tick.
     staleTtlMs: 0,
     eventCacheTtlMs: query => query.provider !== 'gitlab' && getScheduleWebhookHost()?.githubEventsHealthy(sessionPrUrl(query))
       ? GITHUB_EVENT_CACHE_TTL_MS : undefined,
-    onInvalidated: () => prFollowWatch.reset(),
-    onObserved: (query, result) => prFollowWatch.observe(query, result),
+    adaptiveCacheTtlMs: (query, scope) => {
+      if (query.provider === 'gitlab' || !scope) return undefined;
+      const pressure = githubTransport.getCombinedRateLimitPressure(scope);
+      if (pressure === 'critical' || pressure === 'exhausted') return ADAPTIVE_CRITICAL_QUOTA_TTL_MS;
+      if (pressure === 'low') return ADAPTIVE_LOW_QUOTA_TTL_MS;
+      return undefined;
+    },
+    onInvalidated: () => {
+      prFollowWatch.reset();
+      prStatusBroadcaster.reset();
+    },
+    onObserved: (query, result) => {
+      prFollowWatch.observe(query, result);
+      prStatusBroadcaster.observe(query, result);
+    },
   });
+  gitlabSetupSubscriptions.push(
+    onAppSessionInvalidated(() => {
+      prStatusService?.invalidate();
+      githubTransport.invalidate();
+    }),
+  );
+  const gitlabId = 'cindy-gitlab';
+  const namespacedId = pluginInstallStoragePart(pluginNewInstallRelId(createPluginLogicalIdentity(null, gitlabId)));
+  for (const id of new Set([gitlabId, namespacedId])) {
+    gitlabSetupSubscriptions.push(getGhostSetupChangeBus().subscribe(id, event => {
+      if (event.source !== 'connection' && event.source !== 'manifest') return;
+      gitlabTokens.invalidateNegativeCache();
+      prStatusService?.invalidate();
+    }));
+  }
   app.on('browser-window-focus', () => {
     prStatusService?.invalidateGitlabAuthFailures();
   });
@@ -260,6 +303,12 @@ export function registerGitContextIpc(): void {
   registerGithubSetupIpc(() => {
     prStatusService?.invalidate();
     githubTransport.invalidate();
+  });
+  // 自动化「指定 PR 或 Issue」：识别编号是 PR 还是 Issue（仅本机窗口）。
+  ipcMain.handle('git-context:github-item:resolve', async (event, repository: unknown, number: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof repository !== 'string' || typeof number !== 'number') throwIpcError('INVALID_PARAMS', 'repository and number are required');
+    return resolveGithubItem(repository, number);
   });
   ipcMain.handle('git-context:github-read', async (event, payload: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
@@ -447,13 +496,24 @@ export function registerGitContextIpc(): void {
     });
   });
 
-  const statusHandler = async (_e: unknown, queries: unknown) => {
+  const statusHandler = async (event: Electron.IpcMainInvokeEvent, queries: unknown, options?: unknown) => {
     let rawQueries: unknown = queries;
     let remoteSessionId: string | null = null;
     if (isDeviceLinkInvoke()) {
       const obj = queries as { sessionId?: unknown; queries?: unknown };
       remoteSessionId = requireString(obj?.sessionId, 'sessionId');
       rawQueries = obj?.queries;
+    }
+    const forceRefresh =
+      !remoteSessionId &&
+      Boolean(
+        options &&
+        typeof options === 'object' &&
+        !Array.isArray(options) &&
+        (options as { refresh?: unknown }).refresh === true,
+      );
+    if (forceRefresh) {
+      assertTrustedAppRendererEvent(event);
     }
     if (!Array.isArray(rawQueries)) {
       throwIpcError('INVALID_PARAMS', 'queries 必须是数组');
@@ -511,7 +571,10 @@ export function registerGitContextIpc(): void {
         return [];
       }
     }
-    const statuses = await prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
+    const statuses = await prStatusService!.getStatuses(parsed, {
+      remote: remoteSessionId !== null,
+      ...(forceRefresh ? { waitForFresh: true, refresh: true } : {}),
+    });
     return statuses.map(withoutPrMetadata);
   };
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, statusHandler);
@@ -579,5 +642,6 @@ export async function readSessionPrsAllMerged(sessionId: string): Promise<boolea
 
 /** 应用退出时清理 watcher 订阅。 */
 export async function disposeGitContext(): Promise<void> {
+  for (const unsubscribe of gitlabSetupSubscriptions.splice(0)) unsubscribe();
   await gitContextService?.dispose();
 }

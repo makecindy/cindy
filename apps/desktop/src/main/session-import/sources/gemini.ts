@@ -181,8 +181,14 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
         continue;
       }
       const sessionId = str(header.sessionId) || path.basename(f.file).replace(/\.jsonl?$/, '');
-      const firstUser = state.messages.find((m) => m.type === 'user' && userText(m.content).trim());
-      const title = makeTitle(str(state.meta.summary) || (firstUser ? userText(firstUser.content) : ''), '');
+      let title = makeTitle(str(state.meta.summary), '');
+      if (!title) {
+        for (const m of state.messages) {
+          if (m.type !== 'user') continue;
+          title = makeTitle(userText(m.content), '');
+          if (title) break;
+        }
+      }
       if (!title && state.messages.length === 0) continue;
       const slugDir = path.dirname(chatsDir);
       if (!cwdCache.has(slugDir)) cwdCache.set(slugDir, await cwdOf(slugDir, roots));
