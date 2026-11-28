@@ -29,7 +29,7 @@ export interface ProjectManagementCallbacks {
         };
   }): Promise<ControlResult<{ saved: boolean }, string>>;
   list(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     device?: string;
     includeHidden: boolean;
     offset: number;
@@ -121,32 +121,42 @@ export function registerProjectManagementTools(
       offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(500).default(100),
     },
-    handler: ({ include_hidden, offset, limit, device }) =>
-      call(
-        (callerSessionId) =>
-          deps.callbacks.list({
-            callerSessionId,
-            ...(device !== undefined ? { device } : {}),
-            includeHidden: include_hidden,
-            offset,
-            limit,
-          }),
-        (data) => ({
-          device: device ?? "local",
-          projects: data.projects.map((row) => ({
-            working_dir: row.workingDir,
-            project_path: row.workingDir,
-            directory_name: row.directoryName,
-            alias: row.alias,
-            hidden: row.hidden,
-            exists: row.exists,
-            last_used_at: row.lastUsedAt,
-          })),
-          total: data.total,
-          next_offset: data.nextOffset,
-          projects_root: data.projectsRoot,
-        }),
-      ),
+    handler: async ({ include_hidden, offset, limit, device }) => {
+      const { sessionId, hostCaller, remoteHostId } = deps.getSessionContext();
+      if (!sessionId && hostCaller?.kind !== "plugin")
+        return errorPayload(
+          "NO_SESSION_CONTEXT",
+          "No Cindy task is bound to this call.",
+        );
+      if (remoteHostId)
+        return errorPayload(
+          "UNSUPPORTED_CAPABILITY",
+          "Project management only supports local Cindy tasks.",
+        );
+      const result = await deps.callbacks.list({
+        callerSessionId: sessionId,
+        ...(device !== undefined ? { device } : {}),
+        includeHidden: include_hidden,
+        offset,
+        limit,
+      });
+      if (!result.ok) return controlErrorPayload(result);
+      return okPayload({
+        device: device ?? "local",
+        projects: result.projects.map((row) => ({
+          working_dir: row.workingDir,
+          project_path: row.workingDir,
+          directory_name: row.directoryName,
+          alias: row.alias,
+          hidden: row.hidden,
+          exists: row.exists,
+          last_used_at: row.lastUsedAt,
+        })),
+        total: result.total,
+        next_offset: result.nextOffset,
+        projects_root: result.projectsRoot,
+      });
+    },
   });
   registry.register({
     name: "rename_project",

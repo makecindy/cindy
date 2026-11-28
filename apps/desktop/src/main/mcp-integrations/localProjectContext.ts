@@ -43,7 +43,7 @@ export async function withLocalProjectContext<T extends object>(
   };
   try {
     await assertTaskActionCurrent();
-    // Undefined is reserved for authenticated remote host adapters; tools always bind a caller.
+    // Sessionless callers are authenticated by the enclosing Host adapter.
     if (callerSessionId !== undefined) {
       const [caller] = await client.drizzle
         .select({ id: sessions.id, remoteHostId: sessions.remoteHostId })

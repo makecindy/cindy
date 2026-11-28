@@ -39,7 +39,7 @@ const defaultLocal = {
 export interface ProjectToolPorts {
   deviceId(): string;
   withAccountDataAccess<T>(
-    sessionId: string,
+    sessionId: string | undefined,
     operation: (assertCurrent: () => Promise<void>) => Promise<T>,
   ): Promise<T>;
   invokeRemote(
@@ -67,7 +67,7 @@ export function createProjectToolCallbacks(
   } = { ...defaultLocal, ...deps.local };
   const getDeviceId = () => deps.deviceId();
   const withAccountDataAccess = <T>(
-    id: string,
+    id: string | undefined,
     operation: (assertCurrent: () => Promise<void>) => Promise<T>,
   ) => deps.withAccountDataAccess(id, operation);
   const withProjectWriteAccess = <T>(
@@ -325,7 +325,7 @@ export function createProjectToolCallbacks(
       list: async ({ device, ...options }) => {
         if (!device || device === 'local' || device === getDeviceId())
           return withAccountDataAccess(options.callerSessionId, () => listProjects(options));
-        if (isSessionSharedTaskActive(options.callerSessionId))
+        if (options.callerSessionId && isSessionSharedTaskActive(options.callerSessionId))
           return {
             ok: false,
             errorCode: 'PERMISSION_DENIED',
@@ -350,11 +350,11 @@ export function createProjectToolCallbacks(
               message:
                 'The destination must support the remote project catalog. Update it and retry.',
             };
-          const { callerSessionId: _caller, ...remoteOptions } = options;
+          const { includeHidden, offset, limit } = options;
           const response = await deps.invokeRemote(
             device,
             'maker:session:handoff',
-            [{ action: 'list-projects', options: remoteOptions }],
+            [{ action: 'list-projects', options: { includeHidden, offset, limit } }],
             { preSend: assertCurrent },
           );
           await assertCurrent();

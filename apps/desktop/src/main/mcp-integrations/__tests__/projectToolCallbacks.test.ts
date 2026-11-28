@@ -178,6 +178,39 @@ it('returns main directory, ordered access and capabilities from the target comp
   });
 });
 
+it('returns the remote project catalog through account access without a task ID', async () => {
+  const f = fixture();
+  const catalog = {
+    ok: true,
+    projects: [{ workingDir: '/repo', alias: 'Demo' }],
+    total: 1,
+    nextOffset: null,
+  };
+  f.invokeRemote
+    .mockResolvedValueOnce({ ok: true, result: { projectCatalogVersion: 1 } })
+    .mockImplementationOnce(async (_device, _channel, _args, options) => {
+      await options?.preSend?.();
+      return { ok: true, result: catalog };
+    });
+  const options = { includeHidden: false, offset: 0, limit: 10 };
+  const request = { device: 'remote-host', ...options };
+  expect(await f.tools.projectManagement!.list(request)).toEqual(catalog);
+  expect(f.invokeRemote).toHaveBeenCalledTimes(2);
+  expect(f.invokeRemote).toHaveBeenLastCalledWith(
+    'remote-host',
+    'maker:session:handoff',
+    [{ action: 'list-projects', options }],
+    { preSend: expect.any(Function) },
+  );
+
+  f.invokeRemote.mockImplementationOnce(async () => {
+    f.revoke();
+    return { ok: true, result: { projectCatalogVersion: 1 } };
+  });
+  await expect(f.tools.projectManagement!.list(request)).rejects.toThrow('OWNER_SCOPE_CHANGED');
+  expect(f.invokeRemote).toHaveBeenCalledTimes(3);
+});
+
 it('rechecks authority between target lookup and mutation; never falls back to local creation', async () => {
   const f = fixture();
   f.onRead(f.revoke);
