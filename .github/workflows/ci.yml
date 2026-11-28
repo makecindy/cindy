@@ -298,7 +298,9 @@ jobs:
     if: needs.host-changes.outputs.required == 'true'
     name: Host regressions (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Allow dependency installation, the full suite and post-job cache saves to
+    # finish on slower runners; macOS checks have taken over 18 minutes before cleanup.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
