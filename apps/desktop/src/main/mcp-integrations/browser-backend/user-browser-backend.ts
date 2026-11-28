@@ -55,6 +55,12 @@ export interface UserBrowserBackendOptions {
   startBrowser?(): Promise<void>;
   /** Whether the user's normal-profile browser process is already running (avoids duplicate launch). */
   isBrowserRunning?(): Promise<boolean>;
+  /**
+   * Richer process + window probe for the normal-profile user browser.
+   * On macOS, `running: true, hasWindow: false` identifies a 0-window Dock shell whose Profile was
+   * unloaded by DestroyProfileOnBrowserClose so Cindy can safely wake it with `open -g -a`.
+   */
+  inspectBrowserState?(): Promise<{ running: boolean; hasWindow?: boolean }>;
   startupWaitMs?: number;
   /** Cooldown after a timed-out launch before trying startBrowser again; cleared once any client connects. */
   launchCooldownMs?: number;
@@ -290,12 +296,20 @@ export class UserBrowserBackend implements BrowserBackend {
     }
   }
 
-  private async checkBrowserRunning(): Promise<boolean> {
-    if (!this.opts.isBrowserRunning) return false;
+  private async checkBrowserState(): Promise<{ running: boolean; hasWindow?: boolean }> {
+    if (this.opts.inspectBrowserState) {
+      try {
+        const state = await this.opts.inspectBrowserState();
+        return { running: Boolean(state?.running), hasWindow: state?.hasWindow };
+      } catch {
+        return { running: false };
+      }
+    }
+    if (!this.opts.isBrowserRunning) return { running: false };
     try {
-      return Boolean(await this.opts.isBrowserRunning());
+      return { running: Boolean(await this.opts.isBrowserRunning()) };
     } catch {
-      return false;
+      return { running: false };
     }
   }
 
@@ -313,6 +327,10 @@ export class UserBrowserBackend implements BrowserBackend {
       };
       const now = this.opts.now ?? Date.now;
       const stillCurrent = () => !this.disposed && this.opts.getPageControl()?.bridge === control.bridge;
+      const isRunningWithWindow = (s: { running: boolean; hasWindow?: boolean }) =>
+        s.running && s.hasWindow !== false;
+      const isRunningWithoutWindow = (s: { running: boolean; hasWindow?: boolean }) =>
+        s.running && s.hasWindow === false;
       const prepare = async (): Promise<string | undefined> => {
         let status = await control.bridge.status();
         if (status.ok) {
@@ -329,11 +347,13 @@ export class UserBrowserBackend implements BrowserBackend {
         }
 
         // MV3 service workers can sleep past the 35s heartbeat window while Chrome is still alive.
-        // Give previously-connected or already-running browsers a bounded reconnect grace window
-        // before considering launching a new process.
+        // Give previously-connected or already-running browsers (with an open window) a bounded
+        // reconnect grace window before considering launching. When macOS reports a 0-window Dock
+        // shell (`hasWindow === false`), Chromium has already unloaded the Profile & all extensions
+        // via DestroyProfileOnBrowserClose, so waiting cannot reconnect — skip straight to waking.
         const hadConnected = status.hadConnectedClient === true || this.everReady.size > 0;
-        let browserRunning = await this.checkBrowserRunning();
-        if (hadConnected || browserRunning) {
+        let browserState = await this.checkBrowserState();
+        if (!isRunningWithoutWindow(browserState) && (hadConnected || browserState.running)) {
           const reconnectWaitMs = this.opts.reconnectWaitMs ?? DEFAULT_RECONNECT_WAIT_MS;
           const reconnectDeadline = now() + reconnectWaitMs;
           while (
@@ -356,11 +376,12 @@ export class UserBrowserBackend implements BrowserBackend {
             }
           }
           if (!stillCurrent() || this.connectedClients(control).length > 0) return undefined;
-          // Re-check whether the target browser is still running after the grace window.
-          browserRunning = await this.checkBrowserRunning();
+          // Re-check whether the target browser is still running (and whether it has a window)
+          // after the grace window.
+          browserState = await this.checkBrowserState();
         }
 
-        if (browserRunning) {
+        if (isRunningWithWindow(browserState)) {
           this.opts.logger.info('user-browser already running while extension disconnected; skipping launch');
           return BROWSER_RUNNING_DISCONNECTED_MESSAGE;
         }
@@ -381,10 +402,14 @@ export class UserBrowserBackend implements BrowserBackend {
         let skippedBecauseRunning = false;
         const launchIfWanted = async () => {
           if (!state.wantsLaunch || launched || skippedBecauseRunning) return;
-          if (await this.checkBrowserRunning()) {
+          const currentState = await this.checkBrowserState();
+          if (isRunningWithWindow(currentState)) {
             skippedBecauseRunning = true;
             this.opts.logger.info('user-browser detected running before delayed launch; skipping launch');
             return;
+          }
+          if (isRunningWithoutWindow(currentState)) {
+            this.opts.logger.info('user-browser running with 0 windows; waking browser profile');
           }
           launched = true;
           await this.opts.startBrowser!();

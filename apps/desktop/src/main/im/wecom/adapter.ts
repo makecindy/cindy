@@ -1,4 +1,5 @@
 import { receivedWindowImages } from '../shared/receivedImageHistory';
+import { createWecomGuestTurnPermissionPolicy } from './permissionPolicy';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
@@ -51,7 +52,8 @@ function replyContextParts(event: IMMessageEvent): {
 
 export interface WecomAdapterOptions {
   /** 伙伴自有连接: 主人私聊进伙伴主任务, 群按 lane 一条专线。 */
-  companionBotId?: string;
+  /** 交给哪位伙伴: 固定 id(伙伴自有连接), 或每次现读(设置页那份个人机器人的「谁来回复」)。 */
+  companionBotId?: string | (() => string | null);
 }
 
 export function buildWecomAdapter(
@@ -135,6 +137,12 @@ export function buildWecomAdapter(
       return owner && userId === owner ? { kind: 'owner-dm' } : { kind: 'guest-dm', userId };
     },
     handleTextInteraction: (userId, request, options) => interactions.handle(userId, request, options),
+    // 群成员触发的轮次(个人机器人「群成员也能提问」、伙伴连接都不会把成员标成主人): 破坏性动作要主人
+    // 确认, 完全访问的会话临时降到 Auto。主人自己的群轮次与私聊照旧按会话权限档。
+    turnPermissionPolicyFor: (event) =>
+      event.speaker && event.speaker.isOwner !== true
+        ? createWecomGuestTurnPermissionPolicy(event.messageId)
+        : undefined,
     // 群(主人在群里 @ 机器人): 先把这条入窗, 再拼「自上次以来群里的消息」前缀, 游标在
     // 消息被受理后 commit(与 Telegram 同一套语义)。私聊只保留引用回复块, 与共享层的兜底一致。
     prepareAgentTurnText: async (event) => {

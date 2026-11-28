@@ -4356,6 +4356,7 @@
           "supported": "Compatível",
           "unsupported": "Não compatível",
           "undeclared": "Não declarado",
+          "ultrafastDeclaredUnavailable": "Declarado pelo provedor · Indisponível nesta conexão do Codex",
           "pricing": "Preços",
           "pricingLabel": "Preços",
           "noPricing": "Sem dados de preços para esta rota",
@@ -4963,70 +4964,7 @@
         "hint": "Envia uma mensagem privada pelo bot vinculado do Feishu ou Lark; apenas quando a janela está sem foco.",
         "disabledHint": "Primeiro configure o bot e envie uma mensagem privada a ele para concluir o vínculo."
       },
-      "bind": "Vincular",
-      "groups": {
-        "title": "Conversas em grupo",
-        "description": "Defina um projeto, um modelo e permissões próprios para um grupo em que o bot está.",
-        "rules": "O que você não definir: um grupo com projeto segue esse projeto em Projetos e modelos; um grupo sem projeto segue a Configuração de novas conversas e o Modo de permissão para novas tarefas em grupo acima. A conversa principal de um grupo e seus tópicos compartilham a mesma configuração.",
-        "expand": "Expandir",
-        "collapse": "Recolher",
-        "groupCount_one": "{{count}} grupo",
-        "groupCount_other": "{{count}} grupos",
-        "groupCount_many": "{{count}} grupos",
-        "customCount_one": "{{count}} com configuração própria",
-        "customCount_other": "{{count}} com configuração própria",
-        "customCount_many": "{{count}} com configuração própria",
-        "refresh": "Atualizar",
-        "loading": "Carregando grupos…",
-        "loadFailed": "Não foi possível carregar os grupos. Tente de novo em instantes com Atualizar.",
-        "saveFailed": "Não foi possível salvar a configuração do grupo",
-        "notConnected": "Os grupos aparecem quando o bot está conectado. Abaixo aparecem só os grupos com configuração própria.",
-        "empty": "O bot ainda não está em nenhum grupo. Adicione-o a um grupo e volte aqui.",
-        "listPermission": "Não é possível ler os grupos do bot. Na Feishu Open Platform, conceda a este app a permissão para ler informações de grupos. Abaixo aparecem os grupos em que o bot já foi usado.",
-        "listUnavailable": "Não é possível ler os grupos do bot agora. Abaixo aparecem os grupos em que o bot já foi usado.",
-        "unnamed": "Grupo sem nome ({{id}})",
-        "summaryModel": "Modelo próprio",
-        "summaryPermission": "Permissões próprias",
-        "expandAria": "Configuração de {{name}}",
-        "searchLabel": "Buscar grupos",
-        "searchPlaceholder": "Buscar pelo nome do grupo",
-        "customHeading": "Configuração própria",
-        "followHeading": "Seguem a configuração do canal",
-        "showMore": "Mostrar mais {{count}}",
-        "showLess": "Mostrar menos",
-        "noMatch": "Nenhum grupo corresponde a \"{{query}}\"",
-        "project": {
-          "label": "Projeto",
-          "follow": "Conversa",
-          "missing": "{{name}} (não está mais na barra lateral)",
-          "hint": "Vale quando o bot é mencionado pela primeira vez no grupo, um tópico começa ou alguém envia /new. Tarefas em andamento não são movidas. Com um projeto, o modelo e as permissões seguem esse projeto em Projetos e modelos; com Conversa, as tarefas ficam na pasta de conversas do bot e seguem a Configuração de novas conversas acima. Só é possível escolher projetos da barra lateral deste computador."
-        },
-        "model": {
-          "label": "Modelo e esforço de raciocínio",
-          "hintFollow": "Segue a Configuração de novas conversas. Se você mudar aqui o modelo ou o esforço de raciocínio, vale só para este grupo.",
-          "hintFollowProject": "Segue o projeto \"{{project}}\" em Projetos e modelos. Se você mudar aqui o modelo ou o esforço de raciocínio, vale só para este grupo.",
-          "hintProjectUnavailable": "O modelo definido para \"{{project}}\" em Projetos e modelos não está disponível agora. Escolha outro lá ou um para este grupo aqui.",
-          "hintFixed": "Este grupo tem um modelo próprio. As tarefas deste grupo cujo modelo não foi alterado mudam na próxima mensagem; as novas tarefas usam este modelo."
-        },
-        "permission": {
-          "label": "Permissões",
-          "hintFollow": "Segue o Modo de permissão para novas tarefas em grupo. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
-          "hintFollowProject": "Segue as permissões de \"{{project}}\" em Projetos e modelos. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
-          "hintFixed": "Este grupo tem seu próprio modo de permissão. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo."
-        },
-        "fullAccessConfirm": {
-          "title": "Usar Acesso total em {{name}}?",
-          "description": "As novas tarefas deste grupo vão rodar sem confirmar cada etapa, não importa quem mencione o bot. As mensagens do grupo são controladas pelos membros, então faça isso só se confiar em todos.",
-          "confirm": "Usar Acesso total",
-          "cancel": "Cancelar"
-        },
-        "widerConfirm": {
-          "title": "Ampliar as permissões de {{name}}?",
-          "description": "As novas tarefas deste grupo vão passar de \"{{current}}\" para \"{{next}}\", não importa quem mencione o bot. As mensagens do grupo são controladas pelos membros, então faça isso só se confiar em todos.",
-          "confirm": "Mudar mesmo assim",
-          "cancel": "Cancelar"
-        }
-      }
+      "bind": "Vincular"
     },
     "wechatBot": {
       "title": "WeChat pessoal",
@@ -7506,7 +7444,7 @@
     "tina": {
       "chat": {
         "title": "Conversa",
-        "description": "Conversas simples sem repositório; selecione \"chat\" no Slack, Telegram, X ou Feishu / Lark, com uma sessão por fluxo de conversa."
+        "description": "Conversas simples sem pasta de projeto. Usado quando um app de mensagens não aponta para um projeto específico."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7637,7 +7575,8 @@
       "groups": {
         "cindy": "Oficial",
         "personal": "Pessoal",
-        "plugins": "Plugins"
+        "plugins": "Plugins",
+        "shared": "Compartilhado"
       },
       "tips": {
         "cindy": "Fornecido e mantido pelo Cindy. Não é necessário criar um bot nem fornecer credenciais — siga as etapas de conexão para começar.",
@@ -7678,6 +7617,194 @@
       "plugins": {
         "rowHint": "Login, vinculação e configurações de cada conversa ficam na página do plugin.",
         "open": "Abrir plugin"
+      },
+      "replyTarget": {
+        "label": "Quem responde",
+        "cindy": "Tarefas comuns",
+        "cindyHint": "Atendido como tarefa comum na barra lateral usando o projeto e o modelo abaixo. Ou entregue a um parceiro para usar a memória e as configurações dele.",
+        "companionHint": "Mensagens diretas vão para sua conversa com {{name}}, e cada grupo corre separado sob {{name}}. Modelo, permissões e memória seguem {{name}}.",
+        "openCompanion": "Configurações de {{name}}",
+        "summary": "{{name}} responde",
+        "missingCompanion": "Amigo indisponível",
+        "busy": "Este bot ainda tem mensagens na fila ou uma tarefa em andamento. Troque quando terminarem.",
+        "updateFailed": "Não foi possível trocar. Verifique se o amigo ainda está disponível e tente novamente.",
+        "companionSettingsHint": "Modelo, permissões e memória"
+      },
+      "nav": {
+        "back": "Voltar",
+        "backTo": "Voltar para {{page}}"
+      },
+      "pageDescription": "Envie mensagens à Cindy ou aos seus amigos a partir de apps de chat como WeChat, Feishu e Telegram.",
+      "list": {
+        "connected": "Conectados",
+        "available": "Mais apps",
+        "choose": "Escolha uma app de chat",
+        "cindyReplies": "Tarefas comuns",
+        "official": "Bot oficial: {{status}}",
+        "projects": "Projetos e modelos",
+        "projectsHint": "Modelo e permissões de cada projeto quando um app de chat ou plugin inicia uma tarefa nele",
+        "hint": {
+          "both": "Bot oficial ou um bot criado por você",
+          "slack": "Use o bot oficial da Cindy. Basta entrar no Slack",
+          "x": "Use a conta oficial da Cindy. Autorize-a para responder a você no X",
+          "wechat": "Conecte seu WeChat pessoal com um código QR",
+          "personal": "Use um bot criado por você"
+        },
+        "companionDedicated": "Próprio do parceiro: {{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "WeChat",
+        "feishu": "Feishu / Lark",
+        "wecom": "WeCom",
+        "dingtalk": "DingTalk"
+      },
+      "ways": {
+        "official": "Bot oficial da Cindy",
+        "personal": "Seu próprio bot",
+        "personalHint": "Um bot criado por você na plataforma, com o nome e a imagem que quiser.",
+        "personalSetupTitle": "Usar seu próprio bot",
+        "setUp": "Configurar",
+        "personalSetupHint": {
+          "telegram": "Crie um bot com o BotFather e informe o token e seu ID de usuário.",
+          "discord": "Crie um bot no Discord Developer Portal e informe o token.",
+          "feishu": "Crie um app na plataforma do Feishu ou Lark e informe o App ID e o App Secret."
+        },
+        "officialHint": "Sem criar app próprio — conecta-se diretamente à sua conta Cindy."
+      },
+      "rows": {
+        "model": "Modelo",
+        "groupReply": "Quando responder em grupos",
+        "persona": "Nome e personalidade",
+        "behavior": "Reações e citações",
+        "receiveHere": "Receber mensagens neste computador",
+        "receiveHereHint": "Desative para deixar o bot offline aqui. As credenciais ficam salvas e você pode ativá-lo de novo quando quiser.",
+        "unbind": "Desvincular este bot",
+        "ownerId": "Meu ID de usuário {{id}}",
+        "discordChannels": "Canais do servidor",
+        "discordChannelsHint": "Em quais canais do servidor o bot pode trabalhar",
+        "notifications": "Notificações",
+        "on": "Ativado",
+        "off": "Desativado",
+        "project": "Projeto",
+        "projectDialogue": "Conversa (sem projeto)",
+        "projectMissing": "Projeto que não está mais na barra lateral",
+        "projectHint": "As tarefas novas vão para este projeto e usam o modelo e as permissões dele em Projetos e modelos.",
+        "projectDialogueHint": "As tarefas novas vão para a pasta de conversa do próprio bot e usam o modelo abaixo.",
+        "officialProjectHint": "As tarefas novas vão para este projeto e usam o modelo e as permissões dele em Projetos e modelos. Vale para todos os bots oficiais da Cindy.",
+        "officialProjectDialogueHint": "As tarefas novas ficam na pasta de conversas e usam a linha Conversa em Projetos e modelos. Vale para todos os bots oficiais da Cindy.",
+        "projectFullAccessTitle": "Usar as permissões de {{name}}?",
+        "projectFullAccessDescription": "{{name}} tem acesso total em Projetos e modelos: as tarefas novas de {{app}} vão rodar sem pedir confirmação a cada passo. Você pode mudá-lo antes para Auto ou Ask em Projetos e modelos.",
+        "projectFullAccessConfirm": "Usar mesmo assim",
+        "projectFullAccessCancel": "Cancelar",
+        "projectUpdateFailed": "Não foi possível trocar o projeto. Verifique se ele ainda está na barra lateral e tente novamente.",
+        "chats": "Chats de grupo",
+        "channels": "Canais",
+        "projectModel": "Modelo e permissões",
+        "projectModelHint": "Gerenciado em Projetos e modelos",
+        "projectModelFollow": "Segue “{{name}}”",
+        "groupReplyHint": "Escolha se o bot responde em grupos apenas quando mencionado ou a todas as mensagens"
+      },
+      "chats": {
+        "title": "Conversas em grupo",
+        "description": "Dê a um grupo onde o bot está um projeto, modelo e permissões próprios, e escolha se os outros membros podem perguntar.",
+        "rules": "O que você não definir: um grupo com projeto segue esse projeto em Projetos e modelos; um grupo sem projeto segue o projeto do bot ou, se ele não tiver, as configurações de modelo do bot. A conversa principal de um grupo e seus tópicos compartilham a mesma configuração.",
+        "expand": "Expandir",
+        "collapse": "Recolher",
+        "groupCount_one": "{{count}} grupo",
+        "groupCount_other": "{{count}} grupos",
+        "groupCount_many": "{{count}} grupos",
+        "customCount_one": "{{count}} com configuração própria",
+        "customCount_other": "{{count}} com configuração própria",
+        "customCount_many": "{{count}} com configuração própria",
+        "refresh": "Atualizar",
+        "loading": "Carregando grupos…",
+        "loadFailed": "Não foi possível carregar os grupos. Tente de novo em instantes com Atualizar.",
+        "saveFailed": "Não foi possível salvar a configuração do grupo",
+        "notConnected": "Os grupos aparecem quando o bot está conectado. Abaixo aparecem só os grupos com configuração própria.",
+        "empty": "O bot ainda não está em nenhum grupo. Adicione-o a um grupo e volte aqui.",
+        "listPermission": "Não é possível ler os grupos do bot. Na Feishu Open Platform, conceda a este app a permissão para ler informações de grupos. Abaixo aparecem os grupos em que o bot já foi usado.",
+        "listUnavailable": "Não é possível ler os grupos do bot agora. Abaixo aparecem os grupos em que o bot já foi usado.",
+        "unnamed": "Grupo sem nome ({{id}})",
+        "summaryModel": "Modelo próprio",
+        "summaryPermission": "Permissões próprias",
+        "expandAria": "Configuração de {{name}}",
+        "searchLabel": "Buscar grupos",
+        "searchPlaceholder": "Buscar pelo nome do grupo",
+        "customHeading": "Configuração própria",
+        "followHeading": "Seguem a configuração do canal",
+        "showMore": "Mostrar mais {{count}}",
+        "showLess": "Mostrar menos",
+        "noMatch": "Nenhum grupo corresponde a \"{{query}}\"",
+        "project": {
+          "label": "Projeto",
+          "follow": "Seguir o bot",
+          "missing": "{{name}} (não está mais na barra lateral)",
+          "hint": "Vale quando o bot é mencionado pela primeira vez no grupo, um tópico começa ou alguém envia /new. Tarefas em andamento não são movidas. Com um projeto, o modelo e as permissões seguem esse projeto em Projetos e modelos; com Seguir o bot, o grupo usa o projeto do bot ou, se ele não tiver, a pasta de conversas e as configurações de modelo do bot. Só é possível escolher projetos da barra lateral deste computador.",
+          "followWith": "Seguir o bot ({{project}})"
+        },
+        "model": {
+          "label": "Modelo e esforço de raciocínio",
+          "hintFollow": "Segue a Configuração de novas conversas. Se você mudar aqui o modelo ou o esforço de raciocínio, vale só para este grupo.",
+          "hintFollowProject": "Segue o projeto \"{{project}}\" em Projetos e modelos. Se você mudar aqui o modelo ou o esforço de raciocínio, vale só para este grupo.",
+          "hintProjectUnavailable": "O modelo definido para \"{{project}}\" em Projetos e modelos não está disponível agora. Escolha outro lá ou um para este grupo aqui.",
+          "hintFixed": "Este grupo tem um modelo próprio. As tarefas deste grupo cujo modelo não foi alterado mudam na próxima mensagem; as novas tarefas usam este modelo.",
+          "reset": "Voltar a seguir o modelo padrão"
+        },
+        "permission": {
+          "label": "Permissões",
+          "hintFollow": "Segue o Modo de permissão para novas tarefas em grupo. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
+          "hintFollowProject": "Segue as permissões de \"{{project}}\" em Projetos e modelos. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
+          "hintFixed": "Este grupo tem seu próprio modo de permissão. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
+          "hintFollowBot": "Segue as permissões do próprio bot. Vale só para tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
+          "followWith": "Seguir · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "Usar Acesso total em {{name}}?",
+          "description": "As novas tarefas deste grupo vão rodar sem confirmar cada etapa, não importa quem mencione o bot. As mensagens do grupo são controladas pelos membros, então faça isso só se confiar em todos.",
+          "confirm": "Usar Acesso total",
+          "cancel": "Cancelar"
+        },
+        "widerConfirm": {
+          "title": "Ampliar as permissões de {{name}}?",
+          "description": "As novas tarefas deste grupo vão passar de \"{{current}}\" para \"{{next}}\", não importa quem mencione o bot. As mensagens do grupo são controladas pelos membros, então faça isso só se confiar em todos.",
+          "confirm": "Mudar mesmo assim",
+          "cancel": "Cancelar"
+        },
+        "descriptionChannels": "Dê a um canal onde o bot trabalha um projeto, modelo e permissões próprios, e escolha se os outros membros podem perguntar.",
+        "kindGroup": "Grupo",
+        "kindChannel": "Canal",
+        "channelCount_one": "{{count}} canal",
+        "channelCount_other": "{{count}} canais",
+        "membersCount_one": "{{count}} aberto a membros",
+        "membersCount_other": "{{count}} abertos a membros",
+        "unnamedChannel": "Canal sem nome ({{id}})",
+        "searchPlaceholderChannels": "Buscar pelo nome do canal",
+        "emptyLocal": "Nenhum grupo registrado ainda. Mencione o bot uma vez em um grupo e ele aparece aqui.",
+        "emptyChannels": "Nenhum canal aberto ainda. Ative primeiro em Canais do servidor os canais onde o bot trabalha.",
+        "members": {
+          "label": "Membros também podem perguntar",
+          "hint": "Ativado, os outros membros que mencionarem o bot também recebem resposta, com o projeto e o modelo deste grupo. As perguntas deles rodam no máximo com revisão automática, então ações ainda precisam da sua aprovação; suas perguntas usam as permissões do grupo.",
+          "guard": "Se você não escrever no grupo, os membros são pausados após {{limit}} perguntas seguidas até você mencionar o bot lá ou clicar em Retomar. Comandos só valem para você.",
+          "paused": "Pausado para membros: perguntaram {{limit}} vezes seguidas enquanto você não estava.",
+          "resume": "Retomar",
+          "chip": "Membros podem perguntar",
+          "pausedChip": "Membros pausados",
+          "resumeFailed": "Não foi possível retomar. Tente mais tarde."
+        },
+        "statusCustom": "Ajustes próprios",
+        "shownHint": "Mostrando {{shown}} de {{total}}. Digite um nome para filtrar.",
+        "fieldsNote": "Mudanças de projeto, modelo e permissões valem a partir da próxima tarefa criada neste grupo; tarefas em andamento não são movidas.",
+        "channelCount_many": "{{count}} canais",
+        "membersCount_many": "{{count}} abertos a membros"
+      },
+      "companionBots": {
+        "title": "Bots exclusivos de parceiros",
+        "description": "Configurados individualmente nas configurações do parceiro. Configurações existentes continuam funcionando após atualizar.",
+        "manage": "Gerenciar"
       }
     },
     "shortcuts": {
@@ -12222,6 +12349,18 @@
       "memberCount_other": "{{count}} membros",
       "nameLabel": "Nome do grupo",
       "waitingConfirm": "{{name}} está aguardando sua autorização",
+      "assistantDevice": {
+        "title": "A Cindy do grupo está esperando você escolher um computador",
+        "onlyYou": "Só você pode ver",
+        "request": "“{{request}}” começa assim que você escolher um computador.",
+        "requestUnknown": "Sua solicitação começa assim que você escolher um computador.",
+        "requests_one": "{{count}} solicitação está esperando e começa assim que você escolher um computador.",
+        "requests_many": "{{count}} solicitações estão esperando e começam assim que você escolher um computador.",
+        "requests_other": "{{count}} solicitações estão esperando e começam assim que você escolher um computador.",
+        "remember": "Suas próximas solicitações neste grupo usarão o mesmo computador. Você pode mudá-lo nas configurações do grupo.",
+        "cancel": "Cancelar solicitação",
+        "continue": "Continuar"
+      },
       "loadFailedTitle": "Não foi possível carregar esta conversa em grupo",
       "loadFailedDescription": "Cindy não consegue ler esta conversa em grupo agora. Tente novamente ou volte para Amigos.",
       "unavailableTitle": "Esta conversa em grupo não está mais disponível",
@@ -12366,6 +12505,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, por isso a ferramenta não foi executada. Tente novamente quando a conexão for restabelecida.",
           "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download. Reenvie os anexos necessários para este pedido.",
+          "ATTACHMENTS_LIMIT_REACHED": "Alguns anexos não foram entregues a {{name}} devido ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download e ao limite de anexos. Reenvie os anexos necessários para este pedido.",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecte seu Cindy para que o Cindy possa trabalhar por você (nenhum Cindy seu está online agora).",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, escolha um computador para este grupo para continuar a solicitação.",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "O computador que {{name}} escolheu para este grupo está offline."
@@ -12408,6 +12550,7 @@
         "projectDirClear": "Limpar pasta",
         "projectDirNote": "Escolha um projeto existente neste computador. Sem seleção, será usado o projeto do repositório ou o do parceiro que executar a tarefa. A divisão do trabalho no Git usa uma árvore de trabalho própria.",
         "autoContinueSaveFailed": "Não foi possível salvar as transições entre etapas. Tente novamente.",
+        "projectDirNotRegistered": "Adicione esta pasta como projeto no Cindy e selecione-a novamente.",
         "projectDirSaveFailed": "Não foi possível salvar a pasta do projeto. Verifique se a pasta ainda existe e tente novamente.",
         "allowMemberInvites": "Permitir que todos convidem amigos",
         "allowMemberInvitesHint": "Quando ativado, todos os membros do grupo podem convidar amigos. Só o proprietário e os administradores podem alterar esta opção.",
@@ -12853,7 +12996,19 @@
         "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair."
       },
       "memberCount_many": "{{count}} membros",
-      "externalBadge": "Externo"
+      "externalBadge": "Externo",
+      "links": {
+        "kind": {
+          "pull": "Pull request",
+          "issue": "Issue",
+          "discussion": "Discussão",
+          "commit": "Commit",
+          "file": "Arquivo",
+          "folder": "Pasta",
+          "release": "Versão",
+          "repo": "Repositório"
+        }
+      }
     },
     "joined": {
       "today": "Entrou hoje",
@@ -13402,7 +13557,11 @@
         "unbound": "Deixe {{name}} responder às suas perguntas para o bot oficial @askmycindy.",
         "managed": "Um amigo responde às perguntas no X. Altere a atribuição nas configurações de plataforma de mensagens desse amigo.",
         "riskBody": "As perguntas no X usam a memória compartilhada, as ferramentas e o espaço de trabalho do amigo, e as respostas são públicas. Não use o X para informações privadas. A sequência no X não usa diretamente seu histórico de conversa privado."
-      }
+      },
+      "handedOver": "{{apps}}: nas Configurações, {{name}} responde aqui.",
+      "handedOverSeparator": ", ",
+      "manageInSettings": "Gerenciar nas Configurações",
+      "handedOverHint": "Os bots adicionados abaixo pertencem somente a {{name}} e ficam separados dos bots em Configurações."
     },
     "voiceMode": {
       "realtime": {
@@ -14114,7 +14273,8 @@
         },
         "companion": {
           "retryLater": "tente novamente mais tarde"
-        }
+        },
+        "membersPaused": "Vou pausar as perguntas dos membros até o dono voltar 🙈"
       },
       "hook": {
         "interaction": {
@@ -15413,6 +15573,7 @@
       },
       "credentialSwitchDeferred": "Provedor de modelos alterado — a mudança entra em vigor quando a tarefa atual terminar.",
       "effortRuntimeDirty": "O esforço de raciocínio ainda está sendo atualizado. Aguarde um momento e envie novamente.",
+      "tooManyTaskReferences": "Uma mensagem pode incluir até {{max}} referências a tarefas. Remova os links excedentes.",
       "steerNotSent": "Mensagem não enviada. O encaminhamento está temporariamente indisponível; seu rascunho foi mantido.",
       "credentialSwitchApplied": "A troca de provedor de modelo entrou em vigor.",
       "credentialSwitchFailed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente.",
@@ -22859,6 +23020,9 @@
     "send": "Enviar mensagem",
     "sending": "Enviando…",
     "sent": "Enviado",
+    "sendTooManyArguments": "Esta mensagem usa mais de {{limit}} itens em uma só etapa. Peça ao assistente para dividi-los em grupos menores.",
+    "sendValueUnavailable": "Um valor usado nesta mensagem não está disponível. Peça ao assistente para verificar os campos do formulário.",
+    "sendTextUnavailable": "Não foi possível preparar a mensagem para envio.",
     "sendFailed": "A mensagem não foi enviada. O que você digitou continua aqui.",
     "playVideo": "Reproduzir vídeo",
     "openVideoSource": "Abrir vídeo original",

@@ -1258,6 +1258,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const sess = deps.getSession(sessionId);
       if (!sess) return false;
       const hydrated = await hydrateActiveOrcaSessionIfNeeded(sess, createOpts, false);
+      if (sess.agentKind === 'acp' && hydrated?.kind === 'failure') {
+        const outcome = hydrated.result.outcome;
+        throw new Error(outcome?.kind === 'host-send' ? outcome.message : 'Collaboration tools could not be restored.');
+      }
       return hydrated?.kind === 'session';
     },
     async sendToAgentAccepted(
