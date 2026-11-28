@@ -108,8 +108,11 @@ const MODEL_GROUP_STARTUP_FAILURE_REASONS = new Set(['LAZY_CREATE_FAILED', 'REHY
 export function isStartupTakeoverReason(reason: string | undefined): boolean {
   return reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON || MODEL_GROUP_STARTUP_FAILURE_REASONS.has(reason ?? '');
 }
-/** The host could not resume the task yet and says to try again shortly: retry in place, not a source problem. */
-const STARTUP_RETRY_SHORTLY_TEXT = /^\s*\[CODEX_RESUME_NOT_READY\]/;
+/**
+ * The host could not resume the task yet and says to try again shortly: retry in place, not a source problem.
+ * Not anchored: the coordinator hands the failure on as `<host code>: <message>`.
+ */
+const STARTUP_RETRY_SHORTLY_TEXT = /\[CODEX_RESUME_NOT_READY\]/;
 /** The task's subscription account must sign in again, or is signing in now: that source can't take this turn. */
 const SUBSCRIPTION_LOGIN_TEXT = /\[SUBSCRIPTION_ACCOUNT_(?:LOGIN_REQUIRED|SIGNING_IN)\]/;
 const MODEL_GROUP_AUTH_TEXT = /invalid (?:api[ _-]?key|token|x-api-key|access token)|unauthori[sz]ed|authentication (?:failed|error)|incorrect api key/i;

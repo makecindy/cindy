@@ -15016,7 +15016,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 // turn-error tests never enter the cold, unpersisted queue-head failure boundary.
 describe('Bot subscription startup admission', () => {
   function startupHarness(bot = true, opaque = false, rehydrate = false, quota = false,
-    routed?: { failure: string }) {
+    routed?: { failure: string; failingSources?: number }) {
     const scheduledQuotaInputs = new WeakSet<object>();
     const modelGroupOpts = new WeakSet<object>();
     const h = createHarness({ isScheduledQuotaInput: item => scheduledQuotaInputs.has(item.createOpts) });
@@ -15038,8 +15038,11 @@ describe('Bot subscription startup admission', () => {
       }),
     };
     const failure = new Error(routed?.failure ?? '[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=9000000');
+    let routedStarts = 0;
     const bootstrap = vi.fn(async () => {
-      if (!backup) throw opaque ? failure : new AgentStartupStoppedError(failure);
+      // A routed task fails on each of its first `failingSources` sources, then starts on the next.
+      if (routed && (routedStarts += 1) <= (routed.failingSources ?? 1)) throw failure;
+      if (!routed && !backup) throw opaque ? failure : new AgentStartupStoppedError(failure);
       return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
     });
     const transaction = createMakerSendTransaction({
@@ -15212,6 +15215,29 @@ describe('Bot subscription startup admission', () => {
         expect.objectContaining({ retrySameSource: false, accountUnavailable: true }));
       expect(h.session.send).toHaveBeenCalledOnce();
       expect(h.sendToAgent.mock.calls[1][3].persistUserMessage).toMatchObject({ clientId: 'original' });
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+      expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null, pendingQueue: [] });
+    } finally { vi.useRealTimers(); }
+  });
+
+  // model-groups.md §4.2 / PR #13761 review, unit: when the next source also fails at startup, the route must keep
+  // going. The hooks released the guard's pending attempt only for a Bot admission, so a second refused source left
+  // the first attempt pending and the guard refused to take over again: the original message never went out.
+  it('keeps switching a routed task when the next source also fails at startup', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = startupHarness(false, true, false, false,
+        { failure: '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The plugin engine account requires login', failingSources: 2 });
+      h.coordinator.enqueue(h.sid, h.item);
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      // Each switch resends the original queue head; the second refusal needs its own takeover.
+      for (let i = 0; i < 3; i += 1) { await vi.advanceTimersByTimeAsync(5_000); await flush(); }
+      expect(h.fallback).toHaveBeenCalledTimes(2);
+      expect(h.bootstrap).toHaveBeenCalledTimes(3);
+      expect(h.session.send).toHaveBeenCalledOnce();
+      expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId)).toEqual(['original', 'original', 'original']);
       expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
       expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null, pendingQueue: [] });
     } finally { vi.useRealTimers(); }

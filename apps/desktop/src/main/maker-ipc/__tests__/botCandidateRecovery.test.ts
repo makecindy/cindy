@@ -482,7 +482,9 @@ describe('model group failure handling', () => {
     ['a startup refused for a login', { reason: 'LAZY_CREATE_FAILED', message: '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login' }, 'connection'],
     ['a startup refused for quota', { reason: 'REHYDRATE_FAILED', message: '[SUBSCRIPTION_ACCOUNT_LIMITED] The plugin engine account has reached its usage limit' }, 'connection'],
     ['a source that would not start for another reason', { reason: 'LAZY_CREATE_FAILED', message: 'spawn antigravity ENOENT' }, 'model'],
-    ['a resume the host asks to retry shortly', { reason: 'REHYDRATE_FAILED', message: "[CODEX_RESUME_NOT_READY] Codex can't resume this task right now. Try again shortly." }, 'transient'],
+    // The coordinator hands a startup failure on as `<host code>: <message>` (sendFailureMessage).
+    ['a resume the host asks to retry shortly', { reason: 'REHYDRATE_FAILED', message: "REHYDRATE_FAILED: [CODEX_RESUME_NOT_READY] Codex can't resume this task right now. Try again shortly." }, 'transient'],
+    ['a prefixed startup refused for a login', { reason: 'LAZY_CREATE_FAILED', message: 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login' }, 'connection'],
     ['a startup with a prompt too long for any source', { reason: 'LAZY_CREATE_FAILED', message: 'prompt too long' }, null],
     ['a missing working directory', { reason: 'WORKDIR_MISSING', message: 'working directory is missing' }, null],
     ['a busy credential switch', { reason: 'CREDENTIAL_SWITCH_BUSY', message: 'another Codex task is running' }, null],
