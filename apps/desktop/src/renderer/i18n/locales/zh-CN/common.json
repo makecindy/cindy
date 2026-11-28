@@ -4769,6 +4769,18 @@
         "toggleFailed": "切换 LSP 开关失败"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "工具载荷折叠",
+        "description": "把较早的工具往返折成一行，超大输出先截断，模型需要时可取回原文。只对之后新建的 Pi Agent 会话生效。"
+      },
+      "toggleAria": "工具载荷折叠开关",
+      "toast": {
+        "enabled": "工具载荷折叠已开启，新建 Pi Agent 会话后生效",
+        "disabled": "工具载荷折叠已关闭，新建 Pi Agent 会话后生效",
+        "toggleFailed": "切换工具载荷折叠开关失败"
+      }
+    },
     "betaChannel": {
       "title": "Beta 测试渠道",
       "badge": "Beta",

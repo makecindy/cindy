@@ -38018,7 +38018,7 @@ describe('unpublished Codex runtime cleanup', () => {
 // gateways (unit tier); the native fixture additionally checks ALL_TOOLS/calls.
 describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverName => {
   const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-  async function setup(state: string | null | (() => string | null), background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
+  async function setup(state: string | null | ((asked?: string) => string | null), background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
     const agent = new CodexAgent(createDeps());
     let resumes = 0;
     const host = installFakeHost(agent, (method, params) => {
@@ -38032,7 +38032,7 @@ describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverNa
           return { data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
         }
         return { data: [
-          { name: serverName, runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state() : state,
+          { name: serverName, runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state((params as { serverName?: string } | undefined)?.serverName) : state,
             tools: serverName === 'cindy' ? { ghost_info: {}, ghost_call: {} } : { list_tools: {}, call_tool: {} } },
         ], nextCursor: null };
       }
@@ -38050,7 +38050,8 @@ describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverNa
   // Exercise the next ordinary send and both task-visible notice channels.
   it.each(['connected', 'failed'] as const)('rechecks an inconclusive probe and reports only a confirmed failure (%s)', async state => {
     let checks = 0;
-    const { agent, host, handle } = await setup(() => {
+    const { agent, host, handle } = await setup(asked => {
+      if (asked !== serverName) return 'connected';
       if (checks++ === 0) throw new Error('fixture transient status failure');
       return state;
     });

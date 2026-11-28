@@ -4812,6 +4812,18 @@
         "toggleFailed": "LSP konnte nicht umgeschaltet werden"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "Tool-Nutzlasten falten",
+        "description": "Ältere Werkzeug-Roundtrips werden auf eine Zeile gefaltet und überlange Ergebnisse vorher gekürzt; das Modell kann die Originale bei Bedarf abrufen. Betrifft nur Pi-Agent-Sitzungen, die danach starten."
+      },
+      "toggleAria": "Tool-Nutzlasten falten umschalten",
+      "toast": {
+        "enabled": "Tool-Nutzlasten falten aktiviert – gilt für neue Pi-Agent-Sitzungen",
+        "disabled": "Tool-Nutzlasten falten deaktiviert – gilt für neue Pi-Agent-Sitzungen",
+        "toggleFailed": "Tool-Nutzlasten falten konnte nicht umgeschaltet werden"
+      }
+    },
     "betaChannel": {
       "title": "Beta-Kanal",
       "badge": "Beta",

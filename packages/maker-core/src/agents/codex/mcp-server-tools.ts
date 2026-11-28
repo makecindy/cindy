@@ -27,25 +27,32 @@ export async function readCodexThreadMcpServerTools(
   serverName: string,
   timeoutMs = 5_000,
 ): Promise<AgentMcpServerToolsReport> {
-  return readCodexThreadMcpServerToolsBeforeDeadline(request, threadId, serverName, Date.now() + timeoutMs);
+  const reports = await readCodexThreadMcpServersTools(request, threadId, [serverName], timeoutMs);
+  return reports.get(serverName)!;
 }
 
-/** Query each selected thread server under one shared deadline. */
+/**
+ * Share one deadline across the requested servers. The request shape selects a
+ * single server, so this asks once per name: no request may widen the selector
+ * to the whole catalog, which would start discovery for every configured server.
+ */
 export async function readCodexThreadMcpServersTools(
   request: StatusRequest,
   threadId: string,
   serverNames: readonly string[],
   timeoutMs = 5_000,
 ): Promise<Map<string, AgentMcpServerToolsReport>> {
+  const reports = new Map<string, AgentMcpServerToolsReport>();
+  const names = [...new Set(serverNames)];
+  if (!names.length) return reports;
   const deadline = Date.now() + timeoutMs;
-  const reports = await Promise.all([...new Set(serverNames)].map(async serverName => [
-    serverName,
-    await readCodexThreadMcpServerToolsBeforeDeadline(request, threadId, serverName, deadline),
-  ] as const));
-  return new Map(reports);
+  for (const name of names) {
+    reports.set(name, await readOneThreadMcpServerTools(request, threadId, name, deadline));
+  }
+  return reports;
 }
 
-async function readCodexThreadMcpServerToolsBeforeDeadline(
+async function readOneThreadMcpServerTools(
   request: StatusRequest,
   threadId: string,
   serverName: string,
@@ -61,8 +68,8 @@ async function readCodexThreadMcpServerToolsBeforeDeadline(
       { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
       { timeoutMs: remainingMs },
     );
-    const server = status.data.find(entry => entry.name === serverName);
-    if (server) return reportFromCodexStatus(server);
+    const found = status.data.find((server) => server.name === serverName);
+    if (found) return reportFromCodexStatus(found);
     cursor = status.nextCursor;
     if (cursor === null) return { state: 'not-mounted', tools: [] };
     if (seenCursors.has(cursor)) throw new Error('Codex MCP status pagination repeated a cursor');

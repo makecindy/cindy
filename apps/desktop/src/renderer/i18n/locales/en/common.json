@@ -4812,6 +4812,18 @@
         "toggleFailed": "Failed to toggle LSP"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "Tool payload folding",
+        "description": "Older tool round-trips are folded into one line and oversized results are truncated first; the model can fetch the originals when needed. Only applies to Pi agent sessions started afterwards."
+      },
+      "toggleAria": "Toggle tool payload folding",
+      "toast": {
+        "enabled": "Tool payload folding enabled · takes effect in new Pi agent sessions",
+        "disabled": "Tool payload folding disabled · takes effect in new Pi agent sessions",
+        "toggleFailed": "Failed to toggle tool payload folding"
+      }
+    },
     "betaChannel": {
       "title": "Beta channel",
       "badge": "Beta",

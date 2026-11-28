@@ -4868,6 +4868,18 @@
         "toggleFailed": "Impossible de basculer LSP"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "Repli des charges utiles d'outils",
+        "description": "Les allers-retours d'outils anciens sont repliés sur une ligne et les résultats trop volumineux sont tronqués avant ; le modèle peut récupérer les originaux si besoin. Seules les sessions d'Agent Pi créées ensuite sont concernées."
+      },
+      "toggleAria": "Activer/désactiver le repli des charges utiles d'outils",
+      "toast": {
+        "enabled": "Repli des charges utiles d'outils activé : prend effet dans les nouvelles sessions d'Agent Pi",
+        "disabled": "Repli des charges utiles d'outils désactivé : prend effet dans les nouvelles sessions d'Agent Pi",
+        "toggleFailed": "Impossible de basculer le repli des charges utiles d'outils"
+      }
+    },
     "betaChannel": {
       "title": "Canal bêta",
       "badge": "Bêta",

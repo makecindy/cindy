@@ -4868,6 +4868,18 @@
         "toggleFailed": "Falha ao ativar/desativar LSP"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "Dobramento de payload de ferramentas",
+        "description": "As idas e voltas de ferramentas antigas são dobradas em uma única linha e os resultados grandes demais são truncados antes; o modelo pode recuperar os originais quando precisar. Afeta apenas as sessões do Agent Pi criadas depois."
+      },
+      "toggleAria": "Ativar/desativar dobra de payload de ferramentas",
+      "toast": {
+        "enabled": "Dobramento de payload de ferramentas ativado — terá efeito em novas sessões do Agent Pi",
+        "disabled": "Dobramento de payload de ferramentas desativado — terá efeito em novas sessões do Agent Pi",
+        "toggleFailed": "Falha ao ativar/desativar o dobra de payload de ferramentas"
+      }
+    },
     "betaChannel": {
       "title": "Canal beta",
       "badge": "Beta",

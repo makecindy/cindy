@@ -4868,6 +4868,18 @@
         "toggleFailed": "No se pudo alternar LSP"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "Plegado de cargas útiles de herramientas",
+        "description": "Las idas y vueltas de herramientas antiguas se pliegan en una sola línea y los resultados demasiado grandes se truncan antes; el modelo puede recuperar los originales cuando los necesite. Solo afecta a las sesiones del Agent Pi creadas después."
+      },
+      "toggleAria": "Alternar plegado de cargas útiles de herramientas",
+      "toast": {
+        "enabled": "Plegado de cargas útiles de herramientas habilitado: entra en vigor en las nuevas sesiones del Agent Pi",
+        "disabled": "Plegado de cargas útiles de herramientas deshabilitado: entra en vigor en las nuevas sesiones del Agent Pi",
+        "toggleFailed": "No se pudo alternar el plegado de cargas útiles de herramientas"
+      }
+    },
     "betaChannel": {
       "title": "Canal beta",
       "badge": "Beta",

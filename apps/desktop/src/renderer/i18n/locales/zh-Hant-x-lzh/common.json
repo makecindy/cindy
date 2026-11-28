@@ -4769,6 +4769,18 @@
         "toggleFailed": "LSP 開關切換未成"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "工具載荷折疊",
+        "description": "較舊之工具往返折為一行，超大之輸出先截，模型需要時可取回原文。唯於之後新建之 Pi Agent 差事生效。"
+      },
+      "toggleAria": "工具載荷折疊啟閉",
+      "toast": {
+        "enabled": "已啟，新開 Pi Agent 差事後生效",
+        "disabled": "已闔，新開 Pi Agent 差事後生效",
+        "toggleFailed": "開關切換未成"
+      }
+    },
     "betaChannel": {
       "title": "Beta 試行之道",
       "badge": "Beta",
