@@ -699,4 +699,40 @@ describe('evaluateModelGroupBeforeSend', () => {
       target: { providerId: 'anthropic' },
     });
   });
+
+  // 2026-11-28 回归：本机多账号拆平后，账号 1 撞配额时能从 DB 会话行（无 accountId 列）匹配账号后缀绑定，
+  // 并直接提议/切换到同供应商下的账号 2，不再把同 providerId 的其余账号一并判成同一份已满配额。
+  it('fails over from an exhausted flat local account to the sibling account on the same provider', async () => {
+    const flatRoute: ModelGroupRoute = {
+      id: 'src:openai-gpt',
+      name: 'GPT-6.2',
+      strategy: 'order',
+      parent: { id: 'auto:openai', name: 'OpenAI' },
+      candidates: [
+        { agentKind: 'codex', providerId: 'openai', accountId: 'default', model: 'gpt-6.2' },
+        { agentKind: 'codex', providerId: 'openai', accountId: 'second', model: 'gpt-6.2' },
+      ],
+    };
+    const pickedAccount1 = modelGroupCandidateKey({
+      agentKind: 'codex', providerId: 'openai', accountId: 'default', model: 'gpt-6.2',
+    });
+    const offer = await computeModelGroupSwitchOffer({
+      readBinding: () => ({ selection: { type: 'route', id: 'src:openai-gpt' }, pickedKey: pickedAccount1, at: NOW }),
+      readSession: async () => ({ source: 'desktop', agentKind: 'codex', providerId: 'openai', model: 'gpt-6.2' }),
+      isShared: () => false,
+      hasGoal: async () => false,
+      config: () => ({ routes: [flatRoute] }),
+      candidateFacts: async () => [
+        { available: true, modelName: 'GPT-6.2', sourceName: 'OpenAI · first@example.com', windows: [{ usedPercent: 100, resetAtMs: NOW + 60_000, windowMs: 18_000_000 }] },
+        { available: true, modelName: 'GPT-6.2', sourceName: 'OpenAI · second@example.com', windows: [{ usedPercent: 15, resetAtMs: NOW + 60_000, windowMs: 18_000_000 }] },
+      ],
+      now: () => NOW,
+    }, 's-flat-1');
+    expect(offer).toMatchObject({
+      providerId: 'openai',
+      accountId: 'second',
+      sourceName: 'OpenAI · second@example.com',
+      crossEngine: false,
+    });
+  });
 });

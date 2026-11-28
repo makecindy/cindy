@@ -31,6 +31,7 @@ vi.mock('../../maker-host/rehydrateCloseSuppression.js', () => ({
 
 import { sessions } from '../../localDb/schema.js';
 import { createSessionRuntimeFallback, type FallbackRouteProfile } from '../sessionRuntimeFallback.js';
+import { getSessionRuntimeControlSnapshot } from '../sessionRuntimeControl.js';
 
 function createMemoryDb() {
   const sqlite = new Database(':memory:');
@@ -252,5 +253,73 @@ describe('createSessionRuntimeFallback with plugin engine model groups', () => {
     expect(committedSame).toEqual([
       expect.objectContaining({ agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh', model: 'deepseek-r1' }),
     ]);
+  });
+
+  // PR #13634 review, unit: Smart Routing account sources. Two accounts of one provider share engine,
+  // provider and model, so only the account differs. The first one fails to start and the chain moves
+  // to the second. The committed route and the account bound at commit must both be the second's;
+  // the old code kept the first candidate's callbacks and ran an account-only change as a no-op.
+  it('moves between local accounts of one provider through a real switch and commits the account that took over', async () => {
+    sqlite.prepare(
+      `INSERT INTO sessions (id, source, status, agent_kind, model, provider_id, effort)
+       VALUES (?, 'desktop', 'active', 'codex', 'gpt-5.4', 'openai', '')`,
+    ).run('s-accounts');
+    const generation = getSessionRuntimeControlSnapshot('s-accounts').generation;
+    const profile: FallbackRouteProfile = {
+      agentKind: 'codex', agentDeviceId: null, model: 'gpt-5.4', providerId: 'openai', effort: null, fastMode: false,
+    };
+    const committed: string[] = [];
+    const steps = ['second', 'third'].map((accountId) => ({
+      accountId,
+      localAccount: { changes: true, commit: vi.fn(async () => {}) },
+    }));
+    let offered = 0;
+    const performSessionAgentSwitch = vi.fn()
+      .mockRejectedValueOnce(new Error('account could not start'))
+      .mockResolvedValueOnce({ switched: true, engineReady: true });
+    const applySessionRuntimeSelection = vi.fn();
+    const fallback = createSessionRuntimeFallback({
+      maker: { getSession: () => undefined, closeSession: vi.fn(async () => {}) },
+      readSessionRuntimeProfiles: async () => ({
+        effective: profile,
+        control: { pending: null, generation, visitedRoutes: [], fallbackHop: 0 },
+      }),
+      canApplyAutomaticRuntimeSelection: () => true,
+      readBotFallbackCandidate: async () => ({ isBot: false, candidate: null }),
+      readModelGroupFallbackCandidate: async () => {
+        const step = steps[offered++];
+        if (!step) return null;
+        return {
+          candidate: { ...profile },
+          labels: { from: 'GPT-5.4 · OpenAI', to: `GPT-5.4 · ${step.accountId}` },
+          bindCommittedRoute: () => { committed.push(step.accountId); },
+          localAccount: step.localAccount,
+        };
+      },
+      readSessionAgentDeviceId: async () => null,
+      readSessionRuntimeFallbackSettings: () => ({ enabled: false }),
+      getDesktopProviderService: vi.fn() as never,
+      pendingSessionRuntimeFallbackRebuilds: new Map(),
+      applySessionRuntimeSelection: applySessionRuntimeSelection as never,
+      getPendingCredentialSwitchTarget: () => null,
+      clearPendingCredentialSwitchForSession: vi.fn(),
+      broadcastSessionRuntimeProjection: vi.fn(async () => {}),
+      agentSwitchDeps: {} as never,
+      performSessionAgentSwitch: performSessionAgentSwitch as never,
+      runtimeSelectionRequiresModelWindowConfirmation: () => false,
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    });
+
+    const result = await fallback('s-accounts', 1, 1, true, () => true, {
+      accountUnavailable: true,
+      retrySameSource: false,
+      hasImages: false,
+    });
+
+    expect(result).toMatchObject({ outcome: 'switched', sourceSwitch: { to: 'GPT-5.4 · third' } });
+    expect(applySessionRuntimeSelection).not.toHaveBeenCalled();
+    expect(performSessionAgentSwitch.mock.calls.map(([, params]) => params.localSubscriptionAccount))
+      .toEqual([steps[0]!.localAccount, steps[1]!.localAccount]);
+    expect(committed).toEqual(['third']);
   });
 });

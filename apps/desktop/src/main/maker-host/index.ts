@@ -39,6 +39,7 @@ import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval
 import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.desktop.js';
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
+import { readModelGroupRoutedAccount } from '../model-groups/sessionBindings.js';
 import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
 import { onSubscriptionPoolCodexModelsChanged, onSubscriptionPoolClaudeModelsChanged } from '../subscription-accounts/runtime.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
@@ -2076,12 +2077,16 @@ export function getMaker(): Maker {
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
     // 保留同一份可变 map，供可选 Pi runtime 在 Maker 构造后动态注册。
     const makerAgents: ConstructorParameters<typeof Maker>[0]['agents'] = {
-      'claude-code': withSubscriptionAccounts(claudeAgent, desktopClaudeAuthAdapter),
+      'claude-code': withSubscriptionAccounts(claudeAgent, {
+        getState: desktopClaudeAuthAdapter.getState.bind(desktopClaudeAuthAdapter),
+        routedAccount: readModelGroupRoutedAccount,
+      }),
       codex: withSubscriptionAccounts(codexAgent, {
         getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
         resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
         resolveDefaultProvider: model => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
         preparePool: prepareLegacyOpenAiPool,
+        routedAccount: readModelGroupRoutedAccount,
       }),
     };
     attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
@@ -2484,6 +2489,7 @@ export function getMaker(): Maker {
     const piAgent = buildPiAgentForDesktop();
     if (piAgent) makerAgents.pi = withSubscriptionAccounts(piAgent, {
       getState: desktopPiAuthAdapter.getState, preparePool: prepareLegacyOpenAiPool,
+      routedAccount: readModelGroupRoutedAccount,
     });
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
@@ -2971,6 +2977,7 @@ export function getMaker(): Maker {
       if (!next) return false;
       const registered = _maker.registerAgent('pi', withSubscriptionAccounts(next, {
         getState: desktopPiAuthAdapter.getState, preparePool: prepareLegacyOpenAiPool,
+        routedAccount: readModelGroupRoutedAccount,
       }));
       if (!registered) {
         void next.dispose().catch((error) => {

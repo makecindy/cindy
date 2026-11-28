@@ -98,7 +98,13 @@ export interface RunModelGroupBeforeSendPorts {
     effort?: string;
     fastMode?: boolean | 'ultrafast';
     skipBootstrap: boolean;
+    /** 目标是本机某个账号槽位(智能路由按账号拆开的来源)：切换提交后把任务改绑到它。 */
+    accountId?: string;
+    /** 同一供应商内换账号：引擎、模型、位置不变也要关闭旧原生会话重新交接(原生历史属于原账号)。 */
+    accountChanges?: boolean;
   }): Promise<{ switched: boolean }>;
+  /** 同引擎原地换模型前固定本机来源：记下选中的账号槽位(不改绑已在别的账号上的任务)，解除同供应商旧电脑组的二次选路。 */
+  pinLocalSource?(sessionId: string, route: { providerId: string; accountId?: string }): Promise<void> | void;
   writeSwitchNote?(sessionId: string, note: ModelGroupRouteNote, clientId: string): Promise<void>;
   describeCause?(cause: ModelGroupTurnDecisionSwitch['cause']): string;
   runAsOwner?<T>(work: () => Promise<T>): Promise<T>;
@@ -174,8 +180,17 @@ export async function runModelGroupBeforeSend(
       ? false
       : (decision.target.fastMode ?? row.fastMode ?? false);
 
-    const useCrossPath = decision.crossEngine || decision.crossLocation || decision.requiresHandoffForWindow === true;
+    const useCrossPath = decision.crossEngine || decision.crossLocation || decision.crossAccount === true || decision.requiresHandoffForWindow === true;
+    const localAccount = !decision.target.agentDeviceId && decision.target.accountId
+      ? { accountId: decision.target.accountId, ...(decision.crossAccount ? { accountChanges: true } : {}) }
+      : {};
     if (!useCrossPath) {
+      if (!decision.target.agentDeviceId && ports.pinLocalSource) {
+        await ports.pinLocalSource(sessionId, {
+          providerId: decision.target.providerId,
+          ...(decision.target.accountId ? { accountId: decision.target.accountId } : {}),
+        });
+      }
       const sameRes = await ports.applySameEngineRoute({
         sessionId,
         model: decision.target.model,
@@ -194,6 +209,7 @@ export async function runModelGroupBeforeSend(
           effort: decision.target.effort,
           fastMode: decision.target.agentKind === 'acp' ? false : decision.target.fastMode,
           skipBootstrap: !options.bootstrapAfterSwitch,
+          ...localAccount,
         });
         switched = crossRes.switched;
       } else if (!sameRes.deferred && !sameRes.superseded) {
@@ -211,6 +227,7 @@ export async function runModelGroupBeforeSend(
         effort: decision.target.effort,
         fastMode: decision.target.agentKind === 'acp' ? false : decision.target.fastMode,
         skipBootstrap: !options.bootstrapAfterSwitch,
+        ...localAccount,
       });
       switched = crossRes.switched;
     }
@@ -225,6 +242,7 @@ export async function runModelGroupBeforeSend(
         providerId: committedProviderId,
         model: committedModel,
         agentDeviceId: decision.target.agentDeviceId || undefined,
+        accountId: decision.target.accountId,
       }),
     );
 
