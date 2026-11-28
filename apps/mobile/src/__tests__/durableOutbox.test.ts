@@ -1,9 +1,11 @@
+import { DeviceLinkError } from '@cindy/device-link';
 import { describe, expect, it, vi } from "vitest";
 import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
 import { uploadMobileAttachmentFromFile } from '@/session/mobileAttachmentUpload';
 import { accountVaultKey } from '@cindy/auth-client';
 import { cancelledCreationDraft, outboxCreationRetryIdentity } from '../session/cancelledCreationDraft';
 import { cindyMakeOutboxPolicy } from '../session/cindyMakeOutboxPolicy';
+import { beginOutboxBackgroundSend, hasOutboxBackgroundSend, isPendingPlainText } from '../session/outboxBackgroundSend';
 import {
   createDurableOutbox,
   isDurableOutboxUnsent,
@@ -194,6 +196,161 @@ async function setup(storage = disk()) {
     },
   };
 }
+
+// Unit coverage for the legacy decision at the production runner. An untyped
+// message and unrelated wire refusals must never open a second history route.
+it.each([
+  new Error('CHANNEL_NOT_ALLOWED'),
+  new DeviceLinkError('ACCESS_REVOKED', 'CHANNEL_NOT_ALLOWED'),
+  new DeviceLinkError('INVOKE_TIMEOUT', 'timed out'),
+])('leaves an unrelated history failure on the existing path (%s)', async (error) => {
+  const { store, deps } = await setup();
+  const record = message();
+  await store.add({ ...record, state: 'confirming', enqueueStarted: true,
+    prepared: { clientId: record.item.clientId } as QueuedRemoteMessage });
+  const legacyHistory = vi.fn(async () => true);
+  deps.history.mockRejectedValue(error);
+  await createDurableOutboxDelivery({ ...deps, legacyHistory, retryable: () => false }).run();
+  expect(legacyHistory).not.toHaveBeenCalled();
+  expect(deps.enqueue).not.toHaveBeenCalled();
+  expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed' });
+  expect(store.getSnapshot()[0].historyConfirmation).toBeUndefined();
+});
+
+it('restores a waiting confirmation without replaying an interrupted recheck', async () => {
+  const { store, storage, deps } = await setup();
+  const record = message();
+  await store.add({ ...record, historyConfirmation: 'requested', state: 'failed', enqueueStarted: true });
+  const restarted = createDurableOutbox(storage);
+  await restarted.activate('alice');
+  await createDurableOutboxDelivery({ ...deps, store: restarted }).run();
+  expect(restarted.getSnapshot()[0]).toMatchObject({ historyConfirmation: 'unconfirmed', state: 'failed' });
+  expect(deps.history).not.toHaveBeenCalled();
+  expect(deps.enqueue).not.toHaveBeenCalled();
+});
+
+// Unit regression: only a real missing message and a current projection can
+// authorize a resend. The existing legacy recheck only proves delivery.
+describe('resending a missing remote input after explicit confirmation', () => {
+  const missing = () => new DeviceLinkError('NOT_FOUND', 'Message does not exist');
+  const waiting = (): DurableOutboxRecord => ({
+    ...message(), state: 'failed', historyConfirmation: 'requested',
+    prepared: { clientId: 'id-1' } as QueuedRemoteMessage, enqueueStarted: true,
+    retrySafe: true, sendAtMs: 1,
+  });
+  const empty = () => ({ ...projection(), sessionId: 'session-a' });
+
+  it('returns to ordinary failure, then retries exactly once with the same ID', async () => {
+    const { store, deps, runner } = await setup();
+    await store.add(waiting());
+    deps.history.mockRejectedValue(missing());
+    deps.projection.mockResolvedValue(empty());
+    await runner.run();
+    const failed = store.getSnapshot()[0]!;
+    expect(failed).toMatchObject({ state: 'failed', item: waiting().item });
+    expect(failed.historyConfirmation).toBeUndefined();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    runner.wake();
+    await runner.run();
+    expect(deps.projection).toHaveBeenCalledOnce();
+
+    await store.update(failed, { state: 'queued' });
+    deps.enqueue.mockResolvedValue(projection('id-1', 'pending'));
+    runner.wake();
+    await runner.run();
+    expect(deps.enqueue).toHaveBeenCalledTimes(1);
+    expect(deps.enqueue.mock.calls[0]?.[0].prepared?.clientId).toBe('id-1');
+    deps.history.mockResolvedValue(true);
+    runner.wake();
+    await runner.run();
+    expect(store.getSnapshot()).toEqual([]);
+    expect(deps.enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['legacy channel', new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'channel unavailable')],
+    ['unstructured prefix', new Error('[NOT_FOUND] Message does not exist')],
+    ['missing handler', new DeviceLinkError('NOT_FOUND', 'no local IPC handler')],
+  ] as const)('keeps an unproven miss read-only (%s)', async (_name, error) => {
+    const { store, deps } = await setup();
+    await store.add(waiting());
+    deps.history.mockRejectedValue(error);
+    deps.projection.mockResolvedValue(empty());
+    const runner = createDurableOutboxDelivery({ ...deps, legacyHistory: async () => false });
+    await runner.run();
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', historyConfirmation: 'unconfirmed' });
+    expect(deps.projection).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['pending queue', { pendingQueue: [{ clientId: 'id-1' } as QueuedRemoteMessage] }],
+    ['durable receipt', { deliveryReceipts: [{ clientId: 'id-1', state: 'pending' as const }] }],
+    ['being dispatched', { queueSnapshot: { dispatchClientId: 'id-1' } }],
+    ['another task', { sessionId: 'another-task' }],
+  ] as const)('keeps a precisely missing input unconfirmed without a matching empty projection (%s)', async (_name, patch) => {
+    const { store, deps, runner } = await setup();
+    await store.add(waiting());
+    deps.history.mockRejectedValue(missing());
+    deps.projection.mockResolvedValue({ ...empty(), ...patch } as DeliveryProjection);
+    await runner.run();
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', historyConfirmation: 'unconfirmed' });
+    expect(deps.projection).toHaveBeenCalledTimes(1);
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('does not combine missing history and an empty projection from different connections', async () => {
+    const { store, deps } = await setup();
+    let epoch = 1;
+    await store.add(waiting());
+    deps.history.mockRejectedValue(missing());
+    deps.projection.mockImplementationOnce(async () => {
+      epoch++;
+      return empty();
+    });
+    await createDurableOutboxDelivery({ ...deps, connectionEpoch: () => epoch }).run();
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', historyConfirmation: 'unconfirmed' });
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('accepts late delivery evidence before the Retry tap can resend', async () => {
+    const { store, deps, runner } = await setup();
+    await store.add(waiting());
+    deps.history.mockRejectedValue(missing());
+    deps.projection.mockResolvedValue(empty());
+    await runner.run();
+    expect(store.getSnapshot()[0]?.historyConfirmation).toBeUndefined();
+    await store.update(store.getSnapshot()[0]!, { state: 'queued' });
+    deps.history.mockResolvedValue(true);
+    runner.wake();
+    await runner.run();
+    expect(store.getSnapshot()).toEqual([]);
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('leaves the result unconfirmed across restart when a retry reply is lost', async () => {
+    const { store, storage, deps, runner } = await setup();
+    await store.add(waiting());
+    deps.history.mockRejectedValue(missing());
+    deps.projection.mockResolvedValue(empty());
+    await runner.run();
+    await store.update(store.getSnapshot()[0]!, { state: 'queued' });
+    const restarted = createDurableOutbox(storage);
+    deps.enqueue.mockImplementationOnce(async () => {
+      // The sending fence is on disk before the external write. Simulate a
+      // process dying there and its delayed error arriving after a new launch.
+      await restarted.activate('alice');
+      throw new DeviceLinkError('INVOKE_TIMEOUT', 'retry reply lost');
+    });
+    runner.wake();
+    await runner.run();
+    expect(deps.enqueue).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot()[0]).toMatchObject({ historyConfirmation: 'unconfirmed' });
+    await createDurableOutboxDelivery({ ...deps, store: restarted }).run();
+    expect(restarted.getSnapshot()[0]).toMatchObject({ state: 'failed', historyConfirmation: 'unconfirmed' });
+    expect(deps.enqueue).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('disabled Cindy Make outbox recovery', () => {
   it.each(['cindy-make', 'cindy-make-merge'])('cleans upgraded %s records before contacting a legacy host', async (source) => {
@@ -1008,6 +1165,47 @@ describe("app-owned delivery and reconciliation", () => {
     await createDurableOutboxDelivery({ ...deps, cacheHistory: async () => { deactivate(); return true; } }).run();
     expect(store.getSnapshot()[0]?.cleanupOutcome).toBeUndefined();
     expect(deps.cleanup).not.toHaveBeenCalled();
+  });
+  // Unit, #11930: restart coverage misses losing the enqueue reply while still
+  // in background. The same send should show as pending and reconcile on backoff.
+  it('reconciles a lost reply in the original background window without resending', async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, deps, storage } = await setup();
+      const record = message();
+      await store.add(record);
+      const end = beginOutboxBackgroundSend(record, () => () => {}, async () => ({ budgetMs: 8_000, end() {} }));
+      try {
+        const runner = createDurableOutboxDelivery({
+          ...deps, canRun: hasOutboxBackgroundSend, accepted: async () => end(),
+        });
+        deps.enqueue.mockRejectedValueOnce(new Error('response lost'));
+        await runner.run();
+        const uncertain = store.getSnapshot()[0]!;
+        expect(uncertain.state).toBe('confirming');
+        expect.soft(isPendingPlainText(uncertain)).toBe(true);
+
+        deps.projection.mockResolvedValue(projection(record.item.clientId, 'accepted'));
+        // Releasing the last background hold stops the connection. The receipt
+        // must settle this send even when the remote history is unavailable.
+        deps.history.mockRejectedValue(new Error('background connection stopped'));
+        await vi.advanceTimersByTimeAsync(2_000);
+        await runner.run();
+        expect(store.getSnapshot()[0]?.state).toBe('host-owned');
+        expect(deps.history).not.toHaveBeenCalled();
+        expect(deps.enqueue).toHaveBeenCalledTimes(1);
+        runner.stop();
+        const reopened = await setup(storage);
+        reopened.deps.history.mockResolvedValue(true);
+        await reopened.runner.run();
+        expect(reopened.deps.enqueue).not.toHaveBeenCalled();
+        expect(reopened.store.getSnapshot()).toEqual([]);
+      } finally {
+        end();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("restarts after a lost receipt, finds durable host ownership, and never enqueues twice", async () => {
     const first = await setup();

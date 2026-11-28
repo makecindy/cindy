@@ -1,6 +1,8 @@
 import { Animated, Easing, View } from 'react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Text } from '@/components/AppText';
+import { formatVoiceRecordingTime } from './sessionDurationFormat';
+export { formatVoiceRecordingTime } from './sessionDurationFormat';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, typeScale } from '@/theme/tokens';
@@ -16,13 +18,6 @@ import { MOBILE_COMPOSER_CONTROL_SIZE } from '@/session/MobileComposerInputRow';
  */
 export const MOBILE_VOICE_RECORDING_PILL_WIDTH = 72;
 export const MOBILE_VOICE_RECORDING_PILL_WIDTH_WIDE = 80;
-
-/** 录音计时:从录音开始逐秒累计,格式 m:ss(对齐桌面 recTimeText)。 */
-export function formatVoiceRecordingTime(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return `${minutes}:${String(remainder).padStart(2, '0')}`;
-}
 
 export interface MobileVoiceRecordingTimerInput {
   /** 胶囊是否展开(含按下即录的乐观 pending 期,展开时显示红点+计时)。 */

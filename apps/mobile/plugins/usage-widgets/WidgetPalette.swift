@@ -149,7 +149,7 @@ struct LogoMark: View {
   var size: CGFloat = 12
 
   var body: some View {
-    if let logo = source.logo {
+    if let logo = source.displayLogo {
       Image("logo-\(logo)")
         .renderingMode(.template)
         .resizable()

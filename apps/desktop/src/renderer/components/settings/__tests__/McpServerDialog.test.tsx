@@ -38,6 +38,10 @@ afterEach(() => {
 
 it('associates field errors and focuses the first invalid field without sending a request', async () => {
   render(<McpServerDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+  const dialog = screen.getByRole('dialog');
+  expect(dialog.getAttribute('aria-describedby')).toBeTruthy();
+  expect(document.getElementById(dialog.getAttribute('aria-describedby')!)?.textContent).toBe('settings.mcp.dialog.desc');
+  expect(screen.queryByText('settings.mcp.dialog.embeddedGuide')).toBeNull();
   fireEvent.click(save());
   expect(document.activeElement).toBe(field('name'));
   for (const name of ['name', 'url']) {

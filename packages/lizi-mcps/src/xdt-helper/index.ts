@@ -191,6 +191,7 @@ export {
   TASK_DIGEST_MAX_BYTES,
   TASK_DIGEST_TEXT_MAX,
   type GetTaskDigestToolDeps,
+  type TaskDigestCurrentRoute,
   type TaskDigestPhase,
   type TaskDigestRoute,
   type TaskDigestWire,

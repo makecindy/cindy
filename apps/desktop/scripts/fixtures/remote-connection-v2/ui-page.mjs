@@ -5,12 +5,13 @@ export default {
   name: 'remote-connection-v2',
   entry: './fixture.tsx',
   viewport: { width: 1180, height: 1100 },
-  real: 'RemoteControlSection with the Agent-Net (Beta) switch on: RemoteConnectionV2Section, RemoteConnectionTopology, TopologyFlow, PlatformGlyph, DeviceNodePopover, with only the MyDevicesPanel card of this computer above it, then RelayServicePanel',
+  real: 'RemoteControlSection with the Agent-Net (Beta) switch on: RemoteConnectionV2Section, RemoteConnectionTopology, TopologyFlow, PlatformGlyph, DeviceNodePopover, below My devices (MyDevicesPanel: this computer pinned, the other devices in the collapsible list, the 云主机 row for an organization member with the entry), then RelayServicePanel',
   notCovered:
     'Live device-link IPC, real RTT and traffic sampling (send/receive times are fixture values), relay switching, SSH hosts, remote desktop launch; the legacy list page is covered by remoteControlDevicesDeepLink.test.tsx',
   stubs: {
     'src/renderer/contexts/AuthContext': {
-      partial: 'export function useAuth() { return { deviceId: "self", user: null, mode: "cloud" }; }',
+      // The 云主机 row reads the signed-in member; only the cloud-computer case sets one.
+      partial: 'export function useAuth() { return { deviceId: "self", user: null, mode: "cloud" }; } export function useOptionalAuthUser() { return globalThis.__uiPageAuthUser ?? null; } export function useOptionalDataOwnerGeneration() { return 0; }',
     },
   },
   cases: {
@@ -28,6 +29,16 @@ export default {
       about: 'Nine direct devices split in two; the relay group sits below the second direct group, so its label goes under the relay point, clear of this computer’s name',
       storage: V2_ON,
     },
+    'relay-below': {
+      about: 'Seven direct devices split in two and two relayed under the left direct group, so the relay point sits well below this computer and the line to it is steep; this computer\'s leg (UDP · 9 ms) stays whole on that line',
+      storage: V2_ON,
+      viewport: { width: 1400, height: 1000 },
+    },
+    'relay-below-long-name': {
+      about: 'A long computer name beside the steep relay line leaves the transport label by the relay point, away from the name',
+      storage: V2_ON,
+      viewport: { width: 1400, height: 1000 },
+    },
     'self-device-link': {
       about: 'Agent-Net switch on, but this computer runs on Device Link this time: Device Link under its name, in its card and on every peer',
       storage: V2_ON,
@@ -44,6 +55,10 @@ export default {
     },
     empty: { about: 'Only this computer, master switch off', storage: V2_ON },
     'legacy-off': { about: 'Agent-Net off: no topology; 我的设备 and the relay route are unchanged' },
+    'cloud-computer': {
+      about: 'Organization member with a running cloud computer and room for another: the 云主机 row under this computer, with 管理云主机 and 添加云主机; My devices expanded above the topology',
+      storage: V2_ON,
+    },
     'remote-switch': {
       about: 'Prototype: switch another computer between Device Link and Agent-Net from its topology card (switching, reverted, outdated, phone, control off, already Agent-Net)',
       storage: V2_ON,
@@ -121,15 +136,23 @@ export default {
         assert.equal(await card.getByRole('button').count(), 0);
         await ui.capture('friend-card');
         await page.keyboard.press('Escape');
-        await page.getByText('future-app · Lab Mac', { exact: true }).waitFor();
+        await page.getByText('future-app · Lab Mac', { exact: true }).filter({ visible: true }).waitFor();
         await page.getByRole('button', { name: /^future-app · Lab Mac/ }).click();
         const unknownCard = page.getByRole('dialog');
         await unknownCard.getByText('future-app 1.4.0', { exact: false }).waitFor();
         assert.equal(await unknownCard.getByRole('button').count(), 0);
         await ui.capture('unknown-app-card');
         await page.keyboard.press('Escape');
-        await page.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} · Travel Mac`, { exact: true }).waitFor();
+        await page.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} · Travel Mac`, { exact: true }).filter({ visible: true }).waitFor();
       }
+      return;
+    }
+    if (ui.case === 'cloud-computer') {
+      for (const action of ['manageCloud', 'addCloud']) {
+        await page.getByRole('button', { name: await ui.t(`settings.remoteControl.cloudComputer.actions.${action}`) }).waitFor();
+      }
+      await page.getByRole('button', { name: new RegExp(`^${await ui.t('settings.remoteControl.sections.myDevices')}`) }).click();
+      await page.locator('[data-device-id]').filter({ visible: true }).first().waitFor();
       return;
     }
     if (ui.case === 'switched-here') {
@@ -219,7 +242,9 @@ export default {
     const agentNet = await ui.t('settings.remoteControl.v2.protocol.agentNet');
     const deviceLink = await ui.t('settings.remoteControl.v2.protocol.deviceLink');
     const selfProtocol = ui.case === 'self-device-link' ? deviceLink : agentNet;
-    const hub = page.getByRole('button', { name: `Studio Mac · ${selfProtocol}`, exact: true });
+    const hasLongName = ui.case === 'relay-below-long-name';
+    const selfName = hasLongName ? 'Conference Room Editing Workstation' : 'Studio Mac';
+    const hub = page.getByRole('button', { name: `${selfName} · ${selfProtocol}`, exact: true });
     await hub.waitFor();
     const topology = page.locator('div.select-none').filter({ has: hub });
     // 2026-11-18 用户反馈:中转站的字写在圆点下面、朝中间排开,和这台电脑的名字、连接方式挤成一团。
@@ -227,7 +252,9 @@ export default {
     // 同日用户要求：中转站写出协议，以及经中转的数据走 UDP 还是 WS(Agent-Net 两种都可能,Device Link 只有 WS),
     // 往返是那条路的。三行：名字 / 协议 /「UDP · 25 ms」;读屏名字是「名字 · 协议 · 走法 · 往返」。
     const relayName = await ui.t('settings.remoteControl.v2.relay.official');
-    const relayRtt = await ui.t('settings.remoteControl.v2.ms', { value: ui.case === 'many' ? 22 : 25 });
+    const relayBelow = ui.case === 'relay-below' || hasLongName;
+    const relayRttValue = ui.case === 'many' ? 22 : relayBelow ? 9 : 25;
+    const relayRtt = await ui.t('settings.remoteControl.v2.ms', { value: relayRttValue });
     const relayTransport = await ui.t(ui.case === 'self-device-link' || ui.case === 'fleet' || ui.case === 'narrow-fleet'
       ? 'settings.remoteControl.v2.relayTransport.websocket' : 'settings.remoteControl.v2.relayTransport.udp');
     const relayRoute = `${selfProtocol} · ${relayTransport}`;
@@ -247,26 +274,38 @@ export default {
       const dotBox = await relayDot.boundingBox();
       const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
       const dotX = dotBox.x + dotBox.width / 2;
+      // 2026-11-27 用户要求：这台电脑到中转那一段的走法写在这台电脑到中转站的线上，中转点上方只剩名字和协议;
+      // 最窄的设置页那段线放不下，仍是中转点上方第三行。
+      const relayPath = `${relayTransport} · ${relayRtt}`;
+      const pathOnTrunk = ui.case !== 'narrow-relay' && ui.case !== 'narrow-fleet' && !hasLongName;
       const labels = [];
       for (const el of await page.getByText(relayName, { exact: true }).all()) {
         const label = el.locator('..');
         const box = await label.boundingBox();
         if (box && Math.abs(box.x + box.width / 2 - dotX) < 80 && Math.abs(box.y + box.height / 2 - dotBox.y) < 80) {
-          labels.push({ box, lines: [
+          if (hasLongName) assert.equal(await label.getByText(relayPath, { exact: true }).count(), 1, 'the trunk label must clear the long computer name');
+          labels.push({ box, label, lines: [
             await el.boundingBox(),
             await label.getByText(selfProtocol, { exact: true }).boundingBox(),
-            await label.getByText(`${relayTransport} · ${relayRtt}`, { exact: true }).boundingBox(),
+            ...(pathOnTrunk ? [] : [await label.getByText(relayPath, { exact: true }).boundingBox()]),
           ] });
         }
       }
       assert.equal(labels.length, 1, 'relay station label');
-      const [{ box: relayLabel, lines }] = labels;
+      const [{ box: relayLabel, label: relayLabelEl, lines }] = labels;
+      if (pathOnTrunk) assert.equal(await relayLabelEl.getByText(relayPath, { exact: true }).count(), 0, 'relay path still above the relay point');
+      // 上下两行的标签是又窄又高的一块，胶囊的大圆角会把四角的字切掉(2026-11-27 真机截图:「9 ms」的 s 被切);
+      // 字本身没溢出，scrollWidth 看不出来，只能看圆角。
+      const roundClipped = await topology.locator('span.grid').evaluateAll((els) =>
+        els.filter((el) => el.children.length > 1 && parseFloat(getComputedStyle(el).borderTopRightRadius) > 4).length);
+      assert.equal(roundClipped, 0, 'a two-line link label keeps pill corners that cut off its text');
       // The full-size cases miss overlaps at the minimum Settings content width.
       // One relay peer exercises the point; the narrow fleet exercises the station caption beside a neighboring peer.
       if (ui.case === 'narrow-relay' || ui.case === 'narrow-fleet') {
+        // 经中转的线写对方到中转那一段(对方说的):Relay PC 走 WS(本机 UDP),Cloud Runner 走 UDP(本机 WS),CI Linux 是旧连接不写。
         const expected = ui.case === 'narrow-relay'
-          ? [[relayTransport, 24]]
-          : [[relayTransport, 194], [await ui.t('settings.remoteControl.v2.linkTransport.webrtc'), 38], ['', 316]];
+          ? [[await ui.t('settings.remoteControl.v2.relayTransport.websocket'), 24]]
+          : [[await ui.t('settings.remoteControl.v2.relayTransport.udp'), 194], [await ui.t('settings.remoteControl.v2.linkTransport.webrtc'), 38], ['', 316]];
         for (const [transport, value] of expected) {
           const peerRtt = await ui.t('settings.remoteControl.v2.ms', { value });
           const pill = page.getByText(new RegExp(`^${transport}[\\s·]*${peerRtt}$`));
@@ -291,13 +330,29 @@ export default {
       // 细环按圆算:字的每一行离圆心最近的点都要在环外。
       const ringY = hubBox.y + hubBox.height / 2;
       const inRing = (a) => Math.hypot(Math.min(Math.max(hubX, a.x), a.x + a.width) - hubX, Math.min(Math.max(ringY, a.y), a.y + a.height) - ringY) < 36;
-      const blockers = [['name', await below('Studio Mac')], ['protocol', await below(selfProtocol)], ['relay point', dotBox]];
+      const blockers = [['name', await below(selfName)], ['protocol', await below(selfProtocol)], ['relay point', dotBox]];
       for (const line of lines) {
         assert.ok(!inRing(line), 'relay label overlaps the ring');
         for (const [what, box] of blockers) assert.ok(!overlaps(line, box), `relay label overlaps ${what}`);
       }
+      if (pathOnTrunk) {
+        // 写在细环与中转点之间那段线上：不压细环、中转点、这台电脑的字和中转站的字，也不截断。设备线上的标签叠放时它也叠放。
+        // 设备线上可能有同样的「UDP · 9 ms」(relay-below 的 Work PC):取细环与中转点之间那一个。
+        const [near, far] = dotX < hubX ? [dotBox.x + dotBox.width, hubX - 36] : [hubX + 36, dotBox.x];
+        let trunk = null;
+        let trunkBox = null;
+        for (const el of await topology.getByText(new RegExp(`^${relayTransport}[\\s·]*${relayRtt}$`)).all()) {
+          const box = await el.boundingBox();
+          if (box && box.x + box.width / 2 > Math.min(near, far) && box.x + box.width / 2 < Math.max(near, far)) [trunk, trunkBox] = [el, box];
+        }
+        assert.ok(trunk && trunkBox, 'relay path is not on the line from this computer to the relay point');
+        assert.ok(trunkBox.x >= near && trunkBox.x + trunkBox.width <= far, 'relay path is not between the relay point and the ring');
+        assert.ok(!inRing(trunkBox), 'relay path overlaps the ring');
+        for (const [what, box] of [...blockers, ['relay label', relayLabel]]) assert.ok(!overlaps(trunkBox, box), `relay path overlaps ${what}`);
+        assert.ok(await trunk.evaluate((el) => [el, ...el.children].every((part) => part.scrollWidth <= part.clientWidth)), 'relay path on the line is truncated');
+      }
       // 只有中转站整个落在这台电脑的字下面时(split-direct),字才写到圆点下面。
-      if (ui.case === 'split-direct') assert.ok(relayLabel.y >= dotBox.y + dotBox.height, 'relay label under the relay point');
+      if (ui.case === 'split-direct' || relayBelow) assert.ok(relayLabel.y >= dotBox.y + dotBox.height, 'relay label under the relay point');
       else assert.ok(relayLabel.y + relayLabel.height <= dotBox.y, 'relay label above the relay point');
     }
     const hubCardStatus = `${await ui.t('settings.devices.linkStatus.online')} · ${relayTransport} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`;
@@ -329,8 +384,10 @@ export default {
     if (ui.case === 'default') {
       // Fractional RTT samples must render as whole milliseconds alongside each link's actual transport protocol.
       const udp = await ui.t('settings.remoteControl.v2.relayTransport.udp');
+      const ws = await ui.t('settings.remoteControl.v2.relayTransport.websocket');
       const webrtc = await ui.t('settings.remoteControl.v2.linkTransport.webrtc');
-      const labels = await Promise.all([[webrtc, 3], [udp, 1], [udp, 97]].map(async ([transport, value]) => ({
+      // Home server 经中转：这台电脑那段走 UDP(写在它到中转站的线上),它自己那段走 WS(写在通往它的线上)。
+      const labels = await Promise.all([[webrtc, 3], [udp, 1], [ws, 97]].map(async ([transport, value]) => ({
         transport,
         latency: await ui.t('settings.remoteControl.v2.ms', { value }),
       })));
@@ -338,7 +395,7 @@ export default {
         const pill = page.getByText(`${transport} · ${latency}`, { exact: true });
         assert.ok(await pill.evaluate((el) => el.scrollWidth <= el.clientWidth), 'single-line peer label is fully visible');
       }
-      await page.getByText(`${relayTransport} · ${relayRtt}`, { exact: true }).waitFor();
+      await topology.getByText(new RegExp(`^${relayTransport}[\\s·]*${relayRtt}$`)).waitFor();
       // Browser layout regression: the wide and minimum-width fixtures alone miss the
       // intermediate width where WebRTC and UDP on opposite sides used different line counts.
       const assertStackedLabels = async () => {
@@ -374,7 +431,9 @@ export default {
       await page.keyboard.press('Escape');
       await page.getByRole('button', { name: /^Home server/ }).click();
       await page.getByRole('dialog').getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).waitFor();
-      await page.getByRole('dialog').getByText(`· ${udp}`, { exact: true }).waitFor();
+      // 卡片的「连接方式」两段都写：本机 UDP · 对方 WS。
+      const legs = `${await ui.t('settings.remoteControl.v2.popover.relayLegSelf', { transport: udp })} · ${await ui.t('settings.remoteControl.v2.popover.relayLegPeer', { transport: ws })}`;
+      await page.getByRole('dialog').getByText(`· ${legs}`, { exact: true }).waitFor();
       await ui.capture('agent-net-card');
       await page.keyboard.press('Escape');
       // 这台电脑的卡只展示连接信息;本机设置直接使用同页上方的卡片。

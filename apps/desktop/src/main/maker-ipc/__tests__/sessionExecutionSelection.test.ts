@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createSessionExecutionResolver, type SessionExecutionResolverDeps } from '../sessionExecutionSelection';
-import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner';
+import {
+  createGhostAgentTurnRunner,
+  createLocalGhostSessionAdmission,
+  type GhostAgentTurnRunnerDeps,
+  type LocalGhostSessionMeta,
+} from '../ghostAgentTurnRunner';
+import { admitPluginEngineSession } from '../pluginEngineSessionAdmission';
 import { GhostAgentSlot } from '../../cindy-brain/agentSlot';
+import type { PluginHarness } from '../../cindy-brain/pluginHarnesses';
 import type { InstalledGhost } from '../../../shared/ghost';
 
 const caller = { agentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 'openai', effort: 'high' as const, fastMode: false };
@@ -210,5 +217,156 @@ describe('plugin runner execution location admission (#9489)', () => {
     expect(f.deps.send).toHaveBeenLastCalledWith({ sourcePlugin: { pluginId: 'github', name: 'GitHub' },
       targetSessionId: 'forked-task', message: f.request.prompt, persistedContent: f.request.persistedContent,
       resumeWithStoredPermissionMode: true });
+  });
+});
+
+describe('plugin runner local plugin-engine (ACP) admission', () => {
+  const harness = (overrides: Partial<PluginHarness> = {}): PluginHarness => ({
+    key: '_root__cindy-antigravity-acp:agy',
+    ghostId: '_root__cindy-antigravity-acp',
+    harnessId: 'agy',
+    name: 'Antigravity',
+    protocol: 'acp',
+    availability: { state: 'available' },
+    ...overrides,
+  });
+
+  function acpFixture(options: {
+    source?: Partial<LocalGhostSessionMeta>;
+    harnesses?: readonly PluginHarness[];
+    settings?: { suspended?: boolean; disabledModels?: readonly string[] };
+    hasPendingAgentSwitch?: boolean;
+    busy?: boolean;
+    ownerChangedDuringRead?: boolean;
+  } = {}) {
+    const source: LocalGhostSessionMeta = {
+      agentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy',
+      effort: 'high',
+      ...options.source,
+    };
+    const harnesses = options.harnesses ?? [harness()];
+    let ownerChanged = false;
+    const admitBuiltinSession = vi.fn(async () => {
+      throw new Error('发起任务正在切换模型，请稍后重试');
+    });
+    const readSessionMeta = vi.fn(async () => {
+      if (options.ownerChangedDuringRead) ownerChanged = true;
+      return source;
+    });
+    const admitLocalSession = createLocalGhostSessionAdmission({
+      captureOwner: () => () => {
+        if (ownerChanged) throw new Error('账号已变化，请重新发起任务');
+      },
+      readSessionMeta,
+      hasPendingAgentSwitch: () => options.hasPendingAgentSwitch === true,
+      admitBuiltinSession,
+      admitPluginEngineSession: (meta) => admitPluginEngineSession(
+        {
+          agentKind: meta.agentKind as Parameters<typeof admitPluginEngineSession>[0]['agentKind'],
+          model: meta.model,
+          providerId: meta.providerId,
+          effort: meta.effort ?? '',
+          fastMode: false,
+          remoteHostId: meta.remoteHostId,
+          agentDeviceId: meta.agentDeviceId,
+        },
+        harnesses,
+        () => [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['medium', 'high'] }],
+        () => options.settings ?? {},
+      ),
+    });
+    const send = vi.fn<GhostAgentTurnRunnerDeps['send']>(async (params) => ({
+      ok: true,
+      targetSessionId: params.targetSessionId ?? 'new-acp-task',
+      wakeKind: options.busy ? 'queued' : params.targetSessionId ? 'resumed' : 'created',
+    }));
+    const runner = createGhostAgentTurnRunner({
+      readSessionMeta,
+      admitLocalSession,
+      readPluginName: () => 'GitHub',
+      send,
+      readLatestAssistant: vi.fn(async () => ({ clientId: 'last-assistant' })),
+      forkSessionAtMessage: vi.fn(async () => ({ id: 'forked-task' })),
+      broadcastSessionCreated: vi.fn(),
+    });
+    const request = {
+      ghostId: 'cindy-github',
+      ghostVersion: '1.5.37',
+      sourceSessionId: 'acp-task',
+      mode: 'continue' as const,
+      prompt: 'Open PR now',
+      persistedContent: 'Open PR now',
+    };
+    return { runner, request, send, admitBuiltinSession, source };
+  }
+
+  it.each([false, true])('admits local ACP card handoff (busy=%s) without calling built-in catalog admission', async (busy) => {
+    const f = acpFixture({ busy });
+    expect(await f.runner(f.request)).toEqual({
+      ok: true,
+      sessionId: 'acp-task',
+      disposition: busy ? 'queued' : 'resumed',
+    });
+    expect(f.admitBuiltinSession).not.toHaveBeenCalled();
+    expect(f.send).toHaveBeenCalledExactlyOnceWith({
+      sourcePlugin: { pluginId: 'cindy-github', name: 'GitHub' },
+      targetSessionId: 'acp-task',
+      message: f.request.prompt,
+      persistedContent: f.request.persistedContent,
+      resumeWithStoredPermissionMode: true,
+    });
+  });
+
+  it('admits split plugin-engine providers and new-task handoffs from ACP sessions', async () => {
+    const f = acpFixture({
+      source: { providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy~abcd1234' },
+    });
+    expect(await f.runner({ ...f.request, mode: 'new', title: 'Publish PR' })).toEqual({
+      ok: true,
+      sessionId: 'new-acp-task',
+      disposition: 'created',
+    });
+    expect(f.admitBuiltinSession).not.toHaveBeenCalled();
+    expect(f.send).toHaveBeenCalledExactlyOnceWith({
+      sourcePlugin: { pluginId: 'cindy-github', name: 'GitHub' },
+      dispatcherSessionId: 'acp-task',
+      message: f.request.prompt,
+      persistedContent: f.request.persistedContent,
+      inheritSourcePermissionMode: true,
+      title: 'Publish PR',
+    });
+  });
+
+  it.each([
+    ['disabled plugin', { harnesses: [] as PluginHarness[] }, '停用或卸载'],
+    ['suspended engine', { settings: { suspended: true } }, '中停用'],
+    ['unavailable engine', { harnesses: [harness({ availability: { state: 'unavailable', message: '未安装 CLI' } })] }, '未安装 CLI'],
+    ['disabled model', { settings: { disabledModels: ['gemini-4-neon'] } }, '中关闭'],
+    ['pending engine switch', { hasPendingAgentSwitch: true }, '正在切换模型'],
+    ['account switch during read', { ownerChangedDuringRead: true }, '账号已变化'],
+  ] as const)('rejects local ACP handoff when %s without delivering', async (_label, options, expectedMessage) => {
+    const f = acpFixture(options);
+    expect(await f.runner(f.request)).toMatchObject({
+      ok: false,
+      errorCode: 'MODEL_UNAVAILABLE',
+      message: expect.stringContaining(expectedMessage),
+    });
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.admitBuiltinSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps built-in sessions routed through built-in admission', async () => {
+    const f = acpFixture({
+      source: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' },
+    });
+    expect(await f.runner(f.request)).toMatchObject({
+      ok: false,
+      errorCode: 'MODEL_UNAVAILABLE',
+      message: '发起任务正在切换模型，请稍后重试',
+    });
+    expect(f.admitBuiltinSession).toHaveBeenCalledExactlyOnceWith('acp-task');
+    expect(f.send).not.toHaveBeenCalled();
   });
 });

@@ -17,8 +17,9 @@
 > - 已有的 `role = 'routine'` 运行任务作为历史照常在任务列表可见、可打开。
 > - `fresh` 单次运行任务（`route_key = 'routine:<规则>:<uuid>'`）已归入伙伴历史、运行记录全部为 `skipped`（从未派发）、没有任何消息也没有被引用的，在启动时删除，即下文 2026-10-30「未派发即回收」对此前遗留任务的补执行，见[伙伴运行时](./cindy-bots-runtime.md) §3.1；复用任务、派发过或无法判定的一律保留。
 > - 旧控制端调用例行任务设置操作得到 `UNSUPPORTED_CAPABILITY`，读 `routines` 集合与例行任务技能页得到 `NOT_FOUND`。
-> - 插件：声明 `routineEvents`、`will-routine-run` 的插件照常安装，钩子不再触发；`routine-request` 管子对
->   status / publish 返回稳定的空操作；`routineEvents` 不再让插件常驻。见 [插件安全与编写](../dev-rules/plugin-security-and-authoring.md)。
+> - 插件：声明 `routineEvents`、`will-routine-run` 的插件照常安装，`will-routine-run` 不再触发。`routine-request` 管子
+>   2026-11-08 起一度对 status / publish 返回空操作，2026-11-23 起改为叫醒选了该插件的普通自动化，
+>   见 [插件事件触发](plugin-event-triggers.md) 与 [插件安全与编写](../dev-rules/plugin-security-and-authoring.md)。
 
 ## 产品合同
 

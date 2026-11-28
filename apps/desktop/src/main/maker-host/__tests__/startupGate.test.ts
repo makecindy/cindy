@@ -6,6 +6,22 @@ import { createPiRuntimeRecovery, prepareOptionalPiRuntime } from '../../agent-b
 afterEach(() => vi.useRealTimers());
 
 describe('Maker binary startup boundary', () => {
+  // Unit: a cancelled plugin request must leave the existing startup waiter
+  // immediately and never dispatch after startup completes.
+  it('removes a cancelled startup waiter without disturbing other callers', async () => {
+    vi.useFakeTimers();
+    const gate = createMakerStartupGate();
+    const controller = new AbortController();
+    const pending = gate.wait(60_000, controller.signal);
+    const survivor = gate.wait(60_000);
+    controller.abort();
+    expect(await pending).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
+    gate.complete();
+    expect(await survivor).toBe(true);
+    expect(await gate.wait(60_000, controller.signal)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it.each([true, false])('waits for Pi result before construction (ready=%s), then recovers if needed', async (ready) => {
     const gate = createMakerStartupGate();
     const agent = {} as BaseAgent;

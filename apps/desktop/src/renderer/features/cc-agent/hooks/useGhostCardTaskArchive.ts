@@ -150,7 +150,7 @@ async function autoArchiveLeftTask(
         .catch(() => true);
       if (attached) return false;
       // 没读到绑定列表不等于没有绑定:静默归档没有确认框兜底,没读到就保留任务。
-      const bound = await loadConfirmedActiveBoundScheduleNames([{ id: sessionId }]);
+      const bound = await loadConfirmedActiveBoundScheduleNames([{ id: sessionId, orcaRole: session.orcaRole }]);
       if (!bound || (bound.get(sessionId)?.length ?? 0) > 0) return false;
       const preflight = await resolveWorktreeRemovalPreflight(sessionId);
       // 检查期间用户又回到这个任务:不在眼前收走它。输入框里还有没发的草稿时也留着(草稿说明用户还没收尾,不静默把它收出列表;归档本身会保留草稿)。

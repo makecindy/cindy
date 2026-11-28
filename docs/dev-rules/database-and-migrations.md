@@ -2,7 +2,7 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改 `apps/desktop/src/main/localDb/`、数据库 schema、Drizzle migration、
-> migration companion script 或运行期数据库访问之前
+> migration companion script 或运行期数据库访问之前（新增表／列／migration 前先核对「Schema 变更克制原则」）
 > **适用路径**：`apps/desktop/src/main/localDb/**`、`apps/desktop/drizzle/**`、
 > `apps/desktop/drizzle.config.ts`、`apps/desktop/scripts/validate-migrations.mjs`、
 > `apps/desktop/scripts/lib/migration-freeze.mjs`、`scripts/ci-database-tests.mjs`、
@@ -37,6 +37,26 @@
 只依赖 SQL 与 companion；打包回归检查裁剪前后运行期指纹相同、其余文件字节不变。
 实现见 `apps/desktop/forge-prune-runtime.ts`，回归见
 `apps/desktop/scripts/runtime-deps-packaging.test.mjs`。
+
+## Schema 变更克制原则（避免数据库膨胀）
+
+本地 SQLite migration 进入 `main` 即永久冻结、不可回退。每新增一张表、一列或一条
+migration，都会永久沉淀在所有用户的数据库、`drizzle/meta/*_snapshot.json`、迁移回放
+链路、存量升级兼容面，以及配套的状态同步、IPC、跨版本能力探测与测试里。
+
+新增或修改持久 schema 前，必须同时满足以下四项判据；任一项不成立，就不要改数据库：
+
+1. **有明确且持续使用的真实读写闭环**：必须同时存在已落地的生产写入方与消费方（用户可见
+   入口或稳定自动流程）。不为“顺手预留”“以防万一”或“仅靠人工排障时可选传参”提前加表
+   或加列。
+2. **无法用现有结构或运行期机制合理替代**：先评估能否通过修根因消除该状态、复用已有字段、
+   保持在内存／派生状态（例如只做表单来源标注而不落库的临时意图），或放入已有配置文件／
+   JSON 存储。仅当数据必须跨重启持久化，且确需 SQL 查询、索引或事务一致性时才进 SQLite
+   schema。
+3. **收益大于全链路维护成本**：评估的不只是“加一两列 DDL”，要一并计入因此引入的平行
+   状态机、周期扫库、并发 CAS／竞态防护、跨端版本兼容位以及迁移序号冲突成本。
+4. **先说明理由与替代方案再动手**：若任务本身未明确要求改动数据库，在生成 migration 之前
+   必须先向用户或需求方说明为何无法不改表及取舍依据，取得确认后再实施。
 
 ## Append-only 不变量
 
@@ -131,6 +151,10 @@ tier 中的相关测试；删除源码、fixture 变化或无法确定事件基�
   指纹，并以窗口及认证／数据库共同就绪作为启动成功，失败不恢复旧数据库覆盖用户记录。
 
 ## 运行期数据库访问
+
+### 删除任务与归档
+
+桌面删除任务时保留任务 ID 和删除状态，供同步与定时任务识别。正文、标题、列表预览、摘要、全文搜索记录和向量任务关联随删除事务一起清除。归档保留这些数据，可以恢复。0163 对历史上已标为删除的任务执行同样清理。若写入连接未加载 sqlite-vec，仅暂存待清理的向量行号，下次加载扩展时清除对应的索引行。此操作只涉及 Cindy 本机聊天数据库。
 
 ### Schema 租约的发布与故障恢复（#7135）
 
@@ -268,7 +292,8 @@ UDF 是连接级的、不进 schema。持久触发器体内引用 UDF 时，任�
 
 ## Review 清单
 
-1. 这次是否真的需要 schema 变化，还是只需运行时代码调整？
+1. 是否通过「Schema 变更克制原则」四项判据（真实读写闭环、无法用现有结构或运行期机制合理替代、
+   全链路收益大于成本、未明确要求改库时已先确认），而不是把可由运行时逻辑解决的状态塞进永久 schema？
 2. migration 是否基于最新主干生成，且只追加未合入的新序号？
 3. SQL、snapshot、journal、schema 与可选 companion 是否表达同一最终结构？
    新增 migration 文件本体是否零注释？

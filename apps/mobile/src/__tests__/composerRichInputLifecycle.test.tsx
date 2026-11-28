@@ -155,6 +155,24 @@ it('reads the visible send snapshot and acknowledges it without replacing the ed
   expect(page.applyDocument).not.toHaveBeenCalled();
 });
 
+// Unit: Android can pause injected JavaScript between tapping Send and pressing Home.
+it('completes only the outstanding send with a fresh DOM read when the editor is hidden', async () => {
+  const { ref, page, send, onChangeDocument } = mount();
+  send({ type: 'ready' });
+  page.snapshot.mockImplementation(() => {});
+  const visible = textComposerDocument('last typed character');
+  const snapshot = { type: 'hidden-snapshot', capturedAt: Date.now(), documentId: page.id,
+    document: visible, pendingPaste: false };
+  send(snapshot);
+  const result = ref.current!.flushDocument!();
+  send({ ...snapshot, capturedAt: 0 });
+  expect(onChangeDocument).not.toHaveBeenCalled();
+  send({ ...snapshot, capturedAt: Date.now() });
+  await expect(result).resolves.toEqual(visible);
+  send(snapshot);
+  expect(onChangeDocument).toHaveBeenCalledTimes(1);
+});
+
 it.each(['replacement', 'termination', 'unmount', 'timeout'] as const)(
   'rejects an unavailable send snapshot after %s and ignores a late reply', async reason => {
     vi.useFakeTimers();

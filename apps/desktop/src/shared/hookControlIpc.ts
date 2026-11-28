@@ -393,6 +393,8 @@ export interface HookWorkspaceProviderSourceEntry {
   teamId: string | null;
   workspace: string;
   providerId: string;
+  /** 可选智能路由 id(仅存本机，绝不镜像到 hook server)；命中有值时新任务按路由选源并持续托管。 */
+  modelGroup?: string;
 }
 
 export interface HookWorkspacePrefs {

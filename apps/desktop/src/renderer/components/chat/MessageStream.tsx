@@ -389,8 +389,8 @@ import {
 } from './ImageGalleryContext';
 import { replyGalleryImages, type ReplyGalleryOptions, type ReplyImageCache } from './replyGalleryImages';
 import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCard';
-import { ChatToolDiffPreviewProvider } from './ChatToolDiffPreview';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
+import { FilePreviewLightboxProvider } from './FilePreviewLightboxHost';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
 import { isGhostCallToolName, isGhostStartupToolCallName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
@@ -461,8 +461,8 @@ import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
-  /** Viewer scope for a diff snapshot opened in the task conversation. */
-  toolDiffPreviewScope?: string;
+  /** Viewing scope for file diffs that outlive the activity row. */
+  toolDiffPreviewScope?: string | null;
   pendingMessages?: readonly ChatMessage[];
   renderPendingMessage?: (message: ChatMessage, pluginUi: PluginUiMessageCandidates) => ReactNode;
   /** Content before history, sharing its scrolling and measured content height. */
@@ -473,6 +473,8 @@ interface MessageStreamProps {
   onAskInSideChat?: (quote: string) => Promise<boolean>;
   /** Active session id — used to reset scroll state on session switch. */
   sessionId?: string;
+  /** Optional draft key when the session composer is still using its preview draft. */
+  quoteDraftKey?: string;
   /** Active session title, forwarded to handoff cards for return navigation. */
   sessionTitle?: string | null;
   /** Owning agent kind — propagated to UserMessage so capability gates
@@ -867,7 +869,7 @@ export function collectGhostCallsByUserTurn(
     if (
       owner &&
       (m.role === 'tool_use' || m.role === 'assistant') &&
-      isGhostCallToolName(m.toolName) &&
+      isGhostCallToolName(m.mcpToolName ?? m.toolName) &&
       m.toolInput &&
       typeof (m.toolInput as Record<string, unknown>).ghost_id === 'string'
     ) {
@@ -1718,6 +1720,17 @@ function ghostSummonInstanceId(ghostId: string, namespace: unknown): string | nu
     : id;
 }
 
+function artifactTimeLowerBound(times: readonly number[], value: number): number {
+  let low = 0;
+  let high = times.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (times[mid] < value) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
 export function buildRenderItems(
   allMessages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
@@ -2079,6 +2092,19 @@ export function buildRenderItems(
     pendingSegmentGhostCards = [];
   };
 
+  const historyArtifacts = opts?.historyArtifacts ?? [];
+  type TimedArtifact = { artifact: (typeof historyArtifacts)[number]; index: number; time: number };
+  const datedArtifacts: TimedArtifact[] = [];
+  const undatedArtifacts: TimedArtifact[] = [];
+  historyArtifacts.forEach((artifact, index) => {
+    const time = Date.parse(artifact.createdAt);
+    const entry = { artifact, index, time };
+    if (Number.isFinite(time)) datedArtifacts.push(entry);
+    else undatedArtifacts.push(entry);
+  });
+  datedArtifacts.sort((a, b) => a.time - b.time);
+  const artifactTimes = datedArtifacts.map((entry) => entry.time);
+
   let turnStartIdx = 0;
   const flushTurnEnd = (lo: number, hi: number): void => {
     flushTurnChanges(lo, hi);
@@ -2173,10 +2199,11 @@ export function buildRenderItems(
     if (workingDir) {
       const start = Date.parse(messages[lo]?.createdAt ?? '');
       const end = Date.parse(messages[hi]?.createdAt ?? '');
-      const artifacts = (opts?.historyArtifacts ?? []).filter((artifact) => {
-        const time = Date.parse(artifact.createdAt);
-        return !((Number.isFinite(start) && time < start) || (Number.isFinite(end) && time >= end));
-      });
+      const lower = Number.isFinite(start) ? artifactTimeLowerBound(artifactTimes, start) : 0;
+      const upper = Number.isFinite(end) ? artifactTimeLowerBound(artifactTimes, end) : datedArtifacts.length;
+      const artifacts = [...datedArtifacts.slice(lower, upper), ...undatedArtifacts]
+        .sort((a, b) => a.index - b.index)
+        .map((entry) => entry.artifact);
       const editedPaths = new Set(artifacts.filter((file) => file.exclude && file.ready)
         .map((file) => pathKey(resolveToolFilePath(file.path, workingDir))));
       for (const artifact of artifacts) {
@@ -2342,9 +2369,10 @@ export function buildRenderItems(
       // 最早未认领活卡启发式锚(codex);settle 后 xdt_card_id 自校正。
       let suppressMediaForCard = false;
       let hideRowForCard = false;
+      const cardToolName = msg.mcpToolName ?? toolName;
       const maybeQueueGhostCard = (result: string | undefined): void => {
-        const namedPluginTool = isGhostStartupToolCallName(toolName);
-        if (!ghostCards || (!isGhostCallToolName(toolName) && !namedPluginTool)) return;
+        const namedPluginTool = isGhostStartupToolCallName(cardToolName);
+        if (!ghostCards || (!isGhostCallToolName(cardToolName) && !namedPluginTool)) return;
         const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
         const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
         const candidateGhostId = ghostCardInstanceId(ghostIdFromInput, inp?.namespace);
@@ -2393,7 +2421,7 @@ export function buildRenderItems(
                   !settledCardIds.has(lc.callId) &&
                   lc.toolUseId === null &&
                   (lc.startupToolName
-                    ? toolName === `mcp__cindy__${lc.startupToolName}` || toolName === `mcp:cindy:${lc.startupToolName}`
+                    ? cardToolName === `mcp__cindy__${lc.startupToolName}` || cardToolName === `mcp:cindy:${lc.startupToolName}`
                     : !namedPluginTool && ((lc.logicalGhostId ?? lc.ghostId) === candidateGhostId ||
                       (lc.logicalGhostId === undefined && inp?.namespace === undefined &&
                         lc.ghostId === candidateGhostId))),
@@ -2428,7 +2456,7 @@ export function buildRenderItems(
           media = media.filter((item) => !inlineMediaUrls.has(item.url));
         }
         if (media.length === 0) return;
-        if (isGhostCallToolName(toolName)) {
+        if (isGhostCallToolName(cardToolName)) {
           const anchor = extractAnchorCardId(result);
           const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
           const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
@@ -3255,6 +3283,7 @@ export function MessageStream({
   onAskInSideChat,
   historyVisibleAfter,
   sessionId,
+  quoteDraftKey,
   sessionTitle,
   agentKind,
   remoteHostId,
@@ -6871,13 +6900,16 @@ export function MessageStream({
 
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
+      {/* 文件预览浮层的会话级宿主(issue #12851):预览属于「用户正在看这个文件」,
+        不属于任何一行工具 —— 工具行被重建时浮层必须留着。 */}
+      <FilePreviewLightboxProvider key={sessionId} diffPreviewScope={toolDiffPreviewScope}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
-        <ChatToolDiffPreviewProvider scope={toolDiffPreviewScope}>
+        <>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (
-              <SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
+              <SelectionQuoteButton sessionId={sessionId} draftKey={quoteDraftKey} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
             ) : null}
             {/*
         原生滚动容器:overflow-y-auto + overflow-x-hidden。
@@ -7338,8 +7370,9 @@ export function MessageStream({
                 chipSlot,
               )}
           </div>
-        </ChatToolDiffPreviewProvider>
+        </>
       </GhostFulfillmentContext.Provider>
+      </FilePreviewLightboxProvider>
     </ChatSessionFileProvider>
   );
 }
@@ -7515,6 +7548,7 @@ const MessageItem = memo(function MessageItem({
             automationOrigin={message.automationOrigin}
             hookSource={message.hookSource}
             sourceDevice={message.sourceDevice}
+            dispatchRoute={message.dispatchRoute}
             sourcePlugin={message.sourcePlugin}
             delivery={message.delivery}
             goalBadge={message.goalBadge}
@@ -7649,6 +7683,7 @@ const MessageItem = memo(function MessageItem({
           message={message.content}
           reason={message.errorReason}
           providerId={message.errorProviderId}
+          reconnectHandoff={message.reconnectHandoff}
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}
           sessionSource={sessionSource}

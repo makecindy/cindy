@@ -47,6 +47,7 @@ import {
 } from '../../shared/regionalMoney.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
+  recordProviderAccountActivity,
   triggerClaudeSubscriptionUsageRefresh,
   triggerCodexAccountUsageRefresh,
   triggerXaiSubscriptionUsageRefresh,
@@ -526,6 +527,9 @@ export function recordSessionClaudeTurnUsage(
     // 故意放在 cumulative 块外面: spend 走 turn delta, 配额走 HTTP API, 两件事独立;
     // 但仍在 done && claude-code 的 if 内, 不要每个事件都打一次。
     void triggerClaudeAccountUsageRefresh();
+    if (!session.remoteHostId && turnContext.providerId && turnContext.providerId !== 'xd') {
+      recordProviderAccountActivity(turnContext.providerId);
+    }
     // chatgpt/ 订阅轮: 额外触发 ChatGPT wham 额度刷新(与 codex 同一 ChatGPT 账户),让底部
     // chip 的订阅额度实时更新 —— bridge 轮不产生 codex account_usage 事件,须主动触发。
     void modelPromise

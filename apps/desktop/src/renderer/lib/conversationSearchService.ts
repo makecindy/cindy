@@ -19,7 +19,7 @@ import {
 } from './conversationSearchFanout';
 import type { ConversationSearchResultItem } from '../../shared/conversationSearch';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
-import { remoteConversationSearchRequest } from '@cindy/maker-shared/conversation-search';
+import { enforceExplicitConversationSearchResponse, remoteConversationSearchRequest } from '@cindy/maker-shared/conversation-search';
 
 function wrap<T>(p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
@@ -146,7 +146,7 @@ async function searchRemoteIndexed(
   invokeRemote: ConversationSearchFanoutDeps['invokeRemote'],
 ): Promise<ConversationSearchResponse> {
   const response = await invokeRemote(deviceId, 'local-db:conversations:search', [remoteConversationSearchRequest(request)]);
-  return response as ConversationSearchResponse;
+  return enforceExplicitConversationSearchResponse(response as ConversationSearchResponse, request);
 }
 
 async function searchRemoteLegacyByTitle(

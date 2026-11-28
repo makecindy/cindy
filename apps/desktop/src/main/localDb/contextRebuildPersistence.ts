@@ -20,7 +20,8 @@ export async function commitContextRebuildWithPorts(
       | 'idle-gap';
     sourceUserClientId: string | null;
     handoffCoverage?: HandoffCoverage;
-    sourceAgentKind?: 'cc' | 'codex' | 'pi';
+    /** 'acp' = plugin engine task; readers that only know the built-in engines ignore it. */
+    sourceAgentKind?: 'cc' | 'codex' | 'pi' | 'acp';
     sourceModel?: string | null;
     sourceProviderId?: string | null;
     expectedClearedAt?: number | null;

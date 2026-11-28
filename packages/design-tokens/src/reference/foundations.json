@@ -300,6 +300,13 @@
           "unit": "ms"
         }
       },
+      "motion-stream-word": {
+        "$type": "duration",
+        "$value": {
+          "value": 500,
+          "unit": "ms"
+        }
+      },
       "motion-sidebar-title-marquee-per-viewport": {
         "$type": "duration",
         "$value": {

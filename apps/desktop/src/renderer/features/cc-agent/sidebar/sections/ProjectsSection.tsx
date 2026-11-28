@@ -121,10 +121,11 @@ import {
 import { absorbSessionStarting, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
+import type { SidebarPluginHarness } from '../SidebarFilterPopover';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
-import { TaskInbox, type TaskInboxProps } from '../TaskInbox';
+import { TaskInbox } from '../TaskInbox';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -196,7 +197,6 @@ export interface ProjectsSectionProps {
   /** Same device/content scope, including archived tasks, for the standalone inbox mode. */
   inboxSessions?: readonly Session[];
   inboxNow?: number;
-  inboxTeammates?: TaskInboxProps['teammates'];
   /** Inbox: whether a task belongs to a teammate (the task list's teammate-filter test). */
   isInboxTeammateTask?: (session: Session) => boolean;
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
@@ -215,6 +215,8 @@ export interface ProjectsSectionProps {
   allKnownProjects: ProjectNodeData[];
   /** 项目筛选前的无项目任务数,供菜单「对话」选项用。 */
   dialogueCount?: number;
+  /** 当前范围内任务用到的插件 Harness,供菜单的 Harness 筛选列出。 */
+  pluginHarnesses?: readonly SidebarPluginHarness[];
   /**
    * 原始项目全集的规范 key。手动排序以此为 baseline，保证隐藏项目的
    * 位置记忆不会因用户拖动其它可见项目而被 GC。
@@ -292,13 +294,13 @@ export function ProjectsSection({
   unclassified,
   inboxSessions,
   inboxNow,
-  inboxTeammates,
   isInboxTeammateTask,
   projects,
   dialogues,
   dialogueActionSessions = dialogues,
   allKnownProjects,
   dialogueCount = 0,
+  pluginHarnesses,
   allProjectKeysForOrder,
   filter,
   collapsed,
@@ -1154,6 +1156,7 @@ export function ProjectsSection({
         filter={filter}
         allKnownProjects={allKnownProjects}
         dialogueCount={dialogueCount}
+        pluginHarnesses={pluginHarnesses}
         hasRemoteDevices={deviceGroupingAvailable}
         fold={
           taskListMode === 'tasks' && hasMainListContent && foldState !== null
@@ -1421,7 +1424,6 @@ export function ProjectsSection({
       {taskListMode === 'inbox' && inboxSessions && (
         <TaskInbox
           now={inboxNow}
-          teammates={inboxTeammates}
           sessions={inboxSessions}
           contentFiltered={sidebarContentFilterCount(filter) > 0}
           isTeammateTask={isInboxTeammateTask}
