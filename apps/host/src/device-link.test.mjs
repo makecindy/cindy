@@ -1432,7 +1432,7 @@ test('Host SSH access: same-account enrolment, the remote commands and the profi
   const enrolled = await ssh(enroll);
   assert.deepEqual({ ok: enrolled.ok, authorized: enrolled.result.authorized, endpoint: enrolled.result.endpoint },
     { ok: true, authorized: true, endpoint: { user: 'tester', port: 22, addresses: [{ kind: 'lan', host: '10.0.0.9' }], hostKeys: [KEY_B] } });
-  assert.match(authorizedKeys(), new RegExp(`${KEY_A.replace(/[+/]/g, '\\$&')} cindy-device:desktop\n`));
+  assert.ok(authorizedKeys().includes(`${KEY_A} cindy-device:desktop\n`));
   const added = await host.sshAccess('ssh-key-add', { publicKey: `${KEY_B} me@laptop\n`, label: 'work' });
   assert.equal(added.state.manualKeys[0].label, 'work');
   assert.match(authorizedKeys(), /cindy-manual:work/);
