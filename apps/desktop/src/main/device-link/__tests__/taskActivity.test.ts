@@ -59,14 +59,14 @@ it.each<[string, AgentIslandSessionSnapshot['phase'], boolean, Partial<SessionIn
   ['snoozed unread result', 'completed', true, { snoozedUntil: '2026-01-02T00:00:00.000Z', snoozedAt: '2026-01-01T00:00:00.000Z' }, false],
   ['snoozed but woken by a later send', 'completed', true, { snoozedUntil: '2026-01-02T00:00:00.000Z', snoozedAt: '2026-01-01T00:00:00.000Z', userSendAt: '2026-01-01T06:00:00.000Z' }, true],
   ['snooze already over', 'completed', true, { snoozedUntil: '2026-01-01T06:00:00.000Z', snoozedAt: '2026-01-01T00:00:00.000Z' }, true],
-  ['teammate own task, result only', 'completed', true, { teammate: true }, false],
-  ['teammate own task, error', 'error', true, { teammate: true }, true],
-  ['teammate own task, waiting', 'needs-interaction', true, { teammate: true }, true],
-  ['teammate own task, running', 'running', false, { teammate: true }, true],
+  ['teammate own task, result only', 'completed', true, { kind: 'teammate-task' }, false],
+  ['teammate own task, error', 'error', true, { kind: 'teammate-task' }, true],
+  ['teammate own task, waiting', 'needs-interaction', true, { kind: 'teammate-task' }, true],
+  ['teammate own task, running', 'running', false, { kind: 'teammate-task' }, true],
   ['archived', 'completed', true, { status: 'archived' }, false],
 ])('phone share keeps inbox tasks only: %s', (_name, phase, attention, facts, counted) => {
   const now = Date.parse('2026-01-01T12:00:00.000Z');
-  const full = facts && ({ status: 'active', teammate: false, ...facts } as SessionInboxFacts);
+  const full = facts && ({ status: 'active', kind: 'task', ...facts } as SessionInboxFacts);
   expect(keepInboxCountedTasks([row('t', phase, attention)], () => full, now)).toHaveLength(counted ? 1 : 0);
 });
 it('coalesces bursts, uploads the latest state and aborts the previous connection', async () => {

@@ -1662,7 +1662,7 @@ describe('AgentIslandService native publishing', () => {
       const { AgentIslandService } = await import('../service.js');
       mocks.readSessionInboxFacts.mockResolvedValue({
         status: 'active', snoozedUntil: '2026-01-01T01:00:00.000Z', snoozedAt: '2026-01-01T00:00:00.000Z',
-        userSendAt: null, teammate: false,
+        userSendAt: null, kind: 'task',
       });
       const service = new AgentIslandService({
         getMainWindow: () => null,

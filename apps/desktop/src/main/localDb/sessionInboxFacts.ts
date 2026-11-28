@@ -5,8 +5,7 @@ import { getDbClient } from './client/current.js';
 
 /** The row facts the shared inbox rules read, so the phone count lists the same tasks. */
 export interface SessionInboxFacts extends TaskInboxState {
-  /** `isTeammateOwnInboxTask`: kept with the teammate unless it needs the user or runs. */
-  teammate: boolean;
+  kind: 'canonical' | 'teammate-task' | 'task';
 }
 
 const iso = (ms: number | null): string | null => (ms == null ? null : new Date(ms).toISOString());
@@ -32,7 +31,8 @@ export async function readSessionInboxFacts(sessionId: string): Promise<SessionI
   if (!row) return null;
   // A teammate's main conversation also wakes on a new reply (see `botInboxSnooze` in
   // ipc/bots.ts); a reply ends a turn, so the turn end stands in for the reply time.
-  const inputAt = row.companionRole === 'canonical'
+  const canonical = row.companionRole === 'canonical';
+  const inputAt = canonical
     ? Math.max(row.userSendAt ?? 0, row.lastTurnEndedAt ?? 0) || null
     : row.userSendAt;
   return {
@@ -41,11 +41,12 @@ export async function readSessionInboxFacts(sessionId: string): Promise<SessionI
     snoozedUntil: iso(row.snoozedUntil),
     snoozedAt: iso(row.snoozedAt),
     userSendAt: iso(inputAt),
-    teammate: isTeammateOwnInboxTask({
+    // Main conversations live under the teammate workspace too, but have their own inbox row.
+    kind: canonical ? 'canonical' : isTeammateOwnInboxTask({
       source: row.source,
       companion: row.companionRole ? { role: row.companionRole } : null,
       projectDir: row.projectDir,
       workingDir: row.workingDir,
-    }),
+    }) ? 'teammate-task' : 'task',
   };
 }
