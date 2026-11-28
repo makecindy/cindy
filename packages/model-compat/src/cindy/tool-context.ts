@@ -109,7 +109,7 @@ function responseToolIdentity(
  * Codex appends the current turn's declarations last; earlier groups are replayed history that
  * must stay reachable for the provider but must not grant new tools.
  */
-function indexOfCurrentTurnInlineTools(input: ResponsesRequest['input']): number {
+export function indexOfCurrentTurnInlineTools(input: unknown): number {
   if (!Array.isArray(input)) return -1;
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
@@ -118,6 +118,18 @@ function indexOfCurrentTurnInlineTools(input: ResponsesRequest['input']): number
     }
   }
   return -1;
+}
+
+export function collectCurrentToolSearchGroups(input: unknown): unknown[][] {
+  if (!Array.isArray(input)) return [];
+  const groups: unknown[][] = [];
+  const start = Math.max(0, indexOfCurrentTurnInlineTools(input));
+  for (let index = start; index < input.length; index += 1) {
+    const item: unknown = input[index];
+    if (isPlainObject(item) && (item.type === 'tool_search_output' || item.type === 'tool_search_call_output')
+      && Array.isArray(item.tools)) groups.push(item.tools);
+  }
+  return groups;
 }
 
 function specIdentity(spec: ChatBridgeToolSpec): string {
@@ -416,15 +428,7 @@ export class ChatBridgeToolContext {
     }
   }
   private addLoadedToolSearchTools(input: ResponsesRequest['input']): void {
-    if (!Array.isArray(input)) return;
-    const boundary = indexOfCurrentTurnInlineTools(input);
-    for (let index = 0; index < input.length; index += 1) {
-      const item = input[index];
-      if (!isPlainObject(item)) continue;
-      if (item.type !== 'tool_search_output' && item.type !== 'tool_search_call_output') continue;
-      const loaded = item.tools;
-      if (!Array.isArray(loaded)) continue;
-      if (boundary >= 0 && index < boundary) continue;
+    for (const loaded of collectCurrentToolSearchGroups(input)) {
       for (const tool of loaded) this.addResponseTool(tool as ResponseTool);
     }
   }

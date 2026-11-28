@@ -1,7 +1,6 @@
 import { coerceIntegerToolArguments } from "../lib/tool-argument-integers";
-import { namespacedToolName } from "../types/tools";
+import { dottedToolName, namespacedToolName } from "../types/tools";
 import { rewriteRoutedNamespaceToolsForUpstream } from "./namespace-tool-compat";
-import { collectResponsesToolGroups } from "./tool-groups";
 
 export interface FunctionCallRepairSchema {
   name: string;
@@ -9,8 +8,11 @@ export interface FunctionCallRepairSchema {
   parameters?: Record<string, unknown>;
 }
 
-/** Keys are canonical original identities, never a bare-name fallback for a namespace. */
-export type FunctionCallRepairSchemas = ReadonlyMap<string, FunctionCallRepairSchema>;
+export interface FunctionCallRepairSchemas {
+  byIdentity: ReadonlyMap<string, FunctionCallRepairSchema>;
+  byWireName: ReadonlyMap<string, FunctionCallRepairSchema>;
+  namespacedFunctions: ReadonlySet<string>;
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -33,91 +35,216 @@ function namespaceOf(value: unknown): string | undefined {
   return typeof value === "string" && value !== "functions" ? value : undefined;
 }
 
+function identityKey(namespace: string | undefined, name: string): string {
+  return JSON.stringify([namespace, name]);
+}
+
+export function hasDeclaredNamespacedFunction(
+  schemas: FunctionCallRepairSchemas,
+  namespace: string,
+  name: string,
+): boolean {
+  return schemas.namespacedFunctions.has(identityKey(namespace, name));
+}
+
 function selectorAllows(
   selector: unknown,
   lowered: unknown,
-  wireName: string,
+  wireName: string | undefined,
   identity: FunctionCallRepairSchema,
+  key: string,
+  historySelectors?: ReadonlyMap<string, string | null>,
 ): boolean {
   if (!isObject(selector) || selector.type !== "function" || typeof selector.name !== "string") return false;
   if ("namespace" in selector) {
     if (typeof selector.namespace !== "string" || selector.namespace.length === 0) return false;
     return namespaceOf(selector.namespace) === identity.namespace && selector.name === identity.name;
   }
-  return isObject(lowered) && lowered.type === "function" && lowered.name === wireName;
+  if (!isObject(lowered) || lowered.type !== "function" || typeof lowered.name !== "string") return false;
+  if (lowered.name === selector.name && historySelectors?.has(selector.name)) {
+    return historySelectors.get(selector.name) === key;
+  }
+  return lowered.name === wireName;
 }
 
 /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
-export function collectFunctionCallRepairSchemas(body: unknown): Map<string, FunctionCallRepairSchema> {
-  const schemas = new Map<string, FunctionCallRepairSchema>();
-  if (!isObject(body)) return schemas;
-  const groups = collectResponsesToolGroups(body);
+export interface FunctionCallRepairPlan {
+  /** Wire names the live request allocated for displaced namespace children. */
+  renamedWireNames: ReadonlyMap<string, string>;
+  /** `tool_choice` after the request's own lowering, so selectors match the forwarded body. */
+  loweredToolChoice?: unknown;
+  /** Original kinds of the canonical namespaces in a flattened request. */
+  canonicalNamespaceKinds?: ReadonlyMap<string, "function" | "custom">;
+}
+
+/** Native repair has no lowered live request; retain loaded tool-search schemas and selectors. */
+export function deriveFunctionCallRepairPlan(body: unknown, currentInlineIndex?: number): FunctionCallRepairPlan & {
+  renamedKinds: Map<string, "function" | "custom">;
+} {
+  if (!isObject(body)) return { renamedWireNames: new Map(), renamedKinds: new Map() };
+  const groups: unknown[][] = Array.isArray(body.tools) ? [body.tools] : [];
   if (Array.isArray(body.input)) {
-    for (const entry of body.input) {
-      if (isObject(entry) && entry.type === "tool_search_output" && Array.isArray(entry.tools)) groups.push(entry.tools);
+    for (const [index, entry] of body.input.entries()) {
+      if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
+      const currentInline = entry.type === "additional_tools" && (currentInlineIndex === undefined || index === currentInlineIndex);
+      const currentSearch = (entry.type === "tool_search_output" || entry.type === "tool_search_call_output")
+        && index >= (currentInlineIndex ?? -1);
+      if (currentInline || currentSearch) groups.push(entry.tools);
     }
   }
-  // Reuse namespace selector resolution, retaining schemas from the original objects below.
-  // This local catalog view includes loaded definitions without revisiting replay history or
-  // teaching the shared tool-group collector a new transport-wide interpretation.
-  const lowered = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] }).body;
+  const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] });
+  return {
+    renamedWireNames: derived.renamedWireNames,
+    renamedKinds: derived.renamedKinds,
+    loweredToolChoice: isObject(derived.body) ? derived.body.tool_choice : undefined,
+  };
+}
+
+export function collectFunctionCallRepairSchemas(
+  body: unknown,
+  plan?: FunctionCallRepairPlan,
+  currentInlineIndex?: number,
+): FunctionCallRepairSchemas {
+  const byIdentity = new Map<string, FunctionCallRepairSchema>();
+  const byWireName = new Map<string, FunctionCallRepairSchema>();
+  const namespacedFunctions = new Set<string>();
+  const schemas = { byIdentity, byWireName, namespacedFunctions };
+  if (!isObject(body)) return schemas;
+  const liveGroups: unknown[][] = [];
+  if (Array.isArray(body.tools)) liveGroups.push(body.tools);
+  const searchGroups: unknown[][] = [];
+  const historicalGroups: unknown[][] = [];
+  if (Array.isArray(body.input)) {
+    for (const [index, entry] of body.input.entries()) {
+      if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
+      if (entry.type === "tool_search_output" || entry.type === "tool_search_call_output") {
+        (index < (currentInlineIndex ?? -1) ? historicalGroups : searchGroups).push(entry.tools);
+      } else if (entry.type === "additional_tools") {
+        (currentInlineIndex === undefined || index === currentInlineIndex ? liveGroups : historicalGroups).push(entry.tools);
+      }
+    }
+  }
+  // Namespace lowering keeps live top-level declarations over reserved-group duplicates.
+  // Use that same canonical catalog for schemas, without masking two top-level conflicts.
+  const canonicalBareNames = new Set<string>();
+  for (const group of liveGroups) {
+    for (const tool of group) {
+      if (isObject(tool) && tool.type !== "namespace" && typeof tool.name === "string") canonicalBareNames.add(tool.name);
+    }
+  }
+  // The forwarded request owns all wire names. Search history can only resolve selectors that
+  // had no match when the request was lowered; it must never allocate its own wire names here.
+  const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body, currentInlineIndex);
   const choice = body.tool_choice;
-  const loweredChoice = isObject(lowered) ? lowered.tool_choice : undefined;
-  const occupied = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema } | null>();
-  const register = (tool: unknown, namespace?: string): void => {
+  const selectorOwners = (searchGroups.length > 0 || historicalGroups.length > 0) && isObject(choice)
+    ? new Map<string, { key: string | null; historical: boolean }>()
+    : undefined;
+  const declarations = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema; live: boolean; historical: boolean; wireName: string } | null>();
+  const wireOwners = new Map<string, { key: string | null; live: boolean; historical: boolean }>();
+  const liveNamespacedIdentities = new Set<string>();
+  const currentSearchIdentities = new Set<string>();
+  const register = (tool: unknown, declaredNamespace: string | undefined, live: boolean, historical: boolean): void => {
     if (!isObject(tool) || typeof tool.name !== "string" || tool.name.length === 0) return;
+    const namespace = namespaceOf(declaredNamespace);
     const identity: FunctionCallRepairSchema = {
       name: tool.name,
       ...(namespace ? { namespace } : {}),
       ...(isObject(tool.parameters) ? { parameters: tool.parameters } : {}),
     };
-    const key = namespacedToolName(namespace, tool.name);
-    if (occupied.has(key)) {
-      const previous = occupied.get(key);
-      // Conflicting duplicate declarations cannot choose a schema by insertion order.
-      if (!previous || previous.kind !== tool.type
-        || previous.identity.namespace !== namespace
-        || previous.identity.name !== tool.name
-        || !sameSchemaValue(previous.identity.parameters, identity.parameters)) {
-        occupied.set(key, null);
+    const preferred = namespacedToolName(namespace, tool.name);
+    const canonicalKind = namespace && live ? plan?.canonicalNamespaceKinds?.get(preferred) : undefined;
+    if (canonicalKind !== undefined && canonicalKind !== tool.type) return;
+    const wireName = namespace ? (renamedWireNames.get(preferred) ?? preferred) : preferred;
+    const key = identityKey(namespace, tool.name);
+    // Type restoration uses the live declaration when present, independently of schema conflicts.
+    if (namespace) {
+      if (live) liveNamespacedIdentities.add(key);
+      if (!live && !historical) currentSearchIdentities.add(key);
+      if (tool.type === "function" && (live || (!liveNamespacedIdentities.has(key)
+        && (!historical || !currentSearchIdentities.has(key))))) namespacedFunctions.add(key);
+    }
+    // Register the live catalog first. History can supply an explicit coordinate even if another
+    // tool already owns its wire name. Two different tools with equal priority make the wire name ambiguous.
+    const owner = wireOwners.get(wireName);
+    if (owner === undefined) wireOwners.set(wireName, { key, live, historical });
+    else if (owner.key !== key && owner.live === live && owner.historical === historical) owner.key = null;
+    if (selectorOwners) {
+      const names = declaredNamespace ? [tool.name, dottedToolName(declaredNamespace, tool.name)] : [tool.name];
+      for (const name of names) {
+        const previous = selectorOwners.get(name);
+        if (!previous) selectorOwners.set(name, { key, historical });
+        else if (previous.historical === historical && previous.key !== key) previous.key = null;
       }
-    } else occupied.set(key, { kind: tool.type, identity });
+    }
+    const previous = declarations.get(key);
+    if (previous === undefined) declarations.set(key, { kind: tool.type, identity, live, historical, wireName });
+    // This turn's declarations and loaded search outputs take priority over replayed schemas.
+    // Conflicting declarations in the selected catalog still withhold repair.
+    else if (previous && (!historical || previous.historical)
+      && (previous.kind !== tool.type || !sameSchemaValue(previous.identity.parameters, identity.parameters))) {
+      declarations.set(key, null);
+    }
   };
-  for (const group of groups) {
+  const groups = [
+    ...liveGroups.map(group => ({ group, live: true, historical: false })),
+    ...searchGroups.map(group => ({ group, live: false, historical: false })),
+    ...historicalGroups.map(group => ({ group, live: false, historical: true })),
+  ];
+  for (const { group, live, historical } of groups) {
     for (const tool of group) {
       if (!isObject(tool)) continue;
       if (tool.type === "namespace") {
         if (typeof tool.name !== "string" || !tool.name || !Array.isArray(tool.tools)) continue;
-        for (const child of tool.tools) register(child, namespaceOf(tool.name));
+        for (const child of tool.tools) {
+          if (tool.name === "functions" && isObject(child) && typeof child.name === "string"
+            && canonicalBareNames.has(child.name)) continue;
+          register(child, tool.name, live, historical);
+        }
       } else if (tool.type === "function" && isObject(tool.function)) {
-        register({ ...tool.function, type: "function" });
-      } else register(tool);
+        register({ ...tool.function, type: "function" }, undefined, live, historical);
+      } else register(tool, undefined, live, historical);
     }
   }
-  for (const [key, entry] of occupied) {
+  // An unchanged selector can already be a wire name. An exact owner in the same or a
+  // newer catalog takes precedence even when that owner has no repairable schema.
+  const historySelectors = selectorOwners && new Map([...selectorOwners]
+    .filter(([name, entry]) => {
+      const owner = wireOwners.get(name);
+      return !owner || (owner.historical && !entry.historical);
+    })
+    .map(([name, entry]) => [name, entry.key]));
+  for (const [key, entry] of declarations) {
     if (!entry || entry.kind !== "function") continue;
+    const wireName = wireOwners.get(entry.wireName)?.key === key ? entry.wireName : undefined;
     let allowed = choice === undefined || choice === "auto" || choice === "required";
     if (isObject(choice)) {
+      const fallback = entry.live ? undefined : historySelectors;
       if (choice.type === "allowed_tools" && Array.isArray(choice.tools)) {
         const selectors = isObject(loweredChoice) && Array.isArray(loweredChoice.tools) ? loweredChoice.tools : [];
-        allowed = choice.tools.some((selector, index) => selectorAllows(selector, selectors[index], key, entry.identity));
-      } else allowed = selectorAllows(choice, loweredChoice, key, entry.identity);
+        allowed = choice.tools.some((selector, index) => selectorAllows(selector, selectors[index], wireName, entry.identity, key, fallback));
+      } else allowed = selectorAllows(choice, loweredChoice, wireName, entry.identity, key, fallback);
     }
-    if (allowed) schemas.set(key, entry.identity);
+    if (allowed) {
+      byIdentity.set(key, entry.identity);
+      if (wireName !== undefined) byWireName.set(wireName, entry.identity);
+    }
   }
   return schemas;
 }
 
-function repairItem(item: unknown, schemas: FunctionCallRepairSchemas, completed: boolean): unknown {
+function repairItem(
+  item: unknown,
+  schemas: FunctionCallRepairSchemas,
+  completed: boolean,
+): unknown {
   if (!isObject(item) || item.type !== "function_call" || typeof item.name !== "string"
     || typeof item.arguments !== "string") return item;
   if (item.status !== "completed" && !(item.status === undefined && completed)) return item;
   if ("namespace" in item && (typeof item.namespace !== "string" || !item.namespace)) return item;
-  const namespace = namespaceOf(item.namespace);
-  const schema = schemas.get(namespacedToolName(namespace, item.name));
+  const schema = "namespace" in item
+    ? schemas.byIdentity.get(identityKey(namespaceOf(item.namespace), item.name))
+    : schemas.byWireName.get(item.name);
   if (!schema) return item;
-  // An explicit namespace is an identity coordinate, not another spelling to guess at.
-  if ("namespace" in item && (schema.namespace !== namespace || schema.name !== item.name)) return item;
   const raw = item.arguments;
   if (raw !== "") {
     try {
@@ -140,7 +267,7 @@ export function repairFunctionCalls(
   value: unknown,
   schemas: FunctionCallRepairSchemas,
 ): { value: unknown; changed: boolean } {
-  if (schemas.size === 0 || !isObject(value)) return { value, changed: false };
+  if (schemas.byIdentity.size === 0 || !isObject(value)) return { value, changed: false };
   if (typeof value.status === "string" && ["failed", "incomplete", "cancelled", "in_progress", "queued"].includes(value.status)) return { value, changed: false };
   let next: unknown = value;
   if (value.type === "function_call") next = repairItem(value, schemas, false);
@@ -164,8 +291,11 @@ export function repairFunctionCalls(
   return { value: next, changed: next !== value };
 }
 
-export function repairFunctionCallsInJson(text: string, schemas: FunctionCallRepairSchemas): string {
-  if (schemas.size === 0) return text;
+export function repairFunctionCallsInJson(
+  text: string,
+  schemas: FunctionCallRepairSchemas,
+): string {
+  if (schemas.byIdentity.size === 0) return text;
   let payload: unknown;
   try { payload = JSON.parse(text); } catch { return text; }
   const repaired = repairFunctionCalls(payload, schemas);

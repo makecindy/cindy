@@ -33,7 +33,7 @@ export function createResponsesFunctionToolRepairBlockRewrite(
   schemas: FunctionCallRepairSchemas,
   budget?: TranslatorBudget,
 ): SseBlockRewrite {
-  if (schemas.size === 0) return block => [block];
+  if (schemas.byIdentity.size === 0) return block => [block];
   const byId = new Map<string, Identity>();
   const byIndex = new Map<number, Identity>();
   let pending: PendingCompletion[] = [];
