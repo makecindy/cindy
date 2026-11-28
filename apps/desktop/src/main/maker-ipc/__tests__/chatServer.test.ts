@@ -3147,7 +3147,8 @@ describe('Chat Server result delivery and refresh', () => {
         if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: replies, cursor: '1' } };
         if (route === `/conversations/${roomId}/messages?limit=100`) return { body: replies };
         if (route === `/conversations/${roomId}/executions`) return { body: [
-          { ...request(39, peerId), status: 'running' }, { ...request(40), status: 'needs_input' }] };
+          // Own turn claimed by one of this account's computers, now waiting for a confirmation there.
+          { ...request(39, peerId), status: 'running' }, { ...request(40), status: 'needs_input', executor: { deviceId: 'studio-device' } }] };
         return previous(route, method, body);
       });
       const result = await service.getGroup(roomId);
@@ -3175,6 +3176,47 @@ describe('Chat Server result delivery and refresh', () => {
       expect(result.group.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
       expect(result.group.round.canStop).toBe(requester === selfId && status === 'running');
       expect(result.group.teammateActivity?.phase).toBe('idle');
+    });
+
+    // bot-group-chat.md 第 9 节 (2026-11-28). Regression: a request held until its requester chose a computer
+    // showed every member a public notice and a running Cindy nobody else could stop, with no timeout.
+    // Unit: the real getGroup against the HTTP boundary; the server holds the turn as needs_input with no executor.
+    it.each([[selfId, true], [peerId, false]] as const)('keeps a request waiting for %s to choose a computer out of group activity', async (requester, own) => {
+      const source = message(60, requester, 'Sort out the weekly report');
+      const notice = (n: number, reason: 'unbound' | 'offline') => message(n, cindyId, '', { origin: 'bot', content: [{ type: 'card',
+        namespace: 'cindy.group-assistant', schemaRevision: 1, fallback: 'notice', data: { type: 'executor_unavailable', reason, requesterId: requester, sourceMessageId: source.id } }] });
+      const page = [source, notice(61, 'unbound'), notice(62, 'offline')];
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: page, cursor: '1' } };
+        if (route === `/conversations/${roomId}/messages?limit=100`) return { body: page };
+        if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(60, requester), status: 'needs_input' }] };
+        return previous(route, method, body);
+      });
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.group.round).toMatchObject({ status: 'idle', speakers: [], canStop: false, othersActive: false });
+      // The group row asks only the requester for attention.
+      expect(result.group.teammateActivity?.phase).toBe(own ? 'needs-interaction' : 'idle');
+      // The requester keeps the offline notice; the unbound one becomes their own card. Others see neither.
+      expect(result.group.messages.map(m => m.id)).toEqual(own ? [source.id, notice(62, 'offline').id] : [source.id]);
+      expect(result.group.assistantDeviceWaits).toEqual(own
+        ? [{ executionId: request(60).id, sourceMessageId: source.id, requestText: 'Sort out the weekly report' }] : undefined);
+    });
+
+    // The card's cancel ends only this account's own request that has not started; a settled one needs no write.
+    it.each([[selfId, 'needs_input', { ok: true }], [peerId, 'needs_input', { ok: false, errorCode: 'ROLE_REQUIRED' }], [selfId, 'cancelled', { ok: true }]] as const)(
+      'cancels a waiting request of %s in %s only when it is its own', async (requester, status, expected) => {
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(60, requester), status }] };
+        if (route.includes('/control') && method === 'POST') return { body: { id: request(60).id, status: 'cancelled' } };
+        return previous(route, method, body);
+      });
+      const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'cancelAssistantDeviceWait', executionId: request(60).id } });
+      const stops = fixture.handle.mock.calls.filter(([route, method]) => method === 'POST' && route.startsWith(`/conversations/${roomId}/executions/${request(60).id}/control`));
+      expect(result).toEqual(expected);
+      expect(stops.map(([, , body]) => body.action)).toEqual(requester === selfId && status === 'needs_input' ? ['stop'] : []);
     });
 
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;

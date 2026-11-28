@@ -358,6 +358,11 @@ function groupFrom(data: GroupData) {
       : data.arrangement === 'running' ? { id: 'p1', status: 'running', currentStep: 1, stepCount: 2, currentBotName: 'Nova', currentStepStatus: 'running', kind: planKind } : null,
       singleSpeaker: true } : {}),
     ...(data.bubbles || data.arrangement || data.division || data.readReceipts || data.planningForeign ? { serverBacked: true } : {}),
+    // The requester's own group-Cindy requests held until they choose a computer (bot-group-chat.md 第 9 节).
+    ...(data.assistantDeviceWaits ? { serverBacked: true, assistantDeviceId: null,
+      assistantComputers: [{ id: 'mac', name: 'MacBook Pro' }, { id: 'studio', name: 'Studio · A very long computer name for layout verification' }],
+      assistantDeviceWaits: Array.from({ length: data.assistantDeviceWaits }, (_, i) => ({ executionId: `wait-${i}`, sourceMessageId: `m${i}`,
+        requestText: '@Cindy 帮我把这周的周报整理一下，按项目分组，再列出下周的风险' })) } : {}),
     ...(data.readReceipts ? { supportsMessageReaders: true } : {}),
     ...(data.settings ? { autoContinue: false } : {}),
     ...(data.threadUnread ? { threads: threadSummaries() } : {}),

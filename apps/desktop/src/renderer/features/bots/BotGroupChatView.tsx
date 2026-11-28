@@ -83,6 +83,7 @@ import { BotGroupAvatarStack } from './BotGroupAvatars';
 import { botGroupAttachmentScope, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import { BotGroupComposer } from './BotGroupComposer';
+import { BotGroupAssistantDeviceCard } from './BotGroupAssistantDeviceCard';
 import { focusBotGroupComposer } from './botGroupTextInput';
 import { BotGroupThreadHint } from './BotGroupThreadHint';
 import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
@@ -1783,7 +1784,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                 {rowLayout?.dateDivider != null ? <BotGroupDateDivider timestamp={rowLayout.dateDivider} locale={locale} /> : null}
                 {message.id === firstUnreadId ? <BotGroupUnreadDivider /> : null}
                 <BotGroupTimelineItem
-                  showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
                   pluginUi={pluginUi}
                   message={message}
                   continued={timeline[timelineIndex - 1]?.kind !== 'work' && message.id !== firstUnreadId && (rowLayout?.continued ?? false)}
@@ -1903,6 +1903,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             onQuoteChange={setQuoteDraft}
             onQuoteAccepted={acceptQuote}
             onSending={onSending}
+            aboveCard={group.assistantDeviceWaits?.length ? <BotGroupAssistantDeviceCard group={group} /> : null}
           />}
         </div>
       </div>

@@ -47,6 +47,11 @@ export default {
     },
     'public-cindy': { about: 'Public Cindy work remains visible to a peer without private process or stop access',
       data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, workState: 'unknown', canStop: false } },
+    'assistant-device-wait': { about: 'Your own group-Cindy request waiting for a computer: private card above the composer, no running state',
+      data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, assistantDeviceWaits: 1 } },
+    'assistant-device-wait-narrow': { about: 'Two waiting requests at narrow width: the card wraps without overflowing',
+      viewport: { width: 480, height: 640 },
+      data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 2, assistantDeviceWaits: 2 } },
 
     'plan-read-talk': { about: '#9398: delayed plan details never flash an organizer or missing bubble; talk is independent', data: { ...base, sidebar: false, messages: 1, planRead: 'talk' } },
     'plan-read-work': { about: '#9398: delayed work details preserve the selected organizer', data: { ...base, sidebar: false, messages: 1, planRead: 'work' } },
@@ -395,6 +400,18 @@ export default {
       assert.equal(await corner.isVisible(), true);
       const badge = corner.locator('button .chat-reaction-glyph').first();
       assert.equal(await badge.evaluate(inkAlpha), 255, 'reaction badges preserve emoji colors');
+      return;
+    }
+
+    if (ui.case.startsWith('assistant-device-wait')) {
+      const card = page.getByTestId('bot-group-assistant-device');
+      await card.waitFor();
+      await card.getByRole('button', { name: await ui.t('bots.groupChat.assistantDevice.continue'), exact: true }).waitFor();
+      await card.getByRole('button', { name: await ui.t('bots.groupChat.assistantDevice.cancel'), exact: true }).waitFor();
+      // A wait is not group activity: no progress entry or stop control.
+      assert.equal(await page.getByTestId('bot-group-work').count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true }).count(), 0);
+      await ui.capture('device-card');
       return;
     }
 

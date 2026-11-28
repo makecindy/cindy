@@ -12223,6 +12223,18 @@
       "memberCount_other": "{{count}} miembros",
       "nameLabel": "Nombre del grupo",
       "waitingConfirm": "{{name}} está esperando tu visto bueno",
+      "assistantDevice": {
+        "title": "La Cindy del grupo espera a que elijas un equipo",
+        "onlyYou": "Solo tú puedes verlo",
+        "request": "«{{request}}» empieza en cuanto elijas un equipo.",
+        "requestUnknown": "Tu solicitud empieza en cuanto elijas un equipo.",
+        "requests_one": "{{count}} solicitud espera y empieza en cuanto elijas un equipo.",
+        "requests_many": "{{count}} solicitudes esperan y empiezan en cuanto elijas un equipo.",
+        "requests_other": "{{count}} solicitudes esperan y empiezan en cuanto elijas un equipo.",
+        "remember": "Tus próximas solicitudes en este grupo usarán el mismo equipo. Puedes cambiarlo en la configuración del grupo.",
+        "cancel": "Cancelar solicitud",
+        "continue": "Continuar"
+      },
       "loadFailedTitle": "No se pudo cargar este chat grupal",
       "loadFailedDescription": "Cindy no puede leer este chat grupal en este momento. Inténtalo de nuevo o vuelve a Amigos.",
       "unavailableTitle": "Este chat grupal ya no está disponible",

@@ -12087,6 +12087,17 @@
       "memberCount_other": "{{count}} 人",
       "nameLabel": "群議之名",
       "waitingConfirm": "{{name}}候君確認",
+      "assistantDevice": {
+        "title": "群中 Cindy 待君擇機",
+        "onlyYou": "唯君可見",
+        "request": "「{{request}}」既擇機即行。",
+        "requestUnknown": "既擇機即行此事。",
+        "requests_one": "君有 {{count}} 事待行，既擇機即行。",
+        "requests_other": "君有 {{count}} 事待行，既擇機即行。",
+        "remember": "此後君於本群之事皆用此機，可於群議之設更之。",
+        "cancel": "罷此事",
+        "continue": "續"
+      },
       "loadFailedTitle": "不能載此群議",
       "loadFailedDescription": "Cindy 暫不能讀此群議之訊。君可再試，或歸同伴頁。",
       "unavailableTitle": "此群議已不可用",
