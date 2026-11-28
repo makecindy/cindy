@@ -65,12 +65,19 @@ import { redactLocalPathText } from './coldPiRehydrationFailure.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-catalog.js';
 import {
   dbToMakerAgentKind,
+  dbToMakerEngineKind,
   isPluginEngineKind,
   makerToDbAgentKind,
   makerToDbEngineKind,
   normalizeDbAgentKind,
   type DbEngineKind,
 } from '../../shared/agentKindConversion.js';
+import {
+  recordSessionRuntimeRouteChange,
+  sanitizeRouteChangeReason,
+  type SessionRuntimeRouteChangeActor,
+  type SessionRuntimeRouteChangeAttribution,
+} from './sessionRuntimeControl.js';
 import { isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
@@ -212,6 +219,15 @@ export interface AgentSwitchBoundaryContent {
    */
   fromEngineName?: string;
   toEngineName?: string;
+  /**
+   * 路由切换归因快照（何时、谁发起、结构化原因码）。可选追加字段，不改 SQLite schema，
+   * 旧端忽略；应用重启后供 get_session_runtime / get_task_digest 回读最近一次路由切换来源。
+   */
+  attribution?: {
+    at: string;
+    by: SessionRuntimeRouteChangeActor;
+    reason: string | null;
+  };
 }
 
 const NATIVE_RELOCATION_NOTE = '[Session location changed] Your native conversation history was restored on another computer. '
@@ -534,6 +550,8 @@ export interface PendingAgentSwitchIntent {
   preserveModelGroupBinding?: boolean;
   /** Candidate confirmed by the model-group bind handler for this exact pending choice. */
   modelGroupPickedKey?: string;
+  /** Internal only: attribution for who initiated this route switch and why. */
+  routeChangeAttribution?: SessionRuntimeRouteChangeAttribution;
   /** 'acp' = 插件引擎，providerId 必为 acp-plugin:<插件>:<引擎>。 */
   targetAgentKind: EngineKind;
   model: string;
@@ -716,6 +734,7 @@ export async function relocateForFreshStart(
     /** Publish the shared handoff only after the replacement runtime is ready. */
     deferSharedCommit?: true;
     assertCurrent?: () => void;
+    routeChangeAttribution?: SessionRuntimeRouteChangeAttribution;
   },
 ): Promise<{ nativeId: string | null; fallback?: () => Promise<void>; commit?: () => Promise<void> }> {
   const ownerGeneration = deps.readOwnerGeneration?.();
@@ -761,6 +780,11 @@ export async function relocateForFreshStart(
   assertCurrent();
   const handoff = nativeId ? nativeRelocationHandoff(await deps.peekPendingHandoff?.(sessionId)) : full.handoff;
   assertCurrent();
+  const relocationAttribution = {
+    at: new Date().toISOString(),
+    by: params.routeChangeAttribution?.by ?? ('provider-group' as SessionRuntimeRouteChangeActor),
+    reason: sanitizeRouteChangeReason(params.routeChangeAttribution?.reason ?? 'unavailable'),
+  };
   const boundaryContent: AgentSwitchBoundaryContent = {
     fromAgentKind: dbKind,
     toAgentKind: dbKind,
@@ -778,6 +802,7 @@ export async function relocateForFreshStart(
     toAgentDeviceId: agentDeviceId,
     fromAgentDeviceName: params.sharedRelocation ? null : deps.describeAgentDevice?.(fromAgentDeviceId) ?? null,
     toAgentDeviceName: params.sharedRelocation ? null : deps.describeAgentDevice?.(agentDeviceId) ?? null,
+    attribution: relocationAttribution,
   };
   const deferred = params.sharedRelocation === true && params.deferSharedCommit === true;
   const publish = async () => {
@@ -790,6 +815,27 @@ export async function relocateForFreshStart(
       agentDeviceId,
     });
     if (!deferred) deps.setSessionProvider(sessionId, providerId);
+    recordSessionRuntimeRouteChange(
+      sessionId,
+      {
+        at: relocationAttribution.at,
+        by: relocationAttribution.by,
+        reason: relocationAttribution.reason,
+        from: {
+          agentKind: dbToMakerEngineKind(dbKind),
+          model: row.model,
+          providerId: fromProviderId,
+          agentDeviceId: fromAgentDeviceId,
+        },
+        to: {
+          agentKind: dbToMakerEngineKind(dbKind),
+          model,
+          providerId,
+          agentDeviceId,
+        },
+      },
+      { force: params.sharedRelocation === true },
+    );
     let boundaryId: string | null = null;
     try {
       boundaryId = await deps.insertBoundaryMessage(sessionId, boundaryContent);
@@ -978,6 +1024,8 @@ export async function performSessionAgentSwitch(
     scheduledModelSwitch?: boolean;
     /** 仅限 main 内部：由智能路由选路或持续托管发起的切换，保留/更新智能路由绑定而不解绑。 */
     preserveModelGroupBinding?: boolean;
+    /** 仅限 main 内部：记录此次路由切换的发起方与原因码。 */
+    routeChangeAttribution?: SessionRuntimeRouteChangeAttribution;
     /**
      * 仅限 main 内部：智能路由选中的本机账号槽位(model-groups.md §3.5)。`changes` 为真表示任务换到同一供应商的另一个账号：
      * 引擎、模型、位置都没变也按换连接处理——关闭旧原生会话、全量交接、不续接停泊会话(原生历史属于原账号)。
@@ -1223,6 +1271,7 @@ export async function performSessionAgentSwitch(
         ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
         ...(params.configStaged === true ? { configStaged: true } : {}),
         ...(params.preserveModelGroupBinding === true ? { preserveModelGroupBinding: true } : {}),
+        ...(params.routeChangeAttribution ? { routeChangeAttribution: params.routeChangeAttribution } : {}),
       }, params.applyNow === true, params.assertSelectionCurrent, params.beforeMutation);
       // 组选回当前位置并且模型应用真正成功(非 deferred/superseded)时才持久化新绑定；
       // 没落地的调用不应该殊到已纳入组(chatgpt-codex-connector P2, PR #5792 review)。
@@ -1298,6 +1347,7 @@ export async function performSessionAgentSwitch(
         ? { localAutomationSwitch: true } : {}),
       ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
       ...(params.configStaged === true ? { configStaged: true } : {}),
+      ...(params.routeChangeAttribution ? { routeChangeAttribution: params.routeChangeAttribution } : {}),
       targetAgentKind,
       model,
       providerId: normalizedProviderId,
@@ -1629,14 +1679,64 @@ export async function performSessionAgentSwitch(
       unbindModelGroupSession(sessionId);
     }
 
+    const committedProviderId =
+      normalizedProviderId === undefined ? row.providerId : normalizedProviderId;
+    const switchActor: SessionRuntimeRouteChangeActor =
+      params.routeChangeAttribution?.by ??
+      (params.providerGroupRelocation
+        ? 'provider-group'
+        : params.scheduledModelSwitch
+          ? 'scheduler'
+          : params.runtimeSource === 'agent'
+            ? 'agent'
+            : params.configStaged
+              ? 'config-sync'
+              : 'user');
+    const switchReason = sanitizeRouteChangeReason(
+      params.routeChangeAttribution?.reason ??
+        (params.providerGroupSwitchReason ??
+          (params.providerGroupRelocation
+            ? 'unavailable'
+            : params.scheduledModelSwitch
+              ? 'scheduled'
+              : params.configStaged
+                ? 'config-sync'
+                : 'explicit')),
+    );
+    const switchAttribution = {
+      at: new Date().toISOString(),
+      by: switchActor,
+      reason: switchReason,
+    };
+    recordSessionRuntimeRouteChange(
+      sessionId,
+      {
+        at: switchAttribution.at,
+        by: switchAttribution.by,
+        reason: switchAttribution.reason,
+        from: {
+          agentKind: dbToMakerEngineKind(fromDbKind),
+          model: row.model,
+          providerId: row.providerId,
+          agentDeviceId: currentAgentDeviceId,
+        },
+        to: {
+          agentKind: targetAgentKind,
+          model,
+          providerId: committedProviderId,
+          agentDeviceId: targetAgentDeviceId,
+        },
+      },
+      { force: forcedRelocation },
+    );
+
     const boundaryContent: AgentSwitchBoundaryContent = {
       fromAgentKind: fromDbKind,
       toAgentKind: toDbKind,
       fromModel: row.model,
       toModel: model,
       fromProviderId: row.providerId,
-      toProviderId:
-        normalizedProviderId === undefined ? row.providerId : normalizedProviderId,
+      toProviderId: committedProviderId,
       fromSdkSessionId: row.sdkSessionId,
       handoff,
       ...(!relocatedNativeId ? { handoffCoverage: replay.handoffCoverage } : {}),
@@ -1659,6 +1759,7 @@ export async function performSessionAgentSwitch(
         : {}),
       ...(fromDbKind === 'acp' ? { fromEngineName: deps.describePluginEngine?.(row.providerId) ?? undefined } : {}),
       ...(pluginTarget ? { toEngineName: pluginTarget.engineName } : {}),
+      attribution: switchAttribution,
     };
     let boundaryClientId: string | null = null;
     try {
@@ -2033,6 +2134,7 @@ export function applyPendingAgentSwitchIfIdle(
         // bootstrap 好再拿 live session 发送,否则会继续持有已关闭的旧 session。
         skipBootstrap: opts?.bootstrapAfterSwitch !== true,
         ...(preserveModelGroupBinding ? { preserveModelGroupBinding: true } : {}),
+        ...(intent.routeChangeAttribution ? { routeChangeAttribution: intent.routeChangeAttribution } : {}),
         applyNow: true,
         signal,
         assertSelectionCurrent,

@@ -316,3 +316,97 @@ it('reports the pause of a stopped ordinary task in its registered digest', asyn
     duringTurn: false, stopped: true, resumed: false, empty: false,
   });
 });
+
+// Value: local and remote host paths project provider_device_id, privacy-safe device name,
+// and last_route_change without issuing any extra remote RPC beyond existing read channels.
+// Gap: existing host digest tests mocked minimal profiles without agentDeviceId or route attribution.
+// Minimal input: local runtime with routeSource/lastRouteChange + remote sessions:get with runtimeLastRouteChange; tier: unit.
+it('projects provider device and last_route_change in host digest without extra remote RPCs', async () => {
+  const { host, read } = setup('completed', null);
+  const routeChange = {
+    at: '2026-11-28T10:00:00.000Z',
+    by: 'model-group' as const,
+    reason: 'provider_safety_refusal',
+    from: { agentKind: 'claude-code', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null },
+    to: { agentKind: 'codex', model: 'gpt-5.6', providerId: 'openai', agentDeviceId: 'studio-2' },
+  };
+  state.rows = [{ ...row, agentKind: 'codex', agentDeviceId: 'studio-2', model: 'gpt-5.6', providerId: 'openai' }];
+  vi.mocked(host.getSessionRuntime).mockResolvedValue({
+    ok: true,
+    runtime: {
+      phase: 'completed',
+      runtimeGeneration: 5,
+      effectiveProfile: { agentKind: 'codex', agentDeviceId: 'studio-2', model: 'gpt-5.6', providerId: 'openai', effort: 'high', fastMode: false },
+      routeSource: { kind: 'device', providerDeviceId: 'studio-2', providerDeviceName: 'Mac Studio' },
+      lastRouteChange: routeChange,
+    },
+  });
+
+  expect(await read({ sessionId: 'local-task' })).toMatchObject({
+    ok: true,
+    digest: {
+      current_route: { provider_device_id: 'studio-2', source_kind: 'device', provider_device_name: 'Mac Studio' },
+      last_route_change: {
+        by: 'model-group',
+        reason: 'provider_safety_refusal',
+        from: { harness: 'claude-code', provider_device_id: 'local' },
+        to: { harness: 'codex', provider_device_id: 'studio-2' },
+      },
+    },
+  });
+
+  // Remote path reads runtimeLastRouteChange from existing local-db:sessions:get with zero extra channels.
+  host.listDevices = async () => [
+    { deviceId: 'laptop', deviceName: 'MacBook', online: true, local: false, available: true },
+    { deviceId: 'studio-2', deviceName: 'Mac Studio', online: true, local: false, available: true },
+  ];
+  vi.mocked(host.invokeRemote).mockImplementation(async (_device, channel) => ({
+    ok: true,
+    result: channel === 'local-db:sessions:get'
+      ? { ...row, agentKind: 'codex', agentDeviceId: 'studio-2', model: 'gpt-5.6', providerId: 'openai', runtimeLastRouteChange: routeChange }
+      : channel === 'maker:list-active'
+        ? { format: 'active-sessions-v2', sessions: [{ sessionId: 'remote-task', isTurnRunning: true }] }
+        : [],
+  }));
+  const remoteResult = await read({ sessionId: 'laptop::remote-task' });
+  expect(remoteResult).toMatchObject({
+    ok: true,
+    digest: {
+      device: 'MacBook',
+      phase: 'running',
+      current_route: { provider_device_id: 'studio-2', source_kind: 'device', provider_device_name: 'Mac Studio' },
+      last_route_change: { by: 'model-group', reason: 'provider_safety_refusal' },
+    },
+  });
+  const remoteChannels = vi.mocked(host.invokeRemote).mock.calls.map(([, channel]) => channel);
+  expect(remoteChannels).not.toContain(DL_HISTORY_MESSAGES_CHANNEL);
+});
+
+// Unit, host -> digest: a persisted switch remains readable while current, then
+// /clear's in-memory boundary must hide it even if the DB row is still stale.
+// A runtime null must also suppress the facts fallback when no boundary exists.
+it('hides persisted route attribution after a clear boundary before the database update lands', async () => {
+  const { noteSessionClearBoundary } = await import('../../messagePersistBroadcaster.desktop.js');
+  const { host, read } = setup('completed', null);
+  const change = {
+    at: '2026-11-28T10:00:00.000Z', by: 'agent', reason: 'explicit',
+    from: { agentKind: 'pi', model: 'old', providerId: 'gateway', agentDeviceId: null },
+    to: { agentKind: 'pi', model: 'model', providerId: 'gateway', agentDeviceId: null },
+  };
+  host.readPersistedRouteChange = vi.fn(async () => change);
+  expect(await read({ sessionId: 'local-task' })).toMatchObject({
+    ok: true, digest: { last_route_change: { by: 'agent', reason: 'explicit' } },
+  });
+  noteSessionClearBoundary('local-task', Date.parse(change.at) + 1);
+  try {
+    const result = await read({ sessionId: 'local-task' });
+    expect(result).toMatchObject({ ok: true });
+    expect((result as { digest?: Record<string, unknown> }).digest).not.toHaveProperty('last_route_change');
+  } finally {
+    noteSessionClearBoundary('local-task', null);
+  }
+  vi.mocked(host.getSessionRuntime).mockResolvedValue({ ok: true, runtime: { phase: 'completed', lastRouteChange: null } });
+  const explicitlyCleared = await read({ sessionId: 'local-task' });
+  expect(explicitlyCleared).toMatchObject({ ok: true });
+  expect((explicitlyCleared as { digest?: Record<string, unknown> }).digest).not.toHaveProperty('last_route_change');
+});

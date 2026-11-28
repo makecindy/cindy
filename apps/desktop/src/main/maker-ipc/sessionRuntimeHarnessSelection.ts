@@ -108,10 +108,12 @@ export async function setSessionRuntimeHarness(
   },
 ): Promise<SessionRuntimeSetResult> {
   const { targetSessionId: id, expectedGeneration, patch } = params;
-  const revisingStaged = patch.harness === undefined;
-  if (revisingStaged
-    ? patch.model !== undefined && !patch.model.trim()
-    : !['claude-code', 'codex', 'pi'].includes(patch.harness!) || !patch.model?.trim()) {
+  const explicitHarness = patch.harness !== undefined;
+  const changingDevice = patch.agentDeviceId !== undefined;
+  const revisingStagedOnly = !explicitHarness && !changingDevice;
+  if (explicitHarness
+    ? !['claude-code', 'codex', 'pi'].includes(patch.harness!) || !patch.model?.trim()
+    : patch.model !== undefined && !patch.model.trim()) {
     return {
       ok: false,
       errorCode: 'INVALID_ARGS',
@@ -145,11 +147,11 @@ export async function setSessionRuntimeHarness(
       if (!effective)
         return { ok: false, errorCode: 'NOT_FOUND', message: `session ${id} not found` };
       const previous = deps.pending(id);
-      const staged = revisingStaged ? stagedSelectionProfile(previous, effective.agentDeviceId) : null;
+      const staged = !explicitHarness ? stagedSelectionProfile(previous, effective.agentDeviceId) : null;
       // Revising a picker choice must retain its provenance until send records the
       // manual-route override, even when the Agent changes only effort or Fast.
-      const source = revisingStaged && isUserPendingAgentSwitchIntent(previous) ? 'user' : 'agent';
-      if (revisingStaged && !staged) {
+      const source = revisingStagedOnly && isUserPendingAgentSwitchIntent(previous) ? 'user' : 'agent';
+      if (revisingStagedOnly && !staged) {
         return {
           ok: false,
           errorCode: 'CONFLICT',
@@ -157,18 +159,20 @@ export async function setSessionRuntimeHarness(
         };
       }
       const base = staged ?? effective;
+      const targetAgentDeviceId = patch.agentDeviceId === undefined ? base.agentDeviceId : patch.agentDeviceId;
+      const deviceChanged = changingDevice && (targetAgentDeviceId ?? null) !== (base.agentDeviceId ?? null);
       const profile = await deps.resolve(
         {
           ...(patch.agentDeviceId !== undefined || base.agentDeviceId !== undefined
-            ? { agentDeviceId: patch.agentDeviceId === undefined ? base.agentDeviceId : patch.agentDeviceId }
+            ? { agentDeviceId: targetAgentDeviceId }
             : {}),
-          agentKind: patch.harness ?? staged!.agentKind,
-          model: patch.model ?? staged!.model,
-          // Never inherit an old harness's provider when selecting a new target; a revision
-          // keeps the staged source unless it names another one.
-          providerId: staged
-            ? (patch.providerId !== undefined ? patch.providerId : staged.providerId)
-            : patch.providerId ?? null,
+          agentKind: patch.harness ?? base.agentKind,
+          model: patch.model?.trim() || base.model,
+          // Never inherit an old harness's or old computer's provider when selecting a new target;
+          // a same-harness, same-location revision keeps the base source unless it names another one.
+          providerId: explicitHarness || deviceChanged
+            ? (patch.providerId ?? null)
+            : (patch.providerId !== undefined ? patch.providerId : base.providerId),
           effort: patch.effort !== undefined ? patch.effort : base.effort,
           fastMode: patch.fastMode ?? base.fastMode,
         },
@@ -207,9 +211,19 @@ export async function setSessionRuntimeHarness(
       code === 'CONFLICT' ||
       code === 'NOT_FOUND' ||
       code === 'INVALID_PARAMS' ||
+      code === 'PRECONDITION_FAILED' ||
+      code === 'MODEL_SELECTION_UNAVAILABLE' ||
       code === 'UNSUPPORTED_CAPABILITY' ||
       code === 'SSH_HARNESS_SWITCH_UNSUPPORTED' ||
-      code === 'CREDENTIAL_SWITCH_BUSY'
+      code === 'CREDENTIAL_SWITCH_BUSY' ||
+      code === 'PROVIDER_ROUTE_UNAVAILABLE' ||
+      code === 'PROVIDER_GROUP_UNAVAILABLE' ||
+      code === 'REMOTE_AGENT_DEVICE_UNREACHABLE' ||
+      code === 'REMOTE_AGENT_MODEL_UNAVAILABLE' ||
+      code === 'REMOTE_AGENT_SHARE_PAUSED' ||
+      code === 'REMOTE_AGENT_SHARE_REMOVED' ||
+      code === 'REMOTE_AGENT_SHARE_UNAVAILABLE' ||
+      code === 'REMOTE_AGENT_SHARE_LEGACY_DISABLED'
     ) {
       return {
         ok: false,

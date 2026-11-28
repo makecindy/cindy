@@ -82,6 +82,7 @@ export interface RunModelGroupBeforeSendPorts {
     providerId: string;
     effort: string | null;
     fastMode: boolean | 'ultrafast';
+    cause?: ModelGroupTurnDecisionSwitch['cause'];
   }): Promise<{
     deferred?: boolean;
     superseded?: boolean;
@@ -99,6 +100,7 @@ export interface RunModelGroupBeforeSendPorts {
     effort?: string;
     fastMode?: boolean | 'ultrafast';
     skipBootstrap: boolean;
+    cause?: ModelGroupTurnDecisionSwitch['cause'];
     /** 目标是本机某个账号槽位(智能路由按账号拆开的来源)：切换提交后把任务改绑到它。 */
     accountId?: string;
     /** 同一供应商内换账号：引擎、模型、位置不变也要关闭旧原生会话重新交接(原生历史属于原账号)。 */
@@ -218,6 +220,7 @@ export async function runModelGroupBeforeSend(
         providerId: decision.target.providerId,
         effort: decision.target.effort ?? row.effort ?? null,
         fastMode: nextFastMode,
+        cause: decision.cause,
       });
       if (sameRes.contextWindowConfirmationRequired) {
         // 触发窗口缩容确认时自动升级为有界交接，避免阻塞任务发送。
@@ -230,6 +233,7 @@ export async function runModelGroupBeforeSend(
           effort: decision.target.effort,
           fastMode: decision.target.agentKind === 'acp' ? false : decision.target.fastMode,
           skipBootstrap: !options.bootstrapAfterSwitch,
+          cause: decision.cause,
           ...localRoute,
         });
         switched = crossRes.switched;
@@ -248,6 +252,7 @@ export async function runModelGroupBeforeSend(
         effort: decision.target.effort,
         fastMode: decision.target.agentKind === 'acp' ? false : decision.target.fastMode,
         skipBootstrap: !options.bootstrapAfterSwitch,
+        cause: decision.cause,
         ...localRoute,
       });
       switched = crossRes.switched;

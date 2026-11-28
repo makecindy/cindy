@@ -118,7 +118,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务附件 | `read_session_attachment` 只读已有宿主授权的 Cindy 媒体与 grant / deposit / handoff 引用，分块字节与 SHA-256；历史 JSON 文件路径不构成授权，返回 `UNSUPPORTED_CAPABILITY`，不返回宿主路径 | 有（history 组，受上述限制） | 暂不支持，返回 `UNSUPPORTED_CAPABILITY` |
 | 任务包 | `export_session` 原生 `.cshare` 导出、`import_session` 原生任务包导入；插件按安装授权调用，Agent 运行时遵循自身权限流程；Agent 导出存到用户在「设置 → 存储空间」用原生选择器设定的导出位置（宿主命名、不覆盖同名文件、导出到私有临时目录后再落盘；位置失效返回 `EXPORT_DIRECTORY_UNAVAILABLE`，不改弹窗），未设定时由用户在原生保存对话框中选择位置，再返回最终路径，不接受 `output_path`。导入用本机路径，插件用本实例 handoff；加密或需要目录时交原生向导，`awaiting_user` 不算导入完成 | 有（history / control 组；复用原生服务，默认不覆盖） | 暂不支持；沿用已有跨电脑迁移链 |
 | 任务     | 获取可直接引用的任务链接（列表、搜索、聊天记录与摘要返回 sessionUrl） | 有 | 有（链接携带所属电脑；旧远端查询结果由调用端补齐） |
-| 任务     | 读摘要（状态、最后的要求与回答、模型路线、PR、排队数）     | 有   | 有（2026-10-17） |
+| 任务     | 读摘要（状态、最后的要求与回答、模型路线与供应电脑 `provider_device_id`/脱敏设备名、最近路由切换归因 `last_route_change`、PR、排队数）     | 有   | 有（2026-10-17；2026-11-28 补充 `provider_device_id`、`source_kind`、`provider_device_name`（分享来源固定 `null`）与 `last_route_change`，复用既有 `local-db:sessions:get`，零新增远端 RPC；共享任务不暴露宿主来源与切换历史） |
 | GitHub | 查询明确 PR 的 CI、评审和变化；明确关联、移除、恢复、固定、排序 | 有（桌面与手机关联管理） | 有：helper `github` 类目，同账号跨电脑；脚本 `github.read` |
 | 机器     | 看账号下的电脑与 SSH 主机及实时资源（`list_machines`，[规则](cindy-machines.md)） | 有（含 SSH 普通任务） | 有（2026-11-02） |
 | 终端与后台进程 | `terminal_start/list/read/write/resize/stop/forget`，复用界面 PTY 与宿主作业注册表，当前调用方归属及独立游标 | 有（仅执行电脑本机；SSH 工作区明确拒绝本机代跑） | 尚无独立指定另一台电脑的参数；重连执行电脑后可续读同一作业 |
@@ -142,14 +142,14 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 新建任务后核对模型由哪台电脑提供（`send_to_session` create 回执的 `provider_device_id`，`local` 为任务所在电脑自己；是另一台电脑时 `provider_note` 说明是继承来源任务还是调用方点名） | 有（2026-11-28；SSH 任务不适用，不返回） | 有（2026-11-28；目标电脑版本较旧不回报时不返回该字段，`provider_note` 说明位置未知，不当作目标电脑自己的供应商） |
 | 任务     | 看输入队列；编辑 / 撤回 / 调序 / 插话待发消息；任务调用方沿原消息归属，声明 control 的插件可查看、撤回、调序、插话所有来源，编辑范围与任务界面一致，消费中与已消费项不可撤回 | 有（共用唯一队列；插件编辑标明实际插件来源，不沿用原文授权） | 无 |
 | 任务运行 | `control_session` 暂停 / 恢复 / 重试 / 压缩，Agent 与插件共用执行暂停锁、错误恢复与原生压缩事务；送达未知不自动重放 | 有（执行电脑本机；Claude 原 `/compact` 队列、Codex/Pi 原生手动压缩；不打断在途模型和工具） | 无 |
-| 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
+| 任务     | 模型、供应电脑（`provider_device_id`／兼容 `agent_device_id`）、推理强度、Fast 与路由切换归因（`get_session_runtime` / `set_session_runtime`） | 有（2026-11-28：`get_session_runtime` 暴露 `provider_device_id`、脱敏 `route_source` 与 `last_route_change`；`set_session_runtime` 支持单换供应电脑或联合切换，接受后撤销陈旧额度等待） | 无（跨电脑只读经 `get_task_digest`） |
 | 任务     | `fork_session` 按指定消息分叉；`rewind_session` 恢复指定 user 消息前的历史与检查点 | 有（整体安装授予的 control 声明；共用界面入口的屏障、锁与清理） | 有（既有 fork / rewind 通道，不自动重试） |
 | 任务     | `get_session_runtime` 读权限档；`set_session_runtime(permission_mode)` 复用界面权限提交与回滚 | 有（整体安装授予的 control 声明；持有 admission 的任务修改自身权限含混合请求，在所有写入前返回 `UNSUPPORTED_CAPABILITY`，其余原判定保持） | 任务在目标电脑运行工具；不新增跨电脑设置入口 |
 | 任务     | 代用户确认权限或回答提问   | 无   | 无               |
 | 协同 / Worker | 单个 / 批量创建、指定已有目录、查询实际目录与自有 worktree | 有 | 有（运行设备；新建 worktree 仅本机） |
 | 协同 / Worker | Lead 使用远程供应商时派发跨设备 Worker；独立选择工作电脑与模型电脑 | 有 | 有（`execution_device_id` + `agent_device_id`；目录查询支持同一工作电脑范围） |
 | 协同 / Worker | 为 Worker 新建 worktree、指定源分支、归档时回收 | 有 | 无 |
-| 协同 / Worker | 给已开始的本机 Worker 换引擎、模型、来源、推理强度与 Fast（Lead 用 `set_worker_runtime`，也可对 Worker 任务用 `set_session_runtime`；下一条 `send_to_worker` 时生效；已有待生效选择时省略 agent／`harness` 即修改那次选择；`get_session_runtime` 能看到用户在面板里登记的选择） | 有（2026-11-17：撞用量上限的休眠 Worker 派活时先落地新路线，不再先按旧路线唤醒；起不来时回执说明原因与下一步） | 无（运行设备 Worker 不适用） |
+| 协同 / Worker | 给已开始的本机 Worker 换供应电脑（`provider_device_id`／兼容 `agent_device_id`）、引擎、模型、来源、推理强度与 Fast（Lead 用 `set_worker_runtime`，也可对 Worker 任务用 `set_session_runtime`；下一条 `send_to_worker` 时生效；已有待生效选择时省略 agent 与 `provider_device_id` 即修改那次选择；`get_session_runtime` 能看到用户在面板里登记的选择） | 有（2026-11-17：撞用量上限的休眠 Worker 派活时先落地新路线，不再先按旧路线唤醒；2026-11-28 支持 `provider_device_id` 切换供应电脑；起不来时回执说明原因与下一步） | 无（运行设备 Worker 不适用） |
 | 协同 / Worker | 单个／批量创建默认跟随本机手动面板已提交路线，返回实际路线与回退原因 | 有（按当前账号本机 scope；旧逐 Agent 偏好不算选择） | 运行设备与 SSH 保持原策略；远程供应商路线可记忆 |
 | 协同 / Worker | 其他仓库的新 worktree 默认使用主任务记住的源分支，失效回退当前分支 | 有（返回实际源分支与原因；显式参数优先） | 无 |
 | 定时任务 | 列出、详情、运行记录、修改、暂停、恢复、删除、立即运行     | 有   | 有（V1 / V2 各自实时名册判断可用；仅加密连接不依赖 V1 在线状态） |

@@ -2980,4 +2980,45 @@ describe('relocateForFreshStart (opening a task elsewhere when its own computer 
       .rejects.toBeTruthy();
     expect(noModel.deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
   });
+
+  // Value: performSessionAgentSwitch persists sanitized routeChangeAttribution onto the
+  // agent_switch boundary JSON and records runtime lastRouteChange at the commit point.
+  // Gap: prior switch tests did not assert attribution persistence or live runtime recording.
+  // Minimal input: staged agent switch with attribution landed on next send; tier: unit.
+  it('persists routeChangeAttribution on agent_switch boundary and records runtime lastRouteChange', async () => {
+    const { clearSessionRuntimeControlState, getSessionRuntimeControlSnapshot } = await import('../sessionRuntimeControl.js');
+    clearSessionRuntimeControlState('s1');
+    const pending = createPendingAgentSwitchRegistry();
+    const { deps } = makeDeps({
+      pendingSwitches: pending,
+      getSessionRow: vi.fn(async () => makeRow({ agentKind: 'cc', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null })),
+      assertAgentDeviceRouteUsable: vi.fn(async () => null),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'codex',
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      agentDeviceId: 'mac-studio',
+      runtimeSource: 'agent',
+      routeChangeAttribution: { by: 'model-group', reason: 'provider_safety_refusal' },
+    });
+    // Staging must not record committed lastRouteChange yet.
+    expect(getSessionRuntimeControlSnapshot('s1').lastRouteChange).toBeNull();
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0][1];
+    expect(boundary.attribution).toMatchObject({
+      by: 'model-group',
+      reason: 'provider_safety_refusal',
+      at: expect.any(String),
+    });
+    expect(getSessionRuntimeControlSnapshot('s1').lastRouteChange).toMatchObject({
+      by: 'model-group',
+      reason: 'provider_safety_refusal',
+      from: { agentKind: 'claude-code', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null },
+      to: { agentKind: 'codex', model: 'gpt-5.6', providerId: 'openai', agentDeviceId: 'mac-studio' },
+    });
+    clearSessionRuntimeControlState('s1');
+  });
 });
