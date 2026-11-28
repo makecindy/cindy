@@ -4,6 +4,7 @@ import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import type { ForkRequest, ForkReceipt, ForkTarget, ForkOutcome } from '@cindy/maker-shared/fork-request';
 import { getDbClient } from '../localDb/client/current';
+import { isDbTransportOutcomeUnknown } from '../localDb/client/DbTransport';
 import { sessions } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { activeDataOwnerId, ownerGeneration, isOwnerBoundaryPending, ownerScopedPath } from '../ownerContext';
@@ -177,7 +178,7 @@ export async function runForkRequest(request: ForkRequest): Promise<ForkReceipt<
     } catch (error) {
       const completed = await result(record);
       if (completed.state === 'complete') return completed;
-      record.phase = nativeWriteStarted ? 'unknown' : 'failed';
+      record.phase = nativeWriteStarted || isDbTransportOutcomeUnknown(error) ? 'unknown' : 'failed';
       await write();
       if (record.phase === 'unknown') return { state: 'unknown' };
       throw error;

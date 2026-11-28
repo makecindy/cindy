@@ -430,6 +430,20 @@ describe('recoverable fork requests', () => {
     });
   });
 
+  it('does not replay a history-handoff transaction whose acknowledgement is unknown', async () => {
+    // The DB write can still be in flight when its transport rejects. A missing
+    // child at this instant is not proof of failure, even without a native write.
+    await withForkReceiptDb(async () => {
+      const tx = vi.spyOn(snapshotClient!, 'tx').mockRejectedValueOnce(
+        createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'transaction reply unavailable'));
+      const request = receiptRequest({ agentKind: 'pi', model: 'other-model', providerId: 'other-provider', agentDeviceId: null });
+      await expect(runForkRequest(request)).resolves.toEqual({ state: 'unknown' });
+      await expect(runForkRequest(request)).resolves.toEqual({ state: 'unknown' });
+      expect(tx).toHaveBeenCalledTimes(1);
+      expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(['denied', 'clear', 'rewind', 'account'] as const)('does not create a child after %s invalidates preparation', async failure => {
     await withForkReceiptDb(async db => {
       configureForkTargetAdmission(async target => {
