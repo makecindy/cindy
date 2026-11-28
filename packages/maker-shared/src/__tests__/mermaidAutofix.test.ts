@@ -29,6 +29,17 @@ describe('repairMermaidSource', () => {
     expect(repairMermaidSource(src)).toBe(src);
   });
 
+  // subgraph 标题不经过节点标签加引号，标题里的 unicode 箭头会被最后一步改写成 -->。
+  it.each([
+    ['subgraph S [输入 → 输出]', 'subgraph S ["输入 → 输出"]'],
+    ['subgraph S[输入 → 输出]', 'subgraph S ["输入 → 输出"]'],
+    ['subgraph 输入 → 输出', 'subgraph "输入 → 输出"'],
+  ])('subgraph 标题中的 unicode 箭头加引号保留，修复其中的连线 (%s)', (header, repaired) => {
+    expect(repairMermaidSource(`flowchart TD\n${header}\nA → B\nend`)).toBe(
+      `flowchart TD\n${repaired}\nA --> B\nend`,
+    );
+  });
+
   it('// 行注释 → %%(所有图类型,含非 flowchart)', () => {
     expect(repairMermaidSource('sequenceDiagram\n// note here\nA->>B: hi')).toBe(
       'sequenceDiagram\n%% note here\nA->>B: hi',
