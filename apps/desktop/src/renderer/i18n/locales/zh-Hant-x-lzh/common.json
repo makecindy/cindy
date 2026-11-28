@@ -5655,6 +5655,12 @@
       "failed": "存常例工作目錄未成，請重試"
     },
     "linkOpen": {
+      "attachments": {
+        "label": "附件啟處",
+        "description": "擇對話中檔案之預覽處。",
+        "popup": "浮窗",
+        "sidebar": "右側欄"
+      },
       "title": "啟連結",
       "description": "擇訊中連結開啟之處，右鍵可臨時更換",
       "web": {
@@ -16832,7 +16838,9 @@
       "openLink": "開連結",
       "anchorNotFound": "不見對應之標題",
       "openInSidebarBrowser": "於側欄開",
-      "openInSidebarFileBrowser": "於卷列中定位",
+      "openInSidebarFileBrowser": "於專案卷樹中定位",
+      "openFileInPopup": "於浮窗啟之",
+      "openFileInSidebar": "於右側欄啟之",
       "openInSidebarFileBrowserFailed": "於側欄卷瀏覽器中開之未成",
       "openInSidebarFileBrowserOutsideWorkdir": "此卷不在今差事之工作目錄內，不能於側欄卷瀏覽器中定位",
       "openInDefaultBrowser": "於瀏覽器開",

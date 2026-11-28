@@ -57,21 +57,21 @@ export async function openDirInSidebarFileBrowser(
   requestRightSidebarVisibility('open', { sessionId });
 }
 
-/** 在指定 session 的侧边栏文件浏览器里打开 workdir 相对文件,并确保侧边栏可见。 */
+/** 打开正文，或只在项目树中定位。两种动作都用当前文件浏览器所在的窗口。 */
 export async function openFileInSidebarFileBrowser(
   sessionId: string,
   relFilePath: string,
-): Promise<void> {
+  targetKind: 'file' | 'locate-file' = 'file',
+): Promise<boolean> {
   const routeResult = await routeSidebarCommand({
     type: 'open-file-browser',
     sessionId,
     relPath: relFilePath,
-    targetKind: 'file',
+    targetKind,
   });
   if (routeResult !== 'attached') {
-    if (routeResult !== 'routed') return;
-    requestRightSidebarVisibility('open', { sessionId });
-    return;
+    if (routeResult === 'routed') requestRightSidebarVisibility('open', { sessionId });
+    return routeResult === 'routed' || routeResult === 'queued';
   }
   await ensureHydrated(sessionId);
   const bucket = getBucket(sessionId);
@@ -87,17 +87,20 @@ export async function openFileInSidebarFileBrowser(
       return {
         ...base,
         revealFilePath: relFilePath,
+        locateFileOnly: targetKind === 'locate-file',
         revealFileNonce: nonce + 1,
       };
     });
   } else {
     await addTab(sessionId, 'file-browser', {
-      selectedFilePath: relFilePath,
+      selectedFilePath: null,
       revealFilePath: relFilePath,
+      locateFileOnly: targetKind === 'locate-file',
       revealFileNonce: 1,
     });
   }
   requestRightSidebarVisibility('open', { sessionId });
+  return true;
 }
 
 /**
@@ -108,7 +111,7 @@ export async function openFileInSidebarFileBrowser(
 export async function openExternalFileInSidebarFileBrowser(
   sessionId: string,
   absFilePath: string,
-): Promise<void> {
+): Promise<boolean> {
   const routeResult = await routeSidebarCommand({
     type: 'open-file-browser',
     sessionId,
@@ -116,9 +119,8 @@ export async function openExternalFileInSidebarFileBrowser(
     targetKind: 'external-file',
   });
   if (routeResult !== 'attached') {
-    if (routeResult !== 'routed') return;
-    requestRightSidebarVisibility('open', { sessionId });
-    return;
+    if (routeResult === 'routed') requestRightSidebarVisibility('open', { sessionId });
+    return routeResult === 'routed' || routeResult === 'queued';
   }
   await ensureHydrated(sessionId);
   const bucket = getBucket(sessionId);
@@ -145,4 +147,5 @@ export async function openExternalFileInSidebarFileBrowser(
     });
   }
   requestRightSidebarVisibility('open', { sessionId });
+  return true;
 }

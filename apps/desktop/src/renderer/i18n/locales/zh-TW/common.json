@@ -5655,6 +5655,12 @@
       "failed": "儲存預設工作目錄失敗，請重試"
     },
     "linkOpen": {
+      "attachments": {
+        "label": "附件開啟位置",
+        "description": "選擇對話中的檔案在哪裡預覽。",
+        "popup": "彈出視窗",
+        "sidebar": "右側欄"
+      },
       "title": "開啟連結",
       "description": "選擇訊息連結的開啟位置，右鍵可臨時更換",
       "web": {
@@ -16840,7 +16846,9 @@
       "openLink": "開啟連結",
       "anchorNotFound": "未找到對應標題",
       "openInSidebarBrowser": "在側邊欄開啟",
-      "openInSidebarFileBrowser": "在檔案列表中定位",
+      "openInSidebarFileBrowser": "在專案檔案樹中定位",
+      "openFileInPopup": "在彈出視窗中開啟",
+      "openFileInSidebar": "在右側欄開啟",
       "openInSidebarFileBrowserFailed": "在側邊欄檔案瀏覽器中開啟失敗",
       "openInSidebarFileBrowserOutsideWorkdir": "該檔案不在當前任務工作目錄內，無法在側邊欄檔案瀏覽器中定位",
       "openInDefaultBrowser": "在瀏覽器開啟",

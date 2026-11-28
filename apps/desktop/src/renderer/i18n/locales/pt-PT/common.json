@@ -5791,6 +5791,12 @@
       "failed": "Não foi possível guardar o diretório de trabalho predefinido. Tente novamente."
     },
     "linkOpen": {
+      "attachments": {
+        "label": "Pré-visualização de anexos",
+        "description": "Escolha onde abrir os ficheiros da conversa.",
+        "popup": "Janela flutuante",
+        "sidebar": "Barra lateral direita"
+      },
       "title": "Abrir ligações",
       "description": "Escolha onde abrir as ligações nas mensagens. Clique com o botão direito numa ligação para usar outra opção apenas nessa ligação.",
       "web": {
@@ -17037,7 +17043,9 @@
       "openLink": "Abrir ligação",
       "anchorNotFound": "Título não encontrado",
       "openInSidebarBrowser": "Abrir na barra lateral",
-      "openInSidebarFileBrowser": "Localizar na lista de ficheiros",
+      "openInSidebarFileBrowser": "Localizar na árvore do projeto",
+      "openFileInPopup": "Abrir numa janela flutuante",
+      "openFileInSidebar": "Abrir na barra lateral direita",
       "openInSidebarFileBrowserFailed": "Não foi possível abrir no explorador de ficheiros da barra lateral",
       "openInSidebarFileBrowserOutsideWorkdir": "Este ficheiro está fora do diretório de trabalho da sessão atual e não pode ser localizado no explorador de ficheiros da barra lateral",
       "openInDefaultBrowser": "Abrir no navegador",

@@ -87,6 +87,21 @@ describe('settings definition and navigation', () => {
     expect(web.querySelector('[aria-checked="true"]')?.textContent).toBe('settings.linkOpen.options.external');
     expect(local.querySelector('[aria-checked="true"]')?.textContent).toBe('settings.linkOpen.options.sidebar');
   });
+
+  it('saves the attachment preview location and restores the pop-up default', () => {
+    const view = render(<LinkOpenSection />);
+    const popup = view.getByRole('radio', { name: 'settings.linkOpen.attachments.popup' });
+    const sidebar = view.getByRole('radio', { name: 'settings.linkOpen.attachments.sidebar' });
+    expect(popup.getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(sidebar);
+    view.unmount();
+    const reopened = render(<LinkOpenSection />);
+    expect(reopened.getByRole('radio', { name: 'settings.linkOpen.attachments.sidebar' }).getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(reopened.getByRole('radio', { name: 'settings.linkOpen.attachments.popup' }));
+    expect(window.localStorage.getItem('chat.attachmentPreviewPreference')).toBeNull();
+  });
   // A real settings page can grow above an already mounted target after IPC.
   it('follows late layout growth but yields immediately to user scrolling', () => {
     const view = render(<Page ready />);

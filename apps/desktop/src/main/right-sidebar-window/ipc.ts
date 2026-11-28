@@ -303,10 +303,10 @@ function parseCommand(raw: unknown): RsbWindowCommand {
     if (typeof r.relPath !== 'string' || r.relPath.length === 0) {
       throwIpcError('INVALID_PARAMS', 'command.relPath required');
     }
-    if (r.targetKind !== 'file' && r.targetKind !== 'directory') {
+    if (r.targetKind !== 'file' && r.targetKind !== 'locate-file' && r.targetKind !== 'directory') {
       throwIpcError(
         'INVALID_PARAMS',
-        'command.targetKind must be file | directory | external-file',
+        'command.targetKind must be file | locate-file | directory | external-file',
       );
     }
     return {

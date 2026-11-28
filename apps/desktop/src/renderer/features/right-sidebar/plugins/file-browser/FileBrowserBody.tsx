@@ -167,6 +167,7 @@ function FileBrowserBodyWithWorkdir({
     && isHtmlFilePath(state.selectedFilePath);
   const fileContent = useFileContent(workdir, renderingHtml ? null : state.selectedFilePath, remoteHostId, deviceId, visible);
   const [treeOpen, setTreeOpen] = useState(false);
+  const [locatedFilePath, setLocatedFilePath] = useState<string | null>(null);
   const [previousEntry, setPreviousEntry] = useState<string | null>(null);
   const [directoryFilter, setDirectoryFilter] = useState('');
   const [grid, setGrid] = useState(false);
@@ -249,6 +250,7 @@ function FileBrowserBodyWithWorkdir({
       // 切到同一文件 / 当前没有 active dirty editor → 直接放行;否则弹三选一。
       const ok = await confirmSwitchAway(state.selectedFilePath, isHtmlFilePath(relPath) ? null : relPath);
       if (!ok) return;
+      setLocatedFilePath(null);
       setExternalFile(null);
       ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory,
         previewHtmlPath: isHtmlFilePath(relPath) ? relPath : null });
@@ -265,6 +267,7 @@ function FileBrowserBodyWithWorkdir({
     async (relPath: string) => {
       const ok = await confirmSwitchAway(state.selectedFilePath, relPath);
       if (!ok) return;
+      setLocatedFilePath(null);
       setExternalFile(null);
       ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory, previewHtmlPath: null });
       setMode('tree');
@@ -291,6 +294,7 @@ function FileBrowserBodyWithWorkdir({
         return;
       }
       void tree.expandToPath(revealDirPath, 'directory');
+      setLocatedFilePath(null);
       setExternalFile(null);
       setDirectoryFilter('');
       setPreviousEntry(null);
@@ -302,13 +306,21 @@ function FileBrowserBodyWithWorkdir({
     // tree/ctx 引用变化不该重放已消费的请求。
   }, [visible, revealDirPath, revealDirNonce]);
 
-  // 聊天文件 chip → openFileInSidebarFileBrowser 写入的一次性定位请求:
-  // 选中文件,切回 tree 视图,展开父目录并把文件行滚到视口中部。切换前仍走
-  // dirty guard,避免用户在当前 RSB 文件里有未保存编辑时被外部右键菜单直接切走。
+  // 打开文件走编辑保护。定位只改变项目树，因此能在保留草稿时查看其它文件的位置。
   const revealFilePath = state.revealFilePath ?? null;
   const revealFileNonce = state.revealFileNonce ?? 0;
+  const locateFileOnly = state.locateFileOnly === true;
   useEffect(() => {
     if (!visible || !revealFilePath) return;
+    if (locateFileOnly) {
+      setMode('tree');
+      setTreeOpen(true);
+      setFilterQuery('');
+      setLocatedFilePath(revealFilePath);
+      void revealFileInTree(revealFilePath);
+      ctx.patchState({ revealFilePath: null, locateFileOnly: false });
+      return;
+    }
     let cancelled = false;
     void (async () => {
       const ok = await confirmSwitchAway(state.selectedFilePath, revealFilePath);
@@ -317,19 +329,20 @@ function FileBrowserBodyWithWorkdir({
         ctx.patchState({ revealFilePath: null });
         return;
       }
-      setMode('tree');
-      setFilterQuery('');
+      setLocatedFilePath(null);
       setExternalFile(null);
-      ctx.patchState({ selectedFilePath: revealFilePath, currentDirectory: dirname(revealFilePath), previewHtmlPath: null });
-      await revealFileInTree(revealFilePath);
-      if (cancelled) return;
-      ctx.patchState({ revealFilePath: null });
+      ctx.patchState({
+        selectedFilePath: revealFilePath,
+        currentDirectory: dirname(revealFilePath),
+        previewHtmlPath: null,
+        revealFilePath: null,
+      });
     })();
     return () => {
       cancelled = true;
     };
     // state/ctx/tree 引用变化不该重放已消费的请求。
-  }, [visible, revealFilePath, revealFileNonce]);
+  }, [visible, revealFilePath, revealFileNonce, locateFileOnly]);
 
   // refresh 按钮:文件树 + 项目文件索引一起 invalidate。
   const handleRefresh = useCallback(() => {
@@ -435,6 +448,7 @@ function FileBrowserBodyWithWorkdir({
       if (localRelPath) {
         const ok = await confirmSwitchAway(state.selectedFilePath, localRelPath);
         if (isCancelled() || !ok) return;
+      setLocatedFilePath(null);
         setExternalFile(null);
         setMode('tree');
         setFilterQuery('');
@@ -451,6 +465,7 @@ function FileBrowserBodyWithWorkdir({
 
       const ok = await confirmSwitchAway(state.selectedFilePath, null);
       if (isCancelled() || !ok) return;
+      setLocatedFilePath(null);
       setMode('tree');
       setFilterQuery('');
       setExternalFile(external);
@@ -593,6 +608,7 @@ function FileBrowserBodyWithWorkdir({
   const stackedTree = containerWidth > 0 && containerWidth < 540;
   const browseDirectory = useCallback(async (path: string) => {
     if (!(await confirmSwitchAway(state.selectedFilePath, null))) return;
+    setLocatedFilePath(null);
     setPreviousEntry(activeRelPath ?? directory);
     if (directory !== path) setDirectoryFilter('');
     setExternalFile(null);
@@ -625,7 +641,7 @@ function FileBrowserBodyWithWorkdir({
         <Button type="button" size="sm" compact variant={treeOpen ? 'primary' : 'secondary'}
           aria-expanded={treeOpen} onClick={() => {
             setTreeOpen(!treeOpen);
-            if (!treeOpen) void revealFileInTree((externalFile ? null : activeRelPath) ?? directory);
+            if (!treeOpen) void revealFileInTree(locatedFilePath ?? (externalFile ? null : activeRelPath) ?? directory);
           }}>
           <FolderTree size={15} />
           {t('ccAgent.workdirBrowse.projectTree')}
@@ -762,7 +778,7 @@ function FileBrowserBodyWithWorkdir({
                   tree={tree}
                   scrollScope={ctx.tabId}
                   active={visible && treeOpen}
-                  selectedPath={state.selectedFilePath ?? directory}
+                  selectedPath={locatedFilePath ?? state.selectedFilePath ?? directory}
                   onSelectFolder={browseDirectory}
                   onSelectFile={openFile}
                   onPreviewImage={handlePreviewImage}

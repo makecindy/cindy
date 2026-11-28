@@ -5655,6 +5655,12 @@
       "failed": "存常例工作目录未成，请重试"
     },
     "linkOpen": {
+      "attachments": {
+        "label": "附件启处",
+        "description": "择对话中档案之预览处。",
+        "popup": "浮窗",
+        "sidebar": "右侧栏"
+      },
       "title": "启链接",
       "description": "择讯中链接打开之处，右键可临时更换",
       "web": {
@@ -16832,7 +16838,9 @@
       "openLink": "开链接",
       "anchorNotFound": "不见对应之标题",
       "openInSidebarBrowser": "于侧栏开",
-      "openInSidebarFileBrowser": "于卷列中定位",
+      "openInSidebarFileBrowser": "于专案卷树中定位",
+      "openFileInPopup": "于浮窗启之",
+      "openFileInSidebar": "于右侧栏启之",
       "openInSidebarFileBrowserFailed": "于侧栏卷浏览器中开之未成",
       "openInSidebarFileBrowserOutsideWorkdir": "此卷不在今差事之工作目录内，不能于侧栏卷浏览器中定位",
       "openInDefaultBrowser": "于浏览器开",

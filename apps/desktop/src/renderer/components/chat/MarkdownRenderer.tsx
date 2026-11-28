@@ -1098,7 +1098,7 @@ function FileTargetChip({
   // html + 有会话上下文:左键按用户偏好直开(内置侧边栏 / 系统浏览器,见设置 →
   // 个性化 → 链接打开方式);右键菜单额外提供「在侧边栏浏览器中打开」和
   // 「查看源文件」(TextLightbox 的入口从左键挪到这里)。
-  // 其余文件保持原有单击直开 TextLightbox、右键四项菜单。
+  // 普通文件按附件预览位置打开，右键保留文件操作。
   // remote 会话:file:// / 系统浏览器都读本机 fs,先取回缓存副本再按偏好打开。
   const fileCtx = useChatSessionFile();
   const chipRemoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
@@ -1122,6 +1122,7 @@ function FileTargetChip({
     fileName: resolvedAbsPath,
     getAbsPath: async () => resolvedAbsPath,
     location: { absPath: resolvedAbsPath, line, column },
+    onOpenPreview: localKind === 'model' ? undefined : onOpen,
     canOpenInBrowser: localKind !== 'directory' && isBrowserOpenablePath(resolvedAbsPath),
     sidebarFileBrowserKind: localKind === 'directory' ? 'directory' : 'file',
     sidebarOpenSessionId: htmlWithSession,
@@ -1230,7 +1231,7 @@ function ResolvedLocalLink({
 }) {
   const { t } = useTranslation();
   // 同 FileTargetChip:html + 有会话上下文时左键按偏好直开,「查看源文件」
-  // 与「在侧边栏浏览器中打开」并入右键菜单;其余文件左键直开预览。
+  // 与「在侧边栏浏览器中打开」并入右键菜单；普通文件按附件预览位置打开。
   const fileCtx = useChatSessionFile();
   const htmlWithSession =
     localKind !== 'directory' && isHtmlFilePath(resolvedAbsPath) && sessionId ? sessionId : undefined;
@@ -1239,6 +1240,7 @@ function ResolvedLocalLink({
     fileName: resolvedAbsPath,
     getAbsPath: () => resolvedAbsPath,
     location: { absPath: resolvedAbsPath, line, column },
+    onOpenPreview: localKind === 'model' ? undefined : onOpen,
     canOpenInBrowser: localKind !== 'directory' && isBrowserOpenablePath(resolvedAbsPath),
     sidebarFileBrowserKind: localKind === 'directory' ? 'directory' : 'file',
     sidebarOpenSessionId: htmlWithSession,

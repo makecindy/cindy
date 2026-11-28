@@ -5690,6 +5690,12 @@
       "failed": "既定の作業ディレクトリを保存できませんでした。もう一度お試しください。"
     },
     "linkOpen": {
+      "attachments": {
+        "label": "添付ファイルの表示場所",
+        "description": "会話内のファイルをプレビューする場所を選びます。",
+        "popup": "ポップアップ",
+        "sidebar": "右サイドバー"
+      },
       "title": "リンクを開く",
       "description": "メッセージ内のリンクの開き先を選びます。右クリックで、そのリンクだけ別の開き先を選べます。",
       "web": {
@@ -16841,7 +16847,9 @@
       "openLink": "リンクを開く",
       "anchorNotFound": "対応する見出しが見つかりません",
       "openInSidebarBrowser": "サイドバーで開く",
-      "openInSidebarFileBrowser": "ファイル一覧で表示",
+      "openInSidebarFileBrowser": "プロジェクトツリーで表示",
+      "openFileInPopup": "ポップアップで開く",
+      "openFileInSidebar": "右サイドバーで開く",
       "openInSidebarFileBrowserFailed": "サイドバーのファイルブラウザで開けませんでした",
       "openInSidebarFileBrowserOutsideWorkdir": "このファイルは現在のセッション作業ディレクトリ外にあるため、サイドバーのファイルブラウザで特定できません",
       "openInDefaultBrowser": "ブラウザで開く",

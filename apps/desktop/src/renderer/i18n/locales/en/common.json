@@ -5733,6 +5733,12 @@
       "failed": "Could not save the default working directory. Try again."
     },
     "linkOpen": {
+      "attachments": {
+        "label": "Attachment preview",
+        "description": "Choose where files from the conversation open.",
+        "popup": "Pop-up",
+        "sidebar": "Right sidebar"
+      },
       "title": "Open Links",
       "description": "Choose where links in messages open. Right-click a link to use another option just for that link.",
       "web": {
@@ -16914,7 +16920,9 @@
       "openLink": "Open link",
       "anchorNotFound": "Heading not found",
       "openInSidebarBrowser": "Open in sidebar",
-      "openInSidebarFileBrowser": "Locate in file list",
+      "openInSidebarFileBrowser": "Locate in project tree",
+      "openFileInPopup": "Open in pop-up",
+      "openFileInSidebar": "Open in right sidebar",
       "openInSidebarFileBrowserFailed": "Failed to open in sidebar file browser",
       "openInSidebarFileBrowserOutsideWorkdir": "This file is outside the current session working directory and cannot be located in the sidebar file browser",
       "openInDefaultBrowser": "Open in browser",

@@ -33,6 +33,33 @@ function mountBrowser(workdir: string, initial: FileBrowserState, save = (_state
   return render(<Tab />);
 }
 
+// A locate command must expand the project tree without selecting another document.
+it('keeps the current document open when locating another file in the project tree', async () => {
+  const readFile = vi.fn(async () => ({
+    ok: true, data: { content: 'Current document', size: 16, mtimeMs: 1, truncated: false },
+  }));
+  const listDir = vi.fn(async ({ relPath }: { relPath: string }) => relPath === 'docs'
+    ? [{ name: 'another.md', relPath: 'docs/another.md', type: 'file', size: 18, mtimeMs: 1 }]
+    : [{ name: 'docs', relPath: 'docs', type: 'directory', size: 0, mtimeMs: 1 }]);
+  vi.stubGlobal('electronAPI', {
+    fileBrowser: { listDir, readFile, onEvent: () => () => {}, startWatch: vi.fn(), stopWatch: vi.fn() },
+    search: { onEvent: () => () => {} },
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  const save = vi.fn();
+  const view = mountBrowser('/locate-file', {
+    selectedFilePath: 'current.txt',
+    revealFilePath: 'docs/another.md',
+    locateFileOnly: true,
+  }, save);
+
+  await waitFor(() => expect(listDir).toHaveBeenCalledWith(expect.objectContaining({ relPath: 'docs' })));
+  expect(view.getByRole('button', { name: i18n.t('ccAgent.workdirBrowse.projectTree') }).getAttribute('aria-expanded')).toBe('true');
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ revealFilePath: null, selectedFilePath: 'current.txt' }));
+  expect(readFile).not.toHaveBeenCalledWith(expect.objectContaining({ relPath: 'docs/another.md' }));
+  view.unmount();
+});
+
 // #11392, unit: a root watcher failure with a cached child made the visible
 // retry button a no-op. Hook tests cannot exercise which action that button runs.
 it('retries from the displayed subdirectory when the root read failed', async () => {

@@ -28,6 +28,10 @@ import {
 } from '@/hooks/useLinkOpenPreference';
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import {
+  setAttachmentPreviewPreference,
+  useAttachmentPreviewPreference,
+} from '@/hooks/useAttachmentPreviewPreference';
 
 function LinkOpenPreferenceRow({ kind }: { kind: LinkOpenKind }) {
   const { t } = useTranslation();
@@ -67,12 +71,35 @@ function LinkOpenPreferenceRow({ kind }: { kind: LinkOpenKind }) {
 
 export function LinkOpenSection() {
   const { t } = useTranslation();
+  const attachmentPreview = useAttachmentPreviewPreference();
+  const attachmentSetting = useSettingDefinition(personalizationDetailsSettings.attachmentPreviewLocation);
 
   return (
     <SettingsSection title={t('settings.linkOpen.title')} description={t('settings.linkOpen.description')}>
       <SettingsCard>
         <LinkOpenPreferenceRow kind="web" />
         <LinkOpenPreferenceRow kind="local" />
+        <SettingsRow
+          {...attachmentSetting.anchorProps}
+          className="cindy-segmented-row"
+          title={attachmentSetting.title}
+          hint={attachmentSetting.description}
+          trailing={
+            <div className="cindy-segmented-row-actions">
+              <DefaultOverrideControls
+                isCustomized={attachmentPreview !== 'popup'}
+                onReset={() => setAttachmentPreviewPreference('popup')}
+              />
+              <SegmentedControl
+                {...attachmentSetting.controlProps}
+                aria-label={attachmentSetting.title}
+                value={attachmentPreview}
+                onValueChange={setAttachmentPreviewPreference}
+                options={attachmentSetting.options}
+              />
+            </div>
+          }
+        />
       </SettingsCard>
     </SettingsSection>
   );

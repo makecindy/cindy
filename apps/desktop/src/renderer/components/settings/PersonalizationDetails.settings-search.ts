@@ -175,6 +175,19 @@ export const personalizationDetailsSettings = defineSettings({
     ],
     descriptionKey: 'settings.linkOpen.local.description',
   },
+  attachmentPreviewLocation: {
+    id: 'settings.linkOpen.attachments.label',
+    fallbackTargetId: 'settings-search-target-personalization-link-open',
+    tab: 'personalization',
+    targetId: 'settings-attachment-preview-location',
+    titleKey: 'settings.linkOpen.attachments.label',
+    sectionKey: 'settings.sections.linkOpen',
+    descriptionKey: 'settings.linkOpen.attachments.description',
+    options: [
+      { value: 'popup', labelKey: 'settings.linkOpen.attachments.popup' },
+      { value: 'sidebar', labelKey: 'settings.linkOpen.attachments.sidebar' },
+    ],
+  },
   compatModeTitle: {
     id: 'settings.compatMode.title',
     fallbackTargetId: 'settings-search-target-personalization-tips',

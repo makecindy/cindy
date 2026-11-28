@@ -36,8 +36,8 @@ vi.mock('@/features/right-sidebar/lib/openInSidebarBrowser', () => ({
 
 vi.mock('@/features/right-sidebar/lib/openInSidebarFileBrowser', () => ({
   openDirInSidebarFileBrowser: vi.fn(async () => undefined),
-  openExternalFileInSidebarFileBrowser: vi.fn(async () => undefined),
-  openFileInSidebarFileBrowser: vi.fn(async () => undefined),
+  openExternalFileInSidebarFileBrowser: vi.fn(async () => true),
+  openFileInSidebarFileBrowser: vi.fn(async () => true),
 }));
 
 vi.mock('@/lib/remoteFileOpen', () => ({
@@ -56,7 +56,9 @@ import {
   openFileInSidebarFileBrowser,
 } from '@/features/right-sidebar/lib/openInSidebarFileBrowser';
 import { LOCAL_FILE_ORIGIN } from '@/lib/sessionFileOrigin';
+import { setAttachmentPreviewPreference } from '@/hooks/useAttachmentPreviewPreference';
 import { ChatSessionFileProvider } from '../ChatSessionFileContext';
+import { UserAttachmentChip } from '../UserAttachmentChip';
 import { useFileChipContextMenu } from '../useFileChipContextMenu';
 import { useOpenWithMenu } from '../useOpenWithMenu';
 
@@ -71,21 +73,6 @@ function ActionProbe({ html = false }: { html?: boolean }) {
     <>
       <button type="button" onClick={(event) => menu.openAt(10, 20, event.currentTarget)}>
         open-menu
-      </button>
-      {menu.menu}
-    </>
-  );
-}
-
-function ExternalFileActionProbe() {
-  const menu = useFileChipContextMenu({
-    fileName: 'outside.md',
-    getAbsPath: () => 'C:\\tmp\\outside.md',
-  });
-  return (
-    <>
-      <button type="button" onClick={(event) => menu.openAt(10, 20, event.currentTarget)}>
-        open-external-menu
       </button>
       {menu.menu}
     </>
@@ -123,6 +110,7 @@ function wrapper(children: ReactNode) {
 describe('sidebar-embedded action target', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setAttachmentPreviewPreference('popup');
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -133,14 +121,26 @@ describe('sidebar-embedded action target', () => {
     });
   });
 
-  it('opens file-browser and web-browser tabs in the visible Lead bucket', async () => {
+  it('opens a task attachment in its own file panel after selecting the sidebar preference', async () => {
+    setAttachmentPreviewPreference('sidebar');
+    const openPopup = vi.fn();
+    render(
+      <ChatSessionFileProvider value={{ sessionId: 'task', workingDir: '/repo', origin: LOCAL_FILE_ORIGIN }}>
+        <UserAttachmentChip file={{ name: 'notes.md', path: '/repo/notes.md' }} onOpenTextPreview={openPopup} />
+      </ChatSessionFileProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'notes.md' }));
+
+    await waitFor(() => expect(openFileInSidebarFileBrowser).toHaveBeenCalledWith('task', 'notes.md'));
+    expect(openPopup).not.toHaveBeenCalled();
+  });
+
+  it('keeps HTML in the visible Lead browser and avoids locating files in another task tree', async () => {
     const { rerender } = render(wrapper(<ActionProbe />));
 
     fireEvent.click(screen.getByText('open-menu'));
-    fireEvent.click(screen.getByText('chat.markdownRenderer.openInSidebarFileBrowser'));
-    await waitFor(() =>
-      expect(openFileInSidebarFileBrowser).toHaveBeenCalledWith('lead-a', 'src/index.md'),
-    );
+    expect(screen.queryByText('chat.markdownRenderer.openInSidebarFileBrowser')).toBeNull();
 
     rerender(wrapper(<ActionProbe html />));
     fireEvent.click(screen.getByText('open-menu'));
@@ -161,17 +161,44 @@ describe('sidebar-embedded action target', () => {
     );
   });
 
-  it('opens a local file outside the workdir through the external-file preview path', async () => {
-    render(wrapper(<ExternalFileActionProbe />));
+  it('allows both one-off previews and project-tree location without changing the default', async () => {
+    setAttachmentPreviewPreference('sidebar');
+    const openPopup = vi.fn();
+    render(
+      <ChatSessionFileProvider value={{ sessionId: 'task', workingDir: '/repo', origin: LOCAL_FILE_ORIGIN }}>
+        <UserAttachmentChip file={{ name: 'notes.md', path: '/repo/notes.md' }} onOpenTextPreview={openPopup} />
+      </ChatSessionFileProvider>,
+    );
+    const chip = screen.getByRole('button', { name: 'notes.md' });
 
-    fireEvent.click(screen.getByText('open-external-menu'));
+    fireEvent.contextMenu(chip);
+    fireEvent.click(screen.getByText('chat.markdownRenderer.openFileInPopup'));
+    await waitFor(() => expect(openPopup).toHaveBeenCalledWith(chip));
+    expect(openFileInSidebarFileBrowser).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(chip);
     fireEvent.click(screen.getByText('chat.markdownRenderer.openInSidebarFileBrowser'));
+    await waitFor(() => expect(openFileInSidebarFileBrowser).toHaveBeenCalledWith('task', 'notes.md', 'locate-file'));
 
+    setAttachmentPreviewPreference('popup');
+    fireEvent.contextMenu(chip);
+    fireEvent.click(screen.getByText('chat.markdownRenderer.openFileInSidebar'));
+    await waitFor(() => expect(openFileInSidebarFileBrowser).toHaveBeenLastCalledWith('task', 'notes.md'));
+    fireEvent.click(chip);
+    await waitFor(() => expect(openPopup).toHaveBeenCalledTimes(2));
+  });
+
+  it('offers sidebar preview for a local external file without a project-tree action', async () => {
+    render(
+      <ChatSessionFileProvider value={{ sessionId: 'task', workingDir: '/repo', origin: LOCAL_FILE_ORIGIN, localConfirmed: true }}>
+        <UserAttachmentChip file={{ name: 'outside.md', path: '/tmp/outside.md' }} onOpenTextPreview={vi.fn()} />
+      </ChatSessionFileProvider>,
+    );
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'outside.md' }));
+    expect(screen.queryByText('chat.markdownRenderer.openInSidebarFileBrowser')).toBeNull();
+    fireEvent.click(screen.getByText('chat.markdownRenderer.openFileInSidebar'));
     await waitFor(() =>
-      expect(openExternalFileInSidebarFileBrowser).toHaveBeenCalledWith(
-        'lead-a',
-        'C:\\tmp\\outside.md',
-      ),
+      expect(openExternalFileInSidebarFileBrowser).toHaveBeenCalledWith('task', '/tmp/outside.md'),
     );
     expect(openFileInSidebarFileBrowser).not.toHaveBeenCalled();
   });

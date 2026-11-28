@@ -1217,16 +1217,16 @@ function ImageLightboxContent({
   // 文件(合成图没有磁盘实体)。
   const { canCopy, canReveal, canOpenWith, canSaveAs, canSendToChat, canOpenInBrowser } =
     mediaActionCapabilities(currentSrc, Boolean(chatSessionId));
-  // 远程会话图:origUrl 是 workdir 内文件时,"打开所在目录"经侧边栏文件浏览器
-  // 定位远端目录(被控端文件本机 Finder 无从 reveal;缓存图在 workdir 外,
-  // 文件浏览器根覆盖不到,不提供)。
+  // 远程图片只能定位到来源任务的项目树。
   const remoteWorkdirRelPath = (() => {
     if (!currentSrc.startsWith('cindy-remote-media://') || !workingDir) return null;
     const parsed = parseRemoteMediaUrl(currentSrc);
     const origPath = parsed ? xdtFileUrlToPath(parsed.origUrl) : null;
     return origPath ? toWorkdirRel(workingDir, origPath) : null;
   })();
-  const canRevealRemote = Boolean(chatSessionId && remoteWorkdirRelPath);
+  const canRevealRemote = Boolean(
+    sidebarTargetSessionId && sidebarTargetSessionId === chatSessionId && remoteWorkdirRelPath,
+  );
   const hasAnyAction =
     canCopy ||
     canReveal ||
@@ -1255,9 +1255,10 @@ function ImageLightboxContent({
   /** 远程会话图:在侧边栏文件浏览器里定位该远端文件(展开所在目录并选中)。 */
   async function handleRevealRemote(): Promise<void> {
     setMenuPos(null);
-    if (!sidebarTargetSessionId || !remoteWorkdirRelPath) return;
+    if (!canRevealRemote || !sidebarTargetSessionId || !remoteWorkdirRelPath) return;
     try {
-      await openFileInSidebarFileBrowser(sidebarTargetSessionId, remoteWorkdirRelPath);
+      const accepted = await openFileInSidebarFileBrowser(sidebarTargetSessionId, remoteWorkdirRelPath, 'locate-file');
+      if (!accepted) toast.error(t('chat.media.openFolderFailed'));
     } catch {
       toast.error(t('chat.media.openFolderFailed'));
     }
