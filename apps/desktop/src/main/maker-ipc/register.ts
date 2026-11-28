@@ -5415,7 +5415,7 @@ const subscriptionAccountRecoveryDeps = {
     // A temporary source must not overwrite the user's different saved provider.
     if (saved.providerId === fromProviderId) await persistSessionFields(id, { providerId });
     assertCurrent();
-    const remappedKind = saved.agentKind === 'acp' ? 'acp' : dbToMakerAgentKind(saved.agentKind);
+    const remappedKind = dbToMakerEngineKind(saved.agentKind);
     if (remapSessionRuntimeProvider({
       sessionId: id, fromProviderId, toProviderId: providerId,
       expectedOwnerEpoch: owner, expectedGeneration: control.generation,
