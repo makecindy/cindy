@@ -33,7 +33,8 @@ function recoveryHarness() {
     `
     let refreshPromise = null;
     const authRefreshOverride = null;
-    const coldStartAuthInFlight = null;
+    const accessToken = 'test-access-token';
+    const currentUser = { id: 'test-user' };
     let authStateEpoch = 1;
     const refreshBackoff = new AuthRefreshBackoff(() => 1_000_000, () => 0);
     const getActiveAppSession = () => ({ mode: 'cloud' });

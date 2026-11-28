@@ -11,6 +11,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 
 const io = vi.hoisted(() => ({
+  canUseDeviceLink: true,
+  boundaryPending: false,
   handleListDevices: vi.fn(),
   getReceivedShares: vi.fn(() => [] as Array<{
     shareId: string;
@@ -23,6 +25,12 @@ const io = vi.hoisted(() => ({
   providerShareAgentDeviceId: vi.fn((id: string) => `share:${id}`),
 }));
 
+vi.mock('../../appCapabilities.js', () => ({
+  getAppCapabilities: () => ({ canUseDeviceLink: io.canUseDeviceLink }),
+}));
+vi.mock('../../appSessionState.js', () => ({
+  isAppSessionBoundaryPending: () => io.boundaryPending,
+}));
 vi.mock('../../device-link/ipc.js', () => ({
   handleListDevices: io.handleListDevices,
   defaultDeps: vi.fn(() => ({})),
@@ -53,11 +61,34 @@ function device(overrides: Partial<DeviceLinkDeviceView>): DeviceLinkDeviceView 
 
 describe('listWorkerAgentLocations', () => {
   beforeEach(() => {
+    io.canUseDeviceLink = true;
+    io.boundaryPending = false;
     io.handleListDevices.mockReset();
     io.getReceivedShares.mockReset();
     io.providerShareAgentDeviceId.mockClear();
     io.handleListDevices.mockResolvedValue({ devices: [] });
     io.getReceivedShares.mockReturnValue([]);
+  });
+
+  // Cold-start / signed-out callers (e.g. model-groups startup catalog refresh)
+  // must not hit /api/device-link/devices before a cloud session commits.
+  it.each([
+    { label: 'signed-out or local mode', boundaryPending: false, expectedStatus: 'complete' as const },
+    { label: 'owner boundary switch', boundaryPending: true, expectedStatus: 'degraded' as const },
+  ])('skips device directory and shares when Device Link is unavailable ($label)', async ({ boundaryPending, expectedStatus }) => {
+    io.canUseDeviceLink = false;
+    io.boundaryPending = boundaryPending;
+    io.handleListDevices.mockResolvedValue({ devices: [device({})] });
+    io.getReceivedShares.mockReturnValue([
+      { shareId: 's1', status: 'active', providerLabel: 'Claude API', owner: { displayName: 'Ann' } },
+    ]);
+
+    await expect(readWorkerAgentLocations()).resolves.toEqual({
+      status: expectedStatus,
+      locations: [],
+    });
+    expect(io.handleListDevices).not.toHaveBeenCalled();
+    expect(io.getReceivedShares).not.toHaveBeenCalled();
   });
 
   // #8028 / unit: only the same-account controlled picker requests favorite identity.

@@ -639,6 +639,21 @@ describe('saved login recovery after startup network failure', () => {
     expect(h.loadProviders).not.toHaveBeenCalled();
   });
 
+  // Regression: a startup background caller triggering runtime refresh() before
+  // initialize() runs must never consume the persisted refresh token and race
+  // with cold-start recovery.
+  it('refuses runtime refresh before cold-start initialize() establishes an active session', async () => {
+    const h = setup();
+    await expect(h.runtimeRefresh({ serverRejectedToken: true })).resolves.toBe(false);
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.saved.session.refreshToken).toBe('test-refresh');
+
+    h.request.mockResolvedValueOnce(h.ok);
+    await expect(h.start()).resolves.toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    expect(h.request).toHaveBeenCalledTimes(1);
+    expect(h.saved.session.refreshToken).toBe('test-rotated');
+  });
+
   it.each([
     { status: 429, serverWait: undefined },
     { status: 429, serverWait: 120_000 },

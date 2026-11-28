@@ -1,3 +1,5 @@
+import { getAppCapabilities } from '../appCapabilities.js';
+import { isAppSessionBoundaryPending } from '../appSessionState.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { getReceivedShares, providerShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { isExecutionDeviceCandidate } from './orcaRemoteWorkers.js';
@@ -15,6 +17,11 @@ export type WorkerAgentLocationsReadResult =
  * （provider-sharing.md §6），写「供应商 · 分享者」。不含本机。
  */
 export async function readWorkerAgentLocations(options?: { favoriteSources?: boolean }): Promise<WorkerAgentLocationsReadResult> {
+  // Same account-plane gate as device-link IPC and quota-overview: never query
+  // /api/device-link/devices before login, in local mode, or mid-account-switch.
+  if (!getAppCapabilities().canUseDeviceLink) {
+    return { status: isAppSessionBoundaryPending() ? 'degraded' : 'complete', locations: [] };
+  }
   let devices: Awaited<ReturnType<typeof handleListDevices>>['devices'] = [];
   let complete = true;
   try {

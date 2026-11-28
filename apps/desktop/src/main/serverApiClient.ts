@@ -106,6 +106,8 @@ interface RawResponse<T> {
   retryAt?: number;
   /** 这一跳真正用的 base URL(每次尝试各自解析,重试可能落在另一个端点上)。 */
   servedBaseUrl: string;
+  /** 这一跳是否确实带出了 Authorization 头（未带凭证的 401 不代表 token 过期，不得触发 refresh）。 */
+  sentAuthorization: boolean;
 }
 
 /**
@@ -163,6 +165,9 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
       headers['Authorization'] = 'Bearer ' + token;
     }
   }
+  const sentAuthorization = Object.entries(headers).some(
+    ([key, value]) => key.toLowerCase() === 'authorization' && value.length > 0,
+  );
   const timeoutMs = opts.timeoutMs ?? 0;
   const controller = timeoutMs > 0 || opts.signal ? new AbortController() : null;
   const abort = () => controller?.abort(opts.signal?.reason);
@@ -214,7 +219,14 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
         // 400/403/404 也被当成连不上(Codex review #9360「Preserve HTTP status on
         // internal response-body timeouts」)。只有 200 + 卡住的正文仍是暂时性失败。
         if (responseStatus !== undefined) {
-          return { ok: false, status: responseStatus, data: null, retryAt, servedBaseUrl: baseUrl };
+          return {
+            ok: false,
+            status: responseStatus,
+            data: null,
+            retryAt,
+            servedBaseUrl: baseUrl,
+            sentAuthorization,
+          };
         }
         throw error;
       }
@@ -223,7 +235,14 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
         opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));
       data = null;
     }
-    return { ok: response.ok, status: response.status, data, retryAt, servedBaseUrl: baseUrl };
+    return {
+      ok: response.ok,
+      status: response.status,
+      data,
+      retryAt,
+      servedBaseUrl: baseUrl,
+      sentAuthorization,
+    };
   } catch (err) {
     attachAbortMetadata(opts.signal, responseRetryAt, baseUrl, responseStatus);
     opts.signal?.throwIfAborted();
@@ -236,7 +255,14 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     } else {
       log.error('fetch failed', opts.logLabel ?? apiPath, requestErrorMessage(err));
     }
-    return { ok: false, status: 0, data: null, retryAt: responseRetryAt, servedBaseUrl: baseUrl };
+    return {
+      ok: false,
+      status: 0,
+      data: null,
+      retryAt: responseRetryAt,
+      servedBaseUrl: baseUrl,
+      sentAuthorization,
+    };
   } finally {
     if (timeoutId !== null) clearTimeout(timeoutId);
     opts.signal?.removeEventListener('abort', abort);
@@ -273,6 +299,7 @@ async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions): Promis
 
   if (
     result.status === 401 &&
+    result.sentAuthorization &&
     !opts.skipAutoRefresh &&
     firstCode !== 'ACCOUNT_UNAVAILABLE' &&
     isRefreshableUnauthorizedCode(firstCode)
