@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createContext, createElement as el } from 'react';
+import { act, createContext, createElement as el, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ cloudRefresh: vi.fn(async () => {}), cloudError: null as string | null, push: vi.fn(),
@@ -7,17 +7,25 @@ const h = vi.hoisted(() => ({ cloudRefresh: vi.fn(async () => {}), cloudError: n
   startBot: vi.fn(), startGroup: vi.fn(),
   cloudActor: null as null | { id: string }, createOptions: null as any, collapsed: false, showAvatars: true, unread: false,
   cacheRevision: 0, cacheListeners: new Set<() => void>(), unreadIds: new Set<string>(),
-  stripRenders: [] as string[], avatarRenders: [] as string[], identityReads: 0 }));
+  stripRenders: [] as string[], avatarRenders: [] as string[], identityReads: 0,
+  buddySets: { version: 1 as const, sets: [] as Array<{ buddySetId: string; name: string; buddyIds: string[]; collapsed?: boolean }> },
+  buddySetsStatus: 'ready' as string, buddySetsSaveFailed: false,
+  updateBuddySets: vi.fn(), retryBuddySets: vi.fn(), retrySaveBuddySets: vi.fn() }));
+vi.mock('@/session/useBuddySets', () => ({
+  useBuddySets: () => [h.buddySets, h.updateBuddySets, h.buddySetsStatus,
+    h.retryBuddySets, h.buddySetsSaveFailed, h.retrySaveBuddySets],
+}));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { subscribe: () => () => {}, getPendingInteractions: () => [], getSessionLiveActivity: () => null } }));
 vi.mock('react-native', () => ({
   View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
   ScrollView: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
-  Pressable: ({ children, testID, disabled, onPress, onLongPress, accessibilityLabel }: any) => {
+  Pressable: ({ children, testID, disabled, onPress, onPressIn, onLongPress, accessibilityLabel }: any) => {
     if (testID?.startsWith('home.teammatesStrip.bot.')) h.stripRenders.push(testID);
     return el('button', {
       'data-testid': testID,
       disabled,
       onClick: onPress,
+      onMouseDown: onPressIn,
       onContextMenu: onLongPress ? (event: MouseEvent) => { event.preventDefault(); onLongPress(); } : undefined,
       'aria-label': accessibilityLabel,
     }, children);
@@ -108,6 +116,8 @@ vi.mock('@/session/TeammateCreateController', () => ({ useTeammateCreateControll
     sheets: null,
   };
 } }));
+// 「伙伴集」表单走原生 FormSheet 链;本用例只验证首页段落,与其它子表单一样用替身隔离。
+vi.mock('@/session/BuddySetSheet', () => ({ BuddySetSheet: () => null }));
 vi.mock('@/session/TeammateList', () => ({
   useTeammateEntries: (items: any[], groups: any[] = [], query = '') => [...items.map(row => ({ kind: 'bot', row })), ...groups.map(row => ({ kind: 'group', row }))].filter(entry => entry.row.item.display.title.includes(query)),
   useTeammateRowRenderer: (options: any) => (entry: any) => el('button', { key: entry.row.key,
@@ -117,6 +127,7 @@ vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () =>
   owner: 'owner', teammatesCollapsed: h.collapsed, showCollapsedTeammateAvatars: h.showAvatars, lastTeammate: null,
   setTeammatesCollapsed: async () => {}, openTeammate: h.openTeammate, openCreatedTeammate: async () => {} }) }));
 import { HomeTeammatesSection } from '../session/HomeTeammatesSection';
+import { BuddySetGroups } from '../session/BuddySetGroups';
 import { getHomeViewSession } from '../session/homeViewSession';
 import { CONNECTION_NOTICE_DELAY_MS } from '../components/connectionNoticeDelay';
 
@@ -129,6 +140,8 @@ let root: Root; let node: HTMLDivElement;
 beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); vi.clearAllMocks(); h.cloudActor = null; vi.useFakeTimers(); roster.error = 'LIST_FAILED'; h.collapsed = false; h.showAvatars = true; h.unread = false; groups.items = [];
   h.cacheRevision = 0; h.unreadIds.clear(); h.stripRenders = []; h.avatarRenders = []; h.identityReads = 0;
   h.cloudError = null; getHomeViewSession().write('teammatesShowAll', false);
+  h.buddySets = { version: 1, sets: [] }; h.buddySetsStatus = 'ready'; h.buddySetsSaveFailed = false;
+  h.updateBuddySets.mockReset(); h.retryBuddySets.mockReset(); h.retrySaveBuddySets.mockReset();
 });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 const render = (refreshKey: number, overrides: Partial<Parameters<typeof HomeTeammatesSection>[0]> = {}) => act(async () => root.render(el(HomeTeammatesSection, {
@@ -389,6 +402,70 @@ it('carries unread and pending attention on the hidden header without opening it
   expect(byId('home.teammatesHeader')?.getAttribute('aria-label')).not.toContain('Needs attention');
   expect(byId('home.teammatesAttention')).not.toBeNull();
   expect(byId('home.teammatesStrip')).toBeNull();
+});
+
+// Regression for the P2 review finding on BuddySetGroups.tsx: a fold changes the
+// list height, so it must commit inside the home disclosure window (DESIGN.md
+// §14.4) rather than firing onChange directly on press. Minimal failing input: a
+// controller that records apply without running it. Before the fix the rows vanish
+// in one frame and runDisclosure is never called; after it the rows stay until the
+// window applies. tier: unit, in-memory fakes, no native animation.
+it('defers a buddy set fold into the home disclosure window', async () => {
+  const initial = { version: 1 as const, sets: [{ buddySetId: 'set-1', name: 'Trio', buddyIds: ['bot:host:bot'] }] };
+  const prepareDisclosure = vi.fn();
+  let pendingApply: (() => void) | undefined;
+  const runDisclosure = vi.fn((apply: () => void) => { pendingApply = apply; });
+  function Harness() {
+    const [state, setState] = useState(initial);
+    return el(BuddySetGroups, {
+      entries: [{ kind: 'bot', row: item }], buddySets: state, onChange: setState,
+      onEditSet: () => {}, renderRow: (_entry: unknown) => el('span', { key: 'row', 'data-testid': 'buddy.row' }, 'Mimi'),
+      query: '', runDisclosure, prepareDisclosure,
+    } as any);
+  }
+  await act(async () => root.render(el(Harness)));
+  const header = () => node.querySelector<HTMLElement>('button[aria-label^="Trio"]');
+  expect(byId('buddy.row')).not.toBeNull();
+  expect(header()?.getAttribute('aria-label')).toContain('collapse');
+
+  // Press-in opens the window before the state commit.
+  await act(async () => { header()!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); });
+  expect(prepareDisclosure).toHaveBeenCalledTimes(1);
+  await act(async () => { header()!.click(); });
+  expect(runDisclosure).toHaveBeenCalledTimes(1);
+  // No one-frame jump: the rows stay visible until the window applies the fold.
+  expect(byId('buddy.row')).not.toBeNull();
+  await act(async () => { pendingApply!(); });
+  expect(byId('buddy.row')).toBeNull();
+  expect(header()?.getAttribute('aria-label')).toContain('expand');
+});
+
+/**
+ * 测试价值(本轮新增段头失败反馈用例)
+ * - 生产入口与可观察结果:HomeTeammatesSection 在仅显示段头时仍给出伙伴集读/写失败的
+ *   可点击重试点,且不渲染被折叠门隐藏的列表内重试行。
+ * - Bug／规则依据:PR #11701 的 headerOnly 保存失败反馈 P2;DESIGN.md §4「折叠态保留可发现状态」。
+ * - 现有覆盖缺口:已有折叠态用例只覆盖名册未读/待关注点,不覆盖本地伙伴集持久化失败。
+ * - 最小失败输入:collapsed=true、showCollapsedAvatars=false,并令 hook 返回 error 或 saveFailed。
+ * - tier:unit(jsdom,真实首页段落 + hook 替身),纯同步、无真实等待。
+ * - 实测耗时:2.33s(单独运行整个既有 19 用例文件,含启动;用例本身 111ms)。
+ */
+it('keeps buddy-set read and save retries visible when only the header is shown', async () => {
+  h.collapsed = true; h.showAvatars = false; h.buddySetsStatus = 'error';
+  await render(0);
+  expect(byId('home.buddySetsRetry')).toBeNull();
+  const readRetry = byId('home.buddySetsHeaderRetry');
+  expect(readRetry).not.toBeNull();
+  await act(async () => readRetry!.click());
+  expect(h.retryBuddySets).toHaveBeenCalledOnce();
+
+  h.buddySetsStatus = 'ready'; h.buddySetsSaveFailed = true;
+  await render(1);
+  expect(byId('home.buddySetsSaveRetry')).toBeNull();
+  const saveRetry = byId('home.buddySetsHeaderRetry');
+  expect(saveRetry).not.toBeNull();
+  await act(async () => saveRetry!.click());
+  expect(h.retrySaveBuddySets).toHaveBeenCalledOnce();
 });
 
 // PR #13613, unit: the real home section must surface a pending decision outside the

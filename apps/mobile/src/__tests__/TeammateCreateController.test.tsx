@@ -2,13 +2,14 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ account: 1, button: {} as any, menu: {} as any, sheet: null as any, groupSheet: null as any, groupCreated: vi.fn(), created: vi.fn(), alert: vi.fn() }));
+const h = vi.hoisted(() => ({ account: 1, button: {} as any, menu: {} as any, sheet: null as any, groupSheet: null as any, groupCreated: vi.fn(), created: vi.fn(), alert: vi.fn(),
+  nativeMenu: true, chooser: null as any, rows: {} as Record<string, any> }));
 vi.mock('react-native', () => ({ Alert: { alert: h.alert } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: h.account }) }));
-vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: (props: any) => createElement('button', { 'data-testid': props.testID, onClick: props.onPress }, props.label) }));
-vi.mock('@/platform/chrome/NativePullDownMenu', () => ({ usesNativePullDownMenu: () => true, NativePullDownMenu: (props: any) => { h.menu = props; return props.children; } }));
-vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: () => null }));
+vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: (props: any) => { h.rows[props.testID] = props; return createElement('button', { 'data-testid': props.testID, onClick: props.onPress }, props.label); } }));
+vi.mock('@/platform/chrome/NativePullDownMenu', () => ({ usesNativePullDownMenu: () => h.nativeMenu, NativePullDownMenu: (props: any) => { h.menu = props; return props.children; } }));
+vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: (props: any) => { h.chooser = props; return props.visible ? createElement('div', null, props.children) : null; } }));
 vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionCreateSheet: (props: any) => { h.sheet = props; return null; } }));
 vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammates' }));
 vi.mock('@/session/BotGroupCreateSheet', () => ({ BotGroupCreateSheet: (props: any) => { h.groupSheet = props; return null; } }));
@@ -27,7 +28,7 @@ async function render(targets = hosts, groupTargets = [] as typeof hosts) {
   root ??= createRoot(document.createElement('div'));
   await act(async () => root!.render(createElement(Create, { targets, groupTargets, preferredDeviceId: 'pc', onCreated: h.created, onGroupCreated: h.groupCreated })));
 }
-beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.sheet = null; });
+beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.sheet = null; h.nativeMenu = true; h.chooser = null; h.rows = {}; });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 it('uses real menu hosts, prefers the remembered host, and dispatches receipts after form dismissal', async () => {
   await render(); expect(h.menu.actions.map((action: any) => action.title)).toEqual(['PC', 'Mac']); expect(h.sheet).toBeNull();
@@ -68,6 +69,87 @@ it('offers group chats in the same menu and reports a new group only after its f
   expect(h.groupCreated).not.toHaveBeenCalled();
   await act(async () => h.groupSheet.onClosed());
   expect(h.groupCreated).toHaveBeenCalledExactlyOnceWith(hosts[1], 'group');
+});
+
+// Regression for the P2 finding on the compatibility chooser: on installs without the
+// native MenuView, CompanionSheet stays mounted through its close animation. Opening
+// BuddySetSheet before onClosed re-enters the overlapping-Modal path that
+// useModalFadeLifecycle explicitly avoids, so the form may never appear. Minimal
+// failing input: pick the buddy-set row while the chooser is still fading out.
+// tier: unit, in-memory fakes, no native animation.
+it('opens a new buddy set only after the compatibility chooser has closed', async () => {
+  const newBuddySet = vi.fn();
+  h.nativeMenu = false;
+  root = createRoot(document.createElement('div'));
+  await act(async () => root!.render(createElement(Create, { targets: hosts, onCreated: h.created, onNewBuddySet: newBuddySet })));
+  await act(async () => h.button.onPress());
+  expect(h.chooser.visible).toBe(true);
+  await act(async () => h.rows['teammates.createChooser.buddySet'].onPress());
+  expect(newBuddySet).not.toHaveBeenCalled();
+  await act(async () => h.chooser.onClosed());
+  expect(newBuddySet).toHaveBeenCalledTimes(1);
+  // Dismissing the chooser drops the pending action instead of leaking it later.
+  await act(async () => h.chooser.onClose());
+  await act(async () => h.chooser.onClosed());
+  expect(newBuddySet).toHaveBeenCalledTimes(1);
+});
+
+// §2 checkpoint, family A. Last round fixed only one path: it added a THIRD
+// independent pending ref, so two chooser rows pressed before the fade-out
+// finished both fired at `onClosed` and could present two sheets on top of each
+// other -- the exact overlapping-Modal path the controller exists to avoid. This
+// interleaving matrix fails red against that half-fix (verified) and passes with
+// one deferred-action slot. Minimal failing input: two distinct rows in one close
+// window. tier: unit, in-memory fakes, no native animation.
+const CHOOSER_ROWS = {
+  'teammates.createChooser.bot.mac': { label: 'create:mac', kind: 'create', deviceId: 'mac' },
+  'teammates.createChooser.bot.pc': { label: 'create:pc', kind: 'create', deviceId: 'pc' },
+  'teammates.createChooser.buddySet': { label: 'buddySet', kind: 'buddySet' },
+  'teammates.invite': { label: 'invite', kind: 'invite' },
+} as const;
+type RowId = keyof typeof CHOOSER_ROWS;
+const ROW_IDS = Object.keys(CHOOSER_ROWS) as RowId[];
+const PAIRS: Array<[RowId, RowId]> = ROW_IDS.flatMap(first => ROW_IDS.filter(second => second !== first).map(second => [first, second] as [RowId, RowId]));
+
+async function openChooser() {
+  const newBuddySet = vi.fn();
+  const invite = vi.fn();
+  h.nativeMenu = false;
+  root = createRoot(document.createElement('div'));
+  const options = { targets: hosts, onCreated: h.created, onInvite: invite, onNewBuddySet: newBuddySet };
+  await act(async () => root!.render(createElement(Create, options)));
+  await act(async () => h.button.onPress());
+  expect(h.chooser.visible).toBe(true);
+  return { options, newBuddySet, invite };
+}
+
+it.each(PAIRS)('one deferred action per chooser close: %s then %s', async (first, second) => {
+  const { newBuddySet, invite } = await openChooser();
+  await act(async () => { h.rows[first].onPress(); h.rows[second].onPress(); });
+  await act(async () => h.chooser.onClosed());
+  const fired = [
+    h.sheet ? `create:${h.sheet.deviceId}` : null,
+    newBuddySet.mock.calls.length ? 'buddySet' : null,
+    invite.mock.calls.length ? 'invite' : null,
+  ].filter(Boolean);
+  expect(fired).toEqual([CHOOSER_ROWS[second].label]);
+  expect(newBuddySet).toHaveBeenCalledTimes(second === 'teammates.createChooser.buddySet' ? 1 : 0);
+  expect(invite).toHaveBeenCalledTimes(second === 'teammates.invite' ? 1 : 0);
+  // A duplicate or late close cannot replay the consumed action.
+  await act(async () => h.chooser.onClosed());
+  expect(newBuddySet.mock.calls.length + invite.mock.calls.length).toBeLessThanOrEqual(1);
+});
+
+// Matrix cell: account replacement while the chooser fades out must drop the
+// deferred action, not deliver it to the new account's sheet.
+it('an account switch during the close animation drops the deferred action', async () => {
+  const { options, newBuddySet } = await openChooser();
+  await act(async () => h.rows['teammates.createChooser.buddySet'].onPress());
+  const closing = h.chooser;
+  h.account++;
+  await act(async () => root!.render(createElement(Create, { ...options, onInvite: options.onInvite })));
+  await act(async () => closing.onClosed());
+  expect(newBuddySet).not.toHaveBeenCalled();
 });
 
 // Unit: an invitation needs no computer; preserve creation actions and fence old account callbacks.

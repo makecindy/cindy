@@ -214,11 +214,13 @@ function harness(options: {
     changeDevice: () => callback<(id: string, name: string) => void>('handleDeviceChange', {
       ...bindings, applyDraftTarget,
       sendInFlightRef: { current: false }, directoryRecoveryRef: { current: null },
-      // 工作区记忆由「remembers and restores」单独用真实现 + localStorage stub 覆盖；
-      // 这里按「目标设备从未用过」打桩，避免引入 localStorage 依赖。
+      // PR #13024 起，设备切换回调体里的这些自由变量必须由 harness 绑定，否则
+      // new Function 沙箱会直接 ReferenceError。工作区记忆由「remembers and restores」
+      // 单独用真实现 + localStorage stub 覆盖；这里按「目标设备从未用过」打桩，
+      // 避免引入 localStorage 依赖。其余设备切换绑定由上面的 ...bindings 提供。
       effectiveWorkingDir: bindings.draft.workingDir,
-      getLastDeviceTaskWorkspace: () => null,
       resolveDeviceSwitchWorkspace: () => ({ workingDir: null, remoteHostId: null, explicitNoProject: true }),
+      getLastDeviceTaskWorkspace: () => null,
       getDefaultNewTaskWorkingDir: () => null,
     })('target-device', 'Target'),
     current: () => current,

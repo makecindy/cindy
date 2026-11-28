@@ -17,6 +17,7 @@ import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-ro
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, ChevronUp, Link2, Plus, RefreshCw, UserPlus, UsersRound } from 'lucide-react-native';
 import { resolveRemoteText } from '@cindy/device-link';
+import { BUDDY_SET_LIMIT } from '@cindy/maker-shared/buddy-sets';
 import { useAuth } from '@/auth/AuthContext';
 import { openManualChatInvite } from '@/chat/chatInviteIntent';
 import { Text } from '@/components/AppText';
@@ -44,6 +45,10 @@ import { SwipeableSectionHeader } from './SwipeableSectionHeader';
 import type { SwipeRowRegistry } from './swipeRowRegistry';
 import { useTeammateCreateController } from './TeammateCreateController';
 import { useTeammateEntries, useTeammateRowRenderer, type TeammateListEntry } from './TeammateList';
+import { useBuddySets } from './useBuddySets';
+import { BuddySetGroups } from './BuddySetGroups';
+import { BuddySetSheet } from './BuddySetSheet';
+import { mobileBuddySetCopy, type BuddySetCandidate } from './buddySetCopy';
 import { cloudCompanionRoute } from './teammateNavigation';
 import { useTeammateNavigation } from './useTeammateNavigation';
 import { getHomeViewSession, useRetainedHomeState } from './homeViewSession';
@@ -121,6 +126,16 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const showGroups = groups.supported || groups.items.length > 0;
   const search = query.trim();
   const entries = useTeammateEntries(items, showGroups ? groups.items : undefined, search);
+  // 「伙伴集」:纯本机、按账号的展示容器,只收伙伴私聊行。
+  const [buddySets, updateBuddySets, buddySetsStatus, retryBuddySets, buddySetsSaveFailed, retrySaveBuddySets] = useBuddySets(navigation.owner);
+  const buddySetCopy = mobileBuddySetCopy(t);
+  const [buddySetEdit, setBuddySetEdit] = useState<{ visible: boolean; buddySetId: string | null }>({ visible: false, buddySetId: null });
+  const buddySetCandidates = useMemo<BuddySetCandidate[]>(() => entries
+    .filter((entry): entry is TeammateListEntry & { kind: 'bot' } => entry.kind === 'bot')
+    .map((entry) => ({
+      id: `bot:${entry.row.key}`,
+      name: resolveRemoteText(entry.row.item.display.title, i18n.language),
+    })), [entries, i18n.language]);
   const openTeammate = (row: HostedRemoteCollectionItem) => {
     const actor = cloudActor(row);
     if (actor) { Keyboard.dismiss(); push(cloudCompanionRoute(row, actor.id, i18n.language)); }
@@ -140,6 +155,15 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   // Search results are always rows; the stored fold returns with the search cleared.
   const collapsed = stored && !search;
   const headerOnly = collapsed && !showCollapsedAvatars;
+  // Local buddy-set failures must stay actionable even when the body is folded:
+  // the row retries below are hidden by the headerOnly branch.
+  const hasBuddySets = buddySets.sets.length > 0;
+  const buddySetsFailed = buddySetsStatus === 'error';
+  const buddySetsFailure = buddySetsSaveFailed
+    ? { label: buddySetCopy.saveFailed, retry: retrySaveBuddySets }
+    : buddySetsFailed
+      ? { label: t('devices.resources.loadFailed'), retry: retryBuddySets }
+      : null;
   const [showAll, setShowAll] = useRetainedHomeState(getHomeViewSession(), 'teammatesShowAll', false);
   const preview = search ? entries : entries.slice(0, HOME_TEAMMATE_PREVIEW_LIMIT);
   const extra = useMemo(() => search ? [] : entries.slice(HOME_TEAMMATE_PREVIEW_LIMIT), [entries, search]);
@@ -168,6 +192,8 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const creator = useTeammateCreateController({ targets: createTargets, groupTargets: groupCreateTargets,
     preferredDeviceId: navigation.lastTeammate?.deviceId,
     onInvite: canInvite ? () => { Keyboard.dismiss(); openManualChatInvite(); } : undefined,
+    onNewBuddySet: buddySetsStatus === 'ready' && buddySets.sets.length < BUDDY_SET_LIMIT
+      ? () => setBuddySetEdit({ visible: true, buddySetId: null }) : undefined,
     onCreated: (host, ref) => { void navigation.openCreatedTeammate(host, ref); },
     onGroupCreated: (host, groupId) => push(botGroupRoute(host, groupId)) });
   // Keep cached rows during recovery. A lasting failure is surfaced inside the header's
@@ -238,6 +264,16 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
           onPress: () => runAfterOptionsClose(() => { Keyboard.dismiss(); openManualChatInvite(); }),
         });
       }
+      if (buddySetsStatus === 'ready' && buddySets.sets.length < BUDDY_SET_LIMIT) {
+        createItems.push({
+          id: 'newBuddySet',
+          title: buddySetCopy.new,
+          sfSymbol: 'folder.badge.plus',
+          icon: UsersRound,
+          testID: 'home.teammatesOptions.newBuddySet',
+          onPress: () => runAfterOptionsClose(() => setBuddySetEdit({ visible: true, buddySetId: null })),
+        });
+      }
       if (createItems.length > 0) {
         sections.push({
           id: 'create',
@@ -277,6 +313,9 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
     return sections;
   }, [
     botTargets,
+    buddySetCopy.new,
+    buddySets.sets.length,
+    buddySetsStatus,
     canInvite,
     creator.botLabel,
     creator.groupLabel,
@@ -295,7 +334,9 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   ]);
   const hasOptions = !search && optionSections.length > 0;
   // The invitation trigger is independent of device/roster loading; no empty body is reserved.
-  const shown = visible && (search ? entries.length > 0 : canInvite || !!error || !(!entries.length && (!canCreate || roster.loading)));
+  // Sets are visible even with an empty roster; a failed local read offers a retry.
+  const shown = visible && (search ? entries.length > 0
+    : hasBuddySets || buddySetsFailed || buddySetsSaveFailed || canInvite || !!error || !(!entries.length && (!canCreate || roster.loading)));
   const title = t('devices.companions.title');
   const create = (trigger: (press: () => void, label: string) => ReactElement) => showCreate
     ? creator.renderTrigger(trigger(creator.press, creator.label)) : null;
@@ -316,7 +357,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
             if (event.nativeEvent.actionName === 'options') openOptions();
           } : undefined}
           accessibilityLabel={[t(collapsed ? 'devices.list.a11y.expand' : 'devices.list.a11y.collapse', { title }),
-            collapsed ? attentionLabel : ''].filter(Boolean).join(', ')}
+            collapsed ? attentionLabel : '', buddySetsFailure?.label].filter(Boolean).join(', ')}
           delayLongPress={SESSION_ROW_LONG_PRESS_MS}
           onLongPress={hasOptions ? openOptions : undefined}
           onPress={toggleCollapsed} onPressIn={prepareDisclosure}
@@ -328,14 +369,49 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
           {(collapsed && !headerOnly) || !entries.length ? null : <Text style={list.projectCount} numberOfLines={1}>{entries.length}</Text>}
           {collapsed && attentionLabel ? <View style={attentionStyle} testID="home.teammatesAttention" /> : null}
         </Pressable>
+        {headerOnly && buddySetsFailure ? <Pressable accessibilityRole="button"
+          accessibilityLabel={`${buddySetsFailure.label} ${t('devices.resources.retry')}`}
+          onPress={buddySetsFailure.retry} hitSlop={spacing.xs}
+          style={({ pressed }) => [styles.headerAdd, pressed && mobileInteractionStyles.pressed]}
+          testID="home.buddySetsHeaderRetry">
+          <RefreshCw size={iconSize.sm} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
+        </Pressable> : null}
       </View>
     </SwipeableSectionHeader>
-    {headerOnly ? null : !entries.length ? (canCreate ? <DisclosureItem exit>{create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={press}
-      style={({ pressed }) => [styles.addRow, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesAdd">
-      <View style={[styles.addCircle, styles.addCircleRow]}><Plus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} /></View>
-      <Text style={styles.addText} numberOfLines={1}>{t('devices.companions.createTeammate')}</Text>
-    </Pressable>)}</DisclosureItem> : null)
-      : collapsed ? <DisclosureItem exit>
+    {headerOnly ? null : <>
+      {buddySetsFailed ? <Pressable accessibilityRole="button"
+        accessibilityLabel={`${t('devices.resources.loadFailed')} ${t('devices.resources.retry')}`}
+        onPress={retryBuddySets} hitSlop={spacing.xs} testID="home.buddySetsRetry"
+        style={({ pressed }) => [styles.moreRow, pressed && mobileInteractionStyles.pressed]}>
+        <RefreshCw size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
+        <Text style={styles.moreText} numberOfLines={1}>{t('devices.resources.retry')}</Text>
+      </Pressable> : null}
+      {/* A failed write must never look saved; offer an explicit retry row. */}
+      {buddySetsSaveFailed ? <Pressable accessibilityRole="button"
+        accessibilityLabel={`${buddySetCopy.saveFailed} ${t('devices.resources.retry')}`}
+        onPress={retrySaveBuddySets} hitSlop={spacing.xs} testID="home.buddySetsSaveRetry"
+        style={({ pressed }) => [styles.moreRow, pressed && mobileInteractionStyles.pressed]}>
+        <RefreshCw size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
+        <Text style={styles.moreText} numberOfLines={1}>{buddySetCopy.saveFailed}</Text>
+      </Pressable> : null}
+      {!entries.length ? (<>
+        {hasBuddySets && !collapsed ? <BuddySetGroups
+          entries={[]}
+          buddySets={buddySets}
+          onChange={updateBuddySets}
+          onEditSet={(buddySetId) => setBuddySetEdit({ visible: true, buddySetId })}
+          renderRow={renderRow}
+          query={search}
+          runDisclosure={runDisclosure}
+          prepareDisclosure={prepareDisclosure}
+        /> : null}
+        {canCreate ? <DisclosureItem exit>{create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={press}
+          style={({ pressed }) => [styles.addRow, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesAdd">
+          <View style={[styles.addCircle, styles.addCircleRow]}><Plus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} /></View>
+          <Text style={styles.addText} numberOfLines={1}>{t('devices.companions.createTeammate')}</Text>
+        </Pressable>)}</DisclosureItem> : null}
+      </>)
+        : collapsed ? <DisclosureItem exit>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip} testID="home.teammatesStrip">
           {entries.map(entry => <StripCell key={`${entry.kind}:${entry.row.key}`} entry={entry}
             online={entry.kind === 'group' ? groups.isOnline(entry.row.host) : roster.isOnline(entry.row.host)}
@@ -350,8 +426,16 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
         </ScrollView>
       </DisclosureItem>
       : <DisclosureItem exit>
-        {preview.map((entry, index) => renderRow(entry, !hasMore && index === preview.length - 1))}
-        {hasMore && showAll ? <DisclosureItem exit>{extra.map(entry => renderRow(entry, false))}</DisclosureItem> : null}
+        <BuddySetGroups
+          entries={showAll ? entries : preview}
+          buddySets={buddySets}
+          onChange={updateBuddySets}
+          onEditSet={(buddySetId) => setBuddySetEdit({ visible: true, buddySetId })}
+          renderRow={(entry, last) => renderRow(entry, last && !hasMore)}
+          query={search}
+          runDisclosure={runDisclosure}
+          prepareDisclosure={prepareDisclosure}
+        />
         {hasMore ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: showAll }}
           accessibilityLabel={showAll ? t('devices.companions.section.showLess') : [
             t('devices.companions.section.showAllA11y', { count: entries.length }), attentionLabel,
@@ -366,6 +450,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
             : <ChevronDown color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.medium} />}
         </Pressable> : null}
       </DisclosureItem>}
+    </>}
     {showFooter ? <View style={styles.footer} /> : null}
   </DisclosureItem> : null;
   return (
@@ -384,6 +469,9 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
         )}
       </MountOnFirstOpen>
       {creator.sheets}
+      <BuddySetSheet visible={buddySetEdit.visible} buddySetId={buddySetEdit.buddySetId}
+        buddySets={buddySets} candidates={buddySetCandidates} onChange={updateBuddySets}
+        onClose={() => setBuddySetEdit({ visible: false, buddySetId: null })} />
     </>
   );
 }
@@ -519,6 +607,7 @@ function sameHosts(a: readonly RemoteResourceHostTarget[], b: readonly RemoteRes
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center' },
   headerToggle: { flex: 1, backgroundColor: 'transparent' },
+  headerAdd: { width: 36, height: 36, marginRight: spacing.sm, alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill },
   strip: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
   cell: { width: STRIP_CELL_WIDTH, minHeight: TEAMMATE_AVATAR.stripTarget, alignItems: 'center', gap: spacing.xs,
     paddingVertical: (TEAMMATE_AVATAR.stripTarget - STRIP_AVATAR_SIZE) / 2, borderRadius: radius.container },

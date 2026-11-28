@@ -145,6 +145,55 @@ describe('伙伴行的间距基线', () => {
   });
 });
 
+/**
+ * 「添加伙伴」子菜单的高度上限:跨文件几何契约(DESIGN.md §8 主窗口最小 800×600)。
+ * 失效后果:成员上限 200 的子菜单不限高时,面板超过 600px 窗口高度,末尾伙伴
+ * 既看不见也滚不到;必须与加入群聊子菜单保持同一有界可滚动面板。jsdom 量不出
+ * Tailwind max-h 的真实像素,因此把这条契约钉在 guard tier(本文件已在
+ * scripts/test-workspaces.config.mjs 的 guard allowlist 中,由 pnpm test:guard 跑)。
+ * 评审依据:PR #11701 的 P2「为添加伙伴子菜单设置可滚动的高度上限」。
+ */
+describe('伙伴集菜单在最小窗口内的可达性', () => {
+  const buddySetGroupsSource = readFileSync(resolve(__dirname, '..', 'BuddySetGroups.tsx'), 'utf8').replace(/\r\n/g, '\n');
+  const addToGroupSource = readFileSync(resolve(__dirname, '..', 'BotAddToGroupMenu.tsx'), 'utf8').replace(/\r\n/g, '\n');
+  const BOUNDED_SUBMENU = 'className="max-h-72 max-w-64 overflow-y-auto"';
+
+  it('添加伙伴子菜单沿用加入群聊子菜单的有界可滚动面板', () => {
+    expect(buddySetGroupsSource).toContain(`<DropdownMenuSubContent ${BOUNDED_SUBMENU}>`);
+    expect(addToGroupSource).toContain(`<DropdownMenuSubContent ${BOUNDED_SUBMENU}>`);
+  });
+
+  // §2 checkpoint, family B (DESIGN.md §14.6): every control scoped to a named
+  // set must carry the set name in its accessible name, and icon-only controls
+  // also need a visible Tip. Failure consequence: with several sets, every pencil
+  // is announced as the same "Buddy set actions", so a screen-reader user cannot
+  // tell which set the action menu will rename or delete — the same ambiguity the
+  // fold button had before the last round. jsdom cannot measure an accessible name
+  // through Radix's Tip/DropdownMenuTrigger, so this cross-file contract stays in
+  // guard tier (this file is in scripts/test-workspaces.config.mjs's allowlist).
+  it('集头动作图标带可见 Tip,折叠按钮与动作入口的可访问名称都保留集名', () => {
+    expect(buddySetGroupsSource).toContain('const actionsLabel = `${set.name}, ${copy.actions}`;');
+    expect(buddySetGroupsSource).toContain('<Tip text={actionsLabel} side="bottom">');
+    expect(buddySetGroupsSource).toContain('aria-label={actionsLabel}');
+    expect(buddySetGroupsSource).not.toContain('aria-label={copy.actions}');
+    expect(buddySetGroupsSource).toContain('aria-label={`${set.name}, ${collapsed ? copy.expand : copy.collapse}`}');
+    expect(buddySetGroupsSource).not.toContain('aria-label={collapsed ? copy.expand : copy.collapse}');
+    // Symmetric half on mobile: the section header must name its set too.
+    const mobileSource = readFileSync(resolve(__dirname, '..', '..', '..', '..', '..', '..', 'mobile', 'src', 'session', 'BuddySetGroups.tsx'), 'utf8').replace(/\r\n/g, '\n');
+    expect(mobileSource).toContain('accessibilityLabel={`${set.name}, ${collapsed ? copy.expand : copy.collapse}`}');
+  });
+});
+
+// DESIGN.md §14.6 键盘可达性:Radix 的 typeahead 用菜单项文本匹配。失效后果:
+// 已选成员文本带装饰勾号「✓」,按姓名键入时无法定位到该成员,键盘用户无法
+// 从长列表里找到要移出的伙伴。textValue 把检索文本与装饰内容解耦。
+describe('伙伴集菜单的键盘检索文本', () => {
+  const buddySetGroupsSource = readFileSync(resolve(__dirname, '..', 'BuddySetGroups.tsx'), 'utf8').replace(/\r\n/g, '\n');
+  it('成员菜单项用纯姓名作 textValue', () => {
+    expect(buddySetGroupsSource).toContain('textValue={buddy.name}');
+  });
+});
+
 describe('群聊与伙伴行同一套几何', () => {
   const groupRow = readFileSync(
     resolve(__dirname, '..', 'BotGroupSidebarRow.tsx'),
