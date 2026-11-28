@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { REMOTE_DESKTOP_CHANNEL, type RemoteDesktopCapabilities } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { extractIpcError } from '@/utils/ipcError';
@@ -12,9 +12,16 @@ import { isTransientRemoteError } from '@/features/device-link/refreshRemoteSess
 
 const CHECK_INTERRUPTED = 'remoteDesktop.shortcut.checkInterrupted';
 const OFFLINE = 'remoteDesktop.shortcut.offline';
+const DISABLED = 'remoteDesktop.disabled';
 // Probe outcomes that may change without a presence edge: repeat them when the
 // shortcut is revealed instead of keeping a stale failure.
-const RETRYABLE_PROBE_REASONS = new Set([CHECK_INTERRUPTED, OFFLINE]);
+const RETRYABLE_PROBE_REASONS = new Set([
+  CHECK_INTERRUPTED,
+  OFFLINE,
+  DISABLED,
+  'remoteDesktop.shortcut.screenRecordingRequired',
+  'remoteDesktop.shortcut.noDisplay',
+]);
 
 export function remoteDesktopUnavailableReason(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -22,7 +29,7 @@ export function remoteDesktopUnavailableReason(value: unknown): string | null {
   const caps = value as Partial<RemoteDesktopCapabilities>;
   if (caps.version !== 1) return 'remoteDesktop.upgrade';
   if (typeof caps.enabled !== 'boolean') return 'remoteDesktop.shortcut.checkFailed';
-  if (!caps.enabled) return 'remoteDesktop.disabled';
+  if (!caps.enabled) return DISABLED;
   if (caps.permissions?.screenRecording === 'missing')
     return 'remoteDesktop.shortcut.screenRecordingRequired';
   if (
@@ -53,7 +60,7 @@ export function remoteDesktopAvailabilityError(error: unknown): string {
   if (code.includes('CONTROL_DISABLED')) return 'remoteDesktop.shortcut.controlDisabled';
   if (code.includes('REMOTE_DISABLED')) return 'remoteDesktop.remoteDisabled';
   if (code.includes('CHANNEL_NOT_ALLOWED')) return 'remoteDesktop.upgrade';
-  if (code.includes('DESKTOP_DISABLED')) return 'remoteDesktop.disabled';
+  if (code.includes('DESKTOP_DISABLED') || code.includes('DESKTOP_UNAVAILABLE')) return DISABLED;
   if (code.includes('PEER_OFFLINE') || code.includes('DEVICE_OFFLINE')) return OFFLINE;
   // A link that is reconnecting, congested or behind an open circuit says
   // nothing about the remote desktop itself; the user can check again.
@@ -64,6 +71,120 @@ export function remoteDesktopAvailabilityError(error: unknown): string {
   )
     return CHECK_INTERRUPTED;
   return 'remoteDesktop.shortcut.checkFailed';
+}
+
+interface ProbeResult {
+  scope: string;
+  checking: boolean;
+  reason: string | null;
+  failures: number;
+  retryAt: number;
+}
+
+// Shared by the sidebar and task shortcut, including their unmounted intervals.
+// This is a renderer read-cache, never an authorization or transport decision.
+const probes = new Map<string, ProbeResult>();
+const probeListeners = new Set<() => void>();
+let lifecycleApi: typeof window.electronAPI.deviceLink | null = null;
+let stopLifecycle: (() => void) | null = null;
+
+function notifyProbes(): void {
+  probeListeners.forEach((listener) => listener());
+}
+
+export function clearRemoteDesktopAvailability(): void {
+  probes.clear();
+  notifyProbes();
+}
+
+function subscribeProbes(listener: () => void): () => void {
+  const api = window.electronAPI.deviceLink;
+  if (lifecycleApi !== api) {
+    stopLifecycle?.();
+    lifecycleApi = api;
+    probes.clear();
+    // Keep these listeners across component remounts so a logout or offline
+    // transition cannot leave a previous connection's cached capability behind.
+    const status = api.onStatusChanged(({ status }) => {
+      if (status === 'stopped' || status === 'connecting') clearRemoteDesktopAvailability();
+    });
+    const presence = api.onPresenceChanged(({ deviceId, online }) => {
+      if (!online && probes.delete(deviceId)) notifyProbes();
+    });
+    stopLifecycle = () => {
+      status();
+      presence();
+    };
+  }
+  probeListeners.add(listener);
+  return () => {
+    probeListeners.delete(listener);
+  };
+}
+
+function saveProbeFailure(deviceId: string, scope: string, reason: string): void {
+  const previous = probes.get(deviceId);
+  const failures = previous?.scope === scope ? previous.failures + 1 : 1;
+  probes.set(deviceId, {
+    scope,
+    checking: false,
+    reason,
+    failures,
+    retryAt:
+      Date.now() +
+      (reason === DISABLED ? 30_000 : Math.min(2_000 * 2 ** Math.min(failures - 1, 7), 120_000)),
+  });
+  notifyProbes();
+}
+
+function probeDesktop(deviceId: string, scope: string, retry = false): void {
+  const previous = probes.get(deviceId);
+  if (previous?.scope === scope) {
+    if (
+      previous.checking ||
+      !retry ||
+      !RETRYABLE_PROBE_REASONS.has(previous.reason ?? '') ||
+      Date.now() < previous.retryAt
+    )
+      return;
+  }
+  const pending: ProbeResult = {
+    scope,
+    checking: true,
+    reason: null,
+    failures: previous?.scope === scope ? previous.failures : 0,
+    retryAt: 0,
+  };
+  probes.set(deviceId, pending);
+  notifyProbes();
+  void Promise.resolve()
+    .then(() =>
+      probes.get(deviceId) === pending
+        ? window.electronAPI.deviceLink.invoke(deviceId, REMOTE_DESKTOP_CHANNEL, [
+            { op: 'capabilities' },
+          ])
+        : undefined,
+    )
+    .then((value) => {
+      if (probes.get(deviceId) !== pending) return;
+      const reason = remoteDesktopUnavailableReason(value);
+      if (reason && RETRYABLE_PROBE_REASONS.has(reason)) {
+        saveProbeFailure(deviceId, scope, reason);
+        return;
+      }
+      probes.set(deviceId, {
+        ...pending,
+        checking: false,
+        reason,
+        failures: 0,
+        retryAt: 0,
+      });
+      notifyProbes();
+    })
+    .catch((error: unknown) => {
+      if (probes.get(deviceId) === pending)
+        saveProbeFailure(deviceId, scope, remoteDesktopAvailabilityError(error));
+    });
 }
 
 export function useRemoteDesktopAvailability(deviceId: string) {
@@ -96,57 +217,49 @@ export function useRemoteDesktopAvailability(deviceId: string) {
               : unresponsive.has(deviceId)
                 ? 'remoteDesktop.shortcut.unresponsive'
                 : null;
-  // Presence/permission/responsiveness changes invalidate a check; hover and
-  // directory object refreshes do not, except that `retry` repeats a probe the
-  // link interrupted. Keep this scoped to the mounted device row, not disk.
   const present = !!device;
-  const version = device?.appVersion;
-  const platform = device?.platform;
-  const [attempt, setAttempt] = useState(0);
-  const retry = useCallback(() => setAttempt((value) => value + 1), []);
-  const scope = useMemo(
-    () => ({ deviceId, present, blockedReason, version, platform, attempt }),
-    [deviceId, present, blockedReason, version, platform, attempt],
+  const scope = JSON.stringify([
+    deviceId,
+    present,
+    blockedReason,
+    device?.appVersion,
+    device?.platform,
+  ]);
+  const checked = useSyncExternalStore(
+    subscribeProbes,
+    useCallback(() => {
+      const value = probes.get(deviceId);
+      return value?.scope === scope ? value : undefined;
+    }, [deviceId, scope]),
   );
-  const [checked, setChecked] = useState<{ scope: typeof scope; reason: string | null } | null>(
-    null,
-  );
+  const retry = useCallback(() => {
+    if (present && !blockedReason) probeDesktop(deviceId, scope, true);
+  }, [deviceId, scope, present, blockedReason]);
 
-  // Probe when an eligible device first appears, independently of pointer/focus.
   useEffect(() => {
-    if (!scope.present || scope.blockedReason) return;
-    let current = true;
-    void Promise.resolve()
-      .then(() =>
-        current
-          ? window.electronAPI.deviceLink.invoke(scope.deviceId, REMOTE_DESKTOP_CHANNEL, [
-              { op: 'capabilities' },
-            ])
-          : undefined,
-      )
-      .then((value) => {
-        if (current) setChecked({ scope, reason: remoteDesktopUnavailableReason(value) });
-      })
-      .catch((error: unknown) => {
-        if (current) setChecked({ scope, reason: remoteDesktopAvailabilityError(error) });
-      });
-    return () => {
-      current = false;
-    };
-  }, [scope]);
+    if (!present || blockedReason) {
+      if (probes.delete(deviceId)) notifyProbes();
+      return;
+    }
+    // Remounts reuse both settled failures and an in-flight read. Transient
+    // failures are only retried on user interaction, with per-device backoff.
+    probeDesktop(deviceId, scope);
+  }, [deviceId, scope, present, blockedReason, checked]);
 
-  const reason = blockedReason ?? (checked?.scope === scope ? checked.reason : null);
+  const reason = blockedReason ?? checked?.reason ?? null;
   return {
-    checking: !reason && checked?.scope !== scope,
-    available: !blockedReason && checked?.scope === scope && checked.reason === null,
+    checking: !reason && (!checked || checked.checking),
+    available: !blockedReason && !!checked && !checked.checking && checked.reason === null,
     reason,
     retryable:
       !blockedReason &&
-      checked?.scope === scope &&
+      !!checked &&
+      !checked.checking &&
       RETRYABLE_PROBE_REASONS.has(checked.reason ?? ''),
     retry,
     markUnavailable: (error: unknown) => {
-      setChecked({ scope, reason: remoteDesktopAvailabilityError(error) });
+      if (!checked || probes.get(deviceId) !== checked) return;
+      saveProbeFailure(deviceId, scope, remoteDesktopAvailabilityError(error));
     },
   };
 }
