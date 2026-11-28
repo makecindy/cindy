@@ -74,10 +74,13 @@ import type { DurableOutboxRecord } from "./durableOutbox";
 import type { RemoteSession } from "./types";
 import {
   canConnectOutboxPeer,
+  clearOutboxSessionHandoffs,
   createOutboxMessageLeases,
   createOutboxSessionAccess,
   outboxNeedsReconciliation,
   outboxSessionKey,
+  peekOutboxSessionClearBoundary,
+  takeOutboxSessionHandoff,
 } from "./mobileOutboxSessionAdapter";
 
 /** Runs only while the OS gives the app execution time; foreground/reconnect resume the same ledger. */
@@ -117,6 +120,25 @@ export function MobileOutboxBridge() {
     const needsReconciliation = (record: DurableOutboxRecord) =>
       outboxNeedsReconciliation(record,
         findRemoteHistoryView(record.deviceId, record.item.sessionId)?.isActive() === true);
+    // Learned from this host's own projection / enqueue replies. A first send in
+    // a task whose boundary is known needs no projection round trip.
+    const durableHosts = new Map<string, number>();
+    const knownClearBoundaries = new Map<string, { epoch: number; value: number | null }>();
+    // What a host answered belongs to the connection it answered on: a host that
+    // restarted or was replaced by an older build must be asked again.
+    const connectionEpochFor = (deviceId: string) =>
+      latest.current.link.getConnectionEpoch?.(deviceId)
+      ?? latest.current.link.getConnectionState?.(deviceId).connectionEpoch
+      ?? latest.current.link.connectionEpoch;
+    const learnProjection = (r: DurableOutboxRecord, projection: unknown, epoch: number) => {
+      if (!projection || typeof projection !== 'object') return;
+      const value = projection as { inputDeliveryVersion?: unknown; clearBoundaryMs?: unknown };
+      if (value.inputDeliveryVersion === 1) durableHosts.set(r.deviceId, epoch);
+      if (value.clearBoundaryMs === null
+        || (typeof value.clearBoundaryMs === 'number' && Number.isFinite(value.clearBoundaryMs))) {
+        knownClearBoundaries.set(outboxSessionKey(r), { epoch, value: value.clearBoundaryMs });
+      }
+    };
     const { hidden, invokeOwned, readSessionOnce, canRun, sessionPolicy } = createOutboxSessionAccess({
       getSessions: () => remoteSessionStore.getSessions(),
       getRecords: () => mobileDurableOutbox.getSnapshot(),
@@ -124,6 +146,24 @@ export function MobileOutboxBridge() {
       guard,
       invoke: (deviceId, channel, args, options) => latest.current.link.invoke(deviceId, channel, args, options),
       readSession: (record) => maker(record).getSession(record.item.sessionId),
+      takeSeededSession: (record) => {
+        const epoch = connectionEpochFor(record.deviceId);
+        const session = takeOutboxSessionHandoff({
+          accountKey: owner.accountKey,
+          deviceId: record.deviceId,
+          sessionId: record.item.sessionId,
+          clientId: record.item.clientId,
+          connectionEpoch: epoch,
+        });
+        if (
+          session
+          && session.clearedAt == null
+          && knownClearBoundaries.get(outboxSessionKey(record))?.epoch !== epoch
+        ) {
+          knownClearBoundaries.set(outboxSessionKey(record), { epoch, value: null });
+        }
+        return session;
+      },
       isForeground: () => AppState.currentState !== "background" && AppState.currentState !== "inactive",
       canContinueInBackground: (record) => canDeliverNewSessionInBackground(record) || hasOutboxBackgroundSend(record),
       canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
@@ -147,23 +187,6 @@ export function MobileOutboxBridge() {
         deviceId: r.deviceId,
         invoke: invokeOwned(r, options),
       });
-    // Learned from this host's own projection / enqueue replies. A first send in
-    // a task whose boundary is known needs no projection round trip.
-    const durableHosts = new Map<string, number>();
-    const knownClearBoundaries = new Map<string, { epoch: number; value: number | null }>();
-    // What a host answered belongs to the connection it answered on: a host that
-    // restarted or was replaced by an older build must be asked again.
-    const connectionEpochFor = (deviceId: string) =>
-      latest.current.link.getConnectionState?.(deviceId).connectionEpoch ?? latest.current.link.connectionEpoch;
-    const learnProjection = (r: DurableOutboxRecord, projection: unknown, epoch: number) => {
-      if (!projection || typeof projection !== 'object') return;
-      const value = projection as { inputDeliveryVersion?: unknown; clearBoundaryMs?: unknown };
-      if (value.inputDeliveryVersion === 1) durableHosts.set(r.deviceId, epoch);
-      if (value.clearBoundaryMs === null
-        || (typeof value.clearBoundaryMs === 'number' && Number.isFinite(value.clearBoundaryMs))) {
-        knownClearBoundaries.set(outboxSessionKey(r), { epoch, value: value.clearBoundaryMs });
-      }
-    };
     const messageLeases = createOutboxMessageLeases({
       isCurrent,
       getRecords: () => mobileDurableOutbox.getSnapshot(),
@@ -235,8 +258,20 @@ export function MobileOutboxBridge() {
       },
       knownProjection: (r) => {
         const epoch = connectionEpochFor(r.deviceId);
-        const boundary = knownClearBoundaries.get(outboxSessionKey(r));
-        if (durableHosts.get(r.deviceId) !== epoch || boundary?.epoch !== epoch) return undefined;
+        if (durableHosts.get(r.deviceId) !== epoch) return undefined;
+        let boundary = knownClearBoundaries.get(outboxSessionKey(r));
+        if (boundary?.epoch !== epoch) {
+          const handedOffBoundary = peekOutboxSessionClearBoundary({
+            accountKey: owner.accountKey,
+            deviceId: r.deviceId,
+            sessionId: r.item.sessionId,
+            clientId: r.item.clientId,
+            connectionEpoch: epoch,
+          });
+          if (handedOffBoundary === undefined) return undefined;
+          boundary = { epoch, value: handedOffBoundary };
+          knownClearBoundaries.set(outboxSessionKey(r), boundary);
+        }
         return {
           ...EMPTY_INPUT_PROJECTION,
           sessionId: r.item.sessionId,
@@ -490,6 +525,7 @@ export function MobileOutboxBridge() {
       if (runnerRef.current === delivery) runnerRef.current = null;
       off();
       offSessions();
+      clearOutboxSessionHandoffs();
       clearInterval(timer);
       appState.remove();
       messageLeases.dispose();

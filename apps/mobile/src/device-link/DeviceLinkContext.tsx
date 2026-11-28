@@ -248,6 +248,8 @@ export interface DeviceLinkContextValue {
   /** The official connection used by shared tasks; the primary connection in official mode. */
   sharedTaskConnection?: DeviceLinkConnectionState;
   getConnectionState?(deviceId: string): DeviceLinkConnectionState;
+  /** Live ref-backed connection epoch for async handoffs that outlive a screen. */
+  getConnectionEpoch?(deviceId: string): number;
   /** Current online relay capability; undefined while not connected. */
   sharedTaskAvailable?: boolean;
   /** Peers with queued, running, or retrying recovery work. Read-only UI projection. */
@@ -2423,6 +2425,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     sharedTaskAvailable,
     sharedTaskConnection,
     getConnectionState,
+    getConnectionEpoch: connectionEpochFor,
     recoveringDeviceIds,
     connectionIssue,
     presenceVersion,
@@ -2467,6 +2470,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     sharedTaskAvailable,
     sharedTaskConnection,
     getConnectionState,
+    connectionEpochFor,
     subscribe,
     unsubscribe,
     subscribeRemoteAgentRoster,

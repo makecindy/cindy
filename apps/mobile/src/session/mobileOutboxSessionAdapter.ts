@@ -37,6 +37,81 @@ export function outboxNeedsReconciliation(record: DurableOutboxRecord, isHistory
   return !isDurableOutboxHandedOff(record) || !!record.cancelRequested || isHistoryActive;
 }
 
+const OUTBOX_SESSION_HANDOFF_TTL_MS = 15_000;
+const MAX_OUTBOX_SESSION_HANDOFFS = 32;
+
+export interface OutboxSessionHandoffKey {
+  accountKey: string;
+  deviceId: string;
+  sessionId: string;
+  clientId: string;
+  connectionEpoch: number;
+}
+
+export interface OutboxSessionHandoffEntry extends OutboxSessionHandoffKey {
+  session: RemoteSession;
+}
+
+const handedOffOutboxSessions = new Map<string, { at: number; connectionEpoch: number; session: RemoteSession }>();
+
+function outboxSessionHandoffMapKey(
+  key: Pick<OutboxSessionHandoffKey, 'accountKey' | 'deviceId' | 'sessionId' | 'clientId'>,
+): string {
+  return JSON.stringify([key.accountKey, key.deviceId, key.sessionId, key.clientId]);
+}
+
+function pruneHandedOffOutboxSessions(now: number): void {
+  for (const [key, entry] of handedOffOutboxSessions) {
+    if (now - entry.at >= OUTBOX_SESSION_HANDOFF_TTL_MS || handedOffOutboxSessions.size > MAX_OUTBOX_SESSION_HANDOFFS) {
+      handedOffOutboxSessions.delete(key);
+    }
+  }
+}
+
+/** Share the authoritative session row just read by new-session creation with the immediate outbox handoff. */
+export function seedOutboxSessionHandoff(entry: OutboxSessionHandoffEntry, now = Date.now()): void {
+  if (!entry.accountKey || !entry.deviceId || !entry.sessionId || !entry.clientId) return;
+  if (entry.session.id !== entry.sessionId) return;
+  const mapKey = outboxSessionHandoffMapKey(entry);
+  handedOffOutboxSessions.delete(mapKey);
+  handedOffOutboxSessions.set(mapKey, { at: now, connectionEpoch: entry.connectionEpoch, session: entry.session });
+  pruneHandedOffOutboxSessions(now);
+}
+
+/** Peek the never-cleared boundary from a fresh creation handoff on the same connection epoch. */
+export function peekOutboxSessionClearBoundary(
+  query: OutboxSessionHandoffKey,
+  now = Date.now(),
+): null | undefined {
+  const mapKey = outboxSessionHandoffMapKey(query);
+  const entry = handedOffOutboxSessions.get(mapKey);
+  if (!entry) return undefined;
+  if (now - entry.at >= OUTBOX_SESSION_HANDOFF_TTL_MS || entry.connectionEpoch !== query.connectionEpoch) {
+    handedOffOutboxSessions.delete(mapKey);
+    return undefined;
+  }
+  return entry.session.clearedAt == null ? null : undefined;
+}
+
+/** Consume the handed-off session once so delivery skips a duplicate `local-db:sessions:get` round trip. */
+export function takeOutboxSessionHandoff(
+  query: OutboxSessionHandoffKey,
+  now = Date.now(),
+): RemoteSession | undefined {
+  const mapKey = outboxSessionHandoffMapKey(query);
+  const entry = handedOffOutboxSessions.get(mapKey);
+  if (!entry) return undefined;
+  handedOffOutboxSessions.delete(mapKey);
+  if (now - entry.at >= OUTBOX_SESSION_HANDOFF_TTL_MS || entry.connectionEpoch !== query.connectionEpoch) {
+    return undefined;
+  }
+  return entry.session.id === query.sessionId ? entry.session : undefined;
+}
+
+export function clearOutboxSessionHandoffs(): void {
+  handedOffOutboxSessions.clear();
+}
+
 export interface OutboxSessionAccessDeps {
   getSessions(): readonly SessionSource[];
   getRecords(): readonly DurableOutboxRecord[];
@@ -49,6 +124,7 @@ export interface OutboxSessionAccessDeps {
     options: DeviceLinkInvokeOptions & { preSend(): void },
   ): Promise<unknown>;
   readSession(record: DurableOutboxRecord): Promise<RemoteSession>;
+  takeSeededSession?(record: DurableOutboxRecord): RemoteSession | undefined;
   isForeground(): boolean;
   canContinueInBackground?(record: DurableOutboxRecord): boolean;
   canConnect(deviceId: string): boolean;
@@ -87,6 +163,19 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
     for (const [other, entry] of sessionReads) if (now - entry.at >= 2_000) sessionReads.delete(other);
     const cached = sessionReads.get(key);
     if (cached) return cached.read;
+    const seeded = deps.takeSeededSession?.(record);
+    if (seeded && seeded.id === record.item.sessionId) {
+      try {
+        deps.guard();
+        if (!deps.getRecords().includes(record)) throw new Error('OUTBOX_STALE_WRITE');
+        if (hidden(record)) throw new Error('OUTBOX_SESSION_DISABLED');
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      const read = Promise.resolve(seeded);
+      sessionReads.set(key, { at: now, read });
+      return read;
+    }
     const read = deps.readSession(record);
     sessionReads.set(key, { at: now, read });
     read.catch(() => {

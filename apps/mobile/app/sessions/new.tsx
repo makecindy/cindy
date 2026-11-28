@@ -61,6 +61,7 @@ import {
   retractSubmittedDialogueCreation,
   type SubmittedDialogueTarget,
 } from '@/session/mobileDurableOutbox';
+import { seedOutboxSessionHandoff } from '@/session/mobileOutboxSessionAdapter';
 
 import { needsHostCreation, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
@@ -600,6 +601,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const auth = useAuth();
   const outboxOwner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
   const {
+    getConnectionEpoch,
     getPresenceAvailability,
     invoke,
     openLink,
@@ -4860,11 +4862,22 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         ...(onModelGroupSessionCreated ? { onSessionCreated: onModelGroupSessionCreated } : {}),
         transport: {
           maker,
-          handoffFirstMessage: useDurableCreation ? async (item) => {
+          getConnectionEpoch,
+          handoffFirstMessage: useDurableCreation ? async (item, handoff) => {
             if (!isCurrentOwner()) throw new Error('OUTBOX_OWNER_CHANGED');
             const record = getCurrentMobileOutboxRecords().find((r) => r.item.sessionId === sessionId && r.item.clientId === firstMessageClientId);
             if (!record) throw new Error('OUTBOX_STALE_WRITE');
             await mobileDurableOutbox.update(record, { template: item, state: 'queued', suspended: false, error: undefined });
+            if (handoff?.session && handoff.connectionEpoch !== undefined && isCurrentOwner()) {
+              seedOutboxSessionHandoff({
+                accountKey: authOwnerAtCreate.accountKey,
+                deviceId: deviceIdSnapshot,
+                sessionId,
+                clientId: firstMessageClientId,
+                connectionEpoch: handoff.connectionEpoch,
+                session: handoff.session,
+              });
+            }
           } : undefined,
           openLink,
           subscribe,
@@ -4953,6 +4966,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     finishVoiceRecording,
     flushRecoveredDraft,
     leaveForeignOutboxRecovery,
+    getConnectionEpoch,
     getPresenceAvailability,
     maker,
     openLink,
