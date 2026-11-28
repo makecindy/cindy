@@ -17,10 +17,19 @@ import { visiblePluginEngineChoices, type PluginEngineChoice } from '@/lib/plugi
 import type { ModelGroupsConfig } from '../../../../shared/modelGroups';
 import { refreshModelGroups, saveModelGroups } from '../modelGroupsClient';
 import {
+  filterRemoteDeviceModelGroupsConfig,
   implicitSourceRouteSelection,
+  userDefinedModelGroupRoutes,
   withSourceRoutePluginEngines,
   withSourceRouteProviders,
 } from '../sourceRouteProviders';
+import {
+  buildPanelModelGroups,
+  resolveModelSelectorDeviceGroups,
+  resolveModelSelectorRoutingMode,
+  resolveModelSelectorTriggerRouting,
+  resolveStoredSourceRouteIdentity,
+} from '../../../components/new-chat/modelSelectorSmartRouting';
 
 const provider = (id: string, modelIds: string[]) => ({
   id, name: id, source: 'builtin', agents: ['codex'], auth: { method: 'api-key' }, connected: true, routing: { codex: {} },
@@ -302,6 +311,235 @@ describe('provider routes in the model picker', () => {
     expect(autoListed.providers[0]?.models.codex?.map((m) => m.id)).toEqual(['gpt-6-sol', 'gpt-6-astra', 'gpt-5-mini']);
     const orderListed = withSourceRouteProviders(multiProviders, makeCfg('order'));
     expect(orderListed.providers[0]?.models.codex?.map((m) => m.id)).toEqual(['gpt-5-mini', 'gpt-6-astra', 'gpt-6-sol']);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：withSourceRouteProviders / isModelVisible / withSourceRoutePluginEngines(keepMember)。
+  // - Bug／规则依据：2026-11-28 排查合并路由在首成员隐藏/停用时整体消失、sroute: 模型忽略真实成员可见性覆盖、
+  //   以及已解除托管的 ACP 插件引擎被强行收进 sroute: 的问题。
+  // - 现有覆盖缺口：此前用例中所有成员均为 connected 且未隐藏，未测首成员 hidden/suspended、成员级可见性与 ACP keepMember。
+  // - 最小失败输入：首成员 hidden=true/suspended=true 而次成员正常；成员模型 defaultEnabled=false 但在该成员上被显式启用；
+  //   ACP 会话 keepMember=true 运行在某成员上。
+  // - tier：unit（纯函数，Node 环境）。
+  it('does not inherit hidden/suspended from first member, evaluates member visibility, and respects ACP keepMember', () => {
+    const hiddenFirst = {
+      ...provider('openai', ['gpt-6-luna']),
+      hidden: true,
+      suspended: true,
+      subscriptionAccountPool: 'openai' as const,
+      models: { codex: [{ id: 'gpt-6-luna', name: 'gpt-6-luna', defaultEnabled: false, efforts: [] }] },
+    } as unknown as ProviderView;
+    const healthySecond = {
+      ...provider('byok-1', ['byok/gpt-6-luna']),
+      models: { codex: [{ id: 'byok/gpt-6-luna', name: 'byok/gpt-6-luna', defaultEnabled: false, efforts: [] }] },
+    } as unknown as ProviderView;
+    const listed = withSourceRouteProviders([hiddenFirst, healthySecond], config());
+    const merged = listed.providers.find((item) => item.id === 'sroute:auto:openai')!;
+    expect(merged.hidden).toBeUndefined();
+    expect(merged.suspended).toBeUndefined();
+    expect(merged.subscriptionAccountPool).toBeUndefined();
+    expect(merged.connected).toBe(true);
+    expect(listed.hit('sroute:auto:openai', 'byok/gpt-6-luna')?.candidate.providerId).toBe('byok-1');
+    expect(listed.usageMember('sroute:auto:openai')?.provider.id).toBe('byok-1');
+    // 任一真实成员显式启用该模型时，合并行可见；全部成员关闭时隐藏。
+    expect(
+      listed.isModelVisible('sroute:auto:openai', 'byok/gpt-6-luna', 'codex', (member) => member.providerId === 'byok-1'),
+    ).toBe(true);
+    expect(
+      listed.isModelVisible('sroute:auto:openai', 'byok/gpt-6-luna', 'codex', () => false),
+    ).toBe(false);
+
+    const localAgy: PluginEngineChoice = {
+      key: 'antigravity:agy', providerId: 'acp-plugin:antigravity:agy', ghostId: 'antigravity', harnessId: 'agy',
+      name: 'Antigravity', availability: { state: 'available' },
+      models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high'] }],
+      permissionModes: [], defaultPermissionMode: 'ask',
+    };
+    const sharedAgy: PluginEngineChoice = { ...localAgy, deviceId: 'share:dash-agy', deviceName: 'dash' };
+    const acpConfig: ModelGroupsConfig = {
+      sourceRoutes: [{
+        id: 'auto:antigravity', name: 'Antigravity', strategy: 'expiring', auto: true,
+        sources: [
+          { providerId: 'acp-plugin:antigravity:agy' },
+          { providerId: 'acp-plugin:antigravity:agy', agentDeviceId: 'share:dash-agy' },
+        ],
+      }],
+      routes: [{
+        id: 'src:neon', name: 'Gemini 4 Neon', strategy: 'expiring',
+        parent: { id: 'auto:antigravity', name: 'Antigravity' },
+        candidates: [
+          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
+          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
+        ],
+      }],
+    };
+    const detachedAcp = withSourceRoutePluginEngines(
+      [localAgy, sharedAgy],
+      acpConfig,
+      { providerId: 'acp-plugin:antigravity:agy', modelId: 'gemini-4-neon', deviceId: 'share:dash-agy', keepMember: true },
+    );
+    expect(detachedAcp.engines.some((item) => item.providerId === 'acp-plugin:antigravity:agy' && item.deviceId === 'share:dash-agy')).toBe(true);
+    expect(detachedAcp.shownAs('acp-plugin:antigravity:agy', null, 'share:dash-agy')).toBeNull();
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：resolveModelSelectorRoutingMode / resolveModelSelectorDeviceGroups /
+//   buildPanelModelGroups / resolveModelSelectorTriggerRouting / resolveStoredSourceRouteIdentity /
+//   filterRemoteDeviceModelGroupsConfig。
+// - Bug／规则依据：model-groups.md §3.1、§3.5、§6.3；2026-11-28 整理模型选择器智能路由逻辑时发现：
+//   1) 远程设备「其他电脑」格混入远端供应商路由展开项与不可远程调用的路由；
+//   2) 远控无 remoteAgent 时 sourceRouteCatalogHostId 落成 undefined 导致跨机成员查错宿主；
+//   3) 面板未启用合并路由时仍错把 route.parent 从「智能路由」格剥掉；
+//   4) 远程设备路由 ID 与本机展开路由冲突时触发器误判为本机供应商路由；
+//   5) 种子收藏可能把虚拟 sroute: 写入本机收藏。
+// - 现有覆盖缺口：此前无针对模型选择器智能路由编排层的纯函数单测。
+// - 最小失败输入：远程电脑只有展开路由 + 非远程调用路由；deviceIdProp 非空但 remoteAgent 缺省；
+//   onAttach 无 onUnifiedSelect；active 带 deviceId；sroute: 仅含远端候选。
+// - tier：unit（纯函数，Node 环境）。
+describe('modelSelectorSmartRouting', () => {
+  it('filters remote device routes to user-defined remote-invocable modes while keeping hours targets and active selection', () => {
+    const remoteConfig: ModelGroupsConfig = {
+      sourceRoutes: [{
+        id: 'auto:openai', name: 'OpenAI', strategy: 'expiring', auto: true,
+        sources: [{ providerId: 'openai' }],
+      }],
+      routes: [
+        // 展开供应商路由：绝不进「其他电脑」模式格。
+        {
+          id: 'src:gpt', name: 'GPT-6', strategy: 'expiring',
+          parent: { id: 'auto:openai', name: 'OpenAI' },
+          candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-6' }],
+        },
+        // 本机允许远程调用的路由：保留。
+        {
+          id: 'r-ok', name: 'Remote OK', strategy: 'order',
+          candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-6' }],
+        },
+        // 仅含未开远程调用供应商的路由：过滤掉。
+        {
+          id: 'r-private', name: 'Private Only', strategy: 'order',
+          candidates: [{ agentKind: 'codex', providerId: 'local-only', model: 'gpt-6' }],
+        },
+        // 仅含它机成员的路由：过滤掉。
+        {
+          id: 'r-hop', name: 'Second Hop', strategy: 'order',
+          candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-6', agentDeviceId: 'third-pc' }],
+        },
+        // 自身候选不可达，但时段例外指向可达路由 r-ok：保留。
+        {
+          id: 'r-hours', name: 'Night Redirect', strategy: 'order',
+          candidates: [{ agentKind: 'codex', providerId: 'local-only', model: 'gpt-6' }],
+          exceptions: [{ when: { type: 'hours', from: 22, to: 8 }, use: { type: 'route', routeId: 'r-ok' } }],
+        },
+      ],
+    };
+    expect(userDefinedModelGroupRoutes(remoteConfig).map((r) => r.id)).toEqual(['r-ok', 'r-private', 'r-hop', 'r-hours']);
+    const filtered = filterRemoteDeviceModelGroupsConfig(remoteConfig, {
+      remoteInvocableProviderIds: new Set(['openai']),
+    });
+    expect(filtered.routes.map((r) => r.id)).toEqual(['r-ok', 'r-hours']);
+
+    const choices = resolveModelSelectorDeviceGroups({
+      devices: [
+        { deviceId: 'mac-b', name: 'Mac B', config: remoteConfig },
+        { deviceId: 'mac-c', name: 'Mac C', config: { routes: [remoteConfig.routes[0]!] } },
+      ],
+      remoteAgentGroups: [
+        { deviceId: 'mac-b', providers: [provider('openai', ['gpt-6'])] },
+        { deviceId: 'mac-c', providers: [provider('openai', ['gpt-6'])] },
+      ],
+      active: { type: 'route', id: 'r-private', deviceId: 'mac-b' },
+    });
+    // mac-c 只有展开路由，整台被剔除；mac-b 保留可达路由及当前已选中的 r-private。
+    expect(choices.map((d) => d.deviceId)).toEqual(['mac-b']);
+    expect(choices[0]?.config.routes.map((r) => r.id)).toEqual(['r-ok', 'r-private', 'r-hours']);
+  });
+
+  it('keeps routing mode, catalog host fallback, panel sanitization, trigger projection, and stored identity consistent', () => {
+    const cfg = config();
+    // 远控会话无 remoteAgent 时，跨机目录宿主必须回退到 deviceIdProp。
+    const controlledSession = resolveModelSelectorRoutingMode({
+      modelGroups: { config: cfg, active: null, onSelect: vi.fn(), onPickMerged: vi.fn() },
+      hasUnifiedSelect: false,
+      providersOverride: false,
+      sshCatalog: false,
+      currentProviderId: 'openai',
+      modelId: 'gpt-6-luna',
+      remoteAgentDeviceId: null,
+      deviceIdProp: 'host-mac',
+    });
+    expect(controlledSession.mergedSourceRoutesEnabled).toBe(true);
+    expect(controlledSession.sourceRouteCatalogHostId).toBe('host-mac');
+    expect(controlledSession.keepCurrentMember).toBe(true);
+
+    // onAttach 但缺少 onUnifiedSelect（旧端退化）时，不启用合并供应商路由，也不剥离 route.parent。
+    const degradedDraft = resolveModelSelectorRoutingMode({
+      modelGroups: { config: cfg, active: null, onSelect: vi.fn(), onAttach: vi.fn() },
+      hasUnifiedSelect: false,
+      providersOverride: false,
+      sshCatalog: false,
+      currentProviderId: 'openai',
+      modelId: 'gpt-6-luna',
+      remoteAgentDeviceId: null,
+    });
+    expect(degradedDraft.mergedSourceRoutesEnabled).toBe(false);
+    const panelGroups = buildPanelModelGroups({
+      modelGroups: { config: cfg, active: null, onSelect: vi.fn(), onAttach: vi.fn() },
+      mergedSourceRoutesEnabled: degradedDraft.mergedSourceRoutesEnabled,
+      devices: [],
+    });
+    expect(panelGroups?.config.routes.map((r) => r.id)).toEqual(['src:luna']);
+
+    // 选中远程设备的路由时（active.deviceId 非空），即使 ID 与本机展开路由相同也不误认作本机供应商路由。
+    const remoteChoiceTrigger = resolveModelSelectorTriggerRouting({
+      modelGroups: {
+        config: cfg,
+        active: { type: 'route', id: 'src:luna', deviceId: 'mac-b' },
+        onSelect: vi.fn(),
+        onAttach: vi.fn(),
+        devices: [{
+          deviceId: 'mac-b',
+          name: 'Mac B',
+          config: { routes: [{ id: 'src:luna', name: 'Remote Mode', strategy: 'order', candidates: [] }] },
+        }],
+      },
+      hasUnifiedSelect: true,
+      providersOverride: false,
+      sshCatalog: false,
+      checkSavedSource: false,
+      currentProviderId: 'openai',
+      modelId: 'gpt-6-luna',
+      agentDeviceId: null,
+      t: ((key: string) => key) as unknown as import('i18next').TFunction,
+    });
+    expect(remoteChoiceTrigger.activeSourceRouteName).toBeNull();
+    expect(remoteChoiceTrigger.shownModelGroupRow?.name).toBe('Remote Mode · Mac B');
+
+    // resolveStoredSourceRouteIdentity 还原真实本机成员；仅含远端候选时返回 null，避免虚拟 sroute: 落盘。
+    const shareOnlyConfig: ModelGroupsConfig = {
+      sourceRoutes: [{
+        id: 'manual:share-only', name: 'Share Pool', strategy: 'order',
+        sources: [{ providerId: 'openai', agentDeviceId: 'share:s1' }],
+      }],
+      routes: [{
+        id: 'src:share-luna', name: 'GPT-6-LUNA', strategy: 'order',
+        parent: { id: 'manual:share-only', name: 'Share Pool' },
+        candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-6-luna', agentDeviceId: 'share:s1' }],
+      }],
+    };
+    const localMerged = withSourceRouteProviders(PROVIDERS, cfg);
+    expect(resolveStoredSourceRouteIdentity(localMerged, 'sroute:auto:openai', 'gpt-6-luna')).toEqual({
+      providerId: 'openai',
+      modelId: 'gpt-6-luna',
+    });
+    const shareOnlyMerged = withSourceRouteProviders(
+      [],
+      shareOnlyConfig,
+      undefined,
+      new Map([['share:s1', [provider('openai', ['gpt-6-luna'])]]]),
+    );
+    expect(resolveStoredSourceRouteIdentity(shareOnlyMerged, 'sroute:manual:share-only', 'gpt-6-luna')).toBeNull();
   });
 });
 

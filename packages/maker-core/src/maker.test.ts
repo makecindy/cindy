@@ -3524,8 +3524,25 @@ describe('Session turn send guard', () => {
       releaseAccepted = resolve;
     });
     const events = createAsyncQueue<AgentEvent>();
+    let terminalEventConsumed!: () => void;
+    const terminalEventObserved = new Promise<void>((resolve) => {
+      terminalEventConsumed = resolve;
+    });
     const handle = createHandle({ id: 'thread-1' });
-    handle.events = () => events;
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        const inner = events[Symbol.asyncIterator]();
+        let yieldedCount = 0;
+        return {
+          async next() {
+            if (yieldedCount === 1) terminalEventConsumed();
+            const result = await inner.next();
+            if (!result.done) yieldedCount += 1;
+            return result;
+          },
+        };
+      },
+    });
     handle.send = vi.fn(async () => undefined);
     const session = new Session({
       id: 'session-1',
@@ -3535,11 +3552,9 @@ describe('Session turn send guard', () => {
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
-    const terminalEventObserved = new Promise<void>((resolve) => {
-      const unsubscribe = session.onEvent(() => {
-        unsubscribe();
-        resolve();
-      });
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push(event);
     });
 
     const firstSend = session.send('first', { onAccepted: () => acceptedReady });
@@ -3547,6 +3562,7 @@ describe('Session turn send guard', () => {
     events.push({ type: 'status', data: { isRunning: false }, source: 'codex' });
     await terminalEventObserved;
 
+    expect(seen).toEqual([]);
     await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
     expect(handle.send).not.toHaveBeenCalled();
 
