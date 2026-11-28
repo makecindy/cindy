@@ -62,7 +62,7 @@ export async function executeSidebarCommand(
     } else if (command.targetKind === 'directory') {
       await openDirInSidebarFileBrowser(command.sessionId, command.relPath);
     } else {
-      await openFileInSidebarFileBrowser(command.sessionId, command.relPath);
+      await openFileInSidebarFileBrowser(command.sessionId, command.relPath, command.targetKind);
     }
     return;
   }

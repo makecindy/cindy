@@ -5733,6 +5733,12 @@
       "failed": "Das Standard-Arbeitsverzeichnis konnte nicht gespeichert werden. Bitte erneut versuchen."
     },
     "linkOpen": {
+      "attachments": {
+        "label": "Vorschau für Anhänge",
+        "description": "Wähle, wo Dateien aus der Unterhaltung geöffnet werden.",
+        "popup": "Pop-up",
+        "sidebar": "Rechte Seitenleiste"
+      },
       "title": "Links öffnen",
       "description": "Wähle, wo Links in Nachrichten geöffnet werden. Klicke mit der rechten Maustaste auf einen Link, um nur für diesen Link eine andere Option zu verwenden.",
       "web": {
@@ -16877,7 +16883,9 @@
       "openLink": "Link öffnen",
       "anchorNotFound": "Überschrift nicht gefunden",
       "openInSidebarBrowser": "In Seitenleiste öffnen",
-      "openInSidebarFileBrowser": "In Dateiliste finden",
+      "openInSidebarFileBrowser": "Im Projektbaum finden",
+      "openFileInPopup": "Im Pop-up öffnen",
+      "openFileInSidebar": "In rechter Seitenleiste öffnen",
       "openInSidebarFileBrowserFailed": "Öffnen im Dateibrowser der Seitenleiste fehlgeschlagen",
       "openInSidebarFileBrowserOutsideWorkdir": "Diese Datei liegt außerhalb des Arbeitsverzeichnisses der aktuellen Sitzung und kann im Dateibrowser der Seitenleiste nicht gefunden werden",
       "openInDefaultBrowser": "Im Browser öffnen",

@@ -109,7 +109,7 @@ export type RsbWindowCommand =
       type: 'open-file-browser';
       sessionId: string;
       relPath: string;
-      targetKind: 'file' | 'directory';
+      targetKind: 'file' | 'locate-file' | 'directory';
     }
   | {
       type: 'open-file-browser';

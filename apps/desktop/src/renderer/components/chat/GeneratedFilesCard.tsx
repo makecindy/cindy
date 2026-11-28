@@ -263,13 +263,16 @@ function GeneratedFileChip({
   const [textLightboxOpen, setTextLightboxOpen] = useState(false);
   const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const localKind = classifyMarkdownHref(file.path);
   const htmlWithSession = isHtmlFilePath(file.path) ? fileCtx.sessionId : undefined;
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
     fileName: file.path,
+    filePath: file.path,
     getAbsPath: () => file.path,
-    // HTML 左键看渲染结果；源码仍可从右键菜单进入。其它生成文件沿用原菜单。
+    // HTML 使用网页偏好，3D 使用专用查看或下载流程。
     canOpenInBrowser: isBrowserOpenablePath(file.path),
+    onOpenPreview: localKind === 'model-local' ? undefined : open,
     sidebarOpenSessionId: htmlWithSession,
     onViewSource: htmlWithSession
       ? async () => {
@@ -282,9 +285,8 @@ function GeneratedFileChip({
   // 左键与正文文件链接同策(见文件头注释)。HTML 按网页打开偏好渲染；其它
   // 非文本兜底交给 shouldOpenTextLightboxForOrigin:本地 openPath、远程取回
   // 缓存副本,均含失败 toast。
-  const open = async (): Promise<void> => {
-    const kind = classifyMarkdownHref(file.path);
-    if (kind === 'image-local') {
+  async function open(): Promise<void> {
+    if (localKind === 'image-local') {
       const localUrl = toLocalFileUrl(file.path);
       if (!remoteOrigin) {
         setLightboxSrc(localUrl);
@@ -304,7 +306,7 @@ function GeneratedFileChip({
       if (cachePath) setLightboxSrc(toLocalFileUrl(cachePath));
       return;
     }
-    if (kind === 'model-local') {
+    if (localKind === 'model-local') {
       if (remoteOrigin) {
         await downloadRemoteChatEntry(remoteOrigin, fileCtx.workingDir, file.path);
         return;
@@ -325,14 +327,13 @@ function GeneratedFileChip({
     }
     if (!(await shouldOpenTextLightboxForOrigin(fileCtx, file.path))) return;
     setTextLightboxOpen(true);
-  };
+  }
 
   const artifact = file.artifact;
   const format = artifact?.format;
   const formatLabel = format ? t(`chat.generatedFiles.formats.${format}`) : null;
   const artifactTitle = artifact?.title || file.name;
   const fileExtension = generatedFileExtension(file).toUpperCase();
-  const localKind = classifyMarkdownHref(file.path);
   const botImage = presentation === 'bot-primary' && localKind === 'image-local';
   const botHtml = presentation === 'bot-primary' && isHtmlFilePath(file.path);
   const botFile = presentation === 'bot-primary' && !artifact && !botImage && !botHtml;

@@ -2,8 +2,7 @@
 
 /**
  * openInSidebarFileBrowser — 覆盖聊天文件 / 目录 chip 打开 RSB 文件浏览器的
- * 状态写入协议。目录定位只写 revealDirPath;已有 tab 的文件定位只写
- * revealFilePath,由 FileBrowserBody 过 dirty guard 后再选中文件并滚动到文件行。
+ * 状态写入协议。定位与打开正文传不同意图，当前选中的正文由 FileBrowserBody 管理。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,20 +49,21 @@ describe('openInSidebarFileBrowser', () => {
 
     expect(ensureHydrated).toHaveBeenCalledWith('s1');
     expect(addTab).toHaveBeenCalledWith('s1', 'file-browser', {
-      selectedFilePath: 'src/App.tsx',
+      selectedFilePath: null,
       revealFilePath: 'src/App.tsx',
+      locateFileOnly: false,
       revealFileNonce: 1,
     });
     expect(requestRightSidebarVisibility).toHaveBeenCalledWith('open', { sessionId: 's1' });
   });
 
-  it('reuses an existing file-browser tab and writes a reveal request without bypassing dirty guard', async () => {
+  it('reuses an existing file-browser tab and leaves the current document selected when locating another file', async () => {
     bucket = {
       tabs: [{ id: 't1', kind: 'file-browser', state: { selectedFilePath: 'old.ts' } }],
       activeTabId: 'other',
     };
 
-    await openFileInSidebarFileBrowser('s1', 'src/App.tsx');
+    await openFileInSidebarFileBrowser('s1', 'src/App.tsx', 'locate-file');
 
     expect(setActiveTab).toHaveBeenCalledWith('s1', 't1');
     expect(patchTabState).toHaveBeenCalledWith('s1', 't1', expect.any(Function));
@@ -73,6 +73,7 @@ describe('openInSidebarFileBrowser', () => {
     expect(updater?.({ selectedFilePath: 'old.ts', revealFileNonce: 4 })).toEqual({
       selectedFilePath: 'old.ts',
       revealFilePath: 'src/App.tsx',
+      locateFileOnly: true,
       revealFileNonce: 5,
     });
     expect(requestRightSidebarVisibility).toHaveBeenCalledWith('open', { sessionId: 's1' });
@@ -150,8 +151,9 @@ describe('openInSidebarFileBrowser', () => {
     'does not write local state for %s',
     async (routeResult) => {
       vi.mocked(routeSidebarCommand).mockResolvedValue(routeResult);
-      await openFileInSidebarFileBrowser('stale', 'src/App.tsx');
+      const accepted = await openFileInSidebarFileBrowser('stale', 'src/App.tsx');
 
+      expect(accepted).toBe(routeResult === 'queued');
       expect(ensureHydrated).not.toHaveBeenCalled();
       expect(addTab).not.toHaveBeenCalled();
       expect(patchTabState).not.toHaveBeenCalled();

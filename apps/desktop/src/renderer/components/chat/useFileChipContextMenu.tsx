@@ -15,6 +15,7 @@ import {
   FolderTree,
   Globe,
   PanelRight,
+  PictureInPicture2,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -34,6 +35,8 @@ import {
   openFileInSidebarFileBrowser,
 } from '@/features/right-sidebar/lib/openInSidebarFileBrowser';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
+import { getAttachmentPreviewPreference } from '@/hooks/useAttachmentPreviewPreference';
+import { isDroppedFilePreviewSupported } from '@/features/right-sidebar/plugins/file-browser/dropExternalFile';
 import {
   copyRemoteChatFile,
   downloadRemoteChatEntry,
@@ -55,7 +58,7 @@ export interface UseFileChipContextMenu {
   openAt: (x: number, y: number, trigger: HTMLElement) => void;
   onActivate: (
     event: React.MouseEvent<HTMLElement>,
-    openDefault: () => void | Promise<void>,
+    openDefault?: () => void | Promise<void>,
   ) => void;
   menu: ReactElement;
 }
@@ -70,6 +73,8 @@ export function useFileChipContextMenu({
   sidebarOpenSessionId,
   onViewSource,
   location,
+  filePath,
+  onOpenPreview,
 }: {
   /** Menu eligibility only; remote opening also checks the resolved path. */
   fileName: string;
@@ -80,6 +85,9 @@ export function useFileChipContextMenu({
   onViewSource?: () => void | Promise<void>;
   /** Only supplied by resolved Markdown references; existing path-copy stays absolute. */
   location?: FileLocation;
+  /** Absolute path already resolved by the caller, when available. */
+  filePath?: string;
+  onOpenPreview?: (trigger: HTMLElement) => void | Promise<void>;
 }): UseFileChipContextMenu {
   const { t } = useTranslation();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -98,6 +106,29 @@ export function useFileChipContextMenu({
     location && sidebarFileBrowserKind === 'file'
       ? formatFileLocation(sessionFileCtx.workingDir, location)
       : null;
+
+  const knownPath = filePath ?? location?.absPath;
+  const knownProjectPath = knownPath ? toWorkdirRel(sessionFileCtx.workingDir, knownPath) : null;
+  // An embedded session can point at a sidebar backed by another workdir or device.
+  const projectSessionId = sidebarFileTargetSessionId === sessionFileCtx.sessionId
+    ? sidebarFileTargetSessionId
+    : undefined;
+  const canOpenLocalExternalFile = sessionFileCtx.localConfirmed && !remoteOrigin;
+  const canOpenPreview = !!onOpenPreview && !canOpenInBrowser &&
+    sidebarFileBrowserKind === 'file' && !isDangerousAttachmentName(fileName);
+  const canOpenPreviewInSidebar = canOpenPreview && !!projectSessionId && !!sessionFileCtx.workingDir &&
+    location?.line == null && isDroppedFilePreviewSupported(knownPath ?? fileName) &&
+    (!!knownProjectPath || canOpenLocalExternalFile);
+
+  async function openPreviewInSidebar(): Promise<boolean> {
+    if (!canOpenPreviewInSidebar || !projectSessionId) return false;
+    const abs = await getAbsPath();
+    if (!isDroppedFilePreviewSupported(abs) || isDangerousAttachmentName(abs)) return false;
+    const rel = toWorkdirRel(sessionFileCtx.workingDir, abs);
+    if (rel) return openFileInSidebarFileBrowser(projectSessionId, rel);
+    if (!canOpenLocalExternalFile) return false;
+    return openExternalFileInSidebarFileBrowser(projectSessionId, abs);
+  }
 
   async function handleCopyLocation(): Promise<void> {
     setMenuPos(null);
@@ -170,35 +201,32 @@ export function useFileChipContextMenu({
     );
   }
 
-  async function handleOpenInSidebarFileBrowser(): Promise<void> {
+  async function handleLocateInProjectTree(): Promise<void> {
     setMenuPos(null);
-    const sessionId = sidebarFileTargetSessionId;
-    if (!sessionId) return;
-    const abs = await getAbsPath();
-    const rel = toWorkdirRel(sessionFileCtx.workingDir, abs);
-    try {
-      if (sidebarFileBrowserKind === 'directory') {
-        if (!rel) {
-          toast.error(t('chat.markdownRenderer.openInSidebarFileBrowserOutsideWorkdir'));
-          return;
-        }
-        await openDirInSidebarFileBrowser(sessionId, rel);
-        return;
-      }
-      if (rel) {
-        await openFileInSidebarFileBrowser(sessionId, rel);
-        return;
-      }
-      // 远程来源的绝对路径位于远端机器，不能按“本机外部拖入”读取；本地来源则
-      // 复用文件浏览器的外部文件拖入语义，以只读方式预览 workdir 外文件。
-      if (remoteOrigin) {
-        toast.error(t('chat.markdownRenderer.openInSidebarFileBrowserOutsideWorkdir'));
-        return;
-      }
-      await openExternalFileInSidebarFileBrowser(sessionId, abs);
-    } catch {
+    if (!projectSessionId) return;
+    const rel = toWorkdirRel(sessionFileCtx.workingDir, await getAbsPath());
+    if (!rel) {
+      toast.error(t('chat.markdownRenderer.openInSidebarFileBrowserOutsideWorkdir'));
+      return;
+    }
+    if (sidebarFileBrowserKind === 'directory') {
+      await openDirInSidebarFileBrowser(projectSessionId, rel);
+    } else if (!(await openFileInSidebarFileBrowser(projectSessionId, rel, 'locate-file'))) {
       toast.error(t('chat.markdownRenderer.openInSidebarFileBrowserFailed'));
     }
+  }
+
+  async function handleOpenPreviewInSidebar(): Promise<void> {
+    setMenuPos(null);
+    if (!(await openPreviewInSidebar())) {
+      toast.error(t('chat.markdownRenderer.openInSidebarFileBrowserFailed'));
+    }
+  }
+
+  async function handleOpenPreviewPopup(): Promise<void> {
+    setMenuPos(null);
+    const trigger = triggerRef.current;
+    if (trigger?.isConnected) await onOpenPreview?.(trigger);
   }
 
   async function handleViewSource(): Promise<void> {
@@ -237,9 +265,14 @@ export function useFileChipContextMenu({
   const onActivate: UseFileChipContextMenu['onActivate'] = (event, openDefault) => {
     event.preventDefault();
     event.stopPropagation();
+    const trigger = event.currentTarget;
     void (async () => {
-      if (!isSeparateLinkActivation(event)) await openDefault();
-      else if (canOpenInBrowser) await handleOpenInBrowser();
+      if (!isSeparateLinkActivation(event)) {
+        if (canOpenPreviewInSidebar && getAttachmentPreviewPreference() === 'sidebar' &&
+          await openPreviewInSidebar()) return;
+        if (openDefault) await openDefault();
+        else await onOpenPreview?.(trigger);
+      } else if (canOpenInBrowser) await handleOpenInBrowser();
       else await handleOpenWithDefault();
     })().catch(() => toast.error(t('chat.markdownRenderer.openWithAppFailed')));
   };
@@ -247,12 +280,12 @@ export function useFileChipContextMenu({
   const run = (action: () => Promise<void>) => () => {
     void action().catch(() => toast.error(t('chat.markdownRenderer.openLinkFailed')));
   };
-  const canLocateInSidebar = Boolean(sidebarFileTargetSessionId && sessionFileCtx.workingDir);
+  const canLocateInSidebar = Boolean(!canOpenInBrowser && projectSessionId && sessionFileCtx.workingDir &&
+    (!knownPath || knownProjectPath));
   const canOpenWithDefault =
     sidebarFileBrowserKind === 'file' &&
     !(remoteOrigin && isDangerousAttachmentName(fileName));
-  const hasOpenActions =
-    canOpenInBrowser || canLocateInSidebar || canOpenWithDefault;
+  const hasOpenActions = canOpenInBrowser || canOpenPreview || canOpenWithDefault;
   const menu = (
     <>
       <DropdownMenu
@@ -306,10 +339,16 @@ export function useFileChipContextMenu({
             </>
           ) : (
             <>
-              {canLocateInSidebar ? (
-                <DropdownMenuItem onClick={run(handleOpenInSidebarFileBrowser)}>
-                  <FolderTree className="mr-2 h-4 w-4" />
-                  {t('chat.markdownRenderer.openInSidebarFileBrowser')}
+              {canOpenPreview ? (
+                <DropdownMenuItem onClick={run(handleOpenPreviewPopup)}>
+                  <PictureInPicture2 className="mr-2 h-4 w-4" />
+                  {t('chat.markdownRenderer.openFileInPopup')}
+                </DropdownMenuItem>
+              ) : null}
+              {canOpenPreviewInSidebar ? (
+                <DropdownMenuItem onClick={run(handleOpenPreviewInSidebar)}>
+                  <PanelRight className="mr-2 h-4 w-4" />
+                  {t('chat.markdownRenderer.openFileInSidebar')}
                 </DropdownMenuItem>
               ) : null}
               {canOpenWithDefault ? (
@@ -324,6 +363,12 @@ export function useFileChipContextMenu({
             </>
           )}
           {hasOpenActions ? <DropdownMenuSeparator /> : null}
+          {canLocateInSidebar ? (
+            <DropdownMenuItem onClick={run(handleLocateInProjectTree)}>
+              <FolderTree className="mr-2 h-4 w-4" />
+              {t('chat.markdownRenderer.openInSidebarFileBrowser')}
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem onClick={run(handleReveal)}>
             {remoteOrigin ? (
               <Download className="mr-2 h-4 w-4" />

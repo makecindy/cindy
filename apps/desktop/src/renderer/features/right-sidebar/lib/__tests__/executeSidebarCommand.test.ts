@@ -101,7 +101,7 @@ describe('executeSidebarCommand', () => {
       type: 'open-file-browser',
       sessionId: 's1',
       relPath: 'src/App.tsx',
-      targetKind: 'file',
+      targetKind: 'locate-file',
     });
     await executeSidebarCommand({
       type: 'open-file-browser',
@@ -130,7 +130,7 @@ describe('executeSidebarCommand', () => {
     expect(addOrFocusSingletonTab).toHaveBeenCalledWith('s1', 'terminal');
     expect(openUrlInSidebarBrowser).toHaveBeenCalledWith('s1', 'https://example.com/');
     expect(openDirInSidebarFileBrowser).toHaveBeenCalledWith('s1', 'src');
-    expect(openFileInSidebarFileBrowser).toHaveBeenCalledWith('s1', 'src/App.tsx');
+    expect(openFileInSidebarFileBrowser).toHaveBeenCalledWith('s1', 'src/App.tsx', 'locate-file');
     expect(openExternalFileInSidebarFileBrowser).toHaveBeenCalledWith('s1', 'C:\\tmp\\note.md');
     expect(ensureOrcaWorkersTab).toHaveBeenCalledWith('s1', {
       focusWorkerSessionId: 'worker-1',

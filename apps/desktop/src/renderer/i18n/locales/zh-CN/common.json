@@ -5655,6 +5655,12 @@
       "failed": "保存默认工作目录失败，请重试"
     },
     "linkOpen": {
+      "attachments": {
+        "label": "附件打开位置",
+        "description": "选择对话中的文件在哪里预览。",
+        "popup": "弹窗",
+        "sidebar": "右侧栏"
+      },
       "title": "打开链接",
       "description": "选择消息链接的打开位置，右键可临时更换",
       "web": {
@@ -16841,7 +16847,9 @@
       "openLink": "打开链接",
       "anchorNotFound": "未找到对应标题",
       "openInSidebarBrowser": "在侧边栏打开",
-      "openInSidebarFileBrowser": "在文件列表中定位",
+      "openInSidebarFileBrowser": "在项目文件树中定位",
+      "openFileInPopup": "在弹窗打开",
+      "openFileInSidebar": "在右侧栏打开",
       "openInSidebarFileBrowserFailed": "在侧边栏文件浏览器中打开失败",
       "openInSidebarFileBrowserOutsideWorkdir": "该文件不在当前任务工作目录内，无法在侧边栏文件浏览器中定位",
       "openInDefaultBrowser": "在浏览器中打开",

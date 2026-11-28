@@ -5791,6 +5791,12 @@
       "failed": "Impossible d’enregistrer le répertoire de travail par défaut. Réessayez."
     },
     "linkOpen": {
+      "attachments": {
+        "label": "Aperçu des pièces jointes",
+        "description": "Choisissez où afficher les fichiers de la conversation.",
+        "popup": "Fenêtre flottante",
+        "sidebar": "Volet droit"
+      },
       "title": "Ouverture des liens",
       "description": "Choisissez où s'ouvrent les liens des messages. Faites un clic droit sur un lien pour utiliser une autre option pour ce lien uniquement.",
       "web": {
@@ -17037,7 +17043,9 @@
       "openLink": "Ouvrir le lien",
       "anchorNotFound": "Titre introuvable",
       "openInSidebarBrowser": "Ouvrir dans la barre latérale",
-      "openInSidebarFileBrowser": "Localiser dans la liste des fichiers",
+      "openInSidebarFileBrowser": "Localiser dans l’arborescence du projet",
+      "openFileInPopup": "Ouvrir dans une fenêtre flottante",
+      "openFileInSidebar": "Ouvrir dans le volet droit",
       "openInSidebarFileBrowserFailed": "Impossible d'ouvrir dans le navigateur de fichiers de la barre latérale",
       "openInSidebarFileBrowserOutsideWorkdir": "Ce fichier se trouve en dehors du répertoire de travail de la session actuelle et ne peut pas être localisé dans le navigateur de fichiers de la barre latérale",
       "openInDefaultBrowser": "Ouvrir dans le navigateur",

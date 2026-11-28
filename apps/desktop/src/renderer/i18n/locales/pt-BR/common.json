@@ -5791,6 +5791,12 @@
       "failed": "Não foi possível salvar o diretório de trabalho padrão. Tente novamente."
     },
     "linkOpen": {
+      "attachments": {
+        "label": "Prévia de anexos",
+        "description": "Escolha onde abrir os arquivos da conversa.",
+        "popup": "Janela flutuante",
+        "sidebar": "Barra lateral direita"
+      },
       "title": "Abrir links",
       "description": "Escolha onde abrir os links das mensagens. Clique com o botão direito em um link para usar outra opção apenas para ele.",
       "web": {
@@ -17037,7 +17043,9 @@
       "openLink": "Abrir link",
       "anchorNotFound": "Título não encontrado",
       "openInSidebarBrowser": "Abrir na barra lateral",
-      "openInSidebarFileBrowser": "Localizar na lista de arquivos",
+      "openInSidebarFileBrowser": "Localizar na árvore do projeto",
+      "openFileInPopup": "Abrir em janela flutuante",
+      "openFileInSidebar": "Abrir na barra lateral direita",
       "openInSidebarFileBrowserFailed": "Falha ao abrir no explorador de arquivos da barra lateral",
       "openInSidebarFileBrowserOutsideWorkdir": "Este arquivo está fora do diretório de trabalho da sessão atual e não pode ser localizado no explorador de arquivos da barra lateral",
       "openInDefaultBrowser": "Abrir no navegador",

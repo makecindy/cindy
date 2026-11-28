@@ -23,8 +23,7 @@ import { activateInlineLinkFromKeyboard, linkMenuPosition } from './linkInteract
 /**
  * UserAttachmentChip — 用户消息下方的文件附件 chip(与正文里的 `@file` 引用
  * chip 是两种呈现;此前只有 onClick,右键无反应,与 UserFileChip 交互不一致,
- * Issue #1811 讨论中实捉)。左键保持既有行为:安全降级附件走另存流程,其余
- * 文本预览 / 交系统默认应用。右键:
+ * Issue #1811 讨论中实捉)。左键按设置预览文件，安全降级附件走另存流程。右键:
  *   - 普通附件 → 共享文件 chip 菜单(复制 / 路径 / 定位等,与 UserFileChip 同款);
  *   - 安全降级附件 → 仅「另存为…」单项。受控 `.bin` 副本的路径不该经「复制
  *     文件路径 / 打开所在目录」外泄,打开类动作更会绕过降级本身。
@@ -43,8 +42,12 @@ export function UserAttachmentChip({
   // Rules-of-hooks:两个菜单 hook/状态都无条件建,按 downloadOnly 选用其一。
   const ctxMenu = useFileChipContextMenu({
     fileName: file.name,
+    filePath: file.path,
     getAbsPath: () => file.path,
     canOpenInBrowser: isBrowserOpenablePath(file.path),
+    onOpenPreview: async (chip) => {
+      if (await shouldOpenTextLightboxForOrigin(sessionFileCtx, file.path)) onOpenTextPreview(chip);
+    },
   });
   const [saveMenuPos, setSaveMenuPos] = useState<{ x: number; y: number } | null>(null);
   const saveMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -108,18 +111,11 @@ export function UserAttachmentChip({
             await saveChatAttachmentWithToasts(sessionFileCtx, file);
             return;
           }
-          const chip = e.currentTarget;
-          ctxMenu.onActivate(e, async () => {
-            if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, file.path))) return;
-            onOpenTextPreview(chip);
-          });
+          ctxMenu.onActivate(e);
         }}
         onAuxClick={(event) => {
           if (event.button !== 1 || downloadOnly) return;
-          const chip = event.currentTarget;
-          ctxMenu.onActivate(event, async () => {
-            if (await shouldOpenTextLightboxForOrigin(sessionFileCtx, file.path)) onOpenTextPreview(chip);
-          });
+          ctxMenu.onActivate(event);
         }}
         onContextMenu={(e) => {
           if (downloadOnly) {

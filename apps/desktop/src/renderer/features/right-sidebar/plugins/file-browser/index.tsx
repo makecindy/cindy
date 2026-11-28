@@ -46,12 +46,13 @@ export interface FileBrowserState {
   /** 目录定位请求序号:同一目录重复点击也要重新触发 reveal。 */
   revealDirNonce?: number;
   /**
-   * 一次性文件定位请求(聊天文件 chip 右键 → openFileInSidebarFileBrowser 写入):
-   * FileBrowserBody 消费后选中文件、展开父目录并滚动到文件行。
+   * 一次性文件打开或定位请求，由 FileBrowserBody 消费。
    */
   revealFilePath?: string | null;
   /** 文件定位请求序号:同一文件重复打开也要重新触发 reveal。 */
   revealFileNonce?: number;
+  /** 定位请求打开项目树，保留当前正文。缺省时打开文件正文。 */
+  locateFileOnly?: boolean;
   /**
    * 一次性外部文件打开请求(聊天文件 chip 右键 → workdir 外本地文件):
    * FileBrowserBody 复用原生文件拖入链路消费，不把绝对路径挂进项目文件树。
@@ -120,6 +121,7 @@ const plugin: TabKindPlugin<FileBrowserState> = {
         ? { revealFilePath: obj.revealFilePath }
         : {}),
       ...(typeof obj.revealFileNonce === 'number' ? { revealFileNonce: obj.revealFileNonce } : {}),
+      ...(obj.locateFileOnly === true ? { locateFileOnly: true } : {}),
       ...(typeof obj.externalFilePath === 'string' && obj.externalFilePath
         ? { externalFilePath: obj.externalFilePath }
         : {}),
