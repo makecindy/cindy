@@ -38,6 +38,7 @@ const desktopTestInclude = [
 const gitIntegrationTestInclude = [
   'src/main/**/*.git-integration.test.ts',
 ];
+const gitSmokeTestInclude = ['src/main/git-review/__tests__/gitReviewSmoke.test.ts'];
 
 export default defineConfig({
   define: {
@@ -128,7 +129,23 @@ export default defineConfig({
         test: {
           name: 'standard',
           include: desktopTestInclude,
-          exclude: [...gitIntegrationTestInclude, ...cliTestExclude],
+          exclude: [...gitIntegrationTestInclude, ...gitSmokeTestInclude, ...cliTestExclude],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'git-smoke',
+          include: gitSmokeTestInclude,
+          exclude: cliTestExclude,
+          // Vitest 3 runs single-worker specs after draining the parallel specs
+          // in the same pool. Keep the representative real Git smoke in unit,
+          // without competing with the shard's filesystem-heavy tests. Unlike
+          // groupOrder, this preserves sharding across the full file set.
+          poolOptions: {
+            forks: { singleFork: true },
+            threads: { singleThread: true },
+          },
         },
       },
       {

@@ -357,6 +357,7 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 	assert.doesNotMatch(runnerChecks, /^    strategy:/m);
 	assert.equal([...runnerChecks.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
 	assert.match(runnerChecks, /botCanonicalSession\.test\.ts/);
+	assert.match(runnerChecks, /^        run: pnpm --dir apps\/desktop exec vitest run src\/main\/maker-ipc\/__tests__\/botGroupWorkDir\.git-integration\.test\.ts --maxWorkers=1$/m);
 	// Database safety gate: Linux skips the bundled sqlite-vec replay. Keep the
 	// conditional real-upgrade job on a supported runner behind the required check.
 	assert.match(runnerChecks, /^          lfs: true$/m);

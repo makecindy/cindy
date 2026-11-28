@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -90,18 +89,16 @@ describe('botGroupWorkDir', () => {
   it('counts files a step committed on the plan branch as well as uncommitted ones', async () => {
     const repo = path.join(root, 'repo');
     await mkdir(repo);
-    const run = (...args: string[]) =>
-      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: repo, encoding: 'utf8' });
-    run('init', '-q', '-b', 'main');
-    await writeFile(path.join(repo, 'README.md'), 'a');
-    run('add', '.');
-    run('commit', '-q', '-m', 'init');
-    const workDir = create({ git: async (args, cwd) => execFileSync('git', [...args], { cwd, encoding: 'utf8' }) });
+    let head = 'before-step';
+    const workDir = create({ git: async (args) => {
+      if (args[0] === 'status') return head === 'before-step' ? '' : '?? notes.md\0';
+      if (args[0] === 'diff') return 'README.md\0hello.html\0';
+      return args[1] === 'HEAD' ? head : 'true';
+    } });
     const before = await workDir.snapshot(repo);
+    head = 'after-step';
     await writeFile(path.join(repo, 'README.md'), 'a\nb');
     await writeFile(path.join(repo, 'hello.html'), '<p>hi</p>');
-    run('add', '.');
-    run('commit', '-q', '-m', 'step');
     await writeFile(path.join(repo, 'notes.md'), 'draft');
     expect((await workDir.changedFiles(repo, before)).sort()).toEqual(['README.md', 'hello.html', 'notes.md']);
   });

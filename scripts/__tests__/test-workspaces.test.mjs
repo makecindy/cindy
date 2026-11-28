@@ -823,12 +823,13 @@ test("desktop real-Git coverage is an explicit coordinated tier outside default 
 	const files = [
 		"apps/desktop/src/main/git-review/__tests__/stageOps.git-integration.test.ts",
 		"apps/desktop/src/main/__tests__/gitSnapshotService.git-integration.test.ts",
+		"apps/desktop/src/main/maker-ipc/__tests__/botGroupWorkDir.git-integration.test.ts",
 		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
 	];
 	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, files), [
 		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
 	]);
-	assert.deepEqual(selectFilesForTier(desktop, tier, files), files.slice(0, 2));
+	assert.deepEqual(selectFilesForTier(desktop, tier, files), files.slice(0, 3));
 	// #13540: the real Desktop/Host chain must leave the unit pool without
 	// disappearing from CI. Discover its actual filename so a rename back fails.
 	const chainDir = "apps/desktop/src/main/maker-host/__tests__";
@@ -838,6 +839,41 @@ test("desktop real-Git coverage is an explicit coordinated tier outside default 
 	assert.equal(chainFiles.length, 1);
 	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, chainFiles), []);
 	assert.deepEqual(selectFilesForTier(desktop, tier, chainFiles), chainFiles);
+});
+
+// Regression for #13540's Windows Git timeouts: use Vitest's real config and
+// collection entry, not source-text matching. The default smoke must be collected
+// exactly once and drain the parallel pool; full commits belong to the Git tier.
+test("Desktop collects its Git smoke once in a drained worker pool and preserves shards", async () => {
+	const { createVitest } = await import("vitest/node");
+	const ctx = await createVitest("test", {
+		root: path.join(ROOT, "apps/desktop"), watch: false,
+	}, { server: { watch: null } });
+	try {
+		const specs = await ctx.globTestSpecifications([
+			"src/main/git-review/__tests__/gitReviewSmoke.test.ts",
+			"src/main/maker-ipc/__tests__/botGroupWorkDir.test.ts",
+			"src/main/maker-ipc/__tests__/botGroupWorkDir.git-integration.test.ts",
+		]);
+		assert.equal(specs.length, 3);
+		const smoke = specs.find((spec) => spec.moduleId.endsWith("/gitReviewSmoke.test.ts"));
+		const unit = specs.find((spec) => spec.moduleId.endsWith("/botGroupWorkDir.test.ts"));
+		assert.equal(smoke.project.config.poolOptions.forks.singleFork, true);
+		assert.equal(smoke.project.config.poolOptions.threads.singleThread, true);
+		assert.equal(smoke.project.config.pool, unit.project.config.pool);
+		assert.equal(smoke.project.config.sequence.groupOrder, unit.project.config.sequence.groupOrder);
+		assert.equal(unit.project.name, "standard");
+		assert.equal(specs.find((spec) => spec.moduleId.endsWith("/botGroupWorkDir.git-integration.test.ts")).project.name, "git-integration");
+		const sequencer = new ctx.config.sequence.sequencer(ctx);
+		const shards = [];
+		for (let index = 1; index <= 8; index++) {
+			ctx.config.shard = { index, count: 8 };
+			shards.push(...await sequencer.shard(specs));
+		}
+		assert.deepEqual(shards.map((spec) => spec.moduleId).sort(), specs.map((spec) => spec.moduleId).sort());
+	} finally {
+		await ctx.close();
+	}
 });
 
 test("maker-core real-Git worktree matrix is an explicit tier outside default unit", () => {
