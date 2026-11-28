@@ -58,6 +58,9 @@ import {
   type DirEntry,
 } from '@/features/cc-agent/workdir-browse/hooks/useFileTree';
 import { useFileContent } from '@/features/cc-agent/workdir-browse/hooks/useFileContent';
+import { useXcodeBuild } from '@/features/cc-agent/workdir-browse/hooks/useXcodeBuild';
+import { XcodeBuildToolbar } from '@/features/cc-agent/workdir-browse/XcodeBuildToolbar';
+import { XcodeBuildOutput } from '@/features/cc-agent/workdir-browse/XcodeBuildOutput';
 import { useConfirmSwitchAwayIfDirty } from '@/features/cc-agent/workdir-browse/hooks/useConfirmSwitchAwayIfDirty';
 import { useProjectFileList } from '@/features/cc-agent/workdir-browse/hooks/useProjectFileList';
 import { useRevealFileInTree } from '@/features/cc-agent/workdir-browse/hooks/useRevealFileInTree';
@@ -165,6 +168,11 @@ function FileBrowserBodyWithWorkdir({
   });
   const renderingHtml = !!state.selectedFilePath && state.previewHtmlPath === state.selectedFilePath
     && isHtmlFilePath(state.selectedFilePath);
+  const xcode = useXcodeBuild({
+    sessionId: ctx.sessionId,
+    workdir,
+    enabled: visible && window.electronAPI.platform === 'darwin' && !isRemote,
+  });
   const fileContent = useFileContent(workdir, renderingHtml ? null : state.selectedFilePath, remoteHostId, deviceId, visible);
   const [treeOpen, setTreeOpen] = useState(false);
   const [previousEntry, setPreviousEntry] = useState<string | null>(null);
@@ -687,6 +695,23 @@ function FileBrowserBodyWithWorkdir({
               allowEdit={!externalFile}
               onSaved={externalFile ? undefined : fileContent.setLocal}
             />}
+            {(xcode.loading || xcode.available || xcode.error || xcode.build) && (
+              <div className="shrink-0 border-t border-[var(--cmd-palette-border)]">
+                {xcode.build && xcode.outputExpanded && (
+                  <XcodeBuildOutput
+                    build={xcode.build}
+                    output={xcode.output}
+                    expanded
+                    onToggle={xcode.toggleOutput}
+                  />
+                )}
+                {(xcode.loading || xcode.available || xcode.error) && (
+                  <div className="flex h-8 items-center justify-end">
+                    <XcodeBuildToolbar xcode={xcode} />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
         {/* 中间分割线 + resize handle —— 4px 命中宽度,内部 1px 实线;hover 高亮提示
