@@ -164,7 +164,7 @@ export function Usage({ view }: { view: MenubarView }) {
         <span className="task-content"><span className="task-title"><strong>{task.title}</strong><small>{money(view, task.value, view.taskMoneySymbol)}</small></span>
           <span className="task-preview">{[task.running ? view.strings.running : task.idleStatus, task.meta].filter(Boolean).join(' · ')}</span></span>
       </button>) : scope.models[String(range) as '7' | '30' | '90'].slice(0, 5).map((model, i) => <div className="setting" key={i}>
-      <span>{model.name}</span><b>{money(view, model.money)}</b>
+      <span>{model.name}</span><b>{model.money > 0 ? money(view, model.money) : '—'}</b>
     </div>)}
     <p className="secondary">{scope.note}</p>
   </div>;

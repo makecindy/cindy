@@ -1786,7 +1786,7 @@
       "range30": "30 日",
       "range90": "90 日",
       "listModels_other": "直近 {{n}} 日のモデル",
-      "listTasks": "今日のタスク",
+      "listTasks": "このPCの今日",
       "today": "今日",
       "manageTitle": "管理",
       "done": "完了",

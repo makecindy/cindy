@@ -1786,7 +1786,7 @@
       "range30": "30 天",
       "range90": "90 天",
       "listModels_other": "近 {{n}} 天模型",
-      "listTasks": "今天的任務",
+      "listTasks": "本機今天的任務",
       "today": "今天",
       "manageTitle": "管理",
       "done": "完成",
