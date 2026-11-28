@@ -208,7 +208,7 @@ export interface BotGroupChatServiceDeps {
   decidePlan?: (input: PlanDecisionInput, signal: AbortSignal) => Promise<PlanDecision | null>;
   workDir?: Pick<BotGroupWorkDir, 'prepare' | 'snapshot' | 'changedFiles' | 'trashGroupFolder'>;
   /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
-  validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
+  validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string; errorCode?: 'PROJECT_NOT_REGISTERED' | 'INVALID_PARAMS' }>;
   /**
    * A task this computer runs, for its group card: title, state and recorded pull request; null
    * when the task is gone (bot-group-chat.md §10).
@@ -1992,10 +1992,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         if (typeof raw.projectDir !== 'string' || !raw.projectDir || raw.projectDir.length > MAX_PROJECT_DIR_CHARS) {
           return failure('INVALID_PARAMS', '项目文件夹无效');
         }
-        const checked = deps.validateProjectDir
-          ? await deps.validateProjectDir(raw.projectDir).catch(() => ({ ok: false as const, message: '' }))
-          : ({ ok: false as const, message: '' });
-        if (!checked.ok) return failure('INVALID_PARAMS', checked.message || '项目文件夹不可用');
+        const checked = await deps.validateProjectDir?.(raw.projectDir).catch(() => undefined);
+        if (!checked?.ok) return failure(checked?.errorCode ?? 'INVALID_PARAMS', checked?.message || '项目文件夹不可用');
         patch.projectDir = checked.dir;
       }
     }

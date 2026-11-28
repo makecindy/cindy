@@ -68,7 +68,7 @@ import { isIpcErrorCode } from '../../shared/ipc-errors.js';
 // 轮 42 P1(codex-connector):remove host 的 DB 引用检查改**顶部静态导入** ——
 // 之前动态 await import() 把 drizzle/localDb 的打包/加载失败推迟到用户
 // remove host 时才暴露, 违反 main-process 依赖规则(须静态 import)。
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getRemoteClaudeEnv } from './claude-env.js';
@@ -1073,7 +1073,7 @@ async function assertHostHasNoSessionReferences(
     const refs = await getDbClient().drizzle
       .select({ id: sessions.id })
       .from(sessions)
-      .where(eq(sessions.remoteHostId, id))
+      .where(and(eq(sessions.remoteHostId, id), ne(sessions.status, 'deleted')))
       .limit(1);
     if (refs.length > 0) {
       throwIpcError(

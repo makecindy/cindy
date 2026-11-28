@@ -15,6 +15,7 @@ import {
   type OrcaLifecycleDeps,
 } from '../orcaLifecycleService';
 import type { DispatchWorkerTaskResult } from '../orcaTeamService';
+import { applyLeadVendorOptions, createAcpLeadBriefingHandoff } from '../orcaSessionStartOptions';
 import type {
   OrcaTeamSnapshot,
   OrcaWorkerCreationResult,
@@ -126,6 +127,25 @@ function createDeps(overrides: Partial<OrcaLifecycleDeps> = {}) {
 }
 
 describe('OrcaLifecycleService', () => {
+  // Unit: an admitted dormant built-in Lead has no live handle. A promotion
+  // must commit without consulting ACP's briefing or runtime hydration state.
+  it('starts a dormant built-in Lead without a second engine or role lookup', async () => {
+    const readUnavailable = vi.fn(async () => { throw new Error('session metadata unavailable'); });
+    const handoff = createAcpLeadBriefingHandoff({
+      currentOwner: () => 'owner', readActiveTeamId: readUnavailable, readRole: readUnavailable,
+    });
+    const clearHydrated = vi.fn();
+    const { service, deps } = createDeps({
+      setLeadVendorOptions: input => applyLeadVendorOptions(handoff, input, undefined, clearHydrated),
+    });
+    await expect(service.startTeam({ leadSessionId: 'lead-1', admittedLeadAgentKind: 'codex' }))
+      .resolves.toMatchObject({ ok: true, teamId: 'team-1' });
+    expect(deps.setSessionOrcaRole).toHaveBeenCalledWith('lead-1', 'lead');
+    expect(deps.markTeamEnded).not.toHaveBeenCalled();
+    expect(readUnavailable).not.toHaveBeenCalled();
+    expect(clearHydrated).not.toHaveBeenCalled();
+    expect(handoff.hasPending('lead-1')).toBe(false);
+  });
   it.each(['create-task', 'create-placeholder', 'enable-task', 'enable-placeholder', 'enable-deferred'].flatMap(action => [true, false].flatMap(revoked => ['source', 'directory'].map(scope => ({ action, revoked, scope }))))) (
     'guards $action $scope at acceptance, revoked=$revoked, and cleans up outside dispatch', async ({ action, revoked, scope }) => {
       let allowed = true, insideSend = false, nativeCalls = 0;

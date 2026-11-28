@@ -116,7 +116,6 @@ import {
 } from '../hooks/helpers/sidebarFilterCore';
 import { useTaskInfoFields, type TaskInfoField } from '../hooks/useTaskInfoFields';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
-import { FilterReminderDot } from './FilterReminderDot';
 import { useTaskListModeSwitch } from './TaskInboxIntro';
 
 type Option<T extends string> = {
@@ -811,7 +810,7 @@ export function SidebarFilterPopover({
       .map((choice) => t(`ccAgent.sidebar.hideOptions.${choice.key}`))
       .join(t('ccAgent.sidebar.taskInfoSummarySeparator')) || t('ccAgent.sidebar.filterSummaryNone');
 
-  // 段头按钮上的提醒点仍看全部收窄条件（含隐藏）；一级「筛选」行只数「只看哪些」的维度。
+  // 按钮的按下状态仍看全部收窄条件（含隐藏）；一级「筛选」行只数「只看哪些」的维度。
   const activeFilterCount = sidebarContentFilterCount(filter);
   const narrowFilterCount = activeFilterCount - activeHides.length;
   const filterSummary =
@@ -901,9 +900,6 @@ export function SidebarFilterPopover({
               )}
             >
               <SlidersHorizontal size={14} strokeWidth={2} />
-              {/* 收件箱里有筛选或隐藏生效时标一个点（段头会让这个按钮常驻显示）。
-                  查看已归档任务不再标点（2026-11-28 用户决定）：任务状态已经摆在菜单第一层。 */}
-              {inboxMode && activeFilterCount > 0 && <FilterReminderDot />}
             </button>
           </Tip>
         )}

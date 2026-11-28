@@ -205,6 +205,8 @@ import { readProviderRunLocation, setProviderRunLocation } from '../maker-host/p
 import { registerModelFavoritesSync } from './modelFavoritesSync.js';
 import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { removeBotImConnectionsForBot } from '../im/shared/botImConnectionRuntime.js';
+import { clearPersonalChannelsForCompanion } from '../im/shared/personalChannelIpc.js';
+import { clearOfficialCompanionAssignments } from '../hook-control/ipc.js';
 import { configureBotImLaneRuntime } from '../im/shared/botImLaneRuntime.js';
 import { markImSessionManualRouteOverride } from '../im/shared/manualRouteOverride.js';
 import { configureAppDefaultModelSelection, inspectAppDefaultModel, teammatePluginEngineModelChoices } from './appDefaultModelControl.js';
@@ -271,6 +273,7 @@ import {
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import { redactEventForRenderer } from './rendererEventRedaction.js';
+import { getPluginEngineHandoffWindow } from '../maker-host/pluginEngineModelCache.js';
 import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, pluginEngineSettingsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
 import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
 import { onPluginEnginePrefsChanged, readPluginEnginePrefs, updatePluginEnginePrefs } from '../maker-host/plugin-engine-prefs-store.js';
@@ -378,7 +381,7 @@ import {
 } from '../appSessionState.js';
 import { touchRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
 import { createRemoteSessionOpener, createRemoteSessionExecutionResolver } from './remoteSessionCreation.js';
-import { projectForNewTask, registeredTaskProject, listVisibleRegisteredProjectPaths } from '../mcp-integrations/projectManagementCore.js';
+import { projectForNewTask, registeredTaskProject, validateGroupProjectDir, listVisibleRegisteredProjectPaths } from '../mcp-integrations/projectManagementCore.js';
 import { teammateWorkspaceDir } from './botProjectMemory.js';
 import { resolveSessionProject, listProjects } from '../mcp-integrations/projectManagement.js';
 import { isRetainableProjectSession } from '../../shared/sessionSource.js';
@@ -1225,6 +1228,7 @@ import {
 } from './orcaTeamService.js';
 import {
   agentDeviceCatalogFailure,
+  buildOrcaLeadSessionSnapshot,
   createOrcaWorkerCreationService,
   pickWorkerAgentDeviceId,
 } from './orcaWorkerCreationService.js';
@@ -1243,8 +1247,10 @@ import {
 import {
   applyOrcaInstructions,
   ORCA_DIRECT_TASK_CREATE,
-  renderOrcaRoleInstructions,
   synthesizeOrcaVendorOptionsFromDb,
+  acpLeadBriefings,
+  applyLeadVendorOptions,
+  prepareAcpRoleBriefingForStart,
 } from './orcaSessionStartOptions.js';
 import {
   clearManualInterrupt,
@@ -1424,7 +1430,8 @@ import {
   normalizeSessionProviderId,
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
-import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import { getActiveCatalog, getXdGatewayModelAccessSnapshot, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import { createSilentGatewaySwitchForSend } from './silentGatewaySwitch.js';
 import { createSubscriptionFastPolicy } from '../maker-host/subscription-fast-policy.js';
 import { DEFAULT_MODEL_COMPACTION_PCT, modelCompactionTarget } from '../../shared/modelContextLimit.js';
 import { resolveModelDefaultContextWindow } from '../maker-host/catalog-to-descriptors.js';
@@ -5144,9 +5151,26 @@ export interface AutomationUserTurnGitBaselineHooks {
   onUndispatchedUserTurn(sessionId: string): void;
 }
 
+/**
+ * 本机 ACP 插件引擎在首轮 `session/prompt` 前等待受管 worktree 后台 full checkout 完成；
+ * 远程/共享 ACP（`agentDeviceId` 非空）延后到 `RemoteExecutor` 首次访问工作树工具前再等。
+ */
+async function awaitLocalAcpWorktreeCheckoutIfNeeded(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const live = getMakerIfReady()?.getSession(sessionId);
+  if (live?.agentKind === 'acp' && !live.agentDeviceId && !live.remoteHostId) {
+    await worktreeManager.ensureBackgroundCheckoutReady(sessionId, signal);
+  }
+}
+
 export function createAutomationUserTurnGitBaselineHooks(): AutomationUserTurnGitBaselineHooks {
   return {
-    beforeDispatchUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
+    beforeDispatchUserTurn: async (sessionId, signal) => {
+      await awaitLocalAcpWorktreeCheckoutIfNeeded(sessionId, signal);
+      await gitSnapshotCoordinator?.onTurnStart(sessionId, signal);
+    },
     onUndispatchedUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnAbort(sessionId),
   };
 }
@@ -9366,8 +9390,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 不归组管时原样返回 null。
    */
   async function applyProviderGroupAssignment(o: CreateOpts): Promise<ProviderGroupStartContext | null> {
-    // Plugin engines run on this computer with their own models; provider groups do not apply.
-    if (!providerGroupService || !o.id || o.remoteHostId || o.agentKind === 'acp') return null;
+    // Plugin engines do not belong to built-in provider groups. Clear any stale binding
+    // (for example, left over from an earlier version before switch-time cleanup) before
+    // starting so remote opens and status views never treat the task as group-assigned.
+    if (o.agentKind === 'acp') {
+      if (o.id && !o.remoteHostId && readProviderGroupBinding(o.id)) {
+        await writeProviderGroupBinding(o.id, null).catch((error) => {
+          log.warn('provider group: failed to clear stale binding before plugin engine start', {
+            sessionId: o.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      return null;
+    }
+    if (!providerGroupService || !o.id || o.remoteHostId) return null;
     if (typeof o.model !== 'string' || !o.model) return null;
     // 本机没有建组、任务不指向同账号另一台电脑(那台可能建了组)、也没有归组时不读数据库，
     // 启动路径与没有这个功能时完全一致。
@@ -9521,14 +9558,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Lead and Worker role instructions travel ahead of the first message; ordinary local owner
     // tasks (non-bot, non-review, non-hosted) trust the plugin engine as a whole so Orca Lead /
     // Worker tools and Cindy async user question tools work seamlessly.
+    const promotedLeadBriefing = await prepareAcpRoleBriefingForStart(o, acpLeadBriefings);
+    assertAccess?.();
     if (o.agentKind === 'acp' && o.reviewMode !== true) {
-      if (o.vendorOptions?.orcaRole === 'worker' || o.vendorOptions?.orcaRole === 'lead') {
-        const briefing = renderOrcaRoleInstructions(o);
-        if (briefing) {
-          o.pluginEngineBriefing = briefing;
-          o.pluginEngineTrustedCaller = true;
-        }
-      }
       if (!o.deviceHosted && !o.botRuntimeProfile) {
         o.pluginEngineTrustedCaller = true;
       }
@@ -9595,7 +9627,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         delete vendorOptions._cindyRequireNativeResume;
         if (nativeHistoryResume || nativeRelocation?.nativeId) vendorOptions._cindyRequireNativeResume = true;
         o.vendorOptions = vendorOptions;
-        const start = () => createSessionWithRuntimePlugins(o, creationSignal);
+        const start = () => {
+          // Provider-group fallback may have changed the route since the instructions were prepared.
+          o.readPluginEngineRoleBriefing = o.agentDeviceId ? undefined : promotedLeadBriefing;
+          return createSessionWithRuntimePlugins(o, creationSignal);
+        };
         const open = async () => nativeHistoryResume || nativeRelocation?.nativeId
           ? await start()
           : await withSharedSessionResumeRecovery(o, start, {
@@ -11087,6 +11123,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       broadcastSessionCreated,
     }),
+    captureOwner: () => {
+      const owner = getCurrentDbClientSnapshot();
+      return () => { if (getCurrentDbClientSnapshot() !== owner) throwIpcError('PRECONDITION_FAILED', 'Worker account changed'); };
+    },
+    liveAgentDeviceId: sessionId => maker.getSession(sessionId)?.agentDeviceId,
+    closeRuntime: async (sessionId) => {
+      const session = maker.getSession(sessionId);
+      resetAutomaticRecoveryForExplicitStop(sessionId);
+      const results = await Promise.allSettled([
+        pauseGoalBeforeExplicitStop(sessionId),
+        withRehydrateCloseSuppressed(sessionId, async () => {
+          if (session) await maker.closeSessionIfCurrent(session);
+        }),
+      ]);
+      for (const result of results) {
+        if (result.status === 'rejected') throw result.reason;
+      }
+    },
     writeRemoteLead: writeOrcaRemoteLead,
     withSessionLock: withSendToSessionLock,
     now: Date.now,
@@ -11942,6 +11996,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readOwnerGeneration: () => getActiveAppSession().generation,
     resolveHandoffWindow: ({ sessionId, agent, model, providerId, agentDeviceId }) =>
       resolveDesktopHandoffWindow(sessionId, { agentKind: agent, model, providerId, agentDeviceId }),
+    resolveLocalPluginHandoffWindow: (providerId, modelId) => getPluginEngineHandoffWindow(providerId, modelId),
     listCompanionSessionIds: async (sessionId) => {
       const row = await readContextRecoverySession(sessionId);
       if (row?.botRole !== 'canonical') return undefined;
@@ -11956,6 +12011,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 换到供应商组那一项时由组选一台能用的电脑(provider-groups.md §6)。
     resolveProviderGroupTarget: (sessionId, target) =>
       providerGroupService ? providerGroupService.resolveSwitchTarget(sessionId, target) : Promise.resolve(null),
+    clearProviderGroupBinding: async (sessionId) => {
+      if (readProviderGroupBinding(sessionId)) {
+        await writeProviderGroupBinding(sessionId, null);
+      }
+    },
     withSessionLock: withSendToSessionLock,
     canSwitchCompletedAutomationSession: async (sessionId, returningToBuiltin) => {
       if (!returningToBuiltin) {
@@ -12033,6 +12093,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     log,
   };
+  const applySilentGatewaySwitchForSend = createSilentGatewaySwitchForSend({
+    getOwner: getCurrentDbClientSnapshot,
+    isRemoteInvoke: isDeviceLinkInvoke,
+    hasPendingAgentSwitch: sessionId => Boolean(agentSwitchPending.get(sessionId)),
+    isTurnRunning: sessionId => maker.getSession(sessionId)?.isTurnRunning() === true,
+    hasPendingInteraction: hasPendingAgentInteractionForSession,
+    getCatalog: getXdGatewayModelAccessSnapshot,
+    getSessionRow: getSessionRowSnapshotStrict,
+    toBuiltinAgent: agentKind => (isPluginEngineKind(agentKind) ? undefined : dbToMakerAgentKind(agentKind)),
+    listAvailableAgents: () => maker.listAvailableAgents(),
+    canUseRoute: async (agent, modelId) => (await verdictForModelRoute(agent, modelId, 'xd')).kind === 'pass',
+    switchAgent: ({ sessionId, targetAgentKind, model, effort, signal, assertSelectionCurrent }) =>
+      performSessionAgentSwitch(agentSwitchDeps, {
+        sessionId,
+        targetAgentKind,
+        model,
+        providerId: 'xd',
+        effort,
+        fastMode: false,
+        configStaged: true,
+        applyNow: true,
+        skipBootstrap: true,
+        signal,
+        assertSelectionCurrent,
+      }),
+    log,
+  });
+
   registerMakerSessionAgentSwitchHandler(makerSessionRegistry, agentSwitchDeps, (event, sessionId) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     providerGroupService?.noteUserAction(sessionId);
@@ -12668,9 +12756,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     workerPermissionMode: OrcaWorkerPermissionMode;
     dispatchOutcome?: CollabDispatchOutcome;
   }> {
-    await assertLeadCollabProjectEnabled(leadSessionId);
+    const admittedLeadAgentKind = await assertLeadCollabProjectEnabled(leadSessionId);
     const result = await orcaLifecycleService.enableTeam({
       leadSessionId,
+      admittedLeadAgentKind,
       workerAgent: opts.workerAgent,
       role: opts.role,
       label: opts.label,
@@ -12711,7 +12800,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
   }
 
-  async function assertLeadCollabProjectEnabled(leadSessionId: string): Promise<void> {
+  async function assertLeadCollabProjectEnabled(leadSessionId: string): Promise<EngineKind | undefined> {
     await assertReviewSettingsUnlocked(leadSessionId);
     const lead = maker.getSession(leadSessionId);
     const leadRow = await getSessionRowSnapshot(leadSessionId);
@@ -12741,6 +12830,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       (pluginId, workingDir) => getPluginRegistry().isEnabled(pluginId, workingDir),
       isManagedDialogueWorkspace,
     );
+    return lead?.agentKind ?? (leadRow ? dbToMakerEngineKind(leadRow.agentKind) : undefined);
   }
 
   async function sendUserMessageWithAwaitedGitBaseline(
@@ -14305,16 +14395,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasPendingInteraction: (sessionId) => hasPendingAgentInteractionForSession(sessionId),
     decidePlan: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, { ...opts, source: 'group-planning' })),
     workDir: botGroupWorkDir,
-    validateProjectDir: async (dir) => {
-      try {
-        const checked = await registeredTaskProject(dir);
-        return checked
-          ? { ok: true as const, dir: checked }
-          : { ok: false as const, message: '这个文件夹不能用作项目文件夹' };
-      } catch {
-        return { ok: false as const, message: '项目文件夹不存在' };
-      }
-    },
+    validateProjectDir: validateGroupProjectDir,
     // The group's Cindy (bot-group-chat.md §9): one ordinary visible task per group, opened
     // like a new task of this user's (new-task model and permission).
     ensureGroupAssistantSession: async ({ sessionId, title, projectDir }) => {
@@ -14555,8 +14636,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     maker,
     restartRuntime: restartBotCanonicalRuntime,
     onBeforeDelete: async (botId) => {
+      const ownerKey = activeOwnerScopeKey();
       // 伙伴自有的 IM 机器人连接先停掉并清凭证: 伙伴没了, 它的 bot 不能继续收消息。
       await removeBotImConnectionsForBot(botId);
+      // 设置页里通过「谁来回复」交给这位伙伴的个人与官方机器人切回普通任务，避免残留失效选项。
+      await clearPersonalChannelsForCompanion(botId, ownerKey);
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerKey) throw new Error('OWNER_SCOPE_CHANGED');
+      clearOfficialCompanionAssignments(botId);
       await prepareCompanionImportDeletion(botId);
     },
     onDeleted: async (botId, assertOwner) => {
@@ -15622,7 +15708,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   const startOrcaTeamForCaller = async (leadSessionId: string, workerPermissionMode?: OrcaWorkerPermissionMode, assertCurrent?: (activationStarted?: boolean) => Promise<void>, completeOperation?: PluginTaskService['completeOperation']) => {
       try {
-        await assertLeadCollabProjectEnabled(leadSessionId);
+        const admittedLeadAgentKind = await assertLeadCollabProjectEnabled(leadSessionId);
         return await startOrcaTeamWithPermissionGate(
           { leadSessionId, workerPermissionMode },
           {
@@ -15635,7 +15721,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             startTeam: async (params) => {
               const start = async () => {
                 await assertCurrent?.();
-                return orcaLifecycleService.startTeam(params, assertCurrent ? () => assertCurrent(true) : undefined);
+                return orcaLifecycleService.startTeam({ ...params, admittedLeadAgentKind }, assertCurrent ? () => assertCurrent(true) : undefined);
               };
               // Track only admitted native work, never the permission dialog.
               return completeOperation ? completeOperation(start) : start();
@@ -16721,6 +16807,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
     shouldQueueNewTurn: (sessionId, orcaReport): boolean => inputCoordinator.shouldQueueNewTurn(sessionId, orcaReport),
+    needsOrcaRuntimeRefresh: (sessionId) => {
+      const live = maker.getSession(sessionId);
+      return live?.agentKind === 'acp' && !live.agentDeviceId &&
+        (acpLeadBriefings.hasPending(sessionId) || !isOrcaMcpHydrated(sessionId));
+    },
     steerControlInput: (sessionId, item, expectedTurn) =>
       inputCoordinator.steerControlInput(sessionId, { item }, expectedTurn),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
@@ -16970,6 +17061,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertCurrent?.();
     if (persistRole) await setSessionOrcaRole(leadSessionId, null);
     knownNonOrcaSessionIds.delete(leadSessionId);
+    acpLeadBriefings.revoke(leadSessionId);
 
     const leadSess = maker.getSession(leadSessionId);
     if (leadSess) {
@@ -17715,23 +17807,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .where(eq(sessions.id, leadSessionId))
         .limit(1);
       if (!leadRow) return null;
-      const isAcpLead = leadRow.agentKind === 'acp';
-      return {
-        ...readLeadProviderGroupEntry(leadRow.id, leadRow.remoteHostId),
-        id: leadRow.id,
-        // 走引擎转换正本:pi / acp lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
-        // 判等失效,会导致内置 Worker 误继承插件引擎的 model/providerId,或 pi-lead 走错默认分支。
-        agentKind: dbToMakerEngineKind(leadRow.agentKind),
-        workspaceKind: leadRow.workspaceKind,
-        workingDir: leadRow.workingDir,
-        model: isAcpLead ? '' : leadRow.model,
-        effort: isAcpLead ? '' : leadRow.effort,
-        permissionMode: leadRow.permissionMode,
-        fastMode: isAcpLead ? false : (leadRow.fastMode ?? false),
-        providerId: isAcpLead ? null : (leadRow.providerId ?? null),
-        remoteHostId: leadRow.remoteHostId ?? null,
-        ...(leadRow.agentDeviceId && !leadRow.remoteHostId ? { agentDeviceId: leadRow.agentDeviceId } : {}),
-      };
+      return buildOrcaLeadSessionSnapshot(
+        {
+          id: leadRow.id,
+          // 走引擎转换正本:pi / acp lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
+          // 判等失效,会导致内置 Worker 误继承插件引擎的 model/providerId,或 pi-lead 走错默认分支。
+          agentKind: dbToMakerEngineKind(leadRow.agentKind),
+          workspaceKind: leadRow.workspaceKind,
+          workingDir: leadRow.workingDir,
+          model: leadRow.model,
+          effort: leadRow.effort,
+          permissionMode: leadRow.permissionMode,
+          fastMode: leadRow.fastMode,
+          providerId: leadRow.providerId,
+          remoteHostId: leadRow.remoteHostId,
+          agentDeviceId: leadRow.agentDeviceId,
+        },
+        readLeadProviderGroupEntry(leadRow.id, leadRow.remoteHostId),
+      );
     },
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     modelGroupStart: modelGroupSessionStart,
@@ -17847,30 +17940,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     clearKnownNonOrcaSession: (sessionId) => {
       knownNonOrcaSessionIds.delete(sessionId);
     },
-    setLeadVendorOptions: async ({ leadSessionId, teamId, workerId, workerSessionId }) => {
-      const leadSess = maker.getSession(leadSessionId);
-      if (!leadSess) return;
-      const patch: Record<string, unknown> = {
-        orcaRole: 'lead',
-        orcaWorkflowId: teamId,
-        orcaLeadSessionId: leadSessionId,
-        ...(workerId && workerSessionId
-          ? { initialWorker: { workerId, sessionId: workerSessionId } }
-          : {}),
-      };
-      if (leadSess.agentKind === 'acp') {
-        const briefing = renderOrcaRoleInstructions({
-          id: leadSessionId,
-          agentKind: 'acp',
-          workingDir: leadSess.workDir,
-          model: '',
-          vendorOptions: patch,
-        });
-        if (briefing) patch.pluginEngineRoleBriefing = briefing;
-      }
-      await leadSess.setVendorOptions(patch);
+    setLeadVendorOptions: async (input) => {
+      const live = maker.getSession(input.leadSessionId);
+      await applyLeadVendorOptions(acpLeadBriefings, input, live, clearOrcaMcpHydrated);
     },
     clearLeadVendorOptions: async (leadSessionId) => {
+      acpLeadBriefings.revoke(leadSessionId);
       const leadSess = maker.getSession(leadSessionId);
       if (!leadSess) return;
       await leadSess.setVendorOptions({
@@ -19724,7 +19799,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       enqueueDurableWrite(`pi-entry-link:${sessionId}:${clientId}`, () =>
         patchMessageAgentMeta(sessionId, clientId, { piEntryId }),
       ),
-    beforeDispatchDirectUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
+    beforeDispatchDirectUserTurn: async (sessionId, signal) => {
+      await awaitLocalAcpWorktreeCheckoutIfNeeded(sessionId, signal);
+      await gitSnapshotCoordinator?.onTurnStart(sessionId, signal);
+    },
     onModelDispatched: recordDispatchedModelHolder = withModelGroupStartSettlement(createTurnModelAttribution({
       captureModelChoice,
       maker, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
@@ -19842,7 +19920,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           .from(schedules).where(eq(schedules.id, quotaOrigin.scheduleId)).limit(1);
         if (!isQuotaScheduleCurrent(schedule, sessionId)) throwIpcError('PRECONDITION_FAILED', 'Schedule is no longer active for this task');
       }
-      if (!scheduled) await scheduledModelScope.restore(sessionId);
+      if (!scheduled) {
+        await scheduledModelScope.restore(sessionId);
+        await applySilentGatewaySwitchForSend(sessionId, options?.signal);
+      }
       const expectedSwitch = agentInputCoordinatorHolder?.takeRetrySwitchRevision(sessionId, options?.clientId);
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
         signal: options?.signal, expectedRevision: expectedSwitch, nextInputChars: options?.nextInputChars, scheduled,
@@ -21670,6 +21751,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     beforeDispatchUserTurn: async (sessionId, item, signal) => {
       if (isRetiredGroupWelcomeInput(item)) throw new Error('INVALID_EXECUTION_TRIGGER');
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
+      await awaitLocalAcpWorktreeCheckoutIfNeeded(sessionId, signal);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
       if (liveSession) {
@@ -22453,7 +22535,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return {
       ...inputCoordinator.getProjection(sid),
       inputDeliveryVersion: 1,
-      ...(deliveryReceipts ? { deliveryReceipts } : {}),
+      ...(deliveryClientIds ? { deliveryReceipts, dispatchedInput: inputCoordinator.getDispatchedInput(sid, deliveryClientIds) } : {}),
     };
   });
 
