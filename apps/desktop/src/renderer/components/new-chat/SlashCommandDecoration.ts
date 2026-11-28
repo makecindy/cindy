@@ -150,6 +150,7 @@ export function resolveSlashCommandRunEnd(
   from: number,
   query: string,
   commandNames: readonly string[],
+  { consumeFollowingWhitespace = true }: { consumeFollowingWhitespace?: boolean } = {},
 ): number {
   const cursorEnd = from + 1 + query.length;
   if (!query) return cursorEnd;
@@ -183,7 +184,7 @@ export function resolveSlashCommandRunEnd(
       if (nextCharacter && !/\s/.test(nextCharacter)) continue;
       if (nextCharacter) followingWhitespaceLength = nextCharacter.length;
     }
-    return cursorEnd + suffix.length + followingWhitespaceLength;
+    return cursorEnd + suffix.length + (consumeFollowingWhitespace ? followingWhitespaceLength : 0);
   }
 
   return cursorEnd;
