@@ -19,6 +19,7 @@ import { resolveConfiguredContextWindow } from '../maker-host/model-context-sett
 import { lookupVerifiedContextWindow } from '../maker-ipc/contextOverflowRollover.js';
 import { readLatestWorkerTurnError } from '../maker-ipc/orcaTurnErrorQuery.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
+import { backgroundTurnPredatesSessionClear } from '../messagePersistBroadcaster.desktop.js';
 import { lastExchange, readSessionLastExchange } from '../maker-ipc/sessionLastExchange.js';
 import type { BotHarness } from '../../shared/botModelChain.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -83,6 +84,14 @@ export interface DesktopTaskDigestHost {
 }
 
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+
+function visibleLocalRouteChange(sessionId: string, value: unknown, clearedAt?: number | null) {
+  const change = parseTaskDigestRouteChange(value);
+  if (!change) return null;
+  const at = Date.parse(change.at);
+  return (clearedAt != null && at <= clearedAt) || backgroundTurnPredatesSessionClear(sessionId, at)
+    ? null : change;
+}
 
 function routeFromProfile(
   profile: RuntimeLike['effectiveProfile'],
@@ -256,11 +265,12 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           }
         }
         if (!facts.shared && !facts.lastRouteChange) {
-          const inMemory = parseTaskDigestRouteChange(getSessionRuntimeControlSnapshot(sessionId).lastRouteChange);
+          const inMemory = getSessionRuntimeControlSnapshot(sessionId).lastRouteChange;
           const persisted = inMemory ?? (host.readPersistedRouteChange
-            ? parseTaskDigestRouteChange(await host.readPersistedRouteChange(sessionId).catch(() => null))
+            ? await host.readPersistedRouteChange(sessionId).catch(() => null)
             : null);
-          if (persisted) facts.lastRouteChange = persisted;
+          const visible = visibleLocalRouteChange(sessionId, persisted, facts.clearedAt);
+          if (visible) facts.lastRouteChange = visible;
         }
         return facts;
       },
@@ -268,9 +278,10 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const result = await host.getSessionRuntime(sessionId);
         if (!result.ok) return null;
         const runtime = result.runtime;
-        const lastRouteChange = parseTaskDigestRouteChange(
-          runtime.lastRouteChange ?? getSessionRuntimeControlSnapshot(sessionId).lastRouteChange,
-        );
+        const candidateRouteChange = runtime.lastRouteChange === undefined
+          ? getSessionRuntimeControlSnapshot(sessionId).lastRouteChange
+          : runtime.lastRouteChange;
+        const lastRouteChange = visibleLocalRouteChange(sessionId, candidateRouteChange);
         return {
           phase: typeof runtime.phase === 'string' ? runtime.phase : 'idle',
           source: typeof runtime.source === 'string' ? runtime.source : undefined,
@@ -279,7 +290,9 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           lastActivityAtMs: num(runtime.lastActivityAtMs),
           runtimeGeneration: num(runtime.runtimeGeneration),
           route: routeFromProfile(runtime.effectiveProfile, runtime.routeSource, host.describeAgentDevice),
-          ...(lastRouteChange ? { lastRouteChange } : {}),
+          ...(lastRouteChange || runtime.lastRouteChange === null || candidateRouteChange != null
+            ? { lastRouteChange }
+            : {}),
         };
       },
       readError: async (sessionId, activity, facts) => {

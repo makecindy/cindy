@@ -323,7 +323,9 @@ function assemble(input: {
     : rawRoute;
   const lastRouteChange = input.facts.shared
     ? null
-    : (activity?.lastRouteChange ?? input.facts.lastRouteChange ?? null);
+    : (activity && 'lastRouteChange' in activity
+      ? activity.lastRouteChange ?? null
+      : input.facts.lastRouteChange ?? null);
   return {
     session_id: input.key,
     device: input.device,

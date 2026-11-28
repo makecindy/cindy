@@ -381,3 +381,32 @@ it('projects provider device and last_route_change in host digest without extra 
   const remoteChannels = vi.mocked(host.invokeRemote).mock.calls.map(([, channel]) => channel);
   expect(remoteChannels).not.toContain(DL_HISTORY_MESSAGES_CHANNEL);
 });
+
+// Unit, host -> digest: a persisted switch remains readable while current, then
+// /clear's in-memory boundary must hide it even if the DB row is still stale.
+// A runtime null must also suppress the facts fallback when no boundary exists.
+it('hides persisted route attribution after a clear boundary before the database update lands', async () => {
+  const { noteSessionClearBoundary } = await import('../../messagePersistBroadcaster.desktop.js');
+  const { host, read } = setup('completed', null);
+  const change = {
+    at: '2026-11-28T10:00:00.000Z', by: 'agent', reason: 'explicit',
+    from: { agentKind: 'pi', model: 'old', providerId: 'gateway', agentDeviceId: null },
+    to: { agentKind: 'pi', model: 'model', providerId: 'gateway', agentDeviceId: null },
+  };
+  host.readPersistedRouteChange = vi.fn(async () => change);
+  expect(await read({ sessionId: 'local-task' })).toMatchObject({
+    ok: true, digest: { last_route_change: { by: 'agent', reason: 'explicit' } },
+  });
+  noteSessionClearBoundary('local-task', Date.parse(change.at) + 1);
+  try {
+    const result = await read({ sessionId: 'local-task' });
+    expect(result).toMatchObject({ ok: true });
+    expect((result as { digest?: Record<string, unknown> }).digest).not.toHaveProperty('last_route_change');
+  } finally {
+    noteSessionClearBoundary('local-task', null);
+  }
+  vi.mocked(host.getSessionRuntime).mockResolvedValue({ ok: true, runtime: { phase: 'completed', lastRouteChange: null } });
+  const explicitlyCleared = await read({ sessionId: 'local-task' });
+  expect(explicitlyCleared).toMatchObject({ ok: true });
+  expect((explicitlyCleared as { digest?: Record<string, unknown> }).digest).not.toHaveProperty('last_route_change');
+});
