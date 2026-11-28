@@ -146,7 +146,7 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
   复用重连预取，不轮询；进入分享管理页则释放列表订阅。
   打开某一项详情时与模型选择器同一时机发一次 `maker:refresh-plugin-engines`(按电脑 60 秒冷却)并在 2.5 秒后复读。
   该引擎带 `reportsUsage` 时，详情还经既有只读的 `maker:get-plugin-engine-usage`(后台档)读一次那台电脑的账号用量，
-  与本机详情同一组件，打开详情和窗口重新获得焦点时读，与任务里的用量标签共用按电脑、按引擎一分钟内的读取，不轮询；
+  与本机详情同一组件，打开详情和窗口重新获得焦点时读，与无任务上下文的额度预览共用按电脑、按引擎一分钟内的读取，不轮询；
   不带 `reportsUsage` 的引擎不读。
   没有新 channel、新字段或 allowlist 变化，旧电脑回 `CHANNEL_NOT_ALLOWED` 时不列出(用量读失败时不显示用量)。
 - **暂未提供**：与普通供应商混排的拖动排序、模型选择器里的「已隐藏」展开区、供应商组与引擎切换。
@@ -163,7 +163,7 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
 可以处理 `usage({harnessId})`。Host 在调用及返回前检查该实例、批准和可用状态，broker 校验当前账号。
 主进程只把校验并裁剪过的 `GhostHarnessUsage` 返回给发起读取的界面；快照不落盘，也不进入模型列表广播。
 快照使用毫秒时间戳，最多 24 个窗口和 8 个币种余额。读取失败或未提供数据时显示为空，零值保留。
-桌面任务和手机菜单按账号代次、执行电脑、引擎共用在途读取与一分钟缓存。切换任务可复用结果，隐藏期间缓存到期只释放数据，账号切换后丢弃原账号的回包。
+额度预览按账号代次、执行电脑、引擎共用在途读取与一分钟缓存。按任务读取时额外区分任务 ID，桌面借用引擎与远程查看宿主任务也各自缓存。隐藏期间缓存到期只释放数据，账号切换后丢弃原账号的回包。
 模型目录刷新保留仍可上报用量的引擎读数。引擎被移除或停止上报时，控制端清掉该引擎的缓存并丢弃迟到的回包。手机暂时连不上执行电脑时保留上次读到的目录。
 
 同账号配对设备通过只读 `maker:get-plugin-engine-usage(key)` 查询执行电脑；SSH、分享访客与未配对调用没有账号用量入口。
@@ -210,7 +210,7 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
    （插件引擎的 providerId 也会出现，旧界面按不认识的 providerId 忽略）。旧执行电脑以 `INVALID_PARAMS` 拒绝插件引擎 id（含 `session` 探测），控制端按不支持降级为原路径（不交接上下文、不自动换号）。
    `maker:list-plugin-engines` 视图追加可选 `accounts`（登录方式，不含秘密）。`maker:get-plugin-engine-usage` 追加可选第二参数 `{ sessionId }`：
    读该任务所绑账号的用量（本机窗口：未分配时为空）；device-link 调用（手机、同账号远控）带上时，执行电脑认识这个任务就读它所绑账号，
-   不认识就按原来的读法读引擎原有登录；旧 Host 忽略多余参数。
+   同账号控制端借用本机引擎时另带可选的 `hosted: true`，执行端用经验证的调用设备和原任务 ID 查托管任务绑定。未找到绑定时沿用引擎原有登录；旧 Host 忽略多余参数。
    均为既有 invoke 帧与 channel 的可选字段或新取值，没有新 channel、relay 帧或 allowlist 变化，官方与自建中转原样转发，无需修改。
 7. **存储**（均按 Cindy 账号隔离）：`owners/<账号>/plugin-engine-accounts.json`（各引擎的账号设置、拿出的供应商与归属、任务与原生会话绑定）、
    `owners/<账号>/plugin-engine-account-cooling.json`（与 `subscription-account-cooling.json` 同格式，单独存放：旧版写内置账号冷却会丢掉它不认识的键），

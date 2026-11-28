@@ -2722,6 +2722,9 @@ function CCAgentSessionContent({
       : usageAccount.kind === 'task'
         ? (remoteDeviceId ?? null)
         : null;
+  // A third computer viewing a task with a borrowed engine cannot identify itself as its owner.
+  const borrowedPluginEngine = usageAccount.kind === 'device' && !remoteDeviceId;
+  const pluginUsageSessionId = usageAccount.kind === 'device' && remoteDeviceId ? undefined : sessionId;
   const usageCatalogue = taskAccountDeviceId
     ? (taskAccountDeviceId === pluginEngineAgentDeviceId && agentDevicePluginEngines !== undefined
       ? agentDevicePluginEngines
@@ -7548,11 +7551,11 @@ function CCAgentSessionContent({
                     )}
                     {pluginUsageKey && viewVisible && !session?.remoteHostId && !isSharedTaskPeer(remoteDeviceId ?? '')
                       && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
-                      <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey])}
+                      <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey, pluginUsageSessionId, borrowedPluginEngine])}
                         engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
                         modelId={pluginEngineSwitchIntent?.model ?? session?.model ?? null}
                         modelName={pluginEngineModelName(usageEngine, pluginEngineSwitchIntent?.model ?? session?.model ?? '') ?? null}
-                        running={agentStatus.isRunning} {...(sessionId ? { sessionId } : {})} />
+                        running={agentStatus.isRunning} hosted={borrowedPluginEngine} sessionId={pluginUsageSessionId ?? undefined} />
                     )}
                     {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (
                       <TodaySpendChip
