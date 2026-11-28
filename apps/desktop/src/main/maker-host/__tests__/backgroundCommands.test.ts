@@ -113,8 +113,8 @@ it('命令退出后回注一次完成报告:退出码、日志尾部、scheduler
   expect(report.persistedContent).toContain('后台命令完成');
   // 摘要行要把「结果」先亮出来：退出码 + 末尾输出行（命令本身排后面）。
   expect(report.persistedContent).toContain('exit 3');
-  // 末尾行取最后一条输出，且剥掉颜色转义（否则卡片上是一串 ^[[32m）。
-  expect(report.persistedContent).toContain('末尾「gate-tail-line」');
+  // 末尾取最后两行（报错行 + 自己的收尾 echo 都要看得到），且剥掉颜色转义。
+  expect(report.persistedContent).toContain('末尾「gate-output-line」「gate-tail-line」');
   expect(report.persistedContent).not.toContain('\u001b');
   expect(report.origin).toMatchObject({ kind: 'scheduler', scheduleName: '后台命令' });
   expect(report.origin.scheduleId).toMatch(/^bgcmd:bg-/);

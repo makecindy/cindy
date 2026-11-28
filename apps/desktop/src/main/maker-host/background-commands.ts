@@ -342,18 +342,17 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
             ? `exit ${input.exit.code}`
             : `被信号终止（${input.exit.signal ?? 'unknown'}）`;
     const head = input.command.length > 160 ? `${input.command.slice(0, 160)}…` : input.command;
-    // 摘要行只放一行:终端最后一行就是最像结果的那一行(报错/汇总),命令本身
-    // 主人刚写过,排后面且截短——队列行/通知只有一两行可见宽度。
+    // 摘要行只放一行:终端最后两行通常一起构成结果(报错行 + 收尾标记如 TSC-DONE),
+    // 只取一行会被自己的收尾 echo 挤掉真报错。命令本身主人刚写过,排后面且截短。
     // 按 \r 也切:进度条用回车原地刷,终端最后看到的是最后一段。
-    const lastLine =
-      input.tail
-        .split(/[\r\n]+/)
-        .map((line) => line.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').trim())
-        .filter(Boolean)
-        .pop() ?? '';
-    const digest = lastLine
-      ? `末尾「${lastLine.length > 120 ? `${lastLine.slice(0, 120)}…` : lastLine}」`
-      : '无输出';
+    const lastLines = input.tail
+      .split(/[\r\n]+/)
+      .map((line) => line.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').trim())
+      .filter(Boolean)
+      .slice(-2)
+      // 逐行封顶而不是整段截断：否则第二行（收尾标记）会被第一行的长报错吃没。
+      .map((line) => (line.length > 100 ? `${line.slice(0, 100)}…` : line));
+    const digest = lastLines.length ? `末尾「${lastLines.join('」「')}」` : '无输出';
     const shortHead = input.command.length > 60 ? `${input.command.slice(0, 60)}…` : input.command;
     // 「以日志判断成败」只在确实报了退出码时说得通:被杀/启动失败/超时都没码。
     const plainExit =
