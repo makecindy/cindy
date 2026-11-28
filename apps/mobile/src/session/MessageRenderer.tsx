@@ -2,6 +2,7 @@ import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
 import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
 import { SettingsLinkSpan } from './SettingsLinkSpan';
+import { groupExternalLinkDisplay, groupExternalLinkText } from './groupExternalLinkDisplay';
 import type { ViewInstance } from 'react-native';
 import { resolveAttachmentPreviewSource } from './messagePayload';
 import {
@@ -4423,15 +4424,19 @@ function MessageBubble({
       {attachmentStripNode}
       {dispatchRoute && messageDispatchRouteMismatch(dispatchRoute) && dispatchRoute.selected ? (
         <ErrorNotice message={t('session.screen.modelSwitchPreparation.usingPrevious', {
-          actual: messageDispatchRouteLabel(dispatchRoute, t('models.pluginEngines.genericName')),
-          target: messageDispatchRouteLabel(dispatchRoute.selected, t('models.pluginEngines.genericName')),
+          actual: messageDispatchRouteLabel(
+            dispatchRoute,
+            t('models.pluginEngines.genericName'),
+            t('models.pluginEngines.defaultModel'),
+          ),
+          target: messageDispatchRouteLabel(
+            dispatchRoute.selected,
+            t('models.pluginEngines.genericName'),
+            t('models.pluginEngines.defaultModel'),
+          ),
         })}>
           {dispatchRoute.switchError ? <AgentErrorDetails message={dispatchRoute.switchError} /> : null}
         </ErrorNotice>
-      ) : dispatchRoute ? (
-        <Text style={styles.failedSamplingAttemptText} testID="message.dispatchRoute">
-          {messageDispatchRouteLabel(dispatchRoute, t('models.pluginEngines.genericName'))}
-        </Text>
       ) : null}
       {item.message.failedSamplingAttempt ? (
         <Text style={styles.failedSamplingAttemptText}>
@@ -6443,6 +6448,7 @@ function MarkdownBodyBase({
   codeCopyEnabled = true,
   boundTextRuns = false,
   publicMediaOnly = false,
+  groupExternalLinks,
   markdownImageCacheKey,
   layout,
   onOpenPayload,
@@ -6458,6 +6464,8 @@ function MarkdownBodyBase({
   renderRichAnswers?: boolean;
   /** Shared room bodies cannot resolve task-local media from model-authored paths. */
   publicMediaOnly?: boolean;
+  /** Full group bodies keep the same link labels in reading and image-share selection. */
+  groupExternalLinks?: 'interactive' | 'static';
   /** Persisted row ids may replace stream ids; clientId stays stable across that handoff. */
   richStateKey?: string;
   /** 普通任务的超长展开正文可禁用 UITextView，伙伴改用有界文本分组。 */
@@ -6648,6 +6656,7 @@ function MarkdownBodyBase({
     ) =>
       inlines.map((inline, index) => renderInline(inline, index, styles, {
         baseStyle,
+        groupExternalLinks,
         keyPrefix,
         onOpenImage: openMarkdownImage,
         renderManagedImage,
@@ -6660,7 +6669,7 @@ function MarkdownBodyBase({
     ),
     // renderInline also reads translated fallback labels. Invalidate completed
     // memoized text blocks when useTranslation refreshes its bound translator.
-    [onOpenSessionLink, openMarkdownImage, openMarkdownMedia, renderManagedImage, sessionLinkTitles, streaming, styles, t],
+    [groupExternalLinks, onOpenSessionLink, openMarkdownImage, openMarkdownMedia, renderManagedImage, sessionLinkTitles, streaming, styles, t],
   );
   const textRunGroupingOptions = useMemo(() => ({
     ...(Platform.OS === 'android' ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
@@ -6887,6 +6896,7 @@ function MarkdownBodyBase({
         rows: block.rows,
         availableWidth: layout.markdownTableAvailableWidth,
         minWidth: layout.markdownTableCellMinWidth,
+        linkText: groupExternalLinks ? groupExternalLinkText : undefined,
       });
       return (
         <View key={block.key} style={styles.markdownTableScroll}>
@@ -7146,6 +7156,7 @@ function renderInline(
   index: number,
   styles: ReturnType<typeof makeStyles>,
   ctx: {
+    groupExternalLinks?: 'interactive' | 'static';
     /** text_run 合并树里,每个 span 都要自带块级基础样式(扁平两级 flatten 不做深层继承)。 */
     baseStyle?: StyleProp<TextStyle>;
     /** text_run 合并树里多个块共父,key 需要块级前缀防冲突。 */
@@ -7266,6 +7277,16 @@ function renderInline(
       const openExternalUrl = () => {
         void Linking.openURL(inline.url).catch(() => undefined);
       };
+      if (ctx.groupExternalLinks && /^https?:\/\//i.test(inline.url)) {
+        const display = groupExternalLinkDisplay(inline);
+        const onPress = ctx.groupExternalLinks === 'interactive' ? openExternalUrl : undefined;
+        return (
+          <SpanText key={spanKey(`link:${index}:${inline.url}`)} onPress={onPress}
+            style={clickableInlineStyle(styles, onPress, ctx.baseStyle, display.github ? styles.sessionLinkChipText : undefined)}>
+            {display.text}
+          </SpanText>
+        );
+      }
       return (
         <MailLinkSpan
           key={spanKey(`link:${index}:${inline.url}`)}

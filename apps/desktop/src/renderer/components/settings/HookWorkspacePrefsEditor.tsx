@@ -509,6 +509,7 @@ export function WorkspacePrefsEditor({
                 }
               : undefined
           }
+          readModelGroupDevices={targetDeviceId ? remoteGroups.read : undefined}
           {...(groupsAvailable ? {
             modelGroups: {
               config: groupsConfig,

@@ -360,8 +360,15 @@ export type PrepareWorktreeResult =
   | { ok: true; sessionId: string; path: string; cleanup: () => Promise<void> }
   | { ok: false; message: string };
 
+/** 能交给伙伴的官方渠道与其任务标题前缀。 */
+const COMPANION_PROVIDERS = new Set(['slack', 'telegram', 'feishu', 'discord', 'x']);
+const COMPANION_TOPIC_CHANNEL: Record<string, string> = {
+  x: 'X', slack: 'Slack', telegram: 'Telegram', feishu: '飞书', discord: 'Discord',
+};
+
 export interface HookDispatcherDeps {
-  resolveCompanionTarget?: (botId: string, externalKey: string, subject?: string) => Promise<{
+  /** 官方渠道交给伙伴时的落点(provider = 连接 id 末段, 与 source.im 一致)。 */
+  resolveCompanionTarget?: (botId: string, externalKey: string, subject: string | undefined, provider: string) => Promise<{
     sessionId: string;
     workingDir: string;
     initialTopicTitle?: string;
@@ -2455,10 +2462,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       externalKey: payload.externalKey,
     };
     if (config.companionBotId) {
-      if (!connectionId.endsWith(':x') || payload.source?.im !== 'x' || !deps.resolveCompanionTarget) {
+      // 交给伙伴的只接来源与这条连接同一渠道的派发(官方机器人只派主人本人的消息到这台电脑)。
+      const provider = connectionId.split(':').at(-1) ?? '';
+      if (!COMPANION_PROVIDERS.has(provider) || payload.source?.im !== provider || !deps.resolveCompanionTarget) {
         return { reject: 'disabled' };
       }
-      const target = await deps.resolveCompanionTarget(config.companionBotId, payload.externalKey, payload.source.userText);
+      const target = await deps.resolveCompanionTarget(config.companionBotId, payload.externalKey, payload.source.userText, provider);
       if (!isCurrentGeneration(generation)
         || getConnection(connectionId)?.companionBotId !== config.companionBotId) {
         return { reject: 'disabled' };
@@ -2467,7 +2476,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       bindings.set(connectionId, payload.externalKey, target.sessionId);
       return { run: {
         sessionId: target.sessionId, workingDir: target.workingDir, companionBotId: config.companionBotId, isNew: false,
-        ...(target.initialTopicTitle ? { topicNaming: { initialTitle: target.initialTopicTitle, channel: 'X' } } : {}),
+        ...(target.initialTopicTitle ? { topicNaming: { initialTitle: target.initialTopicTitle, channel: COMPANION_TOPIC_CHANNEL[provider] ?? provider } } : {}),
         agentKind: null, model: null, effort: null, permissionMode: null,
         title: null, prompt: payload.prompt, attachments: payload.attachments, origin,
       } };

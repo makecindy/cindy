@@ -10,14 +10,16 @@
 手机将插件目标拆到 `pluginEngineSwitchIntent` 时保留相同准备状态与失败原因，插件和内置目标共用状态提示。
 普通同设备跨引擎准备失败仍可沿旧来源继续发送，不扩大换电脑、同引擎与协同任务的原有准入范围。
 
-Desktop 与 Node Host 的共同发送事务在既有 user 行的 `agentMeta.dispatchRoute` 保存本次实际
-`agentKind/model/providerId/agentDeviceId`，仅当目标不同才附 `selected` 与可选 `switchError`。
-桌面与手机据此展示逐条来源和目标未就绪提示，不从当前选择器反推历史；旧消息缺失时不补猜。
+Desktop 与 Node Host 的共同发送事务仅在本次实际路由与待切换目标不一致时，在既有 user 行的 `agentMeta.dispatchRoute`
+保存实际 `agentKind/model/providerId/agentDeviceId`（插件引擎另带可读 `engineName` 快照）、`selected` 与可选 `switchError`；
+正常发送不写入该字段。桌面与手机仅在 `dispatchRoute` 存在路由不一致时展示回退提示（兼容忽略旧版本写入的普通无差异快照），
+插件引擎展示 `engineName` 或本地化通用名而不暴露 `acp-plugin:` 内部标识，不从当前选择器反推历史；旧消息缺失时不补猜。
 共享任务访客不接收这份含房主供应商／电脑身份的快照，沿用原脱敏边界。
 复用既有消息落库、历史读取及会话推送，无新 channel、网络探测或轮询；自建中转只透传原业务 payload，无需更新。
-回归见 `sessionAgentSwitchHandler.test.ts`、`makerSendTransaction.test.ts`、共享 `messageSource.test.ts`
-及手机 `sessionAgentSwitch.test.ts`、`pluginEngines.test.ts` 和 Host `input-queue.test.mjs` 的失败后继续发送场景；
-界面场景为 `composer-model-width` 的 `switch-preparing/switch-failed/switch-plugin-source`。
+回归见 `sessionAgentSwitchHandler.test.ts`、`makerSendTransaction.test.ts`、共享 `messageSource.test.ts`、
+桌面 `ErrorLocalization.test.tsx`、手机 `messageSourceLabelsRender.test.tsx` / `sessionAgentSwitch.test.ts` / `pluginEngines.test.ts`
+和 Host `input-queue.test.mjs` 的失败后继续发送场景；
+界面场景为 `composer-model-width` 的 `switch-preparing/switch-failed/switch-plugin-source/switch-normal-hidden`。
 
 分享组在 `open` 准入时选不出电脑，可在现有错误信封内返回
 `REMOTE_AGENT_GROUP_FULL` 或 `REMOTE_AGENT_GROUP_USAGE_LIMIT`。额度错误复用本地调度器的

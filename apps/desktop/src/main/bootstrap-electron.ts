@@ -1374,7 +1374,7 @@ import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { registerModelGroupDecisionIpc } from './model-groups/decisionIpc.js';
 import { registerDesktopSshCodexProvidersReader } from './model-groups/desktopResolver.js';
 import { registerModelGroupsIpc } from './model-groups/ipc.js';
-import { registerFeishuGroupSettingsIpc } from './im/feishu/groupSettingsIpc.js';
+import { registerImChatSettingsIpc } from './im/shared/chatSettingsIpc.js';
 import { wireFeishuGroupProjectPorts } from './im/feishu/groupProjectPortsWiring.js';
 import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
@@ -5920,7 +5920,7 @@ const registerIpcHandlers = () => {
     return imDefaultSettingsWire(channel);
   });
   wireFeishuGroupProjectPorts();
-  registerFeishuGroupSettingsIpc();
+  registerImChatSettingsIpc();
   if (!hostClientMode) {
     registerDesktopSshCodexProvidersReader(listSshCodexProviders);
     registerModelGroupsIpc();
