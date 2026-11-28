@@ -87,17 +87,19 @@ const STREAM_TRUNCATION_PATTERN =
   /connection closed mid-response|response above may be incomplete|stream (?:closed|ended|interrupted) (?:unexpectedly|mid-response)/i;
 
 /**
- * Inference gateways may return 503 while every OAuth account is cooling down.
+ * Inference gateways may return 503 while every account is unavailable.
+ * Both "No available accounts" and the older "No available OAuth accounts"
+ * describe the same pool failure; the SDK may omit the structured HTTP status.
  * This is not a transient transport failure: replaying the same turn immediately
  * only asks the same exhausted account pool again, so it must stay out of the
  * automatic resume allowlist below.
  */
-const OAUTH_ACCOUNT_POOL_UNAVAILABLE_PATTERN = /\bno available oauth accounts\b/i;
+const ACCOUNT_POOL_UNAVAILABLE_PATTERN = /\bno available (?:oauth )?accounts\b/i;
 
-function isOAuthAccountPoolUnavailableError(signals: InterruptedTurnErrorSignals): boolean {
+function isAccountPoolUnavailableError(signals: InterruptedTurnErrorSignals): boolean {
   if (signals.errorStatus !== undefined && signals.errorStatus !== 503) return false;
   return typeof signals.message === 'string' &&
-    OAUTH_ACCOUNT_POOL_UNAVAILABLE_PATTERN.test(signals.message);
+    ACCOUNT_POOL_UNAVAILABLE_PATTERN.test(signals.message);
 }
 
 /**
@@ -242,7 +244,7 @@ export function shouldPreserveRuntimeFallbackAutoResume(input: {
 export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): boolean {
   // This is a deliberate exception to the broad 503/network allowlist. Check it
   // first so a future stable reason cannot accidentally re-enable auto-resume.
-  if (isOAuthAccountPoolUnavailableError(signals)) return false;
+  if (isAccountPoolUnavailableError(signals)) return false;
   const reason = typeof signals.reason === 'string' ? signals.reason : '';
   if (
     signals.codexErrorInfo === 'cyberPolicy' ||
