@@ -142,14 +142,14 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 创建回执陈述交接事实，不让 Lead 猜（2026-11-10 现场：五个 Worker「创建成功、首条任务已排队」被说成
 「五个在跑」，随后全部因读不到 Lead 的文件受阻）。`create_worker` 与 `create_workers` 的每个成功项都带：
 
-- `initial_task_state`：`delivered`（已送达并开始处理）／`queued`（已排队、尚未开始）／`not_delivered`
-  （Worker 已创建但任务没送到）／`none`（没有附任务），由 `dispatched`、`queued_message_id` 与
-  `dispatch_outcome` 确定推出；`create_workers.user_report` 按这四类计数，不再让用户自己核对终态。
+- `initial_task_state`：`delivered`（已送达并开始处理）／`queued`（已排队、尚未开始）／`unknown`（送达未确认，正在核对）／
+  `not_delivered`（Worker 已创建但任务没送到）／`none`（没有附任务），由 `dispatched`、`queued_message_id` 与
+  `dispatch_outcome` 确定推出；`create_workers.user_report` 按这五类计数，不再让用户自己核对终态。
 - `file_access`：`lead_working_directory`（与 Lead 同一目录）／`own_worktree`／`explicit_directory`
   （同一台电脑的另一个目录）／`other_computer`（运行设备），后三类附一句 `handoff_hint`。按创建参数与
   实际落点判定，不读 Lead 目录。
 
-跨电脑创建时，Lead 按首条任务的 clientId 查询运行设备的投递回执。运行设备仅在引擎已接手该输入时返回 `dispatchedInput`；消息已落库、查询失败或旧运行设备缺少回执字段时，创建结果保守显示 `queued`，由现有回报通道继续核对。
+跨电脑创建时，Lead 按首条任务的 clientId 查询运行设备的投递回执。只有与该输入匹配的引擎接手回执 `dispatchedInput` 才报告 `delivered`。入队成功、投递回执为 `pending`／`accepted`，或历史中已找到该输入时，缺少接手证据则报告 `queued`。入队回执丢失且回查也无法确认送达（包括旧端缺少回执字段）时报告 `unknown`，保留原 clientId 继续核对，请勿重复派发。明确拒绝或回执为 `removed` 时报告 `not_delivered`。
 
 实现见 `create_worker.ts` 的 `initialTaskState` / `workerHandoffPayload`，回归见
 `createWorkersTool.test.ts`。任务正文要自包含写在这两个工具与 `send_to_worker` 的工具说明里，不进系统提示词。
