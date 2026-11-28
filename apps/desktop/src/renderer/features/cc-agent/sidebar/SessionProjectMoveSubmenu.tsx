@@ -35,7 +35,9 @@ export function SessionProjectMoveSubmenu({
   onMoveToDialogue,
 }: SessionProjectMoveSubmenuProps) {
   const { t } = useTranslation();
-  const movableProjects = projectOptions.filter((project) => !isTeammateProjectPath(project.path));
+  const movableProjects = projectOptions.filter(
+    (project) => !project.missing && !isTeammateProjectPath(project.path),
+  );
   const normalizedCurrent = normalizePath(
     !isDialogue && currentSession ? sessionProjectDirectory(currentSession) : null,
   );

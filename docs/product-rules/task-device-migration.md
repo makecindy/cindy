@@ -8,6 +8,11 @@
 远程任务的同机项目切换仍发送到任务所属电脑，复用已有 `moveSession` 宿主业务路径，
 不开放远程原始 DB patch。同机移动不会传输文件，其既有绑定及运行状态校验保持不变。
 
+「移动任务」的最近项目候选排除已确认目录不存在的记录；只从侧栏隐藏但目录仍有效的项目，
+以及尚未报告目录存在性的记录，仍可选择。过滤仅影响移动菜单，不删除项目历史或数据。
+实现与回归见 `SessionProjectMoveSubmenu.tsx`、`SessionTaskMenu.test.tsx` 和
+`pnpm ui:check --page project-picker-aliases --case move-missing,move-all-missing --theme all`。
+
 ## 复制内容与流程
 
 1. 复制普通 Desktop、共享来源或飞书来源的任务，以及从主任务发起的整组 Orca 任务。
