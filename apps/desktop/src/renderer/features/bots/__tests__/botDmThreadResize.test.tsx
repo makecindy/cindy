@@ -30,6 +30,8 @@ vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => {} },
 }));
 vi.mock('react-router-dom', () => ({
+  useLocation: () => ({ key: 'resize', state: null }),
+  useNavigationType: () => 'REPLACE',
   useSearchParams: () => [h.params, vi.fn()],
 }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
@@ -38,6 +40,7 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
 }));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
+    getMessageHistoryEpoch: () => 0,
     getSnapshot: (sessionId: string) => h.snapshots.get(sessionId) ?? { messages: [] },
     subscribe: () => () => {},
   },

@@ -2,12 +2,18 @@
  * 私聊话题与群聊复用 ThreadPanel 和根消息行；原文放在话题 Session 的消息滚动区内
  * （回复、工具进度、确认、停止都在里面），所以这里不另做一套消息列表。
  */
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import { makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
+import { aroundMessagesByClientIdFor } from '@/lib/makerTransport';
+import { extractIpcError } from '@/utils/ipcError';
+import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
+import { parseUserContent } from '@/lib/imageRef';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import type { BotChatIdentity } from './BotSessionContentHeader';
@@ -16,16 +22,99 @@ import type { ThreadPanelResize } from './useThreadPanelResize';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
 import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { botDmThreadReadKey, markBotRead } from './botReadState';
+import type { BotGroupAttachment } from '../../../shared/botGroupChat';
 
-/** The root message as the main chat has it loaded; null while it is not among the loaded rows. */
+type RootMessage = Pick<ChatMessage, 'clientId' | 'role' | 'content' | 'createdAt' | 'images' | 'files'>;
+
+/** Keep attachment pointers intact; the shared row owns previews and missing-file states. */
+function rootAttachments(root: RootMessage): BotGroupAttachment[] {
+  return [
+    ...(root.images ?? []).map((image, index): BotGroupAttachment => ({
+      id: `${root.clientId}:image:${index}`, name: image.originalName ?? '', category: 'image',
+      mimeType: image.mimeType, size: 'size' in image ? image.size ?? 0 : 0,
+      url: 'url' in image ? image.url : `data:${image.mimeType};base64,${image.base64}`, path: null,
+    })),
+    ...(root.files ?? []).map((file, index): BotGroupAttachment => ({
+      id: `${root.clientId}:file:${index}`, name: file.name, category: 'file',
+      mimeType: 'application/octet-stream', size: 0, url: null, path: file.path,
+    })),
+  ];
+}
+
+/** Resolve the exact root even when restoring an older topic outside the main chat window. */
 function useRootMessage(rootSessionId: string, rootClientId: string) {
   const snapshot = useSyncExternalStore(
     (listener) => makerChatStore.subscribe(rootSessionId, listener),
     () => makerChatStore.getSnapshot(rootSessionId),
     () => makerChatStore.getSnapshot(rootSessionId),
   );
+  const historyEpoch = useSyncExternalStore(
+    (listener) => makerChatStore.subscribe(rootSessionId, listener),
+    () => makerChatStore.getMessageHistoryEpoch(rootSessionId),
+    () => makerChatStore.getMessageHistoryEpoch(rootSessionId),
+  );
   const message = snapshot?.messages?.find((row) => row.clientId === rootClientId);
-  return message && (message.role === 'user' || message.role === 'assistant') ? message : null;
+  const owner = getDataOwnerGeneration();
+  // Keep the existing coordinator across history epochs, not across roots/owners.
+  const refresh = useMemo(() => createCoalescedRefresh<void>(), [rootSessionId, rootClientId, owner]);
+  const [loaded, setLoaded] = useState<(RootMessage & { sessionId: string;
+    owner: ReturnType<typeof getDataOwnerGeneration>; historyEpoch: number }) | null>(null);
+  useEffect(() => {
+    if (message) return;
+    let cancelled = false;
+    setLoaded(null);
+    let readState: 'idle' | 'scheduled' | 'settled' = 'idle';
+    let windowHidden = isWindowHidden();
+    // Invalidate display immediately, but let the coordinator finish the active
+    // read before the latest epoch. Recheck visibility/lifecycle at actual start.
+    const canRead = () => !cancelled && !windowHidden && document.visibilityState !== 'hidden'
+      && isDataOwnerGenerationCurrent(owner)
+      && makerChatStore.getMessageHistoryEpoch(rootSessionId) === historyEpoch;
+    const load = () => {
+      if (readState !== 'idle' || !canRead()) return;
+      readState = 'scheduled';
+      void refresh(async () => {
+        if (!canRead()) { readState = 'idle'; return; }
+        const rows = await aroundMessagesByClientIdFor(rootSessionId, rootClientId, { radius: 0 }).catch(error => {
+          // The exact-anchor IPC reports deleted/rewound roots as NOT_FOUND, not [].
+          // Normalize absence at the read boundary; only real failures remain retryable.
+          if (extractIpcError(error)?.code === 'NOT_FOUND') return [];
+          throw error;
+        });
+        if (cancelled || !isDataOwnerGenerationCurrent(owner)
+          || makerChatStore.getMessageHistoryEpoch(rootSessionId) !== historyEpoch) return;
+        readState = 'settled'; // An empty successful result is genuinely unavailable.
+        const row = rows.find(candidate => candidate.sessionId === rootSessionId && candidate.clientId === rootClientId);
+        if (row && (row.role === 'user' || row.role === 'assistant')) {
+          const parsed = row.role === 'user' ? parseUserContent(row.content) : {
+            text: typeof row.content === 'string' ? row.content : JSON.stringify(row.content),
+            images: [], files: [],
+          };
+          setLoaded({ sessionId: rootSessionId, clientId: rootClientId, role: row.role,
+            content: parsed.text, images: parsed.images, files: parsed.files, createdAt: row.createdAt, owner, historyEpoch });
+        }
+      }).catch(() => {
+        // Failure is not a synchronized empty result. No automatic retry: the next
+        // visibility event may schedule once, through the same lifecycle guards.
+        readState = 'idle';
+      });
+    };
+    document.addEventListener('visibilitychange', load);
+    const offHidden = window.electronAPI?.onWindowHiddenChange?.(hidden => {
+      windowHidden = hidden;
+      load();
+    });
+    load();
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', load);
+      offHidden?.();
+    };
+  }, [message, rootClientId, rootSessionId, historyEpoch, owner, refresh]);
+  if (message) return message.role === 'user' || message.role === 'assistant' ? message : null;
+  return loaded?.sessionId === rootSessionId && loaded.clientId === rootClientId
+    && loaded.historyEpoch === historyEpoch
+    && isDataOwnerGenerationCurrent(loaded.owner) ? loaded : null;
 }
 
 export type BotDmThreadPanelState =
@@ -96,7 +185,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
               authorKind: isBot ? 'bot' : 'user', authorBotId: isBot ? bot.id : null,
               authorName: isBot ? bot.name : t('bots.dmThread.you'), content: root.content,
               mentions: { all: false, botIds: [] }, noticeCode: null, planId: null,
-              files: [], attachments: [], createdAt: root.createdAt ? Date.parse(root.createdAt) : 0,
+              files: [], attachments: rootAttachments(root), createdAt: root.createdAt ? Date.parse(root.createdAt) : 0,
             }}
             continued={false}
             authorName={isBot ? bot.name : t('bots.dmThread.you')}
