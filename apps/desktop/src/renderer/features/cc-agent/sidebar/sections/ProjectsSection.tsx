@@ -125,7 +125,7 @@ import type { SidebarPluginHarness } from '../SidebarFilterPopover';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
-import { TaskInbox, type TaskInboxProps } from '../TaskInbox';
+import { TaskInbox } from '../TaskInbox';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -197,7 +197,6 @@ export interface ProjectsSectionProps {
   /** Same device/content scope, including archived tasks, for the standalone inbox mode. */
   inboxSessions?: readonly Session[];
   inboxNow?: number;
-  inboxTeammates?: TaskInboxProps['teammates'];
   /** Inbox: whether a task belongs to a teammate (the task list's teammate-filter test). */
   isInboxTeammateTask?: (session: Session) => boolean;
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
@@ -295,7 +294,6 @@ export function ProjectsSection({
   unclassified,
   inboxSessions,
   inboxNow,
-  inboxTeammates,
   isInboxTeammateTask,
   projects,
   dialogues,
@@ -1426,7 +1424,6 @@ export function ProjectsSection({
       {taskListMode === 'inbox' && inboxSessions && (
         <TaskInbox
           now={inboxNow}
-          teammates={inboxTeammates}
           sessions={inboxSessions}
           contentFiltered={sidebarContentFilterCount(filter) > 0}
           isTeammateTask={isInboxTeammateTask}
