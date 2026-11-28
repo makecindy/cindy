@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { matchPath, useBlocker, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -7,13 +7,16 @@ import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 
 import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
-import { useBotProfiles } from './botStore';
+import { canonicalBotSessionId, useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { cloudCompanionAt, homeControlOff, cloudRemoteBots } from './companionCloudPresentation';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { useRemoteBots } from './useRemoteBots';
 import { RemoteTeammateSettings } from './RemoteTeammateSettings';
+import * as sessionService from '@/lib/sessionService';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { openFileInSidebarFileBrowser } from '@/features/right-sidebar/lib/openInSidebarFileBrowser';
 
 /** Route-owned compact drawer that keeps the current teammate chat mounted below it. */
 export function BotSettingsDrawer() {
@@ -47,6 +50,17 @@ export function BotSettingsDrawer() {
   // reach the companion. Its settings live on the main computer (the banner on its task links there).
   const bot = localBot && cloud.demotedBotIds.includes(localBot.id) ? null : localBot;
   const open = searchParams.get('settings') === '1' && (bot !== null || !!remoteBot);
+  const rulesBotId = open && bot?.capabilities.projectMode && bot.status === 'active'
+    ? bot.id
+    : undefined;
+  const rulesSessionId = rulesBotId && bot ? canonicalBotSessionId(bot) : undefined;
+  const [rulesCheck, setRulesCheck] = useState(0);
+  const [rulesAction, setRulesAction] = useState<{
+    botId: string;
+    sessionId: string;
+    routeKey: string;
+    open?: () => Promise<void>;
+  } | null>(null);
 
   const requestedPage = searchParams.get('settingsPage');
   const initialPage = requestedPage === 'memory' || requestedPage === 'capabilities' ? requestedPage : 'home';
@@ -58,6 +72,64 @@ export function BotSettingsDrawer() {
   const allowNavigation = useRef(false);
   const pendingGuard = useRef<Promise<boolean> | null>(null);
   const beforeCloseRef = useRef<(() => Promise<boolean>) | null>(null);
+  useEffect(() => {
+    setRulesAction(null);
+    const workspaceApi = window.electronAPI?.localDb?.bots?.workspaceMigration;
+    if (!rulesBotId || !rulesSessionId || !workspaceApi) return;
+    const owner = getDataOwnerGeneration();
+    let active = true;
+    let opening = false;
+    const isCurrent = () => active && isDataOwnerGenerationCurrent(owner);
+    const target = { botId: rulesBotId, sessionId: rulesSessionId, routeKey: location.key };
+    const markUnavailable = () => {
+      if (isCurrent()) setRulesAction(target);
+    };
+    const isReady = async () => {
+      const [workspace, session] = await Promise.all([
+        workspaceApi.getStatus(rulesBotId),
+        sessionService.get(rulesSessionId),
+      ]);
+      return workspace.workspaceAvailable && session.status === 'active' &&
+        session.source === 'bot' && session.workspaceKind === 'project' &&
+        session.companion?.id === rulesBotId && session.companion.role === 'canonical' &&
+        !session.remoteHostId && !session.worktreePath &&
+        session.workingDir === workspace.source;
+    };
+    void isReady().then((ready) => {
+      if (!isCurrent()) return;
+      if (!ready) {
+        markUnavailable();
+        return;
+      }
+      setRulesAction({
+        ...target,
+        open: async () => {
+          if (opening || !isCurrent()) return;
+          opening = true;
+          try {
+            if (!(await beforeCloseRef.current?.() ?? true) || !isCurrent()) return;
+            if (!await isReady()) {
+              markUnavailable();
+              return;
+            }
+            if (!isCurrent()) return;
+            allowNavigation.current = true;
+            navigate(`/bots/${rulesBotId}/session/${rulesSessionId}`, { replace: true, flushSync: true });
+            await openFileInSidebarFileBrowser(rulesSessionId, 'AGENTS.md');
+          } catch {
+            markUnavailable();
+          } finally {
+            opening = false;
+          }
+        },
+      });
+    }, markUnavailable);
+    return () => { active = false; };
+  }, [location.key, navigate, rulesBotId, rulesSessionId, rulesCheck]);
+  const currentRulesAction = rulesAction?.botId === rulesBotId &&
+    rulesAction?.sessionId === rulesSessionId && rulesAction?.routeKey === location.key
+    ? rulesAction
+    : null;
   const blocker = useBlocker(({ currentLocation, nextLocation }) => {
     if (allowNavigation.current) {
       allowNavigation.current = false;
@@ -188,6 +260,10 @@ export function BotSettingsDrawer() {
                   beforeCloseRef={beforeCloseRef}
                   bot={bot}
                   onBack={performClose}
+                  onOpenWorkRules={currentRulesAction?.open}
+                  onRetryWorkRules={currentRulesAction && !currentRulesAction.open
+                    ? () => setRulesCheck((value) => value + 1)
+                    : undefined}
                   onOpenSession={(sessionId, searchJump) => {
                     navigate(standardSessionRoute(sessionId), { state: searchJump ? { searchJump } : undefined });
                   }}
