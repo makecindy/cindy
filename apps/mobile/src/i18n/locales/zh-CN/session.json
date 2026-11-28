@@ -504,7 +504,8 @@
     "worktreeUnsupported": "电脑端当前的 Cindy 无法安全创建 worktree，请关闭 worktree 后继续，或更新电脑上的 Cindy。",
     "worktreeCreateFailed": "worktree 创建失败：{{message}}",
     "worktreeRecoveryStateFailed": "无法保存 worktree 恢复状态，请重试。",
-    "worktreeCleanupPending": "上一个 worktree 仍待清理，请重新连接设备后再试。"
+    "worktreeCleanupPending": "上一个 worktree 仍待清理，请重新连接设备后再试。",
+    "createRejectedResend": "内容已带回，可调整后重新发送。"
   },
   "menu": {
     "moveToProject": "移动任务",

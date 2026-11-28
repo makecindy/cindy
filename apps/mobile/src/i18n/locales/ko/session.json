@@ -504,7 +504,8 @@
     "worktreeUnsupported": "컴퓨터의 Cindy에서는 worktree를 안전하게 만들 수 없습니다. 계속하려면 worktree를 끄거나 컴퓨터의 Cindy를 업데이트하세요.",
     "worktreeCreateFailed": "worktree 생성 실패: {{message}}",
     "worktreeRecoveryStateFailed": "worktree 복구 상태를 저장할 수 없습니다. 다시 시도하세요.",
-    "worktreeCleanupPending": "이전 worktree가 아직 정리 대기 중입니다. 기기를 다시 연결한 후 재시도하세요."
+    "worktreeCleanupPending": "이전 worktree가 아직 정리 대기 중입니다. 기기를 다시 연결한 후 재시도하세요.",
+    "createRejectedResend": "내용을 되돌려 놓았습니다. 필요하면 수정한 뒤 다시 보내세요."
   },
   "menu": {
     "moveToProject": "세션 이동",

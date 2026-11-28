@@ -504,7 +504,8 @@
     "worktreeUnsupported": "パソコンの Cindy では worktree を安全に作成できません。続行するには worktree をオフにするか、パソコンの Cindy を更新してください。",
     "worktreeCreateFailed": "worktree の作成に失敗しました：{{message}}",
     "worktreeRecoveryStateFailed": "worktree の復旧状態を保存できませんでした。もう一度お試しください。",
-    "worktreeCleanupPending": "前回の worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。"
+    "worktreeCleanupPending": "前回の worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。",
+    "createRejectedResend": "内容を戻しました。必要に応じて調整し、もう一度送信してください。"
   },
   "menu": {
     "moveToProject": "タスクを移動",
