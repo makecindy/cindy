@@ -15,6 +15,7 @@ import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Select } from '@/components/ui/select';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
+import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import { toast } from '@/lib/toast';
 import { ChevronDown, ChevronRight, FolderOpen, Puzzle, Sparkles } from 'lucide-react';
 import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
@@ -533,7 +534,10 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   const controlTitle = header ? `${title} · ${sourceTitle}` : sourceTitle;
   const buttonClass = header ? (iconOnly ? HEADER_ICON_BUTTON : HEADER_BUTTON) : action.position === 'statusbar'
     ? (action.fontSize === 14 ? 'text-14' : action.fontSize === 13 ? 'text-13' : 'text-12') : undefined;
-  const label = header ? <ComposerHeaderLabel title={title} icon={action.icon} /> : title;
+  const label = header ? <ComposerHeaderLabel title={title} icon={action.icon} /> : <>{action.position === 'composer.toolbar' && entry.ghost.iconDataUrl &&
+    <span aria-hidden="true" className="size-5 shrink-0"><GhostPluginIcon iconId={entry.ghost.manifest.id}
+      iconName={entry.ghost.manifest.name} iconDataUrl={entry.ghost.iconDataUrl} size="mini" /></span>}
+    {title}</>;
   const Icon = MAIN_VIEW_ICONS[action.icon as keyof typeof MAIN_VIEW_ICONS] ?? Puzzle;
   if (entry.inlineComposerAction) {
     return <InlineComposerActionButton entry={entry} active={active} disabled={state?.disabled === true}
