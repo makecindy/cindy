@@ -1317,15 +1317,19 @@ async function createWorktreeInner(
         releaseRepoQueue();
         try {
           if (options?.awaitFullCheckout) {
-            await timed('full checkout', () => gitExec(
-              ['checkout', '--no-recurse-submodules', 'HEAD', '--', '.'],
-              worktreePath,
-              {
-                extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' },
-                ...(signal ? { signal } : {}),
-                onSpawn: (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
-              },
-            ));
+            const fullCheckoutOptions = {
+              extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' },
+              ...(signal ? { signal } : {}),
+              onSpawn: (pid: number) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
+            };
+            await timed('full checkout', async () => {
+              // An empty root tree (a project initialised with an empty commit) has nothing to check out,
+              // and `git checkout HEAD -- .` exits non-zero on it: the pathspec matches nothing. The size of
+              // the root tree object is a bounded probe, 0 only for the empty tree whatever the entry names.
+              const { stdout: rootTreeSize } = await gitExec(['cat-file', '-s', 'HEAD^{tree}'], worktreePath, fullCheckoutOptions);
+              if (rootTreeSize.trim() === '0') return;
+              await gitExec(['checkout', '--no-recurse-submodules', 'HEAD', '--', '.'], worktreePath, fullCheckoutOptions);
+            });
           } else {
             bgAbortController = new AbortController();
             onCreateAbort = () => bgAbortController?.abort();
