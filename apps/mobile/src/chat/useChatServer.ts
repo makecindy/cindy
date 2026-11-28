@@ -983,6 +983,18 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       }
       return { effects: [] };
     }
+    if (action === 'assistantDevice' || action === 'cancelAssistantDeviceWait') {
+      // The requester's own card: choose the computer, or end the requests waiting for one.
+      if (!enabled || !focused || !valid()) throw new Error('OWNER_CHANGED');
+      const value = action === 'assistantDevice' ? input?.deviceId : input?.executionId;
+      if (typeof value !== 'string' || !value) throw new Error('INVALID_PARAMS');
+      const operationId = (await import('expo-crypto')).randomUUID();
+      try {
+        if (action === 'assistantDevice') await api.client.manageGroup(groupId, undefined, { type: 'assistantDevice', deviceId: value }, operationId);
+        else await api.client.cancelAssistantDeviceWait(groupId, value, operationId);
+      } finally { if (valid()) reload(); }
+      return { effects: [] };
+    }
     if (action !== 'send' || !input || input.division) throw new Error('UNSUPPORTED_CHAT_ACTION');
     const latest = page.current;
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');

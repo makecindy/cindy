@@ -7255,6 +7255,7 @@ function CCAgentSessionContent({
                     ? () => setProjectSettingsOpen(true) : undefined}
                   sessionModelPickRef={sessionModelPickRef}
                   {...(taskModelGroups ? { modelGroups: taskModelGroups } : {})}
+                  readModelGroupDevices={modelGroupsInTask && viewVisible && modelGroupsTaskDeviceId ? deviceTaskModelGroups.read : undefined}
                   modelPickerRequest={sharedTaskRecovery.modelPickerRequest}
                   onModelPickerRequestConsumed={sharedTaskRecovery.consumeModelPickerRequest}
                   topSlot={cindyMakeRecoveryId && session ? (

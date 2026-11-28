@@ -305,6 +305,7 @@ export function CloudImSettings({
                 disabled={disabled}
                 fastModeConfigurable={false}
                 unifiedAgents={agents}
+                readModelGroupDevices={deviceGroups.read}
                 {...(deviceGroups.config ? {
                   modelGroups: {
                     config: deviceGroups.config,

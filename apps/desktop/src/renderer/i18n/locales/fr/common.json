@@ -12223,6 +12223,18 @@
       "memberCount_other": "{{count}} membres",
       "nameLabel": "Nom du groupe",
       "waitingConfirm": "{{name}} attend votre feu vert",
+      "assistantDevice": {
+        "title": "La Cindy du groupe attend que vous choisissiez un ordinateur",
+        "onlyYou": "Visible uniquement par vous",
+        "request": "« {{request}} » démarre dès que vous choisissez un ordinateur.",
+        "requestUnknown": "Votre demande démarre dès que vous choisissez un ordinateur.",
+        "requests_one": "{{count}} demande attend et démarre dès que vous choisissez un ordinateur.",
+        "requests_many": "{{count}} demandes attendent et démarrent dès que vous choisissez un ordinateur.",
+        "requests_other": "{{count}} demandes attendent et démarrent dès que vous choisissez un ordinateur.",
+        "remember": "Vos prochaines demandes dans ce groupe utiliseront le même ordinateur. Vous pouvez le changer dans les paramètres du groupe.",
+        "cancel": "Annuler la demande",
+        "continue": "Continuer"
+      },
       "loadFailedTitle": "Impossible de charger cette conversation de groupe",
       "loadFailedDescription": "Cindy ne parvient pas à lire cette conversation de groupe pour le moment. Réessayez ou revenez à Amis.",
       "unavailableTitle": "Cette conversation de groupe n'est plus disponible",
