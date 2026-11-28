@@ -1264,6 +1264,7 @@ interface ElectronAPI {
   windowMinimize: () => void;
   windowMaximize: () => void;
   windowSidebarExpansion?: (width: number, shrink?: number, adopt?: boolean) => Promise<number | void>;
+  windowSidebarSettle?: () => Promise<void>;
   onSidebarWindowUserResize?: (callback: () => void) => () => void;
   windowExitFullscreen: () => void;
   windowClose: (once?: 'quit' | 'tray' | 'minimize') => void;

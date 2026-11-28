@@ -21,6 +21,11 @@ export function registerSidebarWindowExpansionIpc(): void {
   BrowserWindow.getAllWindows().forEach(watch);
   app.on('browser-window-created', (_event, win) => watch(win));
   // Local chrome only; never expose this through device-link.
+  ipcMain.handle('window-sidebar-settle', (event) => {
+    assertTrustedAppRendererEvent(event);
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) expansion.settle(win);
+  });
   ipcMain.handle('window-sidebar-expansion', (event, width: unknown, shrink: unknown, adopt: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof width !== 'number' || !Number.isFinite(width) || width < 0 || width > 16000) {

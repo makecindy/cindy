@@ -98,14 +98,14 @@ describe('useTabGroupPanes', () => {
       let tabId = '';
       act(() => { tabId = addGlobalPluginTab('alpha', { resourceViewId: 'board', groupId: group })!.id; });
       if (group === 'right') {
-        expect(result.current).toBe(true);
+        expect(result.current.namedGlobalPage).toBe(true);
         expect(currentLayout).toBe(layoutBefore);
       } else {
         expect(hasPanelKind(`tab-group:${group}`)).toBe(true);
         expect(isPanelKindParked(`tab-group:${group}`)).toBe(false);
       }
       act(() => removeGlobalTab(tabId));
-      expect(result.current).toBe(false);
+      expect(result.current.namedGlobalPage).toBe(false);
       if (group !== 'right') expect(hasPanelKind(`tab-group:${group}`)).toBe(false);
     },
   );
@@ -121,17 +121,47 @@ describe('useTabGroupPanes', () => {
     const { result, rerender } = renderHook(({ enabled }) => useTabGroupPanes({
       sessionId: null, enabled, onChatRoute: false, remoteHostId: null,
     }), { initialProps: { enabled: true } });
-    expect(result.current).toBe(true);
+    expect(result.current.namedGlobalPage).toBe(true);
     installedGhostsMock.list = [{ ...ghost, enabled: false }];
     rerender({ enabled: true });
-    expect(result.current).toBe(false);
+    expect(result.current.namedGlobalPage).toBe(false);
     installedGhostsMock.list = [ghost];
     rerender({ enabled: false });
-    expect(result.current).toBe(false);
+    expect(result.current.namedGlobalPage).toBe(false);
     rerender({ enabled: true });
-    expect(result.current).toBe(true);
+    expect(result.current.namedGlobalPage).toBe(true);
     act(() => __setSidebarTabWindowsStateForTest({ [tab.id]: { windowId: 'w1', sessionId: null, open: true } }));
-    expect(result.current).toBe(false);
+    expect(result.current.namedGlobalPage).toBe(false);
+  });
+
+  // Codex P1: 任务语境没有侧栏（/plugins）时，关掉最后一个全局具名页会让就绪在同一帧
+  // 变 false，而面板要等 RightSidebarShell 的被动副作用才收起。收起来源必须在就绪消失
+  // 的那一帧就记下，否则这次自动收起会被当成路由离开，把用户亲手拉宽的窗口收回去。
+  it('records the last global page close on the frame readiness disappears', () => {
+    installedGhostsMock.list = [{
+      enabled: true,
+      approval: { state: 'approved', revision: 'one' },
+      manifest: { id: 'alpha', name: 'Alpha', mcpApps: {
+        ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+        host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'global' }] },
+      } },
+    }];
+    const tab = addGlobalPluginTab('alpha', { resourceViewId: 'board' })!;
+    const { result, rerender } = renderHook(() =>
+      useTabGroupPanes({ sessionId: null, enabled: true, onChatRoute: false, remoteHostId: null }));
+    expect(result.current).toEqual({ namedGlobalPage: true, lastNamedGlobalPageClosed: false });
+    // 同一个 store 更新里：就绪来源消失，收起还没发生（面板挂着，collapsed 仍是 false）。
+    act(() => removeGlobalTab(tab.id));
+    expect(result.current).toEqual({ namedGlobalPage: false, lastNamedGlobalPageClosed: true });
+    // 收起落地后的下一帧只是「已经没有全局具名页」，不再是关闭事件。
+    rerender();
+    expect(result.current).toEqual({ namedGlobalPage: false, lastNamedGlobalPageClosed: false });
+    // 重新打开一页再关掉，事件照样在关掉的那一帧出现。
+    let again = '';
+    act(() => { again = addGlobalPluginTab('alpha', { resourceViewId: 'board' })!.id; });
+    expect(result.current).toEqual({ namedGlobalPage: true, lastNamedGlobalPageClosed: false });
+    act(() => removeGlobalTab(again));
+    expect(result.current).toEqual({ namedGlobalPage: false, lastNamedGlobalPageClosed: true });
   });
 
   it('registers an edge group and inserts its pane when a visible tab lands there; unregisters when it leaves', () => {

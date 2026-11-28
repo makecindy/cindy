@@ -62,6 +62,8 @@ export interface OrcaWorkersTabOptions {
   searchJump?: ConversationSearchJump | null;
   focusTab?: boolean;
   animate?: boolean;
+  /** 这次展开是不是用户当次手势要的；外部 MCP／team 自动开启传 false。 */
+  userInitiated?: boolean;
 }
 
 function withWorkerOpenIntent(
@@ -105,7 +107,7 @@ async function routeDetachedOrcaWorkersCommand(
     command.focusWorkerSessionId = opts.focusWorkerSessionId;
   }
   if (opts.searchJump !== undefined) command.searchJump = opts.searchJump;
-  return routeSidebarCommand(command, { allowOpen });
+  return routeSidebarCommand(command, { allowOpen, userInitiated: opts.userInitiated });
 }
 
 async function ensureOrcaWorkersTabLocal(
@@ -155,6 +157,7 @@ export async function revealOrcaWorkersTab(
   requestRightSidebarVisibility('open', {
     sessionId: leadSessionId,
     ...(opts.animate === false ? { animate: false } : {}),
+    ...(opts.userInitiated === false ? { userInitiated: false } : {}),
   });
   return routeResult;
 }

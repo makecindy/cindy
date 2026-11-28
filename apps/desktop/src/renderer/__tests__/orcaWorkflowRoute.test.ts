@@ -512,7 +512,8 @@ describe('OrcaWorkflowRoute source invariants', () => {
     const mountGuard = edgeEffect.indexOf('if (!edge) return;');
     const compactGuard = edgeEffect.indexOf('if (isCompactRail) return;');
     const revealEdge = edgeEffect.indexOf("if (edge === 'enabled') {");
-    const revealCall = edgeEffect.indexOf('revealOrcaWorkersTab(collabSessionId)');
+    // 外部边沿是程序来的：展开侧栏但不按用户手势拉宽主窗口。
+    const revealCall = edgeEffect.indexOf('revealOrcaWorkersTab(collabSessionId, { userInitiated: false })');
     const closeEdge = edgeEffect.indexOf("if (edge === 'disabled') {");
     const closeCall = edgeEffect.indexOf('closeOrcaWorkersTabAfterTeamEnd(collabSessionId)');
 

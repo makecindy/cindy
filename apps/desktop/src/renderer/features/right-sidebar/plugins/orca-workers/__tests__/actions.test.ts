@@ -120,6 +120,22 @@ describe('orca-workers tab actions', () => {
     off();
   });
 
+  // Bug: 外部 MCP／team 自动开启协同（不是用户点开栏）时，展开不能当成用户手势
+  // 去拉宽主窗口。最小输入：revealOrcaWorkersTab('s1', { userInitiated: false })。
+  it('reveal can forward a programmatic source so the window keeps its width', async () => {
+    const requests: unknown[] = [];
+    const off = onRequestRightSidebarVisibility((visibility, opts) => {
+      requests.push({ visibility, opts });
+    });
+
+    await revealOrcaWorkersTab('s1', { userInitiated: false });
+
+    expect(requests).toEqual([
+      { visibility: 'open', opts: { sessionId: 's1', userInitiated: false } },
+    ]);
+    off();
+  });
+
   it('patches a worker focus hint into the singleton tab state', async () => {
     await ensureOrcaWorkersTab('s1', { focusWorkerSessionId: 'worker-a' });
     const tab = getBucket('s1').tabs.find((candidate) => candidate.kind === 'orca-workers');
