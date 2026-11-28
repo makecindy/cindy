@@ -109,7 +109,7 @@ maker-core（packages/maker-core/src/agents/acp/：protocol / connection / capab
    - **每轮权限闸（`_meta.permissionGate`）**：支持引擎每轮带 `turnId`，受限轮次带 `scope: 'all-tool-calls'`，宿主只受理当前轮（或空闲时最近正常结束轮）的请求并按 ACP `kind` 与 `rawInput.command` 执行频道安全策略；未声明该能力的引擎在策略轮受理前以 `TurnPermissionPolicyUnsupportedError('acp', mode)` fail-closed。
    - **问题卡（`elicitation/create`）**：经 `packages/maker-core/src/agents/acp/elicitation.ts` 转换为原生 `ask_user_question`，强制校验 schema 约束，并把成对的 `k` + 可选纯文本 `${k}_other` 折叠为单题选项 + 自填框（#13001）。
 3. **用量与计费归因**：
-   - 回合 token 从 `session/prompt` 结果的 `usage` 结算，保留 `promptModel` 与零值；设备托管的 ACP token 在控制端结算；企业用量授权跳过插件引擎；限额自动继续只认 `error.data._meta.cindy.resetsAt`，不解析外部错误原文。
+   - 回合 token 从 `session/prompt` 结果的 `usage` 结算，保留 `promptModel` 与零值；用量历史只按「模型 id 在 Model Registry 中唯一对应的官方价」把 token 折成价值估算（`value-estimate`，与订阅估值同口径，不计入实付），未知或多供应商重名的模型只显示 token；设备托管的 ACP token 在控制端结算；企业用量授权跳过插件引擎；限额自动继续只认 `error.data._meta.cindy.resetsAt`，不解析外部错误原文。
 
 4. **任务中途切到插件引擎的交接**：
    - 本机从已有 ACP `usage_update.size` 记下目标供应商和实际模型最近一次有效的窗口。只留在宿主内存，不随会话退出清除；宿主重启或切换登录状态后不复用旧值。只接受正整数，最多 4,000,000 token（内置模型目录最大为 3,500,000，向上取整留余量）。无效更新不覆盖已有的有效值。

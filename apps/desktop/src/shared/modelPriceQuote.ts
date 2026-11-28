@@ -545,3 +545,41 @@ export function subscriptionDirectPriceQuote(
       }
     : undefined;
 }
+
+/**
+ * Reference value for plugin engine usage (agentKind `acp`). The plugin owns the account and its
+ * billing, so Cindy only knows the model id it reported. When exactly one provider in the Model
+ * Registry lists that id, that provider's official tariff values the tokens as a value estimate
+ * (like subscription turns); an unknown id, or one listed by several providers, gets no value.
+ *
+ * Plugin usage is only kept as daily totals, without request boundaries, so a context-length or
+ * priority tier cannot be chosen from it: the quote keeps only the base tier (the band that starts
+ * at zero input tokens). Long requests are then valued low, never high.
+ */
+export function pluginEngineReferencePriceQuote(
+  modelId: string,
+  registry: ModelRegistry | null | undefined,
+  at?: string | Date,
+): ModelPriceQuote | undefined {
+  const id = modelId.trim().toLowerCase();
+  if (!id || !registry) return undefined;
+  const providers = new Set<string>();
+  for (const model of registry.models ?? []) {
+    for (const route of model.routes ?? []) {
+      if (route.providerId !== 'xd' && route.modelId?.toLowerCase() === id) providers.add(route.providerId);
+    }
+  }
+  if (providers.size !== 1) return undefined;
+  const [providerId] = providers;
+  const quote = providerReferencePriceQuote(providerId, modelId, registry, { at, officialOnly: true });
+  if (!quote) return undefined;
+  const { inputTokenPriceBands, priority: _priority, ...rest } = quote;
+  const base = inputTokenPriceBands?.find(band => band.minInputTokens === 0);
+  if (inputTokenPriceBands?.length && !base) return undefined;
+  const priced: ModelPriceQuote = { ...rest, modelId, source: 'subscription-reference' };
+  for (const field of ['inputPerMtok', 'outputPerMtok', 'cacheReadPerMtok', 'cacheCreatePerMtok', 'cacheCreate1hPerMtok'] as const) {
+    const value = base?.[field];
+    if (value !== undefined) priced[field] = value;
+  }
+  return priced;
+}

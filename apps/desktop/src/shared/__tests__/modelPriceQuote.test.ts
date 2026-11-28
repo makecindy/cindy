@@ -4,6 +4,7 @@ import { BUNDLED_CATALOG, type ModelRegistry } from '@cindy/model-providers';
 import type { ModelAccessGatewayModel } from '../modelAccess.js';
 import {
   gatewayPricingCatalog,
+  pluginEngineReferencePriceQuote,
   providerReferencePriceQuote,
   registryPricingCatalog,
 } from '../modelPriceQuote.js';
@@ -323,3 +324,49 @@ it('quotes explicit Anthropic Batch caches and preserves the standard tariff', (
   expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-10-22', variant: 'batch' }))
     .toMatchObject({ currency: 'USD', inputPerMtok: 2, outputPerMtok: 10 });
 });
+
+// Unit: plugin engines report only a model id. The bundled registry lists gemini-4-carbon under one
+// official provider; an id listed by two providers, or none, must not borrow a price.
+describe('pluginEngineReferencePriceQuote', () => {
+  const registry = BUNDLED_CATALOG.modelRegistry as ModelRegistry;
+
+  it('uses the single official tariff of a registry model id', () => {
+    expect(pluginEngineReferencePriceQuote('gemini-4-carbon', registry, '2026-11-28')).toMatchObject({
+      providerId: 'google-gemini-api', modelId: 'gemini-4-carbon', currency: 'USD',
+      source: 'subscription-reference', inputPerMtok: 2, outputPerMtok: 10,
+    });
+  });
+
+  it('gives no price to unknown or ambiguous model ids', () => {
+    expect(pluginEngineReferencePriceQuote('not-a-model', registry)).toBeUndefined();
+    const carbon = registry.models.find(entry => entry.id === 'google-gemini-api/gemini-4-carbon')!;
+    const duplicated = {
+      ...registry,
+      models: [...registry.models, { ...carbon, id: 'other/gemini-4-carbon', routes: carbon.routes.map(route => ({ ...route, providerId: 'other' })) }],
+    } as ModelRegistry;
+    const otherPrice = providerReferencePriceQuote('other', 'gemini-4-carbon', duplicated, { officialOnly: true });
+    expect(otherPrice).toBeDefined();
+    expect(pluginEngineReferencePriceQuote('gemini-4-carbon', duplicated)).toBeUndefined();
+  });
+
+  // #13757 review: a second provider without a price still makes the id ambiguous.
+  it('gives no price when another provider lists the id without a tariff', () => {
+    const carbon = registry.models.find(entry => entry.id === 'google-gemini-api/gemini-4-carbon')!;
+    const duplicated = {
+      ...registry,
+      models: [...registry.models, { id: 'unpriced/gemini-4-carbon', name: carbon.name, status: 'active', routes: [{ providerId: 'unpriced', modelId: 'gemini-4-carbon', agents: ['codex'] }] }],
+    } as ModelRegistry;
+    expect(providerReferencePriceQuote('unpriced', 'gemini-4-carbon', duplicated, { officialOnly: true })).toBeUndefined();
+    expect(pluginEngineReferencePriceQuote('gemini-4-carbon', duplicated)).toBeUndefined();
+  });
+
+  // #13757 review: plugin usage is a daily total, so a long-context band must never be chosen
+  // from it. gpt-6.2-sol has <272k and >=272k input bands; only the base band is kept.
+  it('keeps only the base tier because plugin usage has no request boundaries', () => {
+    const quote = pluginEngineReferencePriceQuote('gpt-6.2-sol', registry, '2026-11-28');
+    expect(quote).toMatchObject({ inputPerMtok: 2, outputPerMtok: 10, cacheReadPerMtok: 0.1 });
+    expect(quote?.inputTokenPriceBands).toBeUndefined();
+    expect(quote?.priority).toBeUndefined();
+  });
+});
+

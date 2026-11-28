@@ -819,14 +819,18 @@ async function collectTasks(
       + Math.max(0, finite(row.tokens) - finite(row.auxiliaryTokens)));
   }
   const meta = new Map((usage?.tasks ?? []).filter((task) => task.deviceId === 'local').map((task) => [task.sessionId, task]));
+  // A plugin engine's value is a reference estimate; built-in engines may carry real spend. Keep
+  // their average rates apart so one model used through both never mixes the two.
+  const rateKey = (agentKind: string | null | undefined, model: string) => `${agentKind === 'acp' ? 'acp' : ''}\u0000${model}`;
   const rates = new Map<string, { money: number; tokens: number; harness: MenubarHarness }>();
   for (const row of usage?.modelDaily ?? []) {
-    if (row.agentKind === 'auxiliary' || row.agentKind === 'acp') continue;
+    if (row.agentKind === 'auxiliary') continue;
     if (row.day !== today) continue;
-    const rate = rates.get(row.model) ?? { money: 0, tokens: 0, harness: harnessOf(row.agentKind) };
+    const key = rateKey(row.agentKind, row.model);
+    const rate = rates.get(key) ?? { money: 0, tokens: 0, harness: harnessOf(row.agentKind) };
     rate.money += finite(row.money?.amount);
     rate.tokens += finite(row.tokens);
-    rates.set(row.model, rate);
+    rates.set(key, rate);
   }
 
   const activities = new Map(deps.activities().map((activity) => [activity.sessionId, activity]));
@@ -854,7 +858,9 @@ async function collectTasks(
         const title = row?.title?.trim() || info?.title?.trim() || '';
         if (!title && !model) return null;
         const tokens = tokensBySession.get(sessionId) ?? 0;
-        const rate = rates.get(model);
+        const rate = row?.agentKind
+          ? rates.get(rateKey(row.agentKind, model))
+          : rates.get(rateKey(undefined, model)) ?? rates.get(rateKey('acp', model));
         const harness = harnessOf(row?.agentKind ?? rate?.harness);
         const running = activity ? isSessionActivityRunning(activity) : false;
         return {
@@ -863,7 +869,7 @@ async function collectTasks(
           harness,
           model: model ? formatModelShort(model) : '',
           tokensToday: tokens,
-          valueToday: harness !== 'acp' && rate && rate.tokens > 0 ? ((conversationTokensBySession.get(sessionId) ?? 0) * rate.money) / rate.tokens : 0,
+          valueToday: rate && rate.tokens > 0 ? ((conversationTokensBySession.get(sessionId) ?? 0) * rate.money) / rate.tokens : 0,
           contextPercent: info && info.contextWindow > 0 ? clampPercent((info.contextTokens / info.contextWindow) * 100) : null,
           running,
           startedAtMs: running ? (activity?.startedAtMs ?? null) : null,
