@@ -10,6 +10,8 @@ import {
 } from '@/features/bots/botFollowScopes';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import type { RailPanelSection } from './sidebar/railPanelStore';
+import { isForegroundComposerEscapeLayer, registerComposerEscapeLayer } from '@/components/chat/composerEscapeLayers';
 /**
  * CCAgentFeature 的 Sidebar 上半内容。
  * ---------------------------------------------------------------------------
@@ -4470,10 +4472,12 @@ const RAIL_PROJECT_KEEPALIVE_SELECTOR =
 
 /** rail 面板容器:portal + fixed + 视口钳制。mouseleave 时若指针落入 Radix
  *  popper / 对话框(行内右键菜单、移动子菜单、确认弹窗)不视为离开。 */
-function RailPanelShell({
+export function RailPanelShell({
   anchorRight,
   anchorTop,
   level,
+  section,
+  projectKey,
   onEnter,
   onLeave,
   children,
@@ -4481,6 +4485,8 @@ function RailPanelShell({
   anchorRight: number;
   anchorTop: number;
   level: 1 | 2;
+  section?: RailPanelSection;
+  projectKey?: string;
   onEnter: () => void;
   onLeave: () => void;
   children: ReactNode;
@@ -4494,6 +4500,11 @@ function RailPanelShell({
     const desired = anchorTop - 6;
     setTop(Math.max(8, Math.min(desired, window.innerHeight - el.offsetHeight - 8)));
   }, [anchorTop, children]);
+
+  useLayoutEffect(() => {
+    const panel = ref.current;
+    if (panel) return registerComposerEscapeLayer(panel);
+  }, [level, section, projectKey]);
 
   return createPortal(
     <div
@@ -4755,7 +4766,9 @@ function RailPanels({
   useEffect(() => {
     if (!panelState.openSection) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      const panels = document.querySelectorAll<HTMLElement>('[data-rail-panel]');
+      if (!Array.from(panels).some(isForegroundComposerEscapeLayer)) return;
       // 行内重命名编辑中:Esc 归编辑器(取消编辑),不整面板收掉。
       if (panelHasEditingFocus()) return;
       // 有浮层挂载时:这一记 Esc 归浮层(Radix 自己会 dismiss),不能同帧把
@@ -4766,10 +4779,11 @@ function RailPanels({
       // 否则 FindInPageBar 的常驻非模态 role="dialog" 会让 Esc 永远收不掉
       // 面板(#505 同款教训)。
       if (
-        document.querySelector('[data-radix-popper-content-wrapper]') ||
+        document.querySelector('[data-radix-popper-content-wrapper], [data-preview-scrim]:not([data-preview-closing])') ||
         panelHasBlockingOverlay()
       )
         return;
+      e.preventDefault();
       railPanelStore.closeAll();
     };
     const onDown = (e: MouseEvent) => {
@@ -4957,6 +4971,7 @@ function RailPanels({
         anchorRight={panelState.anchor.right}
         anchorTop={panelState.anchor.top}
         level={1}
+        section={panelState.openSection}
         onEnter={() => railPanelStore.cancelClose()}
         onLeave={() => railPanelStore.scheduleClose()}
       >
@@ -5116,6 +5131,7 @@ function RailPanels({
           anchorRight={panelState.projectAnchor.right}
           anchorTop={panelState.projectAnchor.top}
           level={2}
+          projectKey={openProject.projectKey}
           onEnter={() => {
             railPanelStore.cancelClose();
             railPanelStore.cancelProjectClose();

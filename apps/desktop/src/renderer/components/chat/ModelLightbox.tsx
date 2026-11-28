@@ -99,7 +99,8 @@ function isModelViewerDefined(): boolean {
 export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps) {
   const restorePreviewFocus = usePreviewFocusReturn();
   const { t } = useTranslation();
-  const [isVisible, setIsVisible] = useState(false);
+  const [phase, setPhase] = useState<'opening' | 'visible' | 'closing'>('opening');
+  const isVisible = phase === 'visible';
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   // 元素注册前不渲染 <model-viewer>,属性始终按已定义元素的方式写入。
@@ -144,13 +145,15 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     // outline:none 穿不进 shadow)会在 200ms 淡出期间闪出默认焦点框。开始
     // 淡出前先把焦点 blur 掉,框就不会被画出来。
     (document.activeElement as HTMLElement | null)?.blur?.();
-    setIsVisible(false);
+    setPhase('closing');
     setTimeout(() => onCloseRef.current(), 200);
   }, []);
 
   // Fade in
   useEffect(() => {
-    const raf = requestAnimationFrame(() => setIsVisible(true));
+    const raf = requestAnimationFrame(() => {
+      if (!isClosingRef.current) setPhase('visible');
+    });
     return () => cancelAnimationFrame(raf);
   }, []);
 
@@ -266,6 +269,7 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     // 要在淡出前先灭掉。
     <>
     <PreviewScrim
+      closing={phase === 'closing'}
       onClose={() => {
         if (performance.now() - lastMenuCloseAt.current < 150) return;
         handleClose();

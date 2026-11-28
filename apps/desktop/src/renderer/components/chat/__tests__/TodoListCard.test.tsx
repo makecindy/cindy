@@ -4,8 +4,11 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { InlinePlanCard, TodoListCard } from '../TodoListCard';
+import { registerComposerEscapeLayer } from '../composerEscapeLayers';
+import { RailPanelShell } from '../../../features/cc-agent/CCAgentSidebarUpper';
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({
     t: (key: string, values?: { current: number; total: number }) =>
       key === 'chat.planPill.dismiss' ? 'Close Plan' : `Step ${values?.current} / ${values?.total}`,
@@ -130,16 +133,156 @@ describe('TodoListCard flyout interaction', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('closes a pinned flyout with Escape', () => {
-    render(<TodoListCard todos={TODOS} animated={false} />);
+  it('claims Escape from a pinned plan before it reaches a lower layer', () => {
+    render(<TodoListCard todos={TODOS} />);
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    const closeLowerLayer = vi.fn();
+    const handleLowerLayer = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) closeLowerLayer();
+    };
+    window.addEventListener('keydown', handleLowerLayer);
+    try {
+      fireEvent.click(trigger);
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
 
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(trigger.getAttribute('aria-expanded')).toBe('false');
+      expect(closeLowerLayer).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(closeLowerLayer).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener('keydown', handleLowerLayer);
+    }
+  });
+
+  // #12437: one Escape should close the newest keyboard-pinned card first.
+  it('closes two keyboard-pinned plans in reverse opening order', () => {
+    render(<><TodoListCard todos={TODOS} /><TodoListCard todos={TODOS} /></>);
+    const [older, newer] = screen.getAllByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(older, { detail: 0 });
+    fireEvent.click(newer, { detail: 0 });
+    fireEvent.keyDown(newer, { key: 'Escape' });
+    expect(newer.getAttribute('aria-expanded')).toBe('false');
+    expect(older.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.keyDown(older, { key: 'Escape' });
+    expect(older.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  // #12437 (unit): keyboard opening permits the rail and plan to coexist.
+  it.each(['plan', 'rail'] as const)('closes the newer Escape layer when the %s opened first', (first) => {
+    render(<><TodoListCard todos={TODOS} /><div data-rail-panel="true" role="menu" /></>);
+    const plan = screen.getByRole('button', { name: 'Step 1 / 2' });
+    const menu = screen.getByRole('menu');
+    if (first === 'plan') fireEvent.click(plan, { detail: 0 });
+    const unregister = registerComposerEscapeLayer(menu);
+    if (first === 'rail') fireEvent.click(plan, { detail: 0 });
+
+    try {
+      expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(first === 'plan');
+      expect(plan.getAttribute('aria-expanded')).toBe(first === 'plan' ? 'true' : 'false');
+      if (first === 'plan') {
+        unregister();
+        menu.removeAttribute('data-rail-panel');
+        fireEvent.keyDown(document.body, { key: 'Escape' });
+        expect(plan.getAttribute('aria-expanded')).toBe('false');
+      }
+    } finally {
+      unregister();
+    }
+  });
+
+  // #12437 (unit): the same primary rail stays mounted when its section changes.
+  it('yields Escape to the rail after switching from Projects to Dialogues', () => {
+    const view = (section: 'projects' | 'dialogues') => (
+      <>
+        <TodoListCard todos={TODOS} />
+        <RailPanelShell anchorRight={0} anchorTop={0} level={1} section={section} onEnter={() => {}} onLeave={() => {}}>
+          {section}
+        </RailPanelShell>
+      </>
+    );
+    const { rerender } = render(view('projects'));
+    const plan = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(plan, { detail: 0 });
+    rerender(view('dialogues'));
+
+    expect(fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })).toBe(true);
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  // #12437 (unit): a real project subpanel opens after the plan without a pointer event.
+  it('yields Escape to a project subpanel opened after the plan', () => {
+    const view = (showProject: boolean) => (
+      <>
+        <TodoListCard todos={TODOS} />
+        <RailPanelShell anchorRight={0} anchorTop={0} level={1} section="projects" onEnter={() => {}} onLeave={() => {}}>
+          Projects
+        </RailPanelShell>
+        {showProject && (
+          <RailPanelShell anchorRight={10} anchorTop={0} level={2} onEnter={() => {}} onLeave={() => {}}>
+            Project tasks
+          </RailPanelShell>
+        )}
+      </>
+    );
+    const { rerender } = render(view(false));
+    const plan = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(plan, { detail: 0 });
+    rerender(view(true));
+
+    expect(fireEvent.keyDown(screen.getByText('Project tasks'), { key: 'Escape' })).toBe(true);
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  // #12437 (unit): a collapsed document rail remains mounted and is clipped.
+  it('closes the visible plan when a newer plan is inside a collapsed document rail', () => {
+    const plans = (collapsed: boolean) => (
+      <>
+        <TodoListCard todos={TODOS} />
+        <div aria-hidden={collapsed || undefined} style={{ width: collapsed ? 0 : 320, contain: 'paint' }}>
+          <TodoListCard todos={TODOS} />
+        </div>
+      </>
+    );
+    const { rerender } = render(plans(false));
+    const [visible, rail] = screen.getAllByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(visible, { detail: 0 });
+    fireEvent.click(rail, { detail: 0 });
+    rerender(plans(true));
+
+    fireEvent.keyDown(visible, { key: 'Escape' });
+    expect(visible.getAttribute('aria-expanded')).toBe('false');
+    expect(rail.getAttribute('aria-expanded')).toBe('true');
+
+    rerender(plans(false));
+    fireEvent.keyDown(rail, { key: 'Escape' });
+    expect(rail.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  // Chromium can report keyCode 229 while isComposing is false during IME cancellation.
+  it('leaves legacy IME Escape unclaimed while the plan is pinned', () => {
+    render(<TodoListCard todos={TODOS} />);
+    const plan = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(plan);
+    const escape = new KeyboardEvent('keydown', {
+      key: 'Escape', keyCode: 229, isComposing: false, bubbles: true, cancelable: true,
+    });
+    fireEvent(plan, escape);
+    expect(escape.defaultPrevented).toBe(false);
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('keeps the plan pinned when another layer has handled Escape', () => {
+    render(<TodoListCard todos={TODOS} />);
     const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
     fireEvent.click(trigger);
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    escape.preventDefault();
+
+    fireEvent(document.body, escape);
+
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
-
-    fireEvent.keyDown(document, { key: 'Escape' });
-
-    expect(trigger.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('toggles the pinned flyout for keyboard-generated clicks', () => {

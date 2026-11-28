@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { TodoListCard } from '@/components/chat/TodoListCard';
 import { Profiler } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -226,6 +227,24 @@ describe('WorkerLayoutMenu hover interaction', () => {
     fireEvent.click(menuButton());
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByText('orca.rolePill.workersHeader')).toBeNull();
+  });
+
+  // #12437 (unit): register both real layers in either keyboard opening order.
+  it.each(['plan', 'menu'] as const)('closes the newest layer when the %s opened first', (first) => {
+    const { container } = render(<TodoListCard todos={[{ content: 'Check worker', status: 'pending' }]} />);
+    const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+    renderToolbar();
+    if (first === 'plan') fireEvent.click(plan, { detail: 0 });
+    fireEvent.click(menuButton(), { detail: 0 });
+    if (first === 'menu') fireEvent.click(plan, { detail: 0 });
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(Boolean(screen.queryByText('orca.rolePill.workersHeader'))).toBe(first === 'menu');
+    expect(plan.getAttribute('aria-expanded')).toBe(first === 'plan' ? 'true' : 'false');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByText('orca.rolePill.workersHeader')).toBeNull();
+    expect(plan.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('选择布局选项后关闭菜单', () => {

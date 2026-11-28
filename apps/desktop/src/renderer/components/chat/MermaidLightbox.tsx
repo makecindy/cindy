@@ -65,7 +65,8 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   const restorePreviewFocus = usePreviewFocusReturn();
   const { t } = useTranslation();
   const [showSource, setShowSource] = useState(false);
-  const [isVisible, setIsVisible] = useState(false);
+  const [phase, setPhase] = useState<'opening' | 'visible' | 'closing'>('opening');
+  const isVisible = phase === 'visible';
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -92,7 +93,9 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   }));
 
   useEffect(() => {
-    const raf = requestAnimationFrame(() => setIsVisible(true));
+    const raf = requestAnimationFrame(() => {
+      if (!isClosingRef.current) setPhase('visible');
+    });
     return () => cancelAnimationFrame(raf);
   }, []);
 
@@ -127,7 +130,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   const handleClose = useCallback(() => {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
-    setIsVisible(false);
+    setPhase('closing');
     setTimeout(() => onClose(), 200);
   }, [onClose]);
 
@@ -262,7 +265,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
 
   const overlay = (
     <>
-    <PreviewScrim onClose={handleClose} />
+    <PreviewScrim closing={phase === 'closing'} onClose={handleClose} />
     <FocusScope onUnmountAutoFocus={restorePreviewFocus} trapped loop asChild
       onMountAutoFocus={(event) => { event.preventDefault(); overlayRef.current?.focus(); }}
     >

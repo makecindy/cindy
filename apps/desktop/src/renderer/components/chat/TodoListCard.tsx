@@ -34,6 +34,7 @@ import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
 import { Spinner, type SpinnerIconComponent } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { isForegroundComposerEscapeLayer, registerComposerEscapeLayer } from './composerEscapeLayers';
 
 // ---------------------------------------------------------------------------
 // Types — normalized agent plan/todo item
@@ -302,32 +303,46 @@ export function TodoListCard({
   const [openMode, setOpenMode] = useState<FlyoutOpenMode>('closed');
   const [renderFlyout, setRenderFlyout] = useState(false);
   const revealed = openMode !== 'closed';
+  const hasTodos = Boolean(todos?.length);
 
   useEffect(() => {
-    if (openMode !== 'pinned') return;
+    const card = cardRef.current;
+    if (openMode !== 'pinned' || !card) return;
+    const unregisterLayer = registerComposerEscapeLayer(card);
 
     const handlePointerDownOutside = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Node && cardRef.current?.contains(target)) return;
+      if (target instanceof Node && card.contains(target)) return;
       setOpenMode('closed');
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpenMode('closed');
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (!isForegroundComposerEscapeLayer(card)) return;
+      const focusedTopic = document.activeElement?.closest('[data-dm-thread-panel]');
+      if (focusedTopic && !focusedTopic.contains(card)) return;
+      // Other foreground layers may close without cancelling the key event.
+      if (document.querySelector(
+        '[data-preview-scrim]:not([data-preview-closing]), [aria-modal="true"], '
+        + '[data-morph-side][data-state="open"]',
+      )) return;
+      event.preventDefault();
+      setOpenMode('closed');
     };
 
     document.addEventListener('pointerdown', handlePointerDownOutside, true);
     document.addEventListener('keydown', handleKeyDown);
     return () => {
+      unregisterLayer();
       document.removeEventListener('pointerdown', handlePointerDownOutside, true);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [openMode]);
+  }, [openMode, hasTodos]);
 
   useEffect(() => {
     if (revealed) setRenderFlyout(true);
   }, [revealed]);
 
-  if (!todos || todos.length === 0) return null;
+  if (!hasTodos) return null;
 
   const completed = todos.filter((todo) => todo.status === 'completed').length;
   const total = todos.length;

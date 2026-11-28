@@ -7,6 +7,8 @@ import { useRef, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { TextLightbox } from '../TextLightbox';
+import { TodoListCard } from '../TodoListCard';
+import { VideoLightbox } from '../VideoLightbox';
 import { AttachmentCollectionContext } from '../AttachmentCollection';
 
 const state = vi.hoisted(() => ({ line: vi.fn(), parse: vi.fn() }));
@@ -69,6 +71,48 @@ it.each(['before', 'after'])('keeps the preview open when fullscreen exits %s Es
   fireEvent.keyDown(video, { key: 'Escape' });
   await act(async () => { await vi.advanceTimersByTimeAsync(210); });
   expect(close).toHaveBeenCalledOnce();
+});
+
+// PR #12437: a preview opened after pinning the real plan owns the first
+// Escape. Neither component's standalone unit tests exercise listener order.
+it.each(['text', 'video', 'audio'] as const)('closes a later %s preview before closing a pinned plan with Escape', async (kind) => {
+  vi.useFakeTimers();
+  mockFile('# Preview');
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  function Host() {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <TodoListCard todos={[{ content: 'Check preview', status: 'in_progress' }]} />
+        <button onKeyDown={(event) => {
+          if (event.key === 'Enter') setOpen(true);
+        }}>Open preview</button>
+        {open && (kind === 'text'
+          ? <TextLightbox filePath="/preview.md" onClose={() => setOpen(false)} />
+          : <VideoLightbox src="/preview-media" kind={kind} onClose={() => setOpen(false)} />
+        )}
+      </>
+    );
+  }
+  const { container } = render(<Host />);
+  const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+  fireEvent.click(plan);
+  fireEvent.keyDown(screen.getByRole('button', { name: 'Open preview' }), { key: 'Enter' });
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+  const preview = document.querySelector<HTMLElement>(kind === 'audio' ? 'audio' : 'video')!;
+  act(() => preview.focus());
+  fireEvent.keyDown(preview, { key: 'Escape' });
+  expect(preview.isConnected).toBe(true);
+  expect(plan.getAttribute('aria-expanded')).toBe('true');
+
+  fireEvent.keyUp(preview, { key: 'Escape' });
+  fireEvent.keyDown(preview, { key: 'Escape' });
+  expect(plan.getAttribute('aria-expanded')).toBe('false');
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(preview.isConnected).toBe(false);
 });
 
 it('opens the referenced line in a collection and returns focus even after switching files', async () => {

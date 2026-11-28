@@ -4,6 +4,7 @@
 import React, { useState } from 'react';
 import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { TodoListCard } from '../../chat/TodoListCard';
 import { MermaidLightbox } from '../../chat/MermaidLightbox';
 import { useRightSidebarMaximizeEscape } from '../useRightSidebarMaximizeEscape';
 
@@ -42,6 +43,40 @@ describe('right sidebar Escape ownership', () => {
     expect(document.querySelector('[data-mermaid-lightbox-overlay]')).toBeNull();
     expect(escape().defaultPrevented).toBe(true);
     expect(screen.getByTestId('maximized').textContent).toBe('false');
+  });
+
+  // #12437: the production sidebar listener must receive Escape while CSS hides
+  // the still-mounted plan. jsdom needs a fixture for native CSS visibility.
+  it('exits sidebar maximize before closing the display-hidden pinned plan', () => {
+    function Layout() {
+      const [maximized, setMaximized] = useState(false);
+      useRightSidebarMaximizeEscape(maximized, () => setMaximized(false));
+      return (
+        <>
+          <main style={{ display: maximized ? 'none' : undefined }}>
+            <TodoListCard todos={[{ content: 'Check sidebar', status: 'in_progress' }]} />
+          </main>
+          <button onClick={() => setMaximized(true)}>Maximize sidebar</button>
+        </>
+      );
+    }
+    const { container } = render(<Layout />);
+    const main = container.querySelector('main')!;
+    const plan = main.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+    const card = plan.closest('[data-plan-pill-anchor]')!.parentElement!;
+    Object.defineProperty(card, 'checkVisibility', {
+      value: () => getComputedStyle(main).display !== 'none',
+    });
+    fireEvent.click(plan);
+    fireEvent.click(screen.getByRole('button', { name: 'Maximize sidebar' }), { detail: 0 });
+    expect(main.style.display).toBe('none');
+
+    escape();
+    expect(main.style.display).toBe('');
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+
+    escape();
+    expect(plan.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('consumes standalone maximize Escape and removes its listener on disable/unmount', () => {
