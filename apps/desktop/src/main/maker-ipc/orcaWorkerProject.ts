@@ -359,6 +359,36 @@ export function getWorkerOwnedWorktree(sessionId: string): WorkerOwnedWorktree |
   return meta ? { path: meta.path, branch: meta.branch } : undefined;
 }
 
+/**
+ * Resolve a source to a commit inside a linked worktree. When a local branch and a tag have the
+ * same exact name the branch wins: rev-parse prefers the tag, which would start the Worker from
+ * the wrong commit without any error. Qualified refs (refs/...) are exact already, and any other
+ * spelling (HEAD, @~1, a commit ID, a tag) resolves as given. A failing lookup throws: falling back
+ * would let the tag decide.
+ */
+async function resolveSourceInWorktree(directory: string, source: string): Promise<string> {
+  let revision = source;
+  if (!source.startsWith('refs/')) {
+    // for-each-ref reports a missing ref as empty output, so only real failures throw. Its patterns
+    // also match children of a name (refs/heads/<name>/...), hence the exact comparison below.
+    const { stdout } = await gitExec(
+      ['for-each-ref', '--format=%(refname)', `refs/heads/${source}`, `refs/tags/${source}`],
+      directory,
+      { timeoutMs: 5000 },
+    );
+    const refs = new Set(stdout.split(/\r?\n/));
+    if (refs.has(`refs/heads/${source}`) && refs.has(`refs/tags/${source}`)) {
+      revision = `refs/heads/${source}`;
+    }
+  }
+  const rev = await gitExec(
+    ['rev-parse', '--verify', '--quiet', '--end-of-options', `${revision}^{commit}`],
+    directory,
+    { timeoutMs: 5000 },
+  );
+  return rev.stdout.trim();
+}
+
 export async function createWorkerWorktree(
   sessionId: string,
   directory: string,
@@ -376,12 +406,7 @@ export async function createWorkerWorktree(
   // Remote-tracking refs are shared by every worktree and stay symbolic: the origin default
   // refresh in WorktreeManager works on the ref name, so a commit ID would silently skip it.
   if (info.isWorktree && !source.startsWith('refs/remotes/')) {
-    const rev = await gitExec(
-      ['rev-parse', '--verify', '--quiet', '--end-of-options', `${source}^{commit}`],
-      directory,
-      { timeoutMs: 5000 },
-    );
-    const sha = rev.stdout.trim();
+    const sha = await resolveSourceInWorktree(directory, source);
     if (sha) resolvedSourceBranch = sha;
   }
   const created = await WorktreeManager.createWorktree(

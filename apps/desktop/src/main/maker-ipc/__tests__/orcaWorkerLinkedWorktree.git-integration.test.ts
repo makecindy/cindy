@@ -159,4 +159,63 @@ describe('Worker worktree linked-worktree ref resolution', () => {
     expect(gitIn(workerDir, 'rev-parse', 'HEAD')).toBe(freshSha);
     expect(existsSync(path.join(workerDir, 'fresh.txt'))).toBe(true);
   }, 30_000);
+
+  /*
+   * Test value (docs/dev-rules/engineering-conventions.md §3.2):
+   * - Entry and observable result: createWorkerWorktree from a linked worktree whose branch shares its name with a tag;
+   *   the Worker starts at the branch tip, not at the tag's commit.
+   * - Basis: rev-parse prefers a tag over a branch of the same name, so resolving the source inside the linked worktree
+   *   (#11823) started the Worker from the tag without any error, where `git worktree add` refuses the ambiguous name.
+   * - Gap: the cases above use revision expressions and an origin ref; none has a branch and a tag with one name.
+   * - Minimal failing input: branch `feature` ahead of a tag `feature`, with the source omitted (the attached branch)
+   *   or given as `feature`.
+   * - Tier: git-integration (real refs and a real worktree add).
+   */
+  it.each([
+    ['the attached branch when the source is omitted', undefined],
+    ['an explicit short name', 'feature'],
+  ] as const)('starts from the branch, not from a tag with the same name: %s', async (_label, explicit) => {
+    const key = explicit ?? 'attached';
+    const project = path.join(fixture, `tag-project-${key}`);
+    const projectLinked = path.join(fixture, `tag-linked-${key}`);
+    mkdirSync(project, { recursive: true });
+    gitIn(project, 'init', '--initial-branch=main');
+    const taggedSha = commitFile(project, 'base.txt', 'base\n', 'tagged commit');
+    gitIn(project, 'worktree', 'add', '-b', 'feature', projectLinked, taggedSha);
+    const branchTip = commitFile(projectLinked, 'feature.txt', 'feature\n', 'branch commit');
+    gitIn(project, 'tag', 'feature', taggedSha);
+
+    const source = await resolveWorkerWorktreeSource(projectLinked, explicit);
+    expect(source).toBe('feature');
+    const workerDir = await createWorkerWorktree(`acp-linked-tag-${key}`, projectLinked, source, { awaitFullCheckout: true });
+    expect(gitIn(workerDir, 'rev-parse', 'HEAD')).toBe(branchTip);
+    expect(existsSync(path.join(workerDir, 'feature.txt'))).toBe(true);
+  }, 30_000);
+
+  /*
+   * Test value (docs/dev-rules/engineering-conventions.md §3.2):
+   * - Entry and observable result: createWorkerWorktree from a linked worktree with a fully qualified source; the Worker
+   *   starts at that exact ref even when another branch is named like the qualified spelling.
+   * - Basis: the branch-over-tag rule above must not prefix a qualified ref again, or `refs/heads/main` would select the
+   *   branch `refs/heads/refs/heads/main`.
+   * - Gap: the cases above only use short names.
+   * - Minimal failing input: `main` at one commit, a branch literally named `refs/heads/main` at another, source `refs/heads/main`.
+   * - Tier: git-integration (real refs and a real worktree add).
+   */
+  it('keeps a fully qualified source exact even when a branch is named like it', async () => {
+    const project = path.join(fixture, 'qualified-project');
+    const projectLinked = path.join(fixture, 'qualified-linked');
+    mkdirSync(project, { recursive: true });
+    gitIn(project, 'init', '--initial-branch=main');
+    const older = commitFile(project, 'base.txt', 'base\n', 'older commit');
+    const mainTip = commitFile(project, 'main.txt', 'main\n', 'main commit');
+    gitIn(project, 'worktree', 'add', '-b', 'qualified-linked', projectLinked, older);
+    gitIn(project, 'update-ref', 'refs/heads/refs/heads/main', older);
+
+    const source = await resolveWorkerWorktreeSource(projectLinked, 'refs/heads/main');
+    expect(source).toBe('refs/heads/main');
+    const workerDir = await createWorkerWorktree('acp-linked-qualified', projectLinked, source, { awaitFullCheckout: true });
+    expect(gitIn(workerDir, 'rev-parse', 'HEAD')).toBe(mainTip);
+    expect(existsSync(path.join(workerDir, 'main.txt'))).toBe(true);
+  }, 30_000);
 });

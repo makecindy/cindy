@@ -552,6 +552,30 @@ describe('Worker worktree subproject directory', () => {
     expect(opts).toEqual({ trackBackgroundCheckout: true, refreshDefaultSource: true, awaitFullCheckout: true });
     expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
   });
+
+  // #11823 review: inside a linked worktree, a ref lookup that fails (timeout, spawn error) must fail the
+  // creation. Falling back to the plain spelling would let a tag with the same name decide the commit.
+  // Unit tier: a failing Git command cannot be produced with real Git; the real-Git outcomes live in
+  // orcaWorkerLinkedWorktree.git-integration.test.ts. Minimal input: a linked worktree and a failing for-each-ref.
+  it('fails the creation when the ref lookup inside a linked worktree fails', async () => {
+    const linkedGitDir = path.join(repo, '.git', 'worktrees', 'lookup');
+    mkdirSync(linkedGitDir, { recursive: true });
+    const previous = vi.mocked(gitExec).getMockImplementation()!;
+    vi.mocked(gitExec).mockImplementation(async (args, ...rest) => {
+      if (args[0] === 'rev-parse' && args.includes('--git-dir')) {
+        return { stdout: [repo, path.join(repo, '.git'), linkedGitDir].join('\n') + '\n', stderr: '' };
+      }
+      if (args[0] === 'for-each-ref') throw new Error('git timed out');
+      return previous(args, ...rest);
+    });
+    vi.mocked(createWorktree).mockClear();
+    try {
+      await expect(createWorkerWorktree('lookup-fails', alias, 'feature')).rejects.toThrow('git timed out');
+      expect(createWorktree).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(gitExec).mockImplementation(previous);
+    }
+  });
 });
 
 // PR2 unit: validate the tool's optional source before any worktree side effect.
