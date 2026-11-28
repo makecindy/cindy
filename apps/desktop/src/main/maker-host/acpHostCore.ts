@@ -135,6 +135,8 @@ export function buildAcpAgentCore(opts: BuildAcpAgentCoreOpts): AcpAgent {
     preparePiExtraSpawnConfig: opts.preparePiExtraSpawnConfig,
     clientInfo: { name: 'cindy', title: 'Cindy', version: opts.appVersion },
     endpoints: {
+      // The official agy relay buffers an incomplete NDJSON line up to 16 MiB.
+      imagePromptByteLimit: key => key === '_root__cindy-antigravity-acp:agy' ? 16 * 1024 * 1024 : undefined,
       connect: async (key, options) => createAcpProcessTransport(
         options?.remoteWorkspace || options?.guestWorkspace || options?.accountDir
           ? await opts.spawnHarness(key, {

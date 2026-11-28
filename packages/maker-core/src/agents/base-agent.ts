@@ -1984,7 +1984,7 @@ export class TurnDispatchRejectedError extends Error {
    *   by the provider, so the host must say "not sent" rather than "reply
    *   failed".
    */
-  readonly diagnostic?: 'pi-retry-history-frame-too-large' | 'pi-retry-history-unavailable';
+  readonly diagnostic?: 'pi-retry-history-frame-too-large' | 'pi-retry-history-unavailable' | 'acp-image-prompt-too-large';
   /**
    * Bounded HTTP status the upstream answered with (400–599), when the
    * rejection carries one. A number only — never the upstream body.

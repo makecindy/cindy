@@ -14,6 +14,7 @@ import { basename, extname, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Logger } from '../../interfaces/logger.js';
 import {
+  TurnDispatchRejectedError,
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
   type SendOptions,
@@ -91,6 +92,12 @@ import {
 import { acpToolDisplayName, AcpUpdateTranslator, type AcpTurnOutcome } from './translator.js';
 
 const DEFAULT_CANCEL_GRACE_MS = 15_000;
+
+function oversizedImagePrompt(): TurnDispatchRejectedError {
+  return new TurnDispatchRejectedError('Send fewer images at once or reduce their size and try again.', {
+    diagnostic: 'acp-image-prompt-too-large',
+  });
+}
 const SESSION_CLOSE_TIMEOUT_MS = 5_000;
 /** Matched by the host's no-active-turn handling, which then delivers the message as the next turn. */
 const NO_ACTIVE_TURN_TO_STEER = 'No active turn to steer';
@@ -187,6 +194,7 @@ export interface OpenAcpSessionOptions {
   /** How long a cancelled prompt may take to settle before Cindy ends the turn itself. */
   cancelGraceMs?: number;
   readFile?: (path: string) => Promise<Uint8Array>;
+  imagePromptByteLimit?: number;
   /**
    * Host text sent ahead of the first message of a newly created agent session (for example
    * collaboration role instructions). A resumed or
@@ -494,6 +502,7 @@ interface TurnGate {
 }
 
 interface QueuedPrompt {
+  admission?: { resolve(): void; reject(error: Error): void };
   blocks: AcpContentBlock[];
   gate: TurnGate | null;
 }
@@ -672,6 +681,7 @@ export class AcpSession {
   private readonly turnChangeCapture: TurnChangeCaptureHooks | undefined;
   private readonly logger: Logger | undefined;
   private readonly readImage: (path: string) => Promise<Uint8Array>;
+  private readonly imagePromptByteLimit?: number;
   private readonly expandSlashInvocation: ((text: string) => Promise<string | null>) | undefined;
   private readonly cancelGraceMs: number;
   private readonly onVendorOptionsChange: ((patch: Record<string, unknown>) => void) | undefined;
@@ -734,6 +744,7 @@ export class AcpSession {
 
   constructor(init: AcpSessionInit) {
     this.connection = init.connection;
+    this.imagePromptByteLimit = init.options.imagePromptByteLimit;
     this.cwd = init.options.cwd;
     this.reviewMode = init.options.reviewMode === true;
     this.reviewReadGrants = this.reviewMode ? [...(init.options.reviewReadGrants ?? [])] : [];
@@ -947,6 +958,12 @@ export class AcpSession {
       // Stop also discards messages that were still being prepared, like queued ones.
       if (generation !== this.stopGeneration) return;
       this.assertOrcaTools();
+      if (this.imagePromptByteLimit !== undefined && prompt.some(block => block.type === 'image')) {
+        return new Promise<void>((resolve, reject) => {
+          this.pendingPrompts.push({ blocks: prompt, gate, admission: { resolve, reject } });
+          this.pump();
+        });
+      }
       this.pendingPrompts.push({ blocks: prompt, gate });
       this.pump();
     });
@@ -986,16 +1003,18 @@ export class AcpSession {
     if (this.readRoleBriefing?.() || requiredOrcaMcpServers(this.getOrcaRole?.()).some(name => !this.acceptedMcpServers.includes(name))) {
       throw new Error(NO_ACTIVE_TURN_TO_STEER);
     }
+    const params = {
+      sessionId: this.id,
+      prompt,
+      // Without this an agent whose turn just ended starts a turn of its own, which Cindy does not track.
+      _meta: { steering: { idleBehavior: 'promptRequired' } },
+    };
+    if (prompt.some(block => block.type === 'image')) this.checkImagePromptSize(ACP_STEERING_METHOD, params);
     // Before the agent can act on the message; a steer that is not taken leaves the turn stricter, never looser.
     if (gate && turn.gate) turn.gate = mergeGates(turn.gate, gate);
     let result: AcpRecord;
     try {
-      result = await this.connection.request(ACP_STEERING_METHOD, {
-        sessionId: this.id,
-        prompt,
-        // Without this an agent whose turn just ended starts a turn of its own, which Cindy does not track.
-        _meta: { steering: { idleBehavior: 'promptRequired' } },
-      }, {
+      result = await this.connection.request(ACP_STEERING_METHOD, params, {
         onResult: (reply) => {
           // Finish the old segment before the decoder handles any following update.
           if (reply.outcome === 'injected' && this.turn === turn) this.emit(this.translator.flushPending());
@@ -1035,7 +1054,7 @@ export class AcpSession {
 
   async abort(): Promise<void> {
     this.stopGeneration += 1;
-    this.pendingPrompts.length = 0;
+    this.discardPendingPrompts();
     const turn = this.turn;
     if (!turn) {
       this.backgroundPermission = null;
@@ -1367,6 +1386,18 @@ export class AcpSession {
     throw methodNotFound(method);
   }
 
+  private discardPendingPrompts(): void {
+    for (const prompt of this.pendingPrompts.splice(0)) {
+      prompt.admission?.reject(new TurnDispatchRejectedError('Queued image message was not sent.'));
+    }
+  }
+
+  private checkImagePromptSize(method: string, params: AcpRecord): void {
+    if (this.imagePromptByteLimit !== undefined && this.connection.nextRequestBytes(method, params) > this.imagePromptByteLimit) {
+      throw oversizedImagePrompt();
+    }
+  }
+
   private pump(): void {
     if (this.turn || this.ended || this.closing) return;
     let next: QueuedPrompt | undefined;
@@ -1375,6 +1406,10 @@ export class AcpSession {
         this.assertOrcaTools();
         break;
       } catch (err) {
+        if (next.admission) {
+          next.admission.reject(err instanceof Error ? err : new Error(String(err)));
+          continue;
+        }
         this.queue.push({ type: 'error', data: {
           message: (err instanceof Error ? err.message : String(err)) + (err instanceof AcpRequiredMcpUnavailableError ? ' The message was not sent.' : ''),
           isTerminal: true,
@@ -1383,10 +1418,6 @@ export class AcpSession {
       }
     }
     if (!next) return;
-    // Output produced between turns (autonomous agent work) is closed off as background.
-    this.emit(this.translator.flushPending());
-    this.clearBackgroundSegmentClose();
-    this.clearOpenToolCap();
     const turn: ActiveTurn = {
       token: ++this.turnSeq,
       usageModel: this.model,
@@ -1396,11 +1427,6 @@ export class AcpSession {
       cancelTimer: null,
       gate: next.gate,
     };
-    this.turn = turn;
-    this.resetTurnChangeCaptureState();
-    this.backgroundPermission = null;
-    this.usage = { ...this.usage, tokenUsage: 0 };
-    this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     const firstText = next.blocks.find((block): block is Extract<AcpContentBlock, { type: 'text' }> => block.type === 'text')?.text ?? '';
     const ordinary = !isLeadingSlashCommand(firstText);
     const roleBriefing = ordinary ? this.readRoleBriefing?.() : undefined;
@@ -1435,6 +1461,25 @@ export class AcpSession {
         ...(next.gate || this.reviewMode ? { scope: ACP_PERMISSION_GATE_SCOPE } : {}),
       } };
     }
+    if (next.admission) {
+      try {
+        this.checkImagePromptSize('session/prompt', params);
+      } catch (error) {
+        next.admission.reject(error instanceof Error ? error : new Error(String(error)));
+        this.pump();
+        return;
+      }
+      next.admission.resolve();
+    }
+    // Only an admitted turn supersedes ongoing background work.
+    this.emit(this.translator.flushPending());
+    this.clearBackgroundSegmentClose();
+    this.clearOpenToolCap();
+    this.turn = turn;
+    this.resetTurnChangeCaptureState();
+    this.backgroundPermission = null;
+    this.usage = { ...this.usage, tokenUsage: 0 };
+    this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     this.runPrompt(turn, params, true, ordinary ? () => {
       this.pendingBriefing = null;
       this.readOrcaDiscoveryBriefing = undefined;
@@ -2089,10 +2134,13 @@ export class AcpSession {
     // Only the message's opening text can be a slash invocation: its first text block, the same text
     // the host keeps its notes off (desktop `shouldPrependMobileClientPromptNote`).
     const opening = message.content.findIndex((block) => block.type === 'text');
+    let remainingImageBytes = this.imagePromptByteLimit;
     for (const [index, block] of message.content.entries()) {
-      blocks.push(index === opening && block.type === 'text'
+      const converted: AcpContentBlock = index === opening && block.type === 'text'
         ? { type: 'text', text: await this.expandText(block.text) }
-        : await this.toContentBlock(block));
+        : await this.toContentBlock(block, remainingImageBytes);
+      if (converted.type === 'image' && remainingImageBytes !== undefined) remainingImageBytes -= converted.data.length;
+      blocks.push(converted);
     }
     return blocks;
   }
@@ -2102,7 +2150,7 @@ export class AcpSession {
     return (await this.expandSlashInvocation(text)) ?? text;
   }
 
-  private async toContentBlock(block: UserContentBlock): Promise<AcpContentBlock> {
+  private async toContentBlock(block: UserContentBlock, remainingImageBytes?: number): Promise<AcpContentBlock> {
     switch (block.type) {
       case 'text':
         return { type: 'text', text: block.text };
@@ -2110,7 +2158,10 @@ export class AcpSession {
         const mimeType = block.mimeType ?? IMAGE_MIME_BY_EXTENSION[extname(block.path).toLowerCase()];
         if (this.initializeResult.agentCapabilities.promptCapabilities.image && mimeType) {
           const bytes = await this.readImage(block.path);
-          return { type: 'image', data: Buffer.from(bytes).toString('base64'), mimeType };
+          if (remainingImageBytes !== undefined && 4 * Math.ceil(bytes.byteLength / 3) > remainingImageBytes) {
+            throw oversizedImagePrompt();
+          }
+          return { type: 'image', data: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64'), mimeType };
         }
         return { type: 'resource_link', uri: pathToFileURL(block.path).href, name: basename(block.path), ...(mimeType ? { mimeType } : {}) };
       }
@@ -2126,7 +2177,7 @@ export class AcpSession {
     if (info.reason !== 'closed-by-client') {
       this.logger?.warn('acp: agent connection ended', { reason: info.reason, ...(info.detail ? { detail: info.detail } : {}) });
     }
-    this.pendingPrompts.length = 0;
+    this.discardPendingPrompts();
     const turn = this.turn;
     if (turn) {
       this.finishTurn(turn.token, info.reason === 'closed-by-client'
@@ -2158,7 +2209,7 @@ export class AcpSession {
   }
 
   private async doClose(): Promise<void> {
-    this.pendingPrompts.length = 0;
+    this.discardPendingPrompts();
     await this.abort();
     if (this.initializeResult.agentCapabilities.sessionCapabilities.close && !this.connection.closed) {
       try {

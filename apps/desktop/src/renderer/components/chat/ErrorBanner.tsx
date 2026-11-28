@@ -446,6 +446,7 @@ export function ErrorBanner({
   const piRetryHistoryKey =
     errorReasonI18nKey === 'chat.errorBanner.piRetryHistoryUnavailable'
     || errorReasonI18nKey === 'chat.errorBanner.piRetryHistoryTooLarge'
+    || errorReasonI18nKey === 'chat.errorBanner.acpImagePromptTooLarge'
       ? errorReasonI18nKey
       : undefined;
   const toolLoopI18nKey =

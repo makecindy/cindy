@@ -108,6 +108,7 @@ export interface AcpEndpointConnectOptions {
 export interface AcpEndpointLauncher {
   /** Known failures carry startup exit proof or the failed process's cleanup receipt. */
   connect(harnessKey: string, options?: AcpEndpointConnectOptions): Promise<AcpLineTransport>;
+  imagePromptByteLimit?(harnessKey: string): number | undefined;
 }
 
 export interface AcpAgentDeps extends AgentDeps {
@@ -438,6 +439,7 @@ export class AcpAgent extends BaseAgent {
       try {
         return await openAcpSession({
           transport: tracked.transport,
+          imagePromptByteLimit: this.acpDeps.endpoints.imagePromptByteLimit?.(harnessKey),
           cwd: opts.workingDir,
           clientInfo: this.acpDeps.clientInfo,
           ...(!hosted && opts.sessionId ? { recoverVerification: this.acpDeps.verificationForTask?.(harnessKey, opts.sessionId) } : {}),

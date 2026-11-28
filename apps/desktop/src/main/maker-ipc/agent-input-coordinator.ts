@@ -4,6 +4,7 @@ import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-s
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionAnswerOrigin, inheritTelegramQuestionRetry } from './telegramQuestionReply.js';
 import type { Session } from '@cindy/maker-core';
+import { ACP_IMAGE_PROMPT_TOO_LARGE, TurnDispatchRejectedError } from '@cindy/maker-core';
 import { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
@@ -3394,14 +3395,15 @@ export class AgentInputCoordinator {
         error: errorMessage(err),
       });
       if (markerStillPresent) {
-        latest.error = errorMessage(err);
+        const imagePromptRejected = err instanceof TurnDispatchRejectedError && err.diagnostic === 'acp-image-prompt-too-large';
+        latest.error = imagePromptRejected ? `provider-rejected-before-dispatch: ${ACP_IMAGE_PROMPT_TOO_LARGE}` : errorMessage(err);
         clearErrorProjectionSignals(latest);
         latest.recovery = null;
         // 视觉 capability 拒绝发生在 Pi RPC 之前，投递结果确定为“未接收”。把原消息
         // 恢复到队首并留下 typed recovery；用户切换到视觉模型后可原样重试。与 ack
         // 超时不同，这里不暂停队列，因为不存在重复投递风险。marker 已被 Stop/clear
         // 清掉时不会进本分支，因此不会把显式丢弃的消息复活。
-        if (isPiImageInputUnsupportedError(err)) {
+        if (imagePromptRejected || isPiImageInputUnsupportedError(err)) {
           this.movePreparedItemToQueueFront(latest, item, true);
           this.movePendingCompactWaitClientIdToFront(latest, item.clientId);
           latest.recovery = { kind: 'queue-head', clientId: item.clientId };
@@ -4978,7 +4980,7 @@ export class AgentInputCoordinator {
       if (
         active &&
         state.recovery?.kind === 'queue-head' &&
-        isPiImageInputUnsupportedError(state.error)
+        (isPiImageInputUnsupportedError(state.error) || state.error === `provider-rejected-before-dispatch: ${ACP_IMAGE_PROMPT_TOO_LARGE}`)
       ) {
         // A Pi capability guard rejected a newer steer before RPC and restored it as the
         // recoverable queue head. The terminal error belongs to the original active turn: close

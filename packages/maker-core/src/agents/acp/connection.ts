@@ -94,6 +94,11 @@ export class AcpConnection {
     return this.closedInfo;
   }
 
+  /** The delimiter follows the JSON line and does not enter the relay's incomplete-line buffer. */
+  nextRequestBytes(method: string, params: AcpRecord): number {
+    return Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', id: this.nextId, method, params }));
+  }
+
   /** Fires once; immediately (microtask) when already closed. Returns a disposer. */
   onClose(listener: (info: AcpTransportClosed) => void): () => void {
     if (this.closedInfo) {

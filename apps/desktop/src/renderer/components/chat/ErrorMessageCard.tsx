@@ -118,6 +118,7 @@ export function ErrorMessageCard({
   const piRetryHistoryKey =
     i18nKey === 'chat.errorBanner.piRetryHistoryUnavailable'
     || i18nKey === 'chat.errorBanner.piRetryHistoryTooLarge'
+    || i18nKey === 'chat.errorBanner.acpImagePromptTooLarge'
       ? i18nKey
       : undefined;
   const isInvalidEncrypted = !isProviderSafetyRefusal && isInvalidEncryptedContentError(decoded);
