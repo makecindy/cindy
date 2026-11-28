@@ -1078,7 +1078,7 @@ function accountView(state: RuntimeState, ref: PluginEngineProviderRef, account:
 }
 
 /** The pool of one provider of a plugin engine, in the built-in pool's view shape. */
-export async function readPluginEnginePoolView(providerId: string, taskId?: string, force = false): Promise<SubscriptionPoolView> {
+export async function readPluginEnginePoolView(providerId: string, taskId?: string, retryStatusAccountId?: string): Promise<SubscriptionPoolView> {
   const ref = resolvePluginEngineProvider(providerId);
   const engine = ref && liveEngine(ref.engineKey);
   if (!ref || !engine?.accounts) throw new Error('Account not found');
@@ -1087,8 +1087,8 @@ export async function readPluginEnginePoolView(providerId: string, taskId?: stri
   // Identity-only engines (no methods) report just the original login.
   const accounts = engine.accounts.methods.length ? providerAccounts(pool, ref.suffix) : [DEFAULT_PLUGIN_ENGINE_ACCOUNT];
   await Promise.all(accounts.map(account => Promise.all([
-    readStatus(state, ref, account.id, force),
-    readUsage(state, ref, account.id, force),
+    readStatus(state, ref, account.id, account.id === retryStatusAccountId),
+    readUsage(state, ref, account.id),
   ]).catch(() => {})));
   assertOwner(state);
   const bound = taskId ? readPluginEngineBinding(ref.engineKey, `task:${taskId}`) : undefined;
@@ -1175,7 +1175,7 @@ export async function runPluginEngineAccountCommand(
     // Views refresh on every load change: reads use the plugin's cached answers (one minute, five
     // seconds after a failed read), like the built-in pool, instead of calling the plugin each time.
     case 'read':
-      return readPluginEnginePoolView(command.providerId, command.taskId);
+      return readPluginEnginePoolView(command.providerId, command.taskId, command.retryStatusAccountId);
     case 'add': {
       if (!multi) throw new Error('Account not found');
       const pool = effectivePluginEnginePool(ref.engineKey);

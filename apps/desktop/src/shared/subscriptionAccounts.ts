@@ -214,7 +214,7 @@ export interface PluginEnginePoolInfo {
   separate?: true;
 }
 export type SubscriptionAccountCommand =
-  | { action: 'read'; providerId: string; taskId?: string }
+  | { action: 'read'; providerId: string; taskId?: string; retryStatusAccountId?: string }
   /** Advisory login presentation only; never binds detected system credentials. */
   | { action: 'preview'; providerId: SubscriptionProvider }
   /**

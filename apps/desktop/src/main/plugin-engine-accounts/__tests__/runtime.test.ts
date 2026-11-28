@@ -89,6 +89,7 @@ const {
   runPluginEngineAccountCommand,
   resetPluginEngineAccountsRuntimeForTests,
 } = await import('../runtime.js');
+const { parseSubscriptionAccountCommand } = await import('../../subscription-accounts/commands.js');
 const { withPluginEngineAccounts } = await import('../agent.js');
 const { canSwitchPluginEngineTaskAccount, preparePluginEngineAccountForSend } = await import('../failover.js');
 const { updatePluginEnginePool, readPluginEngineBinding, readPluginEnginePool, writePluginEngineBindings } = await import('../store.js');
@@ -123,6 +124,23 @@ beforeEach(async () => {
 });
 
 describe('plugin engine account pool', () => {
+  // #13766: within the five-second failure TTL, only the row explicitly retried may recover.
+  it('rechecks only the requested plugin account inside the failure cache period', async () => {
+    h.status.clear();
+    const read = (retryStatusAccountId?: string) => runPluginEngineAccountCommand(
+      parseSubscriptionAccountCommand({ action: 'read', providerId: PROVIDER, retryStatusAccountId }),
+    );
+    const statuses = async (retryStatusAccountId?: string) =>
+      (await read(retryStatusAccountId)).accounts.filter(row => row.id === A || row.id === B).map(row => row.status);
+
+    expect(await statuses()).toEqual(['unavailable', 'unavailable']);
+    h.status.set(A, { state: 'signed-in' });
+    h.status.set(B, { state: 'signed-in' });
+    expect(await statuses()).toEqual(['unavailable', 'unavailable']);
+    expect(await statuses(B)).toEqual(['unavailable', 'ready']);
+    expect(h.login).not.toHaveBeenCalled();
+  });
+
   it('spreads new tasks over signed-in accounts, keeps a bound task on its account and stops at the limit', async () => {
     const first = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1']);
     const second = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t2']);
