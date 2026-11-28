@@ -23,6 +23,7 @@ import {
   ImBotPersonalWay,
   ImBotStatusText,
   ImBotSubPage,
+  ImCompanionBotsSection,
   useImBotNav,
   type ImBotStatusTone,
 } from './ImBotPageParts';
@@ -499,34 +500,40 @@ export function WecomBotSettings() {
 
   if (status.kind !== 'connected') {
     return (
-      <ImBotPersonalWay id={imBotSettings.wecom.targetId}>
-        <ImBotBlockCard><WecomSetupForm bot={bot} onDisconnect={handleDisconnect} /></ImBotBlockCard>
-        <SettingsCard>{groupNotifyRow}</SettingsCard>
-      </ImBotPersonalWay>
+      <>
+        <ImBotPersonalWay id={imBotSettings.wecom.targetId}>
+          <ImBotBlockCard><WecomSetupForm bot={bot} onDisconnect={handleDisconnect} /></ImBotBlockCard>
+          <SettingsCard>{groupNotifyRow}</SettingsCard>
+        </ImBotPersonalWay>
+        <ImCompanionBotsSection channel="wecom" />
+      </>
     );
   }
 
   return (
-    <ImBotPersonalWay id={imBotSettings.wecom.targetId}>
-      <SettingsCard>
-        <ImReplyTargetField target={replyTarget} settingId={imBotSettings.wecom.id} />
-        {toCompanion ? null : <ImChannelProjectRows channel="wecom" appName={t('settings.imBot.apps.wecom')} settingId={imBotSettings.wecom.id} />}
-      </SettingsCard>
-      {toCompanion ? null : <ImChatSettingsCard channel="wecom" />}
-      <SettingsCard>{groupNotifyRow}</SettingsCard>
-      <SettingsCard>
-        <SettingsRow
-          title={bot.botId}
-          hint={<ImBotStatusText tone="connected">
-            {[t(STATUS_KEY.connected), ownerUserId
-              ? t('settings.wecomBot.connected.ownerBound', { ownerUserId })
-              : t('settings.wecomBot.connected.awaitingOwner')].join(' · ')}
-          </ImBotStatusText>}
-        />
-        <SettingsRow data-setting-id={imBotSettings.wecom.id} danger title={t('settings.imBot.rows.unbind')}
-          disabled={isDisconnecting} onClick={() => void handleDisconnect()} />
-      </SettingsCard>
-    </ImBotPersonalWay>
+    <>
+      <ImBotPersonalWay id={imBotSettings.wecom.targetId}>
+        <SettingsCard>
+          <ImReplyTargetField target={replyTarget} settingId={imBotSettings.wecom.id} />
+          {toCompanion ? null : <ImChannelProjectRows channel="wecom" appName={t('settings.imBot.apps.wecom')} settingId={imBotSettings.wecom.id} />}
+        </SettingsCard>
+        {toCompanion ? null : <ImChatSettingsCard channel="wecom" />}
+        <SettingsCard>{groupNotifyRow}</SettingsCard>
+        <SettingsCard>
+          <SettingsRow
+            title={bot.botId}
+            hint={<ImBotStatusText tone="connected">
+              {[t(STATUS_KEY.connected), ownerUserId
+                ? t('settings.wecomBot.connected.ownerBound', { ownerUserId })
+                : t('settings.wecomBot.connected.awaitingOwner')].join(' · ')}
+            </ImBotStatusText>}
+          />
+          <SettingsRow data-setting-id={imBotSettings.wecom.id} danger title={t('settings.imBot.rows.unbind')}
+            disabled={isDisconnecting} onClick={() => void handleDisconnect()} />
+        </SettingsCard>
+      </ImBotPersonalWay>
+      <ImCompanionBotsSection channel="wecom" />
+    </>
   );
 }
 

@@ -25,6 +25,7 @@ import {
   ImBotSetupRow,
   ImBotStatusText,
   ImBotSubPage,
+  ImCompanionBotsSection,
   useImBotNav,
   type ImBotStatusTone,
 } from './ImBotPageParts';
@@ -667,67 +668,73 @@ export function FeishuBotSettings({
 
   if (!shouldShowSavedCredentialsCard(hasSavedCreds)) {
     return (
-      <ImBotPersonalWay id={imBotSettings.feishu.targetId} configured={false}>
-        {nav.multiWay
-          ? <ImBotSetupRow settingId={imBotSettings.feishu.id} hint={t('settings.imBot.ways.personalSetupHint.feishu')} />
-          : <ImBotBlockCard>{manualConfig}</ImBotBlockCard>}
-      </ImBotPersonalWay>
+      <>
+        <ImBotPersonalWay id={imBotSettings.feishu.targetId} configured={false}>
+          {nav.multiWay
+            ? <ImBotSetupRow settingId={imBotSettings.feishu.id} hint={t('settings.imBot.ways.personalSetupHint.feishu')} />
+            : <ImBotBlockCard>{manualConfig}</ImBotBlockCard>}
+        </ImBotPersonalWay>
+        <ImCompanionBotsSection channel="feishu" />
+      </>
     );
   }
 
   const serviceName = t(`settings.feishuBot.services.${service}`);
   const hasError = !isReconnecting && (displayStatus === 'error' || displayStatus === 'conflict');
   return (
-    <ImBotPersonalWay id={imBotSettings.feishu.targetId}>
-      <SettingsCard>
-        <ImReplyTargetField target={replyTarget} settingId={imBotSettings.feishu.id} />
-        {toCompanion ? null : <ImChannelProjectRows channel="feishu" appName={t('settings.imBot.apps.feishu')} settingId={imBotSettings.feishu.id} />}
-      </SettingsCard>
-      {/* 设置搜索「飞书群聊」落在这张卡上(锚点 id 沿用, 深链不失效)。 */}
-      {toCompanion ? null : (
-        <div id={imBotSettings.feishuGroups.targetId} className="scroll-mt-4">
-          <ImChatSettingsCard channel="feishu" />
-        </div>
-      )}
-      <SettingsCard>
-        <SettingsRow title={t('settings.imBot.rows.notifications')} chevron onClick={() => nav.open('notifications')} />
-      </SettingsCard>
-      <SettingsCard data-feishu-connection-card="">
-        <SettingsRow
-          wrap
-          title={`${serviceName} · ${maskTail(appId)}`}
-          hint={<ImBotStatusText tone={statusTone[displayStatus]}>
-            {[t(statusKey[displayStatus]), ownerOpenId
-              ? t('settings.imBot.rows.ownerId', { id: maskTail(ownerOpenId) })
-              : t('settings.feishuBot.connected.ownerWaiting')].join(' · ')}
-          </ImBotStatusText>}
-          trailing={
-            <ImReconnectButton
-              variant="secondary"
-              size="sm"
-              loading={isReconnecting}
-              onReconnect={reconnect}
-              disabled={isClearing || displayStatus === 'testing'}
-              aria-label={t('settings.feishuBot.connected.reconnect', { service: serviceName })}
-            >
-              <RefreshCw size={14} />
-              {t('settings.feishuBot.saved.reconnect')}
-            </ImReconnectButton>
-          }
-        />
-        {hasError ? (
-          <SettingsBlock>
-            <ImConnectionError
-              role="status"
-              message={t('settings.feishuBot.saved.errorHeading', { service: serviceName })}
-              description={t(savedCredentialsNoteKey(displayStatus, errorMessage))}
-              details={errorMessage ?? undefined}
-            />
-          </SettingsBlock>
-        ) : null}
-        <SettingsRow data-settings-search-action="Clear the failed bot connection" danger title={t('settings.imBot.rows.unbind')}
-          disabled={isClearing || isReconnecting} onClick={() => void handleClearClick()} />
-      </SettingsCard>
-    </ImBotPersonalWay>
+    <>
+      <ImBotPersonalWay id={imBotSettings.feishu.targetId}>
+        <SettingsCard>
+          <ImReplyTargetField target={replyTarget} settingId={imBotSettings.feishu.id} />
+          {toCompanion ? null : <ImChannelProjectRows channel="feishu" appName={t('settings.imBot.apps.feishu')} settingId={imBotSettings.feishu.id} />}
+        </SettingsCard>
+        {/* 设置搜索「飞书群聊」落在这张卡上(锚点 id 沿用, 深链不失效)。 */}
+        {toCompanion ? null : (
+          <div id={imBotSettings.feishuGroups.targetId} className="scroll-mt-4">
+            <ImChatSettingsCard channel="feishu" />
+          </div>
+        )}
+        <SettingsCard>
+          <SettingsRow title={t('settings.imBot.rows.notifications')} chevron onClick={() => nav.open('notifications')} />
+        </SettingsCard>
+        <SettingsCard data-feishu-connection-card="">
+          <SettingsRow
+            wrap
+            title={`${serviceName} · ${maskTail(appId)}`}
+            hint={<ImBotStatusText tone={statusTone[displayStatus]}>
+              {[t(statusKey[displayStatus]), ownerOpenId
+                ? t('settings.imBot.rows.ownerId', { id: maskTail(ownerOpenId) })
+                : t('settings.feishuBot.connected.ownerWaiting')].join(' · ')}
+            </ImBotStatusText>}
+            trailing={
+              <ImReconnectButton
+                variant="secondary"
+                size="sm"
+                loading={isReconnecting}
+                onReconnect={reconnect}
+                disabled={isClearing || displayStatus === 'testing'}
+                aria-label={t('settings.feishuBot.connected.reconnect', { service: serviceName })}
+              >
+                <RefreshCw size={14} />
+                {t('settings.feishuBot.saved.reconnect')}
+              </ImReconnectButton>
+            }
+          />
+          {hasError ? (
+            <SettingsBlock>
+              <ImConnectionError
+                role="status"
+                message={t('settings.feishuBot.saved.errorHeading', { service: serviceName })}
+                description={t(savedCredentialsNoteKey(displayStatus, errorMessage))}
+                details={errorMessage ?? undefined}
+              />
+            </SettingsBlock>
+          ) : null}
+          <SettingsRow data-settings-search-action="Clear the failed bot connection" danger title={t('settings.imBot.rows.unbind')}
+            disabled={isClearing || isReconnecting} onClick={() => void handleClearClick()} />
+        </SettingsCard>
+      </ImBotPersonalWay>
+      <ImCompanionBotsSection channel="feishu" />
+    </>
   );
 }

@@ -40,6 +40,7 @@ import {
   ImBotSetupRow,
   ImBotStatusText,
   ImBotSubPage,
+  ImCompanionBotsSection,
   useImBotNav,
   type ImBotStatusTone,
 } from './ImBotPageParts';
@@ -640,55 +641,68 @@ export function TelegramBotSettings() {
 
   if (!bound) {
     return (
-      <ImBotPersonalWay id={imBotSettings.telegram.targetId} configured={false}>
-        {nav.multiWay ? (
-          <ImBotSetupRow settingId={imBotSettings.telegram.id} hint={t('settings.imBot.ways.personalSetupHint.telegram')}
-            status={status.kind === 'idle' ? undefined
-              : <ImBotStatusText tone={statusTone[status.kind]}>{t(statusKey[status.kind])}</ImBotStatusText>} />
-        ) : (
-          <ImBotBlockCard><TelegramSetupForm bot={bot} onDisconnect={handleDisconnectClick} /></ImBotBlockCard>
-        )}
-      </ImBotPersonalWay>
+      <>
+        <ImBotPersonalWay id={imBotSettings.telegram.targetId} configured={false}>
+          {nav.multiWay ? (
+            <ImBotSetupRow settingId={imBotSettings.telegram.id} hint={t('settings.imBot.ways.personalSetupHint.telegram')}
+              status={status.kind === 'idle' ? undefined
+                : <ImBotStatusText tone={statusTone[status.kind]}>{t(statusKey[status.kind])}</ImBotStatusText>} />
+          ) : (
+            <ImBotBlockCard><TelegramSetupForm bot={bot} onDisconnect={handleDisconnectClick} /></ImBotBlockCard>
+          )}
+        </ImBotPersonalWay>
+        <ImCompanionBotsSection channel="telegram" />
+      </>
     );
   }
 
   return (
-    <ImBotPersonalWay id={imBotSettings.telegram.targetId}>
-      <SettingsCard>
-        <ImReplyTargetField target={replyTarget} settingId={imBotSettings.telegram.id} />
-        {toCompanion ? null : <ImChannelProjectRows channel="telegram" appName={t('settings.imBot.apps.telegram')} settingId={imBotSettings.telegram.id} />}
-        <SettingsRow title={t('settings.imBot.rows.groupReply')} chevron onClick={() => nav.open('groups')} />
-      </SettingsCard>
-      {toCompanion ? null : <ImChatSettingsCard channel="telegram" />}
-      {/* 交给伙伴后身份与分寸来自伙伴, 名字性格、表情引用这两项收起, 选回 Cindy 原样回来。 */}
-      {toCompanion ? null : (
+    <>
+      <ImBotPersonalWay id={imBotSettings.telegram.targetId}>
         <SettingsCard>
-          <SettingsRow title={t('settings.imBot.rows.persona')} chevron onClick={() => nav.open('persona')} />
-          <SettingsRow title={t('settings.imBot.rows.behavior')} chevron onClick={() => nav.open('behavior')} />
+          <ImReplyTargetField target={replyTarget} settingId={imBotSettings.telegram.id} />
+          {toCompanion ? null : <ImChannelProjectRows channel="telegram" appName={t('settings.imBot.apps.telegram')} settingId={imBotSettings.telegram.id} />}
         </SettingsCard>
-      )}
-      <SettingsCard>
-        <SettingsRow
-          title={botUsername ? `@${botUsername}` : status.appId}
-          hint={<ImBotStatusText tone={statusTone[status.kind]}>
-            {[t(statusKey[status.kind]), ownerUserId ? t('settings.imBot.rows.ownerId', { id: ownerUserId }) : null].filter(Boolean).join(' · ')}
-          </ImBotStatusText>}
-        />
-        {/* 下线/上线: 可逆且零数据损失, 不加二次确认(解绑才需要确认)。 */}
-        <SettingsRow
-          title={t('settings.imBot.rows.receiveHere')}
-          hint={t(status.kind === 'conflict' ? 'settings.telegramBot.connected.noteConflict' : 'settings.imBot.rows.receiveHereHint')}
-          trailing={<Switch data-setting-id={imBotSettings.telegram.id}
-            checked={status.kind !== 'offline'}
-            disabled={isTogglingOnline || isDisconnecting}
-            onCheckedChange={(next) => void setOnline(next)}
-            aria-label={t('settings.imBot.rows.receiveHere')} />}
-        />
-        <TelegramRemoteDevicesBlock appId={status.appId} />
-        <SettingsRow data-settings-search-action="Disconnect this bot account" danger title={t('settings.imBot.rows.unbind')}
-          disabled={isDisconnecting} onClick={() => void handleDisconnectClick()} />
-      </SettingsCard>
-    </ImBotPersonalWay>
+        <SettingsCard>
+          <SettingsRow
+            title={t('settings.imBot.rows.groupReply')}
+            hint={t('settings.imBot.rows.groupReplyHint')}
+            chevron
+            onClick={() => nav.open('groups')}
+          />
+        </SettingsCard>
+        {toCompanion ? null : <ImChatSettingsCard channel="telegram" />}
+        {/* 交给伙伴后身份与分寸来自伙伴, 名字性格、表情引用这两项收起, 选回普通任务原样回来。 */}
+        {toCompanion ? null : (
+          <SettingsCard>
+            <SettingsRow title={t('settings.imBot.rows.persona')} chevron onClick={() => nav.open('persona')} />
+            <SettingsRow title={t('settings.imBot.rows.behavior')} chevron onClick={() => nav.open('behavior')} />
+          </SettingsCard>
+        )}
+        <SettingsCard>
+          <SettingsRow
+            title={botUsername ? `@${botUsername}` : status.appId}
+            hint={<ImBotStatusText tone={statusTone[status.kind]}>
+              {[t(statusKey[status.kind]), ownerUserId ? t('settings.imBot.rows.ownerId', { id: ownerUserId }) : null].filter(Boolean).join(' · ')}
+            </ImBotStatusText>}
+          />
+          {/* 下线/上线: 可逆且零数据损失, 不加二次确认(解绑才需要确认)。 */}
+          <SettingsRow
+            title={t('settings.imBot.rows.receiveHere')}
+            hint={t(status.kind === 'conflict' ? 'settings.telegramBot.connected.noteConflict' : 'settings.imBot.rows.receiveHereHint')}
+            trailing={<Switch data-setting-id={imBotSettings.telegram.id}
+              checked={status.kind !== 'offline'}
+              disabled={isTogglingOnline || isDisconnecting}
+              onCheckedChange={(next) => void setOnline(next)}
+              aria-label={t('settings.imBot.rows.receiveHere')} />}
+          />
+          <TelegramRemoteDevicesBlock appId={status.appId} />
+          <SettingsRow data-settings-search-action="Disconnect this bot account" danger title={t('settings.imBot.rows.unbind')}
+            disabled={isDisconnecting} onClick={() => void handleDisconnectClick()} />
+        </SettingsCard>
+      </ImBotPersonalWay>
+      <ImCompanionBotsSection channel="telegram" />
+    </>
   );
 }
 

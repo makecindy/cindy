@@ -10,6 +10,11 @@ export const imBotSettings = defineSettings({
     targetId: 'settings-panel-im-bot',
     titleKey: TAB_LABEL_KEY['im-bot'],
     sectionKey: 'settings.sections.imBot',
+    keywordKeys: [
+      'settings.imBot.rows.projectModelHint',
+      'settings.imBot.companionBots.title',
+      'settings.imBot.companionBots.description',
+    ],
   },
   cindy: {
     id: 'imBot.cindy',
@@ -18,6 +23,7 @@ export const imBotSettings = defineSettings({
     targetId: 'im-bot-apps',
     titleKey: 'settings.imBot.groups.cindy',
     sectionKey: 'settings.sections.imBot',
+    keywordKeys: ['settings.imBot.ways.officialHint'],
     aliases: ['Cindy', 'official bot', '官方机器人'],
   },
   cindySlack: {
@@ -202,6 +208,7 @@ export const imBotSettings = defineSettings({
     targetId: 'personal-im-telegram',
     titleKey: 'settings.telegramBot.title',
     sectionKey: 'settings.imBot.groups.personal',
+    keywordKeys: ['settings.imBot.rows.groupReplyHint'],
     aliases: ['Telegram', 'Telegram bot'],
   },
   // 「插件」分栏只在装了 IM 入口插件时出现；没有时落到本页顶部。

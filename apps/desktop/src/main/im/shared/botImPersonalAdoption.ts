@@ -42,6 +42,7 @@ import {
   assertBotImConnectionAddable,
   findBotImConnectionByIdentity,
 } from './botImConnectionRuntime';
+import { clearPersonalChannelChoice, isPersonalChannel, type PersonalChannel } from './personalChannelStore';
 
 const log = createLogger('im:bot-adopt');
 
@@ -66,7 +67,9 @@ export interface BotImPersonalAdoptionDeps {
   isReady(): boolean;
   personal: Partial<Record<BotImChannel, PersonalBotTransport>>;
   /** 个人 Telegram bot 的群参与模式(设置卡「群聊」小节)。 */
-  telegramGroupActivation(): Record<string, 'mention' | 'always'> | undefined;
+  telegramGroupActivation(): Record<string, 'always' | 'mention'> | undefined;
+  /** 移交成功后广播该个人渠道的项目/归属已清空(可选)。 */
+  onPersonalChannelCleared?: (channel: PersonalChannel) => void | Promise<void>;
 }
 
 /** 个人 bot 用的安全存储键名(无前缀), 与 lizi-im 各传输层同源。 */
@@ -284,6 +287,15 @@ export async function adoptPersonalBot(input: BotImAdoptPersonalBotInput): Promi
     }
     // 先删键再让传输层归位: 凭证不能留在个人 bot 上(否则下次启动两处抢同一个 bot)。
     purgePersonalSecrets(input.channel);
+    if (isPersonalChannel(input.channel)) {
+      try {
+        if (clearPersonalChannelChoice(input.channel)) {
+          await current.onPersonalChannelCleared?.(input.channel);
+        }
+      } catch (err) {
+        log.warn(`clear personal channel state after adoption failed: ${String(err)}`);
+      }
+    }
     try {
       await personal.clear();
     } catch (err) {

@@ -7444,7 +7444,7 @@
     "tina": {
       "chat": {
         "title": "Conversa",
-        "description": "Conversas simples sem repositório; selecione \"chat\" no Slack, Telegram, X ou Feishu / Lark, com uma sessão por fluxo de conversa."
+        "description": "Conversas simples sem pasta de projeto. Usado quando um app de mensagens não aponta para um projeto específico."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7575,7 +7575,8 @@
       "groups": {
         "cindy": "Oficial",
         "personal": "Pessoal",
-        "plugins": "Plugins"
+        "plugins": "Plugins",
+        "shared": "Compartilhado"
       },
       "tips": {
         "cindy": "Fornecido e mantido pelo Cindy. Não é necessário criar um bot nem fornecer credenciais — siga as etapas de conexão para começar.",
@@ -7619,9 +7620,9 @@
       },
       "replyTarget": {
         "label": "Quem responde",
-        "cindy": "Cindy",
-        "cindyHint": "A Cindy inicia uma tarefa nova para responder. Você também pode passá-la a um amigo.",
-        "companionHint": "Mensagens diretas vão para sua conversa com {{name}}, e cada grupo ganha sua própria tarefa oculta. Suas mensagens rodam com as permissões de {{name}}.",
+        "cindy": "Tarefas comuns",
+        "cindyHint": "Atendido como tarefa comum na barra lateral usando o projeto e o modelo abaixo. Ou entregue a um parceiro para usar a memória e as configurações dele.",
+        "companionHint": "Mensagens diretas vão para sua conversa com {{name}}, e cada grupo corre separado sob {{name}}. Modelo, permissões e memória seguem {{name}}.",
         "openCompanion": "Configurações de {{name}}",
         "summary": "{{name}} responde",
         "missingCompanion": "Amigo indisponível",
@@ -7630,14 +7631,15 @@
         "companionSettingsHint": "Modelo, permissões e memória"
       },
       "nav": {
-        "back": "Voltar"
+        "back": "Voltar",
+        "backTo": "Voltar para {{page}}"
       },
       "pageDescription": "Envie mensagens à Cindy ou aos seus amigos a partir de apps de chat como WeChat, Feishu e Telegram.",
       "list": {
         "connected": "Conectados",
         "available": "Mais apps",
         "choose": "Escolha uma app de chat",
-        "cindyReplies": "A Cindy responde",
+        "cindyReplies": "Tarefas comuns",
         "official": "Bot oficial: {{status}}",
         "projects": "Projetos e modelos",
         "projectsHint": "Modelo e permissões de cada projeto quando um app de chat ou plugin inicia uma tarefa nele",
@@ -7647,7 +7649,8 @@
           "x": "Use a conta oficial da Cindy. Autorize-a para responder a você no X",
           "wechat": "Conecte seu WeChat pessoal com um código QR",
           "personal": "Use um bot criado por você"
-        }
+        },
+        "companionDedicated": "Próprio do parceiro: {{names}}"
       },
       "apps": {
         "telegram": "Telegram",
@@ -7669,7 +7672,8 @@
           "telegram": "Crie um bot com o BotFather e informe o token e seu ID de usuário.",
           "discord": "Crie um bot no Discord Developer Portal e informe o token.",
           "feishu": "Crie um app na plataforma do Feishu ou Lark e informe o App ID e o App Secret."
-        }
+        },
+        "officialHint": "Sem criar app próprio — conecta-se diretamente à sua conta Cindy."
       },
       "rows": {
         "model": "Modelo",
@@ -7698,7 +7702,11 @@
         "projectFullAccessCancel": "Cancelar",
         "projectUpdateFailed": "Não foi possível trocar o projeto. Verifique se ele ainda está na barra lateral e tente novamente.",
         "chats": "Chats de grupo",
-        "channels": "Canais"
+        "channels": "Canais",
+        "projectModel": "Modelo e permissões",
+        "projectModelHint": "Gerenciado em Projetos e modelos",
+        "projectModelFollow": "Segue “{{name}}”",
+        "groupReplyHint": "Escolha se o bot responde em grupos apenas quando mencionado ou a todas as mensagens"
       },
       "chats": {
         "title": "Conversas em grupo",
@@ -7792,6 +7800,11 @@
         "fieldsNote": "Mudanças de projeto, modelo e permissões valem a partir da próxima tarefa criada neste grupo; tarefas em andamento não são movidas.",
         "channelCount_many": "{{count}} canais",
         "membersCount_many": "{{count}} abertos a membros"
+      },
+      "companionBots": {
+        "title": "Bots exclusivos de parceiros",
+        "description": "Configurados individualmente nas configurações do parceiro. Configurações existentes continuam funcionando após atualizar.",
+        "manage": "Gerenciar"
       }
     },
     "shortcuts": {
@@ -13523,7 +13536,8 @@
       },
       "handedOver": "{{apps}}: nas Configurações, {{name}} responde aqui.",
       "handedOverSeparator": ", ",
-      "manageInSettings": "Gerenciar nas Configurações"
+      "manageInSettings": "Gerenciar nas Configurações",
+      "handedOverHint": "Os bots adicionados abaixo pertencem somente a {{name}} e ficam separados dos bots em Configurações."
     },
     "voiceMode": {
       "realtime": {

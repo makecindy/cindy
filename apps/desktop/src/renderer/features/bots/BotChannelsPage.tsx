@@ -349,12 +349,17 @@ function HandedOverFromSettings({ bot }: { bot: BotProfile }) {
   if (apps.length === 0) return null;
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3">
-      <p className="min-w-0 flex-[1_1_240px] text-13 leading-[1.5] text-[var(--text-primary)]">
-        {t('bots.channels.handedOver', {
-          name: bot.name,
-          apps: apps.map((app) => t(`settings.imBot.apps.${app}`)).join(t('bots.channels.handedOverSeparator')),
-        })}
-      </p>
+      <div className="min-w-0 flex-[1_1_240px]">
+        <p className="text-13 leading-[1.5] text-[var(--text-primary)]">
+          {t('bots.channels.handedOver', {
+            name: bot.name,
+            apps: apps.map((app) => t(`settings.imBot.apps.${app}`)).join(t('bots.channels.handedOverSeparator')),
+          })}
+        </p>
+        <p className="mt-0.5 text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {t('bots.channels.handedOverHint', { name: bot.name })}
+        </p>
+      </div>
       <Button type="button" variant="secondary" size="sm" onClick={() => navigate('/settings?tab=im-bot')}>
         {t('bots.channels.manageInSettings')}
       </Button>

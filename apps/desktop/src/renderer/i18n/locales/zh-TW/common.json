@@ -7334,7 +7334,7 @@
     "tina": {
       "chat": {
         "title": "對話",
-        "description": "不落任何倉庫的純對話；在 Slack、Telegram、X 或飛書 / Lark 裡選擇 chat 即可使用，每條對話 lane 獨立對應一個任務。"
+        "description": "不關聯具體專案資料夾的純對話；各訊息應用未指定專案時預設使用這裡的模型和權限。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7465,7 +7465,8 @@
       "groups": {
         "cindy": "官方",
         "personal": "個人",
-        "plugins": "插件"
+        "plugins": "插件",
+        "shared": "通用設定"
       },
       "tips": {
         "cindy": "由 Cindy 提供並維護。無需自行建立機器人或準備憑證，按引導連線後即可使用。",
@@ -7509,9 +7510,9 @@
       },
       "replyTarget": {
         "label": "誰來回覆",
-        "cindy": "Cindy",
-        "cindyHint": "Cindy 開新任務來回覆。也可以交給一位夥伴回覆。",
-        "companionHint": "私訊會進入與 {{name}} 的對話，每個群組各開一條隱藏任務。你傳的訊息依 {{name}} 的權限執行。",
+        "cindy": "普通任務",
+        "cindyHint": "在側欄任務列表裡處理，使用下方的專案和模型。也可以交給夥伴，按夥伴的記憶與設定回覆。",
+        "companionHint": "私訊進 {{name}} 的對話，群組由 {{name}} 獨立跟進。模型、權限和記憶均跟隨 {{name}}。",
         "openCompanion": "{{name}} 的設定",
         "summary": "由 {{name}} 回覆",
         "missingCompanion": "已無法使用的夥伴",
@@ -7520,14 +7521,15 @@
         "companionSettingsHint": "模型、權限和記憶"
       },
       "nav": {
-        "back": "返回"
+        "back": "返回",
+        "backTo": "返回 {{page}}"
       },
       "pageDescription": "在微信、飛書、Telegram 這些訊息應用裡，傳訊息給 Cindy 或你的夥伴。",
       "list": {
         "connected": "已連線",
         "available": "還可以連線",
         "choose": "選一個訊息應用",
-        "cindyReplies": "Cindy 回覆",
+        "cindyReplies": "普通任務",
         "official": "官方機器人：{{status}}",
         "projects": "專案與模型",
         "projectsHint": "訊息應用或插件在專案裡開新任務時，每個專案使用的模型與權限",
@@ -7537,7 +7539,8 @@
           "x": "用 Cindy 官方帳號，授權後在 X 上回覆你",
           "wechat": "掃碼連線你的個人微信",
           "personal": "用你自己建立的機器人"
-        }
+        },
+        "companionDedicated": "夥伴專屬：{{names}}"
       },
       "apps": {
         "telegram": "Telegram",
@@ -7559,7 +7562,8 @@
           "telegram": "在 BotFather 建立機器人，填入權杖和你的使用者 ID。",
           "discord": "在 Discord 開發者後台建立機器人，填入權杖。",
           "feishu": "在飛書或 Lark 開放平台建立應用，填入 App ID 和 App Secret。"
-        }
+        },
+        "officialHint": "無需自建應用，直接與你的 Cindy 帳號綁定。"
       },
       "rows": {
         "model": "模型",
@@ -7588,7 +7592,11 @@
         "projectFullAccessCancel": "取消",
         "projectUpdateFailed": "無法切換專案，請確認它還在側欄裡後再試一次。",
         "chats": "群組",
-        "channels": "頻道"
+        "channels": "頻道",
+        "projectModel": "模型與權限",
+        "projectModelHint": "在「專案與模型」裡統一修改",
+        "projectModelFollow": "跟隨「{{name}}」",
+        "groupReplyHint": "控制機器人在群組裡僅 @ 時回覆或全部回應"
       },
       "chats": {
         "title": "群組",
@@ -7678,6 +7686,11 @@
         "statusCustom": "已單獨設定",
         "shownHint": "已顯示前 {{shown}} / {{total}} 個，輸入名稱可篩選。",
         "fieldsNote": "更換專案、模型或權限後，群組裡下一次新建任務時生效，進行中的任務不會被移走。"
+      },
+      "companionBots": {
+        "title": "夥伴專屬機器人",
+        "description": "這些機器人在夥伴設定裡單獨配置，升級前已配好的會繼續正常運作。",
+        "manage": "去管理"
       }
     },
     "shortcuts": {
@@ -13371,7 +13384,8 @@
       },
       "handedOver": "{{apps}} 在設定裡交給了 {{name}} 回覆。",
       "handedOverSeparator": "、",
-      "manageInSettings": "前往設定管理"
+      "manageInSettings": "前往設定管理",
+      "handedOverHint": "下方新增的是 {{name}} 單獨使用的機器人，與設定裡的機器人互不衝突。"
     },
     "voiceMode": {
       "realtime": {

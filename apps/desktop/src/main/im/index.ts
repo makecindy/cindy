@@ -131,7 +131,11 @@ import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { readPersonalChannelChoice } from './shared/personalChannelStore';
-import { registerPersonalChannelIpc } from './shared/personalChannelIpc';
+import {
+  broadcastPersonalChannelState,
+  clearPersonalChannelState,
+  registerPersonalChannelIpc,
+} from './shared/personalChannelIpc';
 import { throwIpcError } from '../utils/ipcValidate';
 import { registerCloudDomainCall } from '../host-settings/managementCalls';
 import { CLOUD_WECHAT_WORKING_DIR_SET } from '../../shared/cloudImSettings';
@@ -386,6 +390,7 @@ export function startImOrchestrators(): void {
       record.channel === 'telegram' && record.botContextId
         ? listTelegramKnownGroups(record.botContextId)
         : Promise.resolve([]),
+    personalFeishuIm: () => feishuIm,
   });
 
   // 把设置页那份个人 bot 移给伙伴: 停 = 与登出同一个 dispose(静默、凭证保留),
@@ -395,6 +400,7 @@ export function startImOrchestrators(): void {
   configureBotImPersonalAdoption({
     isReady: () => connectionLifecycle.isStarted(),
     telegramGroupActivation: () => readTelegramBehavior().groupActivation,
+    onPersonalChannelCleared: (channel) => broadcastPersonalChannelState(channel),
     personal: {
       telegram: {
         identity: () => {
@@ -437,7 +443,7 @@ export function startImOrchestrators(): void {
     },
   });
 
-  const setWechatCompanion = (botId: string | null) =>
+  const setWechatCompanion = (botId: string | null, options?: { allowReassign?: boolean }) =>
     connectionLifecycle.runWhileStarted(async () => {
       const generation = captureImAccountGeneration();
       if (generation === null) throwIpcError('PRECONDITION_FAILED', 'Account unavailable');
@@ -445,7 +451,7 @@ export function startImOrchestrators(): void {
         await setWechatCompanionBinding(botId, (commit) => wechatIm.updateCompanionBinding(() => {
           if (!isImAccountGenerationCurrent(generation)) throw new Error('ACCOUNT_CHANGED');
           commit();
-        }));
+        }), options);
       } catch (error) {
         const code = error instanceof Error ? error.message : '';
         throwIpcError('PRECONDITION_FAILED',
@@ -460,6 +466,7 @@ export function startImOrchestrators(): void {
   const unbindWechat = () =>
     connectionLifecycle.runWhileStarted(async () => {
       await wechatIm.unbind();
+      await clearPersonalChannelState('wechat');
       return { ok: true };
     });
   // The teammate settings host (a remote Desktop's pages) uses the same operations; browser
@@ -493,12 +500,15 @@ export function startImOrchestrators(): void {
     assertTrustedAppRendererEvent(event);
     return readWechatChannelSettings();
   });
-  ipcMain.handle('wechatBot:set-companion', (event, botId: unknown) => {
+  ipcMain.handle('wechatBot:set-companion', (event, botId: unknown, options?: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (botId !== null && (typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId))) {
       throwIpcError('INVALID_ARGUMENT', 'Invalid buddy');
     }
-    return setWechatCompanion(botId as string | null);
+    const allowReassign = Boolean(
+      options && typeof options === 'object' && (options as { allowReassign?: unknown }).allowReassign === true,
+    );
+    return setWechatCompanion(botId as string | null, allowReassign ? { allowReassign: true } : undefined);
   });
   ipcMain.handle('wechatBot:choose-working-directory', async (event) => {
     assertTrustedAppRendererEvent(event);

@@ -3123,9 +3123,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workingDir: string | null;
       workingDirAvailable: boolean; companionBotId?: string;
     }> => ipcRenderer.invoke('wechatBot:get-channel-settings'),
-    setCompanion: (botId: string | null): Promise<{
+    setCompanion: (botId: string | null, options?: { allowReassign?: boolean }): Promise<{
       version: 1; workingDir: string | null; workingDirAvailable: boolean; companionBotId?: string;
-    }> => ipcRenderer.invoke('wechatBot:set-companion', botId),
+    }> => ipcRenderer.invoke('wechatBot:set-companion', botId, options),
     chooseWorkingDirectory: (): Promise<{
       canceled: boolean;
       state: { version: 1; workingDir: string | null; workingDirAvailable: boolean; companionBotId?: string };

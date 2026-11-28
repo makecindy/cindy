@@ -25,12 +25,13 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { useBotProfiles } from '@/features/bots/botStore';
+import type { BotImConnectionView } from '../../../shared/botImConnection';
 import {
   SettingsCard,
   SettingsPageHeader,
@@ -39,6 +40,7 @@ import {
   SettingsRowIcon,
   SettingsSection,
 } from '@/components/ui/settings-rows';
+import { useSettingsSubpageBack } from './useSettingsEscape';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { DingTalkBotSettings, useDingTalkListStatus } from './DingTalkBotSection';
 import { DiscordBotSettings, useDiscordListStatus } from './DiscordBotSection';
@@ -89,7 +91,10 @@ const APPS: readonly AppDef[] = [
   { id: 'x', icon: AtSign, official: 'x', personal: false },
 ];
 
-type Nav = { app: ImBotApp | 'projects'; page: string | null } | null;
+type Nav =
+  | { app: ImBotApp; page: string | null }
+  | { app: 'projects'; page: null; returnApp?: ImBotApp }
+  | null;
 
 /** 设置搜索 / 深链的落点 → 该打开哪个子页(以及更深一层)。 */
 function navForTarget(targetId: string | undefined): { app: ImBotApp; page: string | null } | null {
@@ -125,8 +130,23 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
   const imPlugins = useImEntrancePlugins();
   const bots = useBotProfiles();
   const [official, setOfficial] = useState<OfficialImSummary>({});
+  const [companionConnections, setCompanionConnections] = useState<BotImConnectionView[]>([]);
   const [nav, setNav] = useState<Nav>(() => navForTarget(entry?.targetId) ?? navForTarget(entry?.fallbackTargetId));
   const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // 订阅本机已在「伙伴 → 消息平台」里配置的伙伴专属机器人，升级后设置页主页与子页都能一眼看见。
+  useEffect(() => {
+    const api = (window as { electronAPI?: Partial<Window['electronAPI']> }).electronAPI?.botImConnection;
+    if (!api || typeof api.list !== 'function') return;
+    let cancelled = false;
+    void api.list()
+      .then((payload) => { if (!cancelled) setCompanionConnections(payload.connections ?? []); })
+      .catch(() => {});
+    const off = api.onChanged?.((payload) => {
+      if (!cancelled) setCompanionConnections(payload.connections ?? []);
+    });
+    return () => { cancelled = true; off?.(); };
+  }, []);
 
   // 各渠道状态(只读订阅, 与子页同一份 hook)。
   const personal: Record<PersonalApp, { configured: boolean; tone: ImBotStatusTone; labelKey: string }> = {
@@ -166,16 +186,36 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
     rootRef.current?.scrollIntoView({ block: 'start' });
   }, [navKey]);
 
-  const openApp = (app: ImBotApp | 'projects') => setNav({ app, page: null });
+  const openApp = (app: ImBotApp | 'projects') =>
+    setNav(app === 'projects' ? { app: 'projects', page: null } : { app, page: null });
+  const appName = useCallback((id: ImBotApp) => t(`settings.imBot.apps.${id}`), [t]);
+  const stepBack = useCallback(() => {
+    setNav((current) => {
+      if (!current) return null;
+      if (current.app === 'projects') {
+        return current.returnApp ? { app: current.returnApp, page: null } : null;
+      }
+      return current.page ? { ...current, page: null } : null;
+    });
+  }, []);
+  useSettingsSubpageBack(nav ? stepBack : null);
+
   const appNav: ImBotNav = useMemo(() => {
     const def = nav && nav.app !== 'projects' ? APPS.find((app) => app.id === nav.app) : undefined;
     return {
       page: nav?.page ?? null,
-      open: (page) => setNav((current) => (current ? { ...current, page } : current)),
-      back: () => setNav((current) => (current?.page ? { ...current, page: null } : null)),
+      open: (page) => setNav((current) => (current && current.app !== 'projects' ? { ...current, page } : current)),
+      openProjects: () => setNav((current) => ({
+        app: 'projects',
+        page: null,
+        ...(current && current.app !== 'projects' ? { returnApp: current.app } : {}),
+      })),
+      back: stepBack,
+      appName: def ? appName(def.id) : undefined,
       multiWay: !!def && def.personal && officialVisible(def),
+      companionConnections,
     };
-  }, [nav, officialVisible]);
+  }, [nav, officialVisible, stepBack, appName, companionConnections]);
 
   const companionName = (id: string | null | undefined) =>
     id ? bots.find((bot) => bot.id === id)?.name ?? t('settings.imBot.replyTarget.missingCompanion') : null;
@@ -203,6 +243,19 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
       const name = companionName(theirs.companionBotId);
       if (name) parts.push(t('settings.imBot.replyTarget.summary', { name }));
     }
+    const dedicated = companionConnections.filter((conn) => conn.channel === app.id);
+    if (dedicated.length > 0) {
+      const anyConnected = dedicated.some((conn) => conn.status.kind === 'connected');
+      const anyError = dedicated.some((conn) => conn.status.kind === 'error');
+      const anyProgress = dedicated.some((conn) => conn.status.kind === 'connecting' || conn.status.kind === 'conflict');
+      if (parts.length === 0) {
+        tone = anyConnected ? 'connected' : anyError ? 'error' : anyProgress ? 'progress' : 'off';
+      }
+      const names = [...new Set(dedicated.map((conn) => companionName(conn.botId)).filter((n): n is string => Boolean(n)))];
+      parts.push(t('settings.imBot.list.companionDedicated', {
+        names: names.join(t('bots.channels.handedOverSeparator')),
+      }));
+    }
     if (parts.length > 0) return { inUse: true, hint: <ImBotStatusText tone={tone}>{parts.join(' · ')}</ImBotStatusText> };
     const hintKey = app.id === 'slack' || app.id === 'x' || app.id === 'wechat'
       ? `settings.imBot.list.hint.${app.id}`
@@ -210,7 +263,7 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
     return { inUse: false, hint: t(hintKey) };
   };
 
-  const appName = (id: ImBotApp) => t(`settings.imBot.apps.${id}`);
+  const rootTitle = t(imBotSettings.imBot.sectionKey);
 
   let content: ReactNode = null;
   let officialShow: HookConnectionsShow = 'list';
@@ -231,7 +284,7 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
     content = (
       <div id="im-bot-apps" className="flex min-w-0 flex-col">
         <SettingsPageHeader
-          title={t(imBotSettings.imBot.sectionKey)}
+          title={rootTitle}
           description={t('settings.imBot.pageDescription')}
           adornment={<span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
             {t('settings.imBot.beta')}
@@ -244,19 +297,21 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
               {renderRows(rest)}
             </SettingsSection>
           ) : null}
-          {/* 「项目与模型」官方机器人、选了项目的个人机器人和插件都用, 所以没有插件也常驻在列表末尾。
-              本机模式没有官方机器人, 只在有插件时整块内嵌(个人机器人在自己的「模型」子页改所选项目)。 */}
-          {imPlugins.length > 0 || cindyGroupAvailable ? (
+          {/* 「项目与模型」独立成组，方便查找；官方机器人、选了项目的个人机器人和插件共用这一份。 */}
+          {cindyGroupAvailable ? (
+            <SettingsSection id="im-bot-group-projects" className="scroll-mt-4" title={t('settings.imBot.groups.shared')}>
+              <SettingsCard>
+                <SettingsRow title={t('settings.imBot.list.projects')} hint={t('settings.imBot.list.projectsHint')}
+                  chevron onClick={() => openApp('projects')} />
+              </SettingsCard>
+            </SettingsSection>
+          ) : null}
+          {imPlugins.length > 0 ? (
             <SettingsSection id="im-bot-group-plugins" className="scroll-mt-4"
-              title={imPlugins.length > 0 ? t('settings.imBot.groups.plugins') : undefined}
-              description={imPlugins.length > 0 ? t('settings.imBot.tips.plugins') : undefined}>
-              {imPlugins.length > 0 ? <ImPluginEntrancesCard plugins={imPlugins} /> : null}
-              {cindyGroupAvailable ? (
-                <SettingsCard>
-                  <SettingsRow title={t('settings.imBot.list.projects')} hint={t('settings.imBot.list.projectsHint')}
-                    chevron onClick={() => openApp('projects')} />
-                </SettingsCard>
-              ) : <HookConnectionsSection projectsOnly />}
+              title={t('settings.imBot.groups.plugins')}
+              description={t('settings.imBot.tips.plugins')}>
+              <ImPluginEntrancesCard plugins={imPlugins} />
+              {!cindyGroupAvailable ? <HookConnectionsSection projectsOnly /> : null}
             </SettingsSection>
           ) : null}
         </div>
@@ -264,15 +319,18 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
     );
   } else if (nav.app === 'projects') {
     officialShow = 'projects';
+    const backTarget = nav.returnApp ? appName(nav.returnApp) : rootTitle;
+    const backLabel = t('settings.imBot.nav.backTo', { page: backTarget });
     content = (
       <SettingsPageHeader title={t('settings.imBot.list.projects')} description={t('settings.imBot.list.projectsHint')}
-        onBack={appNav.back} backLabel={t('settings.imBot.nav.back')} />
+        onBack={appNav.back} backLabel={backLabel} backProps={{ title: backLabel }} />
     );
   } else {
     const def = APPS.find((app) => app.id === nav.app)!;
     if (!nav.page) {
+      const backLabel = t('settings.imBot.nav.backTo', { page: rootTitle });
       content = (
-        <SettingsPageHeader title={appName(def.id)} onBack={appNav.back} backLabel={t('settings.imBot.nav.back')} />
+        <SettingsPageHeader title={appName(def.id)} onBack={appNav.back} backLabel={backLabel} backProps={{ title: backLabel }} />
       );
       if (def.official && officialVisible(def)) officialShow = def.official;
     }

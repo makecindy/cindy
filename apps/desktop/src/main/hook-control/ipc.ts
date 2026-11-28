@@ -1070,6 +1070,27 @@ export async function changeProviderCompanionBinding(
   return hook;
 }
 
+/** 伙伴被删除时，把官方机器人里指向这位伙伴的「谁来回复」清回普通任务并刷新界面。 */
+export function clearOfficialCompanionAssignments(botId: string): void {
+  if (!botId || !store) return;
+  try {
+    const current = store.get().companionBotIds;
+    if (!current) return;
+    let changed = false;
+    for (const provider of ['slack', 'telegram', 'feishu', 'discord', 'x'] as const) {
+      if (current[provider] === botId) {
+        store.setCompanionBotId(provider, null);
+        changed = true;
+      }
+    }
+    if (changed && manager) {
+      broadcastStatus(manager.snapshot());
+    }
+  } catch (err) {
+    log.warn(`clear official companion assignments on delete failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /** What a teammate's settings page may show of the official X account: no URLs, accounts or tokens. */
 export function readXCompanionSummary(): { available: boolean; visible: boolean; enabled: boolean; connected: boolean; companionBotId: string | null } {
   const x = hookControlAvailable() ? ensureInstances().manager.snapshot().x : disabledHookView().x;

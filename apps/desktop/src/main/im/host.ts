@@ -80,7 +80,16 @@ import { shouldAnnounceFeishuLifecycle } from './feishu/lifecycleAnnouncements';
 // lizi-im 传输层文案随界面语言：注册一次解析器，缺 key 时回退包内中文。
 import './transportText';
 import { imChatMembersAllowed } from './shared/chatSettingsStore';
-import { readPersonalChannelChoice } from './shared/personalChannelStore';
+import { clearPersonalChannelState } from './shared/personalChannelIpc';
+import { readPersonalChannelChoice, type PersonalChannel } from './shared/personalChannelStore';
+
+const PERSONAL_DISCONNECT_CHANNEL: Partial<Record<string, PersonalChannel>> = {
+  'telegramBot:disconnect': 'telegram',
+  'feishuBot:clear': 'feishu',
+  'discordBot:disconnect': 'discord',
+  'wecomBot:disconnect': 'wecom',
+  'dingtalkBot:clear': 'dingtalk',
+};
 
 /**
  * 设置页那份个人机器人的「群成员也能提问」(由 Cindy 自己回复时)。交给伙伴回复期间「群聊」总表
@@ -186,13 +195,21 @@ const host: IMHost = {
   ipc: {
     throwIpcError,
     handle(channel, handler) {
-      registerCloudImCall(channel, handler);
+      const disconnectChannel = PERSONAL_DISCONNECT_CHANNEL[channel];
+      const wrapped = disconnectChannel
+        ? async (payload: unknown) => {
+            const result = await handler(payload);
+            await clearPersonalChannelState(disconnectChannel);
+            return result;
+          }
+        : handler;
+      registerCloudImCall(channel, wrapped);
       // IM 凭证/配置通道(set-config/get-status/disconnect 等)全部是敏感面:
       // 统一在适配器入口验可信 app renderer, 包侧 handler 拿不到 event 也
       // 不会漏鉴权(review P1 — 不受信 WebContents 不得读 owner id/换 token)。
       ipcMain.handle(channel, (e, payload) => {
         assertTrustedAppRendererEvent(e);
-        return handler(payload);
+        return wrapped(payload);
       });
     },
     broadcast(channel, payload) {

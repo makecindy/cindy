@@ -8,6 +8,7 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useInRouterContext, useNavigate } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -18,7 +19,10 @@ import {
   SettingsRow,
   SettingsSection,
 } from '@/components/ui/settings-rows';
+import { useBotProfiles } from '@/features/bots/botStore';
+import { maskBotImContextId } from '@/features/bots/botImConnectionClient';
 import { pluginEngineModelName } from '@/lib/pluginEngineSelection';
+import type { BotImChannel, BotImConnectionView } from '../../../shared/botImConnection';
 import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings';
 import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines';
 import { useImChannelSettingsSummary } from './ImChannelSettingsCard';
@@ -28,12 +32,25 @@ export interface ImBotNav {
   /** 当前打开的更深一层页面; null = 聊天软件子页本身。 */
   page: string | null;
   open(page: string): void;
+  /** 从当前子页跳转到「项目与模型」，点返回时回到当前子页。 */
+  openProjects(): void;
   back(): void;
+  /** 当前所在聊天软件的名称(供更深一层页面的返回按钮标注上一级)。 */
+  appName?: string;
   /** 这个聊天软件同时有官方机器人与自己的机器人两种方式(决定自己的机器人是否单独成组)。 */
   multiWay: boolean;
+  /** 本机已在「伙伴 → 消息平台」配置的伙伴专属机器人(只读展示，升级不丢设置)。 */
+  companionConnections: readonly BotImConnectionView[];
 }
 
-const ImBotNavContext = createContext<ImBotNav>({ page: null, open: () => {}, back: () => {}, multiWay: false });
+const ImBotNavContext = createContext<ImBotNav>({
+  page: null,
+  open: () => {},
+  openProjects: () => {},
+  back: () => {},
+  multiWay: false,
+  companionConnections: [],
+});
 
 export const ImBotNavProvider = ImBotNavContext.Provider;
 
@@ -45,10 +62,19 @@ export function useImBotNav(): ImBotNav {
 export function ImBotSubPage({ title, description, children }: { title: ReactNode; description?: ReactNode; children: ReactNode }) {
   const { t } = useTranslation();
   const nav = useImBotNav();
+  const backLabel = nav.appName
+    ? t('settings.imBot.nav.backTo', { page: nav.appName })
+    : t('settings.imBot.nav.back');
   return (
     <SettingsPageScope>
       <section className="flex min-w-0 flex-col">
-        <SettingsPageHeader title={title} description={description} onBack={nav.back} backLabel={t('settings.imBot.nav.back')} />
+        <SettingsPageHeader
+          title={title}
+          description={description}
+          onBack={nav.back}
+          backLabel={backLabel}
+          backProps={{ title: backLabel }}
+        />
         <div className="mt-6 flex min-w-0 flex-col gap-9">{children}</div>
       </section>
     </SettingsPageScope>
@@ -195,5 +221,105 @@ export function ImBotModelRow({ channel, settingId }: { channel: ImDefaultSettin
       chevron
       onClick={() => nav.open('model')}
     />
+  );
+}
+
+/** 选了项目(或官方机器人使用「项目与模型」)时的「模型与权限」直达行，避免隐藏后找不到修改入口。 */
+export function ImProjectModelLinkRow({
+  summary,
+  settingId,
+}: {
+  summary?: ReactNode;
+  settingId?: string;
+}) {
+  const { t } = useTranslation();
+  const nav = useImBotNav();
+  return (
+    <SettingsRow
+      data-setting-id={settingId}
+      title={t('settings.imBot.rows.projectModel')}
+      hint={t('settings.imBot.rows.projectModelHint')}
+      value={summary}
+      chevron
+      onClick={() => nav.openProjects()}
+    />
+  );
+}
+
+const COMPANION_CONN_TONE: Record<BotImConnectionView['status']['kind'], ImBotStatusTone> = {
+  connected: 'connected',
+  connecting: 'progress',
+  conflict: 'attention',
+  offline: 'off',
+  idle: 'off',
+  error: 'error',
+};
+
+/** 平台子页底部: 只读展示在「伙伴 → 消息平台」里单独配置的伙伴专属机器人，一键跳去管理。没有时不渲染。 */
+export function ImCompanionBotsSection({ channel }: { channel: Exclude<BotImChannel, 'imessage'> }) {
+  const nav = useImBotNav();
+  const inRouter = useInRouterContext();
+  const connections = nav.companionConnections.filter((item) => item.channel === channel);
+  if (connections.length === 0) return null;
+  return inRouter
+    ? <ImCompanionBotsSectionWithNav channel={channel} connections={connections} />
+    : <ImCompanionBotsSectionBody channel={channel} connections={connections} />;
+}
+
+function ImCompanionBotsSectionWithNav({
+  channel,
+  connections,
+}: {
+  channel: Exclude<BotImChannel, 'imessage'>;
+  connections: readonly BotImConnectionView[];
+}) {
+  const navigate = useNavigate();
+  return <ImCompanionBotsSectionBody channel={channel} connections={connections} onOpenBot={(id) => navigate(`/bots/${encodeURIComponent(id)}?settings=1`)} />;
+}
+
+function ImCompanionBotsSectionBody({
+  channel,
+  connections,
+  onOpenBot,
+}: {
+  channel: Exclude<BotImChannel, 'imessage'>;
+  connections: readonly BotImConnectionView[];
+  onOpenBot?: (botId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const bots = useBotProfiles();
+
+  return (
+    <SettingsSection
+      title={t('settings.imBot.companionBots.title')}
+      description={t('settings.imBot.companionBots.description')}
+    >
+      <SettingsCard>
+        {connections.map((conn) => {
+          const bot = bots.find((item) => item.id === conn.botId);
+          const name = bot?.name ?? t('settings.imBot.replyTarget.missingCompanion');
+          const identity = conn.identity.username
+            ? (channel === 'telegram' ? `@${conn.identity.username}` : conn.identity.username)
+            : conn.botContextId
+              ? maskBotImContextId(conn.botContextId)
+              : null;
+          const statusLabel = t(`bots.channels.status.${conn.status.kind}`);
+          return (
+            <SettingsRow
+              key={conn.id}
+              title={name}
+              hint={
+                <ImBotStatusText tone={COMPANION_CONN_TONE[conn.status.kind]}>
+                  {[statusLabel, identity].filter(Boolean).join(' · ')}
+                </ImBotStatusText>
+              }
+              value={t('settings.imBot.companionBots.manage')}
+              chevron={!!bot && !!onOpenBot}
+              onClick={bot && onOpenBot ? () => onOpenBot(bot.id) : undefined}
+            />
+          );
+        })}
+      </SettingsCard>
+    </SettingsSection>
   );
 }

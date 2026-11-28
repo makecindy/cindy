@@ -16,8 +16,10 @@ import { Select } from '@/components/ui/select';
 import { SettingsRow } from '@/components/ui/settings-rows';
 import { toast } from '@/lib/toast';
 import type { PersonalChannelState } from '../../../shared/botImConnection';
+import type { HookWorkspacePrefs } from '../../../shared/hookControlIpc';
 import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings';
-import { ImBotModelRow } from './ImBotPageParts';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines';
+import { ImBotModelRow, ImProjectModelLinkRow } from './ImBotPageParts';
 
 type Channel = PersonalChannelState['channel'];
 const DIALOGUE = '__dialogue__';
@@ -63,7 +65,7 @@ export function usePersonalChannelProject(channel: Channel) {
   return { supported, state, project, pending, change };
 }
 
-/** 「项目」行, 选「对话」时再加平台自己的「模型」行; 放在「谁来回复」之后, 交给伙伴时由调用方整组收起。 */
+/** 「项目」行 + 「模型」行: 选项目时显示直达「项目与模型」的摘要行，选「对话」时显示平台自己的「模型」行。 */
 export function ImChannelProjectRows({ channel, appName, settingId }: {
   channel: Channel & ImDefaultSettingsChannel;
   appName: string;
@@ -72,7 +74,38 @@ export function ImChannelProjectRows({ channel, appName, settingId }: {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const { supported, state, project, pending, change } = usePersonalChannelProject(channel);
+  const [projectPref, setProjectPref] = useState<HookWorkspacePrefs | null>(null);
+
+  useEffect(() => {
+    if (!project) {
+      setProjectPref(null);
+      return;
+    }
+    const api = (window as { electronAPI?: Partial<Window['electronAPI']> }).electronAPI?.hookControl;
+    if (!api || typeof api.getSharedProjectPrefs !== 'function') return;
+    let cancelled = false;
+    const load = () => {
+      void api.getSharedProjectPrefs!()
+        .then(({ prefs }) => {
+          if (cancelled) return;
+          setProjectPref(prefs.prefs.find((row) => row.workspace === project.name) ?? null);
+        })
+        .catch(() => {});
+    };
+    load();
+    const off = api.onSharedProjectPrefsChanged?.((prefs) => {
+      if (!cancelled) setProjectPref(prefs.prefs.find((row) => row.workspace === project.name) ?? null);
+    });
+    return () => { cancelled = true; off?.(); };
+  }, [project]);
+
   if (!supported || !state) return <ImBotModelRow channel={channel} settingId={settingId} />;
+
+  const projectModelSummary = project ? (() => {
+    const model = projectPref?.model;
+    if (!model) return t('settings.imBot.rows.projectModelFollow', { name: project.name });
+    return model === PLUGIN_ENGINE_DEFAULT_MODEL ? t('newChat.pluginEngines.defaultModel') : model;
+  })() : undefined;
 
   const label = t('settings.imBot.rows.project');
   const options = [
@@ -117,8 +150,12 @@ export function ImChannelProjectRows({ channel, appName, settingId }: {
         trailing={<Select data-setting-id={settingId} label={label} value={state.projectDir ?? DIALOGUE} options={options}
           width="sm" disabled={pending} onValueChange={(value) => void select(value)} />}
       />
-      {/* 选的项目已从侧栏移除时任务落回对话目录, 平台模型重新生效, 所以按 project 判断。 */}
-      {project ? null : <ImBotModelRow channel={channel} settingId={settingId} />}
+      {/* 选了项目时保留模型与权限直达行，一键跳进「项目与模型」；项目已移除时回到平台模型。 */}
+      {project ? (
+        <ImProjectModelLinkRow summary={projectModelSummary} settingId={settingId} />
+      ) : (
+        <ImBotModelRow channel={channel} settingId={settingId} />
+      )}
     </>
   );
 }

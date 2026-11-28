@@ -95,6 +95,8 @@ void mountPage({
         onProvidersChanged: subscription('providers'),
       },
       botImConnection: {
+        list: async () => ({ connections: ctx.data.companionConnections ?? [] }),
+        onChanged: subscription('botImConnections'),
         getPersonalReplyTarget: async ({ channel }: { channel: string }) => ({ channel, companionBotId: channel === 'telegram' ? telegramCompanion : null }),
         setPersonalReplyTarget: async ({ channel, companionBotId: next }: { channel: string; companionBotId: string | null }) => {
           if (channel === 'telegram') telegramCompanion = next;

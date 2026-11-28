@@ -21,7 +21,23 @@ export default {
     default: { about: 'List: connected apps first with who replies, the rest under 还可以连接', data: { telegramCompanion: 'bot-mei' } },
     'telegram-cindy': { about: 'Telegram page, Cindy replies: model and more rows shown', data: { telegramCompanion: null, open: 'telegram' } },
     'telegram-companion': { about: 'Telegram page handed to a teammate: Cindy-only rows fold away', data: { telegramCompanion: 'bot-mei', open: 'telegram' } },
-    'telegram-project': { about: 'Telegram page with a project: only the project picker, no model row (models live in 项目与模型)', data: { telegramCompanion: null, telegramProject: '/Users/me/Projects/demo-shop', open: 'telegram' } },
+    'telegram-project': { about: 'Telegram page with a project: project picker + direct jump row to Projects and models', data: { telegramCompanion: null, telegramProject: '/Users/me/Projects/demo-shop', open: 'telegram' } },
+    'feishu-companion-bot': {
+      about: 'Feishu page showing an existing buddy-specific bot preserved after upgrade',
+      data: {
+        telegramCompanion: null,
+        open: 'feishu',
+        companionConnections: [{
+          id: 'a1b2c3d4e5f6',
+          botId: 'bot-dash',
+          channel: 'feishu',
+          createdAt: 1,
+          botContextId: 'cli_a9b8c7d6e5f4',
+          status: { kind: 'connected' },
+          identity: { username: null, ownerUserId: 'ou_1234' },
+        }],
+      },
+    },
     'telegram-chats-collapsed': { about: 'Group chats card on the Telegram page, collapsed: counts and avatars', data: { telegramCompanion: null, open: 'telegram', deeper: 'chats', collapsed: true } },
     'telegram-chats': { about: 'Group chats card expanded: one row per group with its status on the right; a paused group is marked', data: { telegramCompanion: null, open: 'telegram', deeper: 'chats' }, viewport: { width: 800, height: 1100 } },
     'telegram-chats-narrow': { about: 'Group chats card at 320px with a group opened', data: { telegramCompanion: null, open: 'telegram', deeper: 'chats', expand: '周末徒步群' }, viewport: { width: 320, height: 1500 } },
@@ -39,7 +55,8 @@ export default {
       return;
     }
     await page.locator(`[data-im-bot-app="${ui.data.open}"]`).click();
-    await page.getByRole('button', { name: await ui.t('settings.imBot.nav.back') }).first().waitFor();
+    const rootTitle = await ui.t('settings.sections.imBot');
+    await page.getByRole('button', { name: await ui.t('settings.imBot.nav.backTo', { page: rootTitle }) }).first().waitFor();
     if (ui.data.deeper === 'chats') {
       const card = page.locator('[data-im-chat-card="telegram"]');
       // 收起时: 群数与单独设置数写在标题旁。
@@ -65,11 +82,14 @@ export default {
       const project = page.getByRole('combobox', { name: await ui.t('settings.imBot.rows.project') });
       if (ui.data.telegramCompanion) assert.equal(await project.count(), 0);
       else await project.waitFor();
-      // 选了项目: 模型与权限只在「项目与模型」里改, 子页不再有「模型」行。
-      if (ui.data.telegramCompanion || ui.data.telegramProject) assert.equal(await model.count(), 0);
-      else await model.first().waitFor();
-      if (ui.data.telegramProject) {
+      // 选了项目: 子页保留直达「项目与模型」的「模型与权限」行; 交给伙伴时收起。
+      if (ui.data.telegramCompanion) {
+        assert.equal(await model.count(), 0);
+      } else if (ui.data.telegramProject) {
         await page.getByText(await ui.t('settings.imBot.rows.projectHint'), { exact: true }).waitFor();
+        await page.getByRole('button', { name: new RegExp('^' + await ui.t('settings.imBot.rows.projectModel')) }).first().waitFor();
+      } else {
+        await model.first().waitFor();
       }
     }
   },

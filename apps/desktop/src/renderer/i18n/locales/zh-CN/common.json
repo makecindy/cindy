@@ -7334,7 +7334,7 @@
     "tina": {
       "chat": {
         "title": "对话",
-        "description": "不落任何仓库的纯对话；在 Slack、Telegram、X 或飞书 / Lark 里选择 chat 即可使用，每条对话 lane 独立对应一个任务。"
+        "description": "不关联具体项目文件夹的纯对话；各消息应用未指定项目时默认使用这里的模型和权限。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7465,7 +7465,8 @@
       "groups": {
         "cindy": "官方",
         "personal": "个人",
-        "plugins": "插件"
+        "plugins": "插件",
+        "shared": "通用设置"
       },
       "tips": {
         "cindy": "由 Cindy 提供并维护。无需自行创建机器人或准备凭证，按引导连接后即可使用。",
@@ -7509,9 +7510,9 @@
       },
       "replyTarget": {
         "label": "谁来回复",
-        "cindy": "Cindy",
-        "cindyHint": "Cindy 开新任务来回复。也可以交给一位伙伴回复。",
-        "companionHint": "私聊进 {{name}} 的对话，每个群各开一条隐藏任务。你发的消息按 {{name}} 的权限执行。",
+        "cindy": "普通任务",
+        "cindyHint": "在侧栏任务列表里处理，使用下面的项目和模型。也可以交给伙伴，按伙伴的记忆和设定回复。",
+        "companionHint": "私聊进 {{name}} 的对话，群聊由 {{name}} 独立跟进。模型、权限和记忆均跟随 {{name}}。",
         "openCompanion": "{{name}} 的设置",
         "summary": "由 {{name}} 回复",
         "missingCompanion": "已不可用的伙伴",
@@ -7520,14 +7521,15 @@
         "companionSettingsHint": "模型、权限和记忆"
       },
       "nav": {
-        "back": "返回"
+        "back": "返回",
+        "backTo": "返回 {{page}}"
       },
       "pageDescription": "在微信、飞书、Telegram 这些消息应用里，给 Cindy 或你的伙伴发消息。",
       "list": {
         "connected": "已连接",
         "available": "还可以连接",
         "choose": "选一个消息应用",
-        "cindyReplies": "Cindy 回复",
+        "cindyReplies": "普通任务",
         "official": "官方机器人：{{status}}",
         "projects": "项目与模型",
         "projectsHint": "消息应用或插件在项目里开新任务时，每个项目用的模型与权限",
@@ -7537,7 +7539,8 @@
           "x": "用 Cindy 官方账号，授权后在 X 上回复你",
           "wechat": "扫码连接你的个人微信",
           "personal": "用你自己创建的机器人"
-        }
+        },
+        "companionDedicated": "伙伴专属：{{names}}"
       },
       "apps": {
         "telegram": "Telegram",
@@ -7559,7 +7562,8 @@
           "telegram": "在 BotFather 创建机器人，填入令牌和你的用户 ID。",
           "discord": "在 Discord 开发者后台创建机器人，填入令牌。",
           "feishu": "在飞书或 Lark 开放平台创建应用，填入 App ID 和 App Secret。"
-        }
+        },
+        "officialHint": "无需自建应用，直接与你的 Cindy 账号绑定。"
       },
       "rows": {
         "model": "模型",
@@ -7588,7 +7592,11 @@
         "projectFullAccessCancel": "取消",
         "projectUpdateFailed": "没能切换项目，请确认它还在侧栏里后重试。",
         "chats": "群聊",
-        "channels": "频道"
+        "channels": "频道",
+        "projectModel": "模型与权限",
+        "projectModelHint": "在「项目与模型」里统一修改",
+        "projectModelFollow": "跟随「{{name}}」",
+        "groupReplyHint": "控制机器人在群里仅 @ 时回复还是全响应"
       },
       "chats": {
         "title": "群聊",
@@ -7678,6 +7686,11 @@
         "statusCustom": "已单独设置",
         "shownHint": "已显示前 {{shown}} / {{total}} 个，输入名字可筛选。",
         "fieldsNote": "换项目、模型或权限后，群里下一次新建任务时生效，进行中的任务不会被挪走。"
+      },
+      "companionBots": {
+        "title": "伙伴专属机器人",
+        "description": "这些机器人在伙伴设置里单独配置，升级前已配好的会继续正常运行。",
+        "manage": "去管理"
       }
     },
     "shortcuts": {
@@ -13371,7 +13384,8 @@
       },
       "handedOver": "{{apps}} 在设置里交给了 {{name}} 回复。",
       "handedOverSeparator": "、",
-      "manageInSettings": "去设置里管理"
+      "manageInSettings": "去设置里管理",
+      "handedOverHint": "下方添加的是 {{name}} 单独使用的机器人，与设置里的机器人互不冲突。"
     },
     "voiceMode": {
       "realtime": {

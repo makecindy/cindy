@@ -43,7 +43,7 @@ import { imBotSettings } from './ImBotSection.settings-search';
  */
 
 import { Button } from '@/components/ui/button';
-import { SETTINGS_HINT, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { SETTINGS_HINT, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Select } from '@/components/ui/select';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
@@ -77,7 +77,9 @@ type NeutralCardProvider = 'telegram' | 'x' | 'feishu' | 'discord';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { HOOK_DEFAULT_PERMISSION_MODE } from './hookWorkspacePrefsLogic';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
+import { ImProjectModelLinkRow, useImBotNav } from './ImBotPageParts';
 import { useImEntrancePlugins } from './ImPluginEntrances';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines';
 import { ImReplyTargetField, type ImReplyTarget } from './ImReplyTargetField';
 import { useBotProfiles } from '@/features/bots/botStore';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
@@ -249,6 +251,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false, show, 
   const { api } = useSettingsTarget();
   const hookControl = api.hookControl;
   const bots = useBotProfiles();
+  const imBotNav = useImBotNav();
   const { entry, activation } = useSettingsSearchNavigation();
   /** 飞书不可用时的去向因身份而异: 组织成员找管理员, 个人账号没有管理员可找。 */
   const personalAccount = useOptionalAuthUser()?.membershipKind === 'personal';
@@ -992,7 +995,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false, show, 
     void setProviderDefaultWorkspace('feishu', alias);
 
   /**
-   * 官方机器人子页的「项目」下拉: 只选新任务放进哪个项目, 模型与权限在「项目与模型」里改。
+   * 官方机器人子页的「项目」下拉 + 「模型与权限」直达行: 只选新任务放进哪个项目, 模型与权限一键进「项目与模型」改。
    * 默认项目所有官方机器人共用一个(Slack 在频道里各自选, 不显示这一行)。
    */
   const renderOfficialProjectRow = () => {
@@ -1002,14 +1005,22 @@ export function HookConnectionsSection({ companion, projectsOnly = false, show, 
       { value: HOOK_CHAT_WORKSPACE_ALIAS, label: t('settings.imBot.rows.projectDialogue') },
       ...Object.keys(hook.workspaces).map((name) => ({ value: name, label: name })),
     ];
+    const effectiveModel = projectPrefsState.prefsFor(current).model;
+    const displayName = sharedDefaultWorkspace ?? t('settings.tina.chat.title');
+    const modelSummary = effectiveModel
+      ? (effectiveModel === PLUGIN_ENGINE_DEFAULT_MODEL ? t('newChat.pluginEngines.defaultModel') : effectiveModel)
+      : t('settings.imBot.rows.projectModelFollow', { name: displayName });
     return (
-      <SettingsRow
-        wrap
-        title={label}
-        hint={t(sharedDefaultWorkspace ? 'settings.imBot.rows.officialProjectHint' : 'settings.imBot.rows.officialProjectDialogueHint')}
-        trailing={<Select data-setting-id={imBotSettings.cindy.id} label={label} value={current} options={options} width="sm"
-          onValueChange={(value) => setSharedDefaultWorkspace(value === HOOK_CHAT_WORKSPACE_ALIAS ? null : value)} />}
-      />
+      <>
+        <SettingsRow
+          wrap
+          title={label}
+          hint={t(sharedDefaultWorkspace ? 'settings.imBot.rows.officialProjectHint' : 'settings.imBot.rows.officialProjectDialogueHint')}
+          trailing={<Select data-setting-id={imBotSettings.cindy.id} label={label} value={current} options={options} width="sm"
+            onValueChange={(value) => setSharedDefaultWorkspace(value === HOOK_CHAT_WORKSPACE_ALIAS ? null : value)} />}
+        />
+        <ImProjectModelLinkRow summary={modelSummary} settingId={imBotSettings.cindy.id} />
+      </>
     );
   };
   /** 默认项目的权限是完全访问(从没设过也是)时把后果说出来: 群里任何人 @ 机器人都会落到它里面。 */
@@ -2073,8 +2084,8 @@ export function HookConnectionsSection({ companion, projectsOnly = false, show, 
     // 开着的官方机器人才问「谁来回复」与「项目」; 交给伙伴后用伙伴自己的项目与模型。
     const showReply = enabled && replyTarget.supported;
     const showProject = enabled && show !== 'slack' && !replyTarget.companionBotId;
-    return (
-      <section className="flex min-w-0 flex-col gap-3.5">
+    const inner = (
+      <>
         {card}
         {showReply || showProject ? (
           <SettingsCard>
@@ -2092,7 +2103,17 @@ export function HookConnectionsSection({ companion, projectsOnly = false, show, 
             </span>
           </p>
         ) : null}
-      </section>
+      </>
+    );
+    return imBotNav.multiWay ? (
+      <SettingsSection
+        title={t('settings.imBot.ways.official')}
+        description={t('settings.imBot.ways.officialHint')}
+      >
+        {inner}
+      </SettingsSection>
+    ) : (
+      <section className="flex min-w-0 flex-col gap-3.5">{inner}</section>
     );
   }
 

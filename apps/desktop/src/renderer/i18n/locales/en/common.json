@@ -7377,7 +7377,7 @@
     "tina": {
       "chat": {
         "title": "Chat",
-        "description": "Plain conversations without any repository; select “chat” from Slack, Telegram, X, or Feishu / Lark, one session per conversation lane."
+        "description": "Plain conversations without a project folder. Used when a chat app does not target a specific project."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7508,7 +7508,8 @@
       "groups": {
         "cindy": "Official",
         "personal": "Personal",
-        "plugins": "Plugins"
+        "plugins": "Plugins",
+        "shared": "Shared"
       },
       "tips": {
         "cindy": "Provided and maintained by Cindy. No need to create a bot or supply credentials—follow the connection steps to get started.",
@@ -7552,9 +7553,9 @@
       },
       "replyTarget": {
         "label": "Who replies",
-        "cindy": "Cindy",
-        "cindyHint": "Cindy starts a new task to reply. You can also hand it to a buddy.",
-        "companionHint": "Direct messages go to your chat with {{name}}, and each group gets its own hidden task. Your messages run with {{name}}’s permissions.",
+        "cindy": "Ordinary tasks",
+        "cindyHint": "Handled as ordinary tasks in the sidebar using the project and model below. You can also assign a buddy to use their memory and settings.",
+        "companionHint": "Direct messages go to your chat with {{name}}, and each group runs separately under {{name}}. Model, permissions, and memory follow {{name}}.",
         "openCompanion": "{{name}}’s settings",
         "summary": "{{name}} replies",
         "missingCompanion": "Unavailable buddy",
@@ -7563,14 +7564,15 @@
         "companionSettingsHint": "Model, permissions and memory"
       },
       "nav": {
-        "back": "Back"
+        "back": "Back",
+        "backTo": "Back to {{page}}"
       },
       "pageDescription": "Message Cindy or your buddies from chat apps like WeChat, Feishu and Telegram.",
       "list": {
         "connected": "Connected",
         "available": "More apps",
         "choose": "Choose a chat app",
-        "cindyReplies": "Cindy replies",
+        "cindyReplies": "Ordinary tasks",
         "official": "Official bot: {{status}}",
         "projects": "Projects and models",
         "projectsHint": "Model and permissions for each project when a chat app or plugin starts a task in it",
@@ -7580,7 +7582,8 @@
           "x": "Use the Cindy official account. Authorize it to reply to you on X",
           "wechat": "Scan a QR code to connect your WeChat",
           "personal": "Use a bot you create"
-        }
+        },
+        "companionDedicated": "Buddy’s own: {{names}}"
       },
       "apps": {
         "telegram": "Telegram",
@@ -7602,7 +7605,8 @@
           "telegram": "Create a bot with BotFather, then enter its token and your user ID.",
           "discord": "Create a bot in the Discord Developer Portal, then enter its token.",
           "feishu": "Create an app on the Feishu or Lark open platform, then enter its App ID and App Secret."
-        }
+        },
+        "officialHint": "No app setup required — connects directly to your Cindy account."
       },
       "rows": {
         "model": "Model",
@@ -7631,7 +7635,11 @@
         "projectFullAccessCancel": "Cancel",
         "projectUpdateFailed": "Couldn’t switch the project. Make sure it’s still in the sidebar and try again.",
         "chats": "Group chats",
-        "channels": "Channels"
+        "channels": "Channels",
+        "projectModel": "Model and permissions",
+        "projectModelHint": "Managed in Projects and models",
+        "projectModelFollow": "Follows “{{name}}”",
+        "groupReplyHint": "Choose whether the bot replies only when mentioned or to all group messages"
       },
       "chats": {
         "title": "Group chats",
@@ -7721,6 +7729,11 @@
         "statusCustom": "Own settings",
         "shownHint": "Showing {{shown}} of {{total}}. Type a name to filter.",
         "fieldsNote": "Project, model and permission changes apply when the next task starts in this group; tasks in progress aren’t moved."
+      },
+      "companionBots": {
+        "title": "Buddy-specific bots",
+        "description": "Configured individually in buddy settings. Existing setups keep working after upgrades.",
+        "manage": "Manage"
       }
     },
     "shortcuts": {
@@ -13418,7 +13431,8 @@
       },
       "handedOver": "{{apps}}: handed to {{name}} in Settings.",
       "handedOverSeparator": ", ",
-      "manageInSettings": "Manage in Settings"
+      "manageInSettings": "Manage in Settings",
+      "handedOverHint": "Bots added below belong exclusively to {{name}} and stay separate from the bots in Settings."
     },
     "voiceMode": {
       "realtime": {

@@ -25,6 +25,7 @@ import {
   ImBotSetupRow,
   ImBotStatusText,
   ImBotSubPage,
+  ImCompanionBotsSection,
   useImBotNav,
   type ImBotStatusTone,
 } from './ImBotPageParts';
@@ -554,39 +555,47 @@ export function DiscordBotSettings() {
 
   if (!connected) {
     return (
-      <ImBotPersonalWay id={imBotSettings.discord.targetId} configured={false}>
-        {nav.multiWay ? (
-          <ImBotSetupRow settingId={imBotSettings.discord.id} hint={t('settings.imBot.ways.personalSetupHint.discord')}
-            status={status.kind === 'idle' ? undefined
-              : <ImBotStatusText tone={statusTone[status.kind]}>{t(statusKey[status.kind])}</ImBotStatusText>} />
-        ) : (
-          <ImBotBlockCard><DiscordSetupForm bot={bot} onDisconnect={handleDisconnectClick} /></ImBotBlockCard>
-        )}
-      </ImBotPersonalWay>
+      <>
+        <ImBotPersonalWay id={imBotSettings.discord.targetId} configured={false}>
+          {nav.multiWay ? (
+            <ImBotSetupRow settingId={imBotSettings.discord.id} hint={t('settings.imBot.ways.personalSetupHint.discord')}
+              status={status.kind === 'idle' ? undefined
+                : <ImBotStatusText tone={statusTone[status.kind]}>{t(statusKey[status.kind])}</ImBotStatusText>} />
+          ) : (
+            <ImBotBlockCard><DiscordSetupForm bot={bot} onDisconnect={handleDisconnectClick} /></ImBotBlockCard>
+          )}
+        </ImBotPersonalWay>
+        <ImCompanionBotsSection channel="discord" />
+      </>
     );
   }
 
   return (
-    <ImBotPersonalWay id={imBotSettings.discord.targetId}>
-      <SettingsCard>
-        <ImReplyTargetField target={replyTarget} settingId={imBotSettings.discord.id} />
-        {toCompanion ? null : <ImChannelProjectRows channel="discord" appName={t('settings.imBot.apps.discord')} settingId={imBotSettings.discord.id} />}
-        <SettingsRow title={t('settings.imBot.rows.discordChannels')} hint={t('settings.imBot.rows.discordChannelsHint')}
-          chevron onClick={() => nav.open('channels')} />
-      </SettingsCard>
-      {toCompanion ? null : <ImChatSettingsCard channel="discord" />}
-      <SettingsCard>{lifecycleRow}</SettingsCard>
-      <SettingsCard>
-        <SettingsRow
-          title={status.appId}
-          hint={<ImBotStatusText tone="connected">
-            {[t(statusKey.connected), ownerUserId ? t('settings.imBot.rows.ownerId', { id: ownerUserId }) : null].filter(Boolean).join(' · ')}
-          </ImBotStatusText>}
-        />
-        <SettingsRow data-settings-search-action="Disconnect this bot account" danger title={t('settings.imBot.rows.unbind')}
-          disabled={isDisconnecting} onClick={() => void handleDisconnectClick()} />
-      </SettingsCard>
-    </ImBotPersonalWay>
+    <>
+      <ImBotPersonalWay id={imBotSettings.discord.targetId}>
+        <SettingsCard>
+          <ImReplyTargetField target={replyTarget} settingId={imBotSettings.discord.id} />
+          {toCompanion ? null : <ImChannelProjectRows channel="discord" appName={t('settings.imBot.apps.discord')} settingId={imBotSettings.discord.id} />}
+        </SettingsCard>
+        <SettingsCard>
+          <SettingsRow title={t('settings.imBot.rows.discordChannels')} hint={t('settings.imBot.rows.discordChannelsHint')}
+            chevron onClick={() => nav.open('channels')} />
+        </SettingsCard>
+        {toCompanion ? null : <ImChatSettingsCard channel="discord" />}
+        <SettingsCard>{lifecycleRow}</SettingsCard>
+        <SettingsCard>
+          <SettingsRow
+            title={status.appId}
+            hint={<ImBotStatusText tone="connected">
+              {[t(statusKey.connected), ownerUserId ? t('settings.imBot.rows.ownerId', { id: ownerUserId }) : null].filter(Boolean).join(' · ')}
+            </ImBotStatusText>}
+          />
+          <SettingsRow data-settings-search-action="Disconnect this bot account" danger title={t('settings.imBot.rows.unbind')}
+            disabled={isDisconnecting} onClick={() => void handleDisconnectClick()} />
+        </SettingsCard>
+      </ImBotPersonalWay>
+      <ImCompanionBotsSection channel="discord" />
+    </>
   );
 }
 

@@ -32,7 +32,12 @@ vi.mock('../controlProjects', () => ({
 vi.mock('../../defaultSessionSettings', () => ({ getImDefaultEffortFor: () => 'high' }));
 
 import { personalChannelProjectDefaults, personalChannelProjectDir, setImProjectPorts } from '../imProjectPorts';
-import { writePersonalChannelChoice } from '../personalChannelStore';
+import {
+  clearPersonalChannelChoice,
+  listPersonalChannelsForCompanion,
+  readPersonalChannelChoice,
+  writePersonalChannelChoice,
+} from '../personalChannelStore';
 
 describe('personal channel project and reply target', () => {
   let projectDir = '';
@@ -82,5 +87,20 @@ describe('personal channel project and reply target', () => {
     writePersonalChannelChoice('wecom', { projectDir });
     mocks.projects = [];
     expect(await personalChannelProjectDir('wecom')).toBeNull();
+  });
+
+  it('lists companion-assigned personal channels (excluding wechat) and cleans stale channel state on unbind/adopt', () => {
+    writePersonalChannelChoice('feishu', { projectDir, companionBotId: 'bot-a' });
+    writePersonalChannelChoice('telegram', { companionBotId: 'bot-a' });
+    writePersonalChannelChoice('wechat', { projectDir, companionBotId: 'bot-a' });
+    writePersonalChannelChoice('discord', { companionBotId: 'bot-b' });
+
+    expect(listPersonalChannelsForCompanion('bot-a')).toEqual(['telegram', 'feishu']);
+    expect(listPersonalChannelsForCompanion('bot-b')).toEqual(['discord']);
+
+    expect(clearPersonalChannelChoice('feishu')).toBe(true);
+    expect(clearPersonalChannelChoice('feishu')).toBe(false);
+    expect(readPersonalChannelChoice('feishu')).toEqual({ projectDir: null, companionBotId: null });
+    expect(listPersonalChannelsForCompanion('bot-a')).toEqual(['telegram']);
   });
 });

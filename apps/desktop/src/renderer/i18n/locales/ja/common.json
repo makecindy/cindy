@@ -7334,7 +7334,7 @@
     "tina": {
       "chat": {
         "title": "会話",
-        "description": "リポジトリに紐づかない会話です。Slack・Telegram・X・Feishu / Lark で「chat」を選ぶと利用でき、会話 lane ごとに 1 つのセッションが対応します。"
+        "description": "プロジェクトフォルダに紐づかない通常の会話です。チャットアプリでプロジェクトを指定しない場合に使われます。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7465,7 +7465,8 @@
       "groups": {
         "cindy": "公式",
         "personal": "個人",
-        "plugins": "プラグイン"
+        "plugins": "プラグイン",
+        "shared": "共通設定"
       },
       "tips": {
         "cindy": "Cindy が提供・管理します。自分でボットを作成したり認証情報を用意したりする必要はなく、案内に沿って接続するだけで利用できます。",
@@ -7509,9 +7510,9 @@
       },
       "replyTarget": {
         "label": "返信する相手",
-        "cindy": "Cindy",
-        "cindyHint": "Cindy が新しいタスクを始めて返信します。仲間に任せることもできます。",
-        "companionHint": "個人チャットは {{name}} との会話に入り、グループごとに非表示のタスクが作られます。あなたのメッセージは {{name}} の権限で実行されます。",
+        "cindy": "通常のタスク",
+        "cindyHint": "サイドバーのタスクとして下のプロジェクトとモデルで処理します。バディに任せて記憶や設定を使うこともできます。",
+        "companionHint": "DM は {{name}} との会話に入り、グループは {{name}} が個別に処理します。モデル・権限・記憶は {{name}} に従います。",
         "openCompanion": "{{name}} の設定",
         "summary": "{{name}} が返信",
         "missingCompanion": "利用できない仲間",
@@ -7520,14 +7521,15 @@
         "companionSettingsHint": "モデル、権限、記憶"
       },
       "nav": {
-        "back": "戻る"
+        "back": "戻る",
+        "backTo": "{{page}} に戻る"
       },
       "pageDescription": "WeChat、Feishu、Telegram などのチャットアプリから Cindy や仲間にメッセージを送れます。",
       "list": {
         "connected": "接続済み",
         "available": "ほかに接続できるアプリ",
         "choose": "チャットアプリを選ぶ",
-        "cindyReplies": "Cindy が返信",
+        "cindyReplies": "通常のタスク",
         "official": "公式ボット：{{status}}",
         "projects": "プロジェクトとモデル",
         "projectsHint": "チャットアプリやプラグインがプロジェクトでタスクを始めるときの、プロジェクトごとのモデルと権限",
@@ -7537,7 +7539,8 @@
           "x": "Cindy 公式アカウントを使います。承認すると X で返信します",
           "wechat": "QR コードで個人の WeChat を接続",
           "personal": "自分で作ったボットを使います"
-        }
+        },
+        "companionDedicated": "バディ専用: {{names}}"
       },
       "apps": {
         "telegram": "Telegram",
@@ -7559,7 +7562,8 @@
           "telegram": "BotFather でボットを作り、トークンと自分のユーザー ID を入力します。",
           "discord": "Discord Developer Portal でボットを作り、トークンを入力します。",
           "feishu": "Feishu または Lark のオープンプラットフォームでアプリを作り、App ID と App Secret を入力します。"
-        }
+        },
+        "officialHint": "アプリ作成は不要で、Cindy アカウントに直接連携できます。"
       },
       "rows": {
         "model": "モデル",
@@ -7588,7 +7592,11 @@
         "projectFullAccessCancel": "キャンセル",
         "projectUpdateFailed": "プロジェクトを切り替えられませんでした。サイドバーにあるか確認して、もう一度お試しください。",
         "chats": "グループチャット",
-        "channels": "チャンネル"
+        "channels": "チャンネル",
+        "projectModel": "モデルと権限",
+        "projectModelHint": "「プロジェクトとモデル」でまとめて管理",
+        "projectModelFollow": "「{{name}}」に従う",
+        "groupReplyHint": "グループでメンション時のみ返信するか、すべてに返信するかを設定します"
       },
       "chats": {
         "title": "グループチャット",
@@ -7678,6 +7686,11 @@
         "statusCustom": "個別に設定",
         "shownHint": "{{total}} 件中 {{shown}} 件を表示。名前を入力して絞り込めます。",
         "fieldsNote": "プロジェクト・モデル・権限の変更は、このグループで次に新しいタスクを始めたときに反映され、進行中のタスクは移動しません。"
+      },
+      "companionBots": {
+        "title": "バディ専用ボット",
+        "description": "バディ設定で個別に構成されたボットです。アップデート後もそのまま動作します。",
+        "manage": "管理"
       }
     },
     "shortcuts": {
@@ -13371,7 +13384,8 @@
       },
       "handedOver": "{{apps}} は設定で {{name}} が返信するようになっています。",
       "handedOverSeparator": "、",
-      "manageInSettings": "設定で管理"
+      "manageInSettings": "設定で管理",
+      "handedOverHint": "以下で追加するボットは {{name}} 専用で、設定画面のボットとは別管理になります。"
     },
     "voiceMode": {
       "realtime": {

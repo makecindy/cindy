@@ -113,6 +113,7 @@ import { blueBubblesStateStorage } from '../../imessage/storage';
 import { __testing as laneTesting } from '../botImLaneRuntime';
 import { withBotProfileLocks } from '../../../maker-ipc/botProfileLock';
 import { readWechatChannelSettings, writeWechatCompanionBinding, writeWechatWorkingDir } from '../../wechat/channelSettings';
+import { readPersonalChannelChoice, writePersonalChannelChoice } from '../personalChannelStore';
 import {
   adoptPersonalBot,
   configureBotImPersonalAdoption,
@@ -1158,6 +1159,45 @@ describe('bot im connection runtime', () => {
       const result = await adoptPersonalBot({ botId: 'bot-mia', channel: 'wecom' });
       expect(h.secrets.get(`${secretKeyPrefixFor(result.connection.id)}wecom-owner-user-id`)).toBe('zhangsan');
       expect([...h.secrets.keys()].filter((key) => key.startsWith('wecom-'))).toEqual([]);
+    });
+
+    it('allows direct WeChat companion reassignment from Settings while preserving companion-page conflict guard', async () => {
+      const apply = vi.fn(async (commit: () => void) => { commit(); });
+      h.botStatus = 'active';
+      writeWechatCompanionBinding('bot-mia');
+      await expect(setWechatCompanionBinding('bot-other', apply)).rejects.toThrow('WECHAT_COMPANION_IN_USE');
+      await setWechatCompanionBinding('bot-other', apply, { allowReassign: true });
+      expect(readWechatChannelSettings().companionBotId).toBe('bot-other');
+    });
+
+    it('clears stale personal channel project/companion state after adopting a personal bot', async () => {
+      personalTransports();
+      h.secrets.set('wecom-bot-id', 'wb-2');
+      h.secrets.set('wecom-bot-secret', 's3cret');
+      writePersonalChannelChoice('wecom', { projectDir: h.root, companionBotId: 'bot-mia' });
+      await adoptPersonalBot({ botId: 'bot-mia', channel: 'wecom' });
+      expect(readPersonalChannelChoice('wecom')).toEqual({ projectDir: null, companionBotId: null });
+    });
+
+    it('resolves handed-over personal Feishu transport for the assigned companion and enforces owner match', () => {
+      const personalFeishu = {
+        getStatus: () => ({ kind: 'connected' }),
+        getOwnerOpenId: () => 'ou_owner_1',
+      } as unknown as import('@cindy/im').FeishuIM;
+      configureBotImConnectionRuntime({
+        removeWechatCompanionBinding: async (update) => { update(); },
+        create: () => { throw new Error('unused'); },
+        settingsIdentity: () => ({
+          telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null,
+        }),
+        listKnownGroups: async () => [],
+        personalFeishuIm: () => personalFeishu,
+      });
+      writePersonalChannelChoice('feishu', { companionBotId: 'bot-mia' });
+      expect(getBotFeishuTransport('bot-mia')).toBe(personalFeishu);
+      expect(getBotFeishuTransport('bot-mia', 'ou_owner_1')).toBe(personalFeishu);
+      expect(getBotFeishuTransport('bot-mia', 'ou_other')).toBeNull();
+      expect(getBotFeishuTransport('bot-other')).toBeNull();
     });
   });
 });

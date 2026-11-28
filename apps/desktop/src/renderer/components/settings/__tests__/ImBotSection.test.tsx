@@ -14,6 +14,7 @@ import { useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ImBotSection } from '../ImBotSection';
+import { SettingsEscapeHarness } from './SettingsEscapeHarness';
 import { SettingsSearchNavigationContext } from '../SettingsSearchNavigation';
 import imBotSearch from '../ImBotSection.settings-search';
 
@@ -106,10 +107,48 @@ describe('ImBotSection', () => {
     expect(screen.getByTestId('personal-telegram')).toBeTruthy();
     expect(appRows()).toEqual([]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.imBot.nav.back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.imBot.nav.backTo' }));
     expect(appRows()).toHaveLength(8);
     // 官方机器人始终只挂一份: 换页只换显示范围。
     expect(new Set(officialShows)).toEqual(new Set(['list', 'telegram']));
+  });
+
+  it('steps back one subpage on Escape instead of exiting settings, and surfaces existing companion-dedicated bots under Connected', async () => {
+    const prevApi = (window as { electronAPI?: unknown }).electronAPI;
+    (window as { electronAPI?: unknown }).electronAPI = {
+      botImConnection: {
+        list: vi.fn(async () => ({
+          connections: [{
+            id: 'a1b2c3d4e5f6',
+            botId: 'bot-xiaoxue',
+            channel: 'feishu',
+            createdAt: 1,
+            botContextId: 'cli_demo1234',
+            status: { kind: 'connected' },
+            identity: { username: null, ownerUserId: 'ou_1' },
+          }],
+        })),
+        onChanged: () => () => {},
+      },
+    };
+    try {
+      render(
+        <SettingsEscapeHarness>
+          <SettingsSearchNavigationContext.Provider value={{ entry: null, activation: 0 }}>
+            <ImBotSection targetGroup={null} />
+          </SettingsSearchNavigationContext.Provider>
+        </SettingsEscapeHarness>,
+      );
+      await act(async () => {});
+      // 升级前在「伙伴 → 消息平台」配好的飞书机器人会出现在「已连接」组，不会误落到「还可以连接」。
+      expect(appRows().slice(0, 2)).toEqual(['feishu', 'telegram']);
+      fireEvent.click(document.querySelector('[data-im-bot-app="telegram"]')!);
+      expect(screen.getByTestId('personal-telegram')).toBeTruthy();
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(appRows()).toHaveLength(8);
+    } finally {
+      (window as { electronAPI?: unknown }).electronAPI = prevApi;
+    }
   });
 
   it('hides official-only apps in local mode', () => {

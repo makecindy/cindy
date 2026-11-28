@@ -22,7 +22,9 @@ import { switchPersonalBotReplyTarget } from './botImPersonalAdoption';
 import { listProjectsForControl } from './controlProjects';
 import { imProjectAliasForDir, syncImProjectWorkspaces } from './imProjectPorts';
 import {
+  clearPersonalChannelChoice,
   isPersonalChannel,
+  listPersonalChannelsForCompanion,
   readPersonalChannelChoice,
   writePersonalChannelChoice,
   type PersonalChannel,
@@ -92,6 +94,48 @@ async function setCompanion(channel: PersonalChannel, botId: unknown): Promise<P
   });
   log.info(`personal ${channel} bot now replies as ${botId ? 'teammate' : 'Cindy'}`);
   return broadcast(channel);
+}
+
+/** 仅广播某个个人渠道状态变化(例如移交伙伴后外部已清盘)。 */
+export async function broadcastPersonalChannelState(channel: PersonalChannel): Promise<void> {
+  try {
+    await broadcast(channel);
+  } catch (err) {
+    log.warn(`broadcast personal channel state for ${channel} failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** 解绑或移交个人机器人后清空该平台的项目与伙伴归属，并广播刷新设置页。 */
+export async function clearPersonalChannelState(channel: PersonalChannel): Promise<void> {
+  try {
+    if (!clearPersonalChannelChoice(channel)) return;
+    await broadcast(channel);
+  } catch (err) {
+    log.warn(`clear personal channel state for ${channel} failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** 伙伴被删除时，把设置页里交给这位伙伴的个人机器人安全切回普通任务并刷新界面。 */
+export async function clearPersonalChannelsForCompanion(botId: string): Promise<void> {
+  const channels = listPersonalChannelsForCompanion(botId);
+  for (const channel of channels) {
+    try {
+      const clear = () => {
+        if (readPersonalChannelChoice(channel).companionBotId === botId) {
+          writePersonalChannelChoice(channel, { companionBotId: null });
+        }
+      };
+      try {
+        await switchPersonalBotReplyTarget(channel, clear);
+      } catch {
+        // 传输层尚未启动或正在切换时直接落盘，不阻塞伙伴删除。
+        clear();
+      }
+      await broadcast(channel);
+    } catch (err) {
+      log.warn(`clear personal ${channel} companion on delete failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }
 
 export function registerPersonalChannelIpc(): void {

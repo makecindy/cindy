@@ -21,6 +21,7 @@ import {
   ImBotSetupGuide,
   ImBotStatusText,
   ImBotSubPage,
+  ImCompanionBotsSection,
   useImBotNav,
   type ImBotStatusTone,
 } from './ImBotPageParts';
@@ -418,30 +419,36 @@ export function DingTalkBotSettings() {
 
   if (bot.status.kind !== 'connected') {
     return (
-      <ImBotPersonalWay id={imBotSettings.dingtalk.targetId}>
-        <ImBotBlockCard><DingTalkSetupForm bot={bot} onClear={clear} /></ImBotBlockCard>
-      </ImBotPersonalWay>
+      <>
+        <ImBotPersonalWay id={imBotSettings.dingtalk.targetId}>
+          <ImBotBlockCard><DingTalkSetupForm bot={bot} onClear={clear} /></ImBotBlockCard>
+        </ImBotPersonalWay>
+        <ImCompanionBotsSection channel="dingtalk" />
+      </>
     );
   }
 
   return (
-    <ImBotPersonalWay id={imBotSettings.dingtalk.targetId}>
-      <SettingsCard>
-        <ImReplyTargetField target={replyTarget} settingId={imBotSettings.dingtalk.id} />
-        {toCompanion ? null : <ImChannelProjectRows channel="dingtalk" appName={t('settings.imBot.apps.dingtalk')} settingId={imBotSettings.dingtalk.id} />}
-      </SettingsCard>
-      {toCompanion ? null : <ImChatSettingsCard channel="dingtalk" />}
-      <SettingsCard>
-        <SettingsRow
-          title={bot.appKey}
-          hint={<ImBotStatusText tone="connected">
-            {[t(statusKey.connected), t(bot.ownerUserId ? 'settings.dingtalkBot.connected.ownerBound' : 'settings.dingtalkBot.connected.waitingOwner')].join(' · ')}
-          </ImBotStatusText>}
-        />
-        <SettingsRow data-setting-id={imBotSettings.dingtalk.id} danger title={t('settings.imBot.rows.unbind')}
-          disabled={bot.isClearing} onClick={() => void clear()} />
-      </SettingsCard>
-    </ImBotPersonalWay>
+    <>
+      <ImBotPersonalWay id={imBotSettings.dingtalk.targetId}>
+        <SettingsCard>
+          <ImReplyTargetField target={replyTarget} settingId={imBotSettings.dingtalk.id} />
+          {toCompanion ? null : <ImChannelProjectRows channel="dingtalk" appName={t('settings.imBot.apps.dingtalk')} settingId={imBotSettings.dingtalk.id} />}
+        </SettingsCard>
+        {toCompanion ? null : <ImChatSettingsCard channel="dingtalk" />}
+        <SettingsCard>
+          <SettingsRow
+            title={bot.appKey}
+            hint={<ImBotStatusText tone="connected">
+              {[t(statusKey.connected), t(bot.ownerUserId ? 'settings.dingtalkBot.connected.ownerBound' : 'settings.dingtalkBot.connected.waitingOwner')].join(' · ')}
+            </ImBotStatusText>}
+          />
+          <SettingsRow data-setting-id={imBotSettings.dingtalk.id} danger title={t('settings.imBot.rows.unbind')}
+            disabled={bot.isClearing} onClick={() => void clear()} />
+        </SettingsCard>
+      </ImBotPersonalWay>
+      <ImCompanionBotsSection channel="dingtalk" />
+    </>
   );
 }
 

@@ -2760,7 +2760,7 @@ interface ElectronAPI {
     cancelAuthorization: () => Promise<{ ok: true }>;
     unbind: () => Promise<{ ok: true }>;
     getChannelSettings: () => Promise<WechatChannelSettingsState>;
-    setCompanion: (botId: string | null) => Promise<WechatChannelSettingsState>;
+    setCompanion: (botId: string | null, options?: { allowReassign?: boolean }) => Promise<WechatChannelSettingsState>;
     onChannelSettingsChange: (callback: (state: WechatChannelSettingsState) => void) => () => void;
     chooseWorkingDirectory: () => Promise<{
       canceled: boolean;

@@ -7334,7 +7334,7 @@
     "tina": {
       "chat": {
         "title": "言谈",
-        "description": "不落任何仓库之纯言谈；于 Slack、Telegram、X 或飞书 / Lark 中选 chat 即可用之，每条言谈 lane 各对应一差事。"
+        "description": "不系于具体项目夹之纯对谈；诸消息应用未指项目时，默认依此模型与权限。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7465,7 +7465,8 @@
       "groups": {
         "cindy": "官设",
         "personal": "私",
-        "plugins": "法器"
+        "plugins": "法器",
+        "shared": "共用设置"
       },
       "tips": {
         "cindy": "由 Cindy 所供并维护。无须自建机器人或备凭证，依引导连接即可用。",
@@ -7509,9 +7510,9 @@
       },
       "replyTarget": {
         "label": "孰为应答",
-        "cindy": "Cindy",
-        "cindyHint": "Cindy 启新差事以应之。亦可付一同伴应之。",
-        "companionHint": "私语入与 {{name}} 之言谈，每群各启一隐差事。汝之言依 {{name}} 之权限行之。",
+        "cindy": "常务",
+        "cindyHint": "于侧栏任务录中处置，依下文项目与模型而行；亦可委诸伙伴，循其记忆与设定答复。",
+        "companionHint": "私语入 {{name}} 之对谈，群议由 {{name}} 各自料理；模型、权限与记忆皆从 {{name}}。",
         "openCompanion": "{{name}} 之设置",
         "summary": "{{name}} 应答",
         "missingCompanion": "已不可用之同伴",
@@ -7520,14 +7521,15 @@
         "companionSettingsHint": "模型、权限与记忆"
       },
       "nav": {
-        "back": "返"
+        "back": "返",
+        "backTo": "返至 {{page}}"
       },
       "pageDescription": "于微信、飞书、Telegram 诸传讯之器，传言于 Cindy 或汝之同伴。",
       "list": {
         "connected": "已连",
         "available": "尚可连者",
         "choose": "择一传讯之器",
-        "cindyReplies": "Cindy 应答",
+        "cindyReplies": "常务",
         "official": "官方机器人：{{status}}",
         "projects": "项目与模型",
         "projectsHint": "传讯之器或法器于项目中启新差事时，各项目所用之模型与权柄",
@@ -7537,7 +7539,8 @@
           "x": "用 Cindy 官方之号，许之则于 X 上应汝",
           "wechat": "扫码以连汝之微信",
           "personal": "用汝自建之机器人"
-        }
+        },
+        "companionDedicated": "伙伴专属：{{names}}"
       },
       "apps": {
         "telegram": "Telegram",
@@ -7559,7 +7562,8 @@
           "telegram": "于 BotFather 建机器人，填其令牌与汝之用户 ID。",
           "discord": "于 Discord 开发者后台建机器人，填其令牌。",
           "feishu": "于飞书或 Lark 开放平台建应用，填其 App ID 与 App Secret。"
-        }
+        },
+        "officialHint": "毋庸自建应用，径与阁下 Cindy 账号相系。"
       },
       "rows": {
         "model": "模型",
@@ -7588,7 +7592,11 @@
         "projectFullAccessCancel": "取消",
         "projectUpdateFailed": "未能换项目，请察其尚在侧栏，再试之。",
         "chats": "群议",
-        "channels": "频道"
+        "channels": "频道",
+        "projectModel": "模型与权限",
+        "projectModelHint": "于「项目与模型」统一更改",
+        "projectModelFollow": "从「{{name}}」",
+        "groupReplyHint": "定机器人在群中惟点名方答，抑或悉数回应"
       },
       "chats": {
         "title": "群议",
@@ -7678,6 +7686,11 @@
         "statusCustom": "已另定",
         "shownHint": "已示前 {{shown}} / {{total}}，书其名可筛之。",
         "fieldsNote": "易项目、模型、权柄者，群中下次新启差事乃行，进行之差事不移。"
+      },
+      "companionBots": {
+        "title": "伙伴专属机器人",
+        "description": "此类机器人另设于伙伴设置中，升级前已备者照常运行。",
+        "manage": "往理"
       }
     },
     "shortcuts": {
@@ -13371,7 +13384,8 @@
       },
       "handedOver": "{{apps}} 已于设置中付 {{name}} 应答。",
       "handedOverSeparator": "、",
-      "manageInSettings": "往设置理之"
+      "manageInSettings": "往设置理之",
+      "handedOverHint": "下文所添乃 {{name}} 独用之机器人，与设置中者各行不悖。"
     },
     "voiceMode": {
       "realtime": {

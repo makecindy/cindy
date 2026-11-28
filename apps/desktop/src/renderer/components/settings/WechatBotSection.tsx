@@ -481,7 +481,7 @@ function useWechatReplyTarget(wechat: ReturnType<typeof useWechatBot>): ImReplyT
     companionBotId,
     companion: companionBotId ? bots.find((bot) => bot.id === companionBotId) ?? null : null,
     pending: isUpdatingCompanion,
-    change: async (next) => { await setCompanion(next); },
+    change: async (next) => { await setCompanion(next, { allowReassign: true }); },
   };
 }
 

@@ -116,6 +116,30 @@ export function readPersonalChannelChoice(channel: PersonalChannel, rootPath?: s
   return { ...(readDocument(rootPath).channels[channel] ?? EMPTY) };
 }
 
+/** 列出当前交给这位伙伴回复的个人机器人渠道(不含微信, 微信走 wechat-channel.json)。 */
+export function listPersonalChannelsForCompanion(
+  botId: string,
+  rootPath?: string,
+): Array<Exclude<PersonalChannel, 'wechat'>> {
+  if (!botId || !BOT_ID_RE.test(botId)) return [];
+  const doc = readDocument(rootPath);
+  const channels: Array<Exclude<PersonalChannel, 'wechat'>> = [];
+  for (const channel of PERSONAL_CHANNELS) {
+    if (channel === 'wechat') continue;
+    if (doc.channels[channel]?.companionBotId === botId) channels.push(channel);
+  }
+  return channels;
+}
+
+/** 清空单个渠道的「项目」与「谁来回复」记录(解绑 / 移交伙伴后保持设置干净)。 */
+export function clearPersonalChannelChoice(channel: PersonalChannel, rootPath?: string): boolean {
+  if (!isPersonalChannel(channel)) return false;
+  const current = readPersonalChannelChoice(channel, rootPath);
+  if (!current.projectDir && !current.companionBotId) return false;
+  writePersonalChannelChoice(channel, { projectDir: null, companionBotId: null }, rootPath);
+  return true;
+}
+
 /** 省略的字段不改; 文件损坏时抛错, 不覆盖原文件。 */
 export function writePersonalChannelChoice(
   channel: PersonalChannel,
