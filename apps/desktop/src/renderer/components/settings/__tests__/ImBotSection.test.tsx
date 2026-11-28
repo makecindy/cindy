@@ -160,6 +160,15 @@ describe('ImBotSection', () => {
     expect(appRows()).toContain('telegram');
   });
 
+  // Static search must lead to the editor even when the account has no official bot or IM plugin.
+  it('opens the shared project editor from search in local mode', () => {
+    authState.mode = 'local';
+    renderWithSearch('imBot.projects');
+
+    expect(screen.getByRole('heading', { name: 'settings.imBot.list.projects' })).toBeTruthy();
+    expect(screen.getByTestId('official-projects')).toBeTruthy();
+  });
+
   it('opens the deeper page a search result points at', () => {
     renderWithSearch('imBot.discord.channels');
 

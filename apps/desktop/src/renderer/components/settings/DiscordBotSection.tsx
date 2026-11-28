@@ -574,7 +574,7 @@ export function DiscordBotSettings() {
     <>
       <ImBotPersonalWay id={imBotSettings.discord.targetId}>
         <SettingsCard>
-          <ImReplyTargetField target={replyTarget} settingId={imBotSettings.discord.id} />
+          <ImReplyTargetField target={replyTarget} setting="discord" />
           {toCompanion ? null : <ImChannelProjectRows channel="discord" appName={t('settings.imBot.apps.discord')} settingId={imBotSettings.discord.id} />}
         </SettingsCard>
         <SettingsCard>

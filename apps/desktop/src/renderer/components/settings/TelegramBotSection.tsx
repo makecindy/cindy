@@ -660,7 +660,7 @@ export function TelegramBotSettings() {
     <>
       <ImBotPersonalWay id={imBotSettings.telegram.targetId}>
         <SettingsCard>
-          <ImReplyTargetField target={replyTarget} settingId={imBotSettings.telegram.id} />
+          <ImReplyTargetField target={replyTarget} setting="telegram" />
           {toCompanion ? null : <ImChannelProjectRows channel="telegram" appName={t('settings.imBot.apps.telegram')} settingId={imBotSettings.telegram.id} />}
         </SettingsCard>
         <SettingsCard>

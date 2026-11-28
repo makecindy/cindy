@@ -1201,6 +1201,30 @@ describe('bot im connection runtime', () => {
       expect(getBotFeishuTransport('bot-other')).toBeNull();
     });
 
+    // Reconnecting after a suspended stop must never write or restart against the next account.
+    it('cancels a personal reply-target switch when the account changes during stop', async () => {
+      const start = vi.fn(async () => undefined);
+      configureBotImPersonalAdoption({
+        isReady: () => true,
+        telegramGroupActivation: () => undefined,
+        personal: {
+          feishu: {
+            identity: () => 'cli_1',
+            stop: async () => { h.ownerKey = 'owner-b'; },
+            start,
+            clear: vi.fn(async () => undefined),
+          },
+        },
+      });
+      h.secrets.set('feishu_bot_app_id', 'cli_1');
+      h.secrets.set('feishu_bot_app_secret', 'sec_1');
+      const apply = vi.fn();
+
+      await expect(switchPersonalBotReplyTarget('feishu', apply)).rejects.toThrow(/OWNER_SCOPE_CHANGED/);
+      expect(apply).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    });
+
     it('blocks reply-target switching while a personal bot has active or queued work unless allowWhileBusy is set', async () => {
       let busy = true;
       const stop = vi.fn(async () => undefined);

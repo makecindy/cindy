@@ -110,6 +110,7 @@ import {
 } from './shared/botImPersonalAdoption';
 import { readTelegramBehavior } from './telegram/behaviorStore';
 import { readBotImConnection, secretKeyPrefixFor } from './shared/botImConnectionStore';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { backfillLegacyImDefaultRoutes, backfillLegacyImDefaultRoutesAtStartup } from './shared/channelDefaultRouteSync';
 import type { ImDefaultSettingsChannel } from '../../shared/imDefaultSettings';
@@ -470,8 +471,9 @@ export function startImOrchestrators(): void {
     });
   const unbindWechat = () =>
     connectionLifecycle.runWhileStarted(async () => {
+      const ownerKey = activeOwnerScopeKey();
       await wechatIm.unbind();
-      await clearPersonalChannelState('wechat');
+      await clearPersonalChannelState('wechat', ownerKey);
       return { ok: true };
     });
   // The teammate settings host (a remote Desktop's pages) uses the same operations; browser

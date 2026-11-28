@@ -66,6 +66,7 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { imHostAccountScope } from './accountScopeBridge';
 import { blueBubblesStateStorage } from './imessage/storage';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
 import { getDbClient } from '../localDb/client/current';
@@ -198,8 +199,9 @@ const host: IMHost = {
       const disconnectChannel = PERSONAL_DISCONNECT_CHANNEL[channel];
       const wrapped = disconnectChannel
         ? async (payload: unknown) => {
+            const ownerKey = activeOwnerScopeKey();
             const result = await handler(payload);
-            await clearPersonalChannelState(disconnectChannel);
+            await clearPersonalChannelState(disconnectChannel, ownerKey);
             return result;
           }
         : handler;

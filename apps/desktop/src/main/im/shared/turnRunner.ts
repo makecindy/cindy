@@ -714,6 +714,7 @@ export interface ImTurnRunner {
     text: string;
     attachments?: readonly IMAttachment[];
     protectedContent?: boolean;
+    requesterIsOwner?: boolean;
     messageOrigin?: ImMessageOrigin;
   }) => Promise<{ sessionId: string; clientId: string } | null>;
   /**
@@ -1211,6 +1212,11 @@ export function createTurnRunner(
     return dispatchAgentTurnInternal(args);
   }
 
+  function isPersonalGuest(args: Pick<ImRunAgentTurnArgs, 'botContextId' | 'userId' | 'requesterIsOwner' | 'notificationSessionId'>): boolean {
+    return deps.personalGuests !== undefined && args.requesterIsOwner !== true
+      && !args.notificationSessionId && !companionBotIdFor(args.botContextId, args.userId);
+  }
+
   async function dispatchAgentTurnInternal(
     args: ImRunAgentTurnArgs & {
       queueMode: 'internal' | 'external';
@@ -1219,8 +1225,7 @@ export function createTurnRunner(
   ): Promise<ImTurnDispatch> {
     const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
     // 个人机器人的群成员轮次(交给伙伴回复时按伙伴规则, 不算)。
-    const guestCapped = deps.personalGuests !== undefined && args.requesterIsOwner !== true
-      && !args.notificationSessionId && !companionBotIdFor(botContextId, userId);
+    const guestCapped = isPersonalGuest(args);
     // 群成员的轮次必须带渠道的群轮次策略(最高自动审批); 渠道漏挂时不按会话档位放行。
     if (guestCapped && !args.turnPermissionPolicy) {
       log.warn(`dropped group member turn without a permission policy channel=${channel}`);
@@ -5426,10 +5431,13 @@ export function createTurnRunner(
     text: string;
     attachments?: readonly IMAttachment[];
     protectedContent?: boolean;
+    requesterIsOwner?: boolean;
     messageOrigin?: ImMessageOrigin;
   }): Promise<{ sessionId: string; clientId: string } | null> {
     // 受保护群的触发消息永不进存档(与 onAccepted 同一条边界)。
     if (args.protectedContent === true) return null;
+    // Persist guest input only after dispatch validates its permission policy and group route.
+    if (isPersonalGuest(args)) return null;
     if (args.text.length === 0 && (args.attachments?.length ?? 0) === 0) return null;
     let target: RouteTarget | null;
     try {

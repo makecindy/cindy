@@ -471,10 +471,16 @@ export function createMessageHandler(
         chatName: event.interactionSource?.chatName,
       }).catch(() => log.warn('received image history indexing failed'));
     }
+    // Resolve the sender once so early persistence and dispatch use the same authority.
+    const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
+    const requesterIsOwner = turnPermissionPolicy?.autoReviewContext
+      ? turnPermissionPolicy.autoReviewContext.requesterAuthority === 'owner'
+      : isCommandAuthorized(event);
     if (adapter.prepareAgentTurnText) {
       handedOverAck = event.messageId ? ackProcessingEarly(im, event.messageId) : null;
       try {
         if (!notificationSessionId && !event.delivery) {
+          event.assertCurrent?.();
           prePersisted =
             (await turnRunner.persistInboundUserMessageEarly?.({
               botContextId: event.contextId,
@@ -482,6 +488,7 @@ export function createMessageHandler(
               scopeKey: threadScoped ? event.scopeKey : undefined,
               text: event.text,
               attachments: event.attachments,
+              requesterIsOwner,
               ...(event.protectedContent === true ? { protectedContent: true } : {}),
               // 群 / 私聊此刻还没算出来(渠道说明在拼), 先把发言人存上; 派发时补齐。
               ...(() => {
@@ -503,13 +510,6 @@ export function createMessageHandler(
     }
     const channelNoteSource = await channelNoteSourcePromise;
     const messageOrigin = imMessageOriginFor(event, channelNoteSource);
-    // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
-    const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
-    // A channel policy's own identity verdict wins (personal WeChat is always
-    // `unknown`); otherwise the control-command owner check applies.
-    const requesterIsOwner = turnPermissionPolicy?.autoReviewContext
-      ? turnPermissionPolicy.autoReviewContext.requesterAuthority === 'owner'
-      : isCommandAuthorized(event);
     // Telegram / 飞书由渠道自己登记带 transport 的作用域; 企业微信 / 钉钉 / Discord 的伙伴专线
     // 轮次登记一份不带 transport 的, 让伙伴技能等能按本轮触发者授权(否则主人也只读)。
     try {

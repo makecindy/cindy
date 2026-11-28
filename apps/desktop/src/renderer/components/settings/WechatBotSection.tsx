@@ -501,7 +501,7 @@ export function WechatBotSettings() {
           <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--bg-primary)] text-10 font-semibold text-[var(--text-primary)]">
             {step}
           </span>
-          <span>{t(`settings.wechatBot.authorizeConfirm.step${step}`)}</span>
+          <span>{t(`settings.wechatBot.authorization.steps.${step}`)}</span>
         </li>
       ))}
     </ol>
@@ -509,11 +509,11 @@ export function WechatBotSettings() {
 
   const handleAuthorize = useCallback(async () => {
     const accepted = await confirm({
-      title: t(state.bound ? 'settings.wechatBot.rebindConfirm.title' : 'settings.wechatBot.authorizeConfirm.title'),
-      description: t(state.bound ? 'settings.wechatBot.rebindConfirm.description' : 'settings.wechatBot.authorizeConfirm.description'),
+      title: t(state.bound ? 'settings.wechatBot.authorization.rebindTitle' : 'settings.wechatBot.authorization.title'),
+      description: t(state.bound ? 'settings.wechatBot.authorization.rebindDescription' : 'settings.wechatBot.authorization.description'),
       content: authorizationSteps,
-      confirmText: t(state.bound ? 'settings.wechatBot.rebindConfirm.confirm' : 'settings.wechatBot.authorizeConfirm.confirm'),
-      cancelText: t('settings.wechatBot.authorizeConfirm.cancel'),
+      confirmText: t('settings.wechatBot.authorization.confirm'),
+      cancelText: t('settings.wechatBot.authorization.cancel'),
     });
     if (!accepted) return;
     await authorize();
@@ -521,10 +521,11 @@ export function WechatBotSettings() {
 
   const handleUnbind = useCallback(async () => {
     const accepted = await confirm({
-      title: t('settings.wechatBot.unbindConfirm.title'),
-      description: t('settings.wechatBot.unbindConfirm.description'),
-      confirmText: t('settings.wechatBot.unbindConfirm.confirm'),
-      cancelText: t('settings.wechatBot.unbindConfirm.cancel'),
+      title: t('settings.wechatBot.unbind.title'),
+      description: t('settings.wechatBot.unbind.description'),
+      confirmText: t('settings.wechatBot.unbind.confirm'),
+      cancelText: t('settings.wechatBot.unbind.cancel'),
+      confirmVariant: 'destructive',
     });
     if (accepted) await unbind();
   }, [confirm, t, unbind]);
@@ -586,7 +587,7 @@ export function WechatBotSettings() {
   return (
     <ImBotPersonalWay id="personal-im-wechat">
       <SettingsCard>
-        <ImReplyTargetField target={replyTarget} settingId={imBotSettings.wechat.id} />
+        <ImReplyTargetField target={replyTarget} setting="wechat" />
         {toCompanion ? null : <ImChannelProjectRows channel="wechat" appName={t('settings.imBot.apps.wechat')} settingId={imBotSettings.wechat.id} />}
         {toCompanion || inProject ? null : (
           <SettingsBlock>

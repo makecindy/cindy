@@ -514,7 +514,7 @@ export function WecomBotSettings() {
     <>
       <ImBotPersonalWay id={imBotSettings.wecom.targetId}>
         <SettingsCard>
-          <ImReplyTargetField target={replyTarget} settingId={imBotSettings.wecom.id} />
+          <ImReplyTargetField target={replyTarget} setting="wecom" />
           {toCompanion ? null : <ImChannelProjectRows channel="wecom" appName={t('settings.imBot.apps.wecom')} settingId={imBotSettings.wecom.id} />}
         </SettingsCard>
         {toCompanion ? null : <ImChatSettingsCard channel="wecom" />}

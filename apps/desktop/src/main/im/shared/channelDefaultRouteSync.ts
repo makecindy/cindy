@@ -92,6 +92,7 @@ export interface SessionRouteRow {
   /** 任务当前的工作目录; 只有仍在路由键绑定的项目里时才跟随那个项目的设置。 */
   workingDir?: string | null;
   imBotContextId: string | null;
+  imUserId?: string | null;
 }
 
 async function readSessionRouteRow(sessionId: string): Promise<SessionRouteRow | null> {
@@ -112,6 +113,7 @@ async function readSessionRouteRow(sessionId: string): Promise<SessionRouteRow |
       feishuOpenId: sessions.feishuOpenId,
       workingDir: sessions.workingDir,
       imBotContextId: sessions.imBotContextId,
+      imUserId: sessions.imUserId,
     })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
@@ -200,10 +202,10 @@ export function createImChannelDefaultRouteSync(deps: {
   channelProjectDefaultsFor?: (workingDir: string) => ImLaneProjectDefaults | null;
 }): ImChannelDefaultRouteSync {
   const { source, config } = deps;
-  // 只有飞书行带得出路由键; 其他渠道没有实现这两个钩子。
+  // 复用建任务时保存的渠道路由键；飞书保留自己的历史列。
   const laneOf = (row: SessionRouteRow): { botContextId: string; userId: string } | null => {
-    const botContextId = source === 'feishu' ? row.feishuBotAppId : null;
-    const userId = source === 'feishu' ? row.feishuOpenId ?? null : null;
+    const botContextId = source === 'feishu' ? row.feishuBotAppId : row.imBotContextId;
+    const userId = source === 'feishu' ? row.feishuOpenId : row.imUserId;
     return botContextId && userId ? { botContextId, userId } : null;
   };
   // 这条任务此刻跟随什么: 路由键固定的路由 > 任务所在的绑定项目 > 渠道「新对话配置」。

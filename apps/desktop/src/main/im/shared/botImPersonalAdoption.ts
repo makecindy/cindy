@@ -226,6 +226,12 @@ export async function switchPersonalBotReplyTarget(
   if (!current?.isReady()) throwIpcError('PRECONDITION_FAILED', 'IM_NOT_READY');
   if (inFlight) throwIpcError('PRECONDITION_FAILED', 'ADOPT_IN_PROGRESS');
   const personal = readPersonalCredentials(channel, '') ? current.personal[channel] : undefined;
+  const ownerKey = activeOwnerScopeKey();
+  const sameOwner = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerKey;
+  const assertOwner = () => {
+    if (!sameOwner()) throwIpcError('PRECONDITION_FAILED', 'OWNER_SCOPE_CHANGED');
+  };
+  assertOwner();
   if (!options?.allowWhileBusy && personal?.isBusy?.()) {
     throwIpcError('PRECONDITION_FAILED', 'PERSONAL_BOT_BUSY');
   }
@@ -233,9 +239,10 @@ export async function switchPersonalBotReplyTarget(
   try {
     if (personal) await personal.stop();
     try {
+      assertOwner();
       apply();
     } finally {
-      if (personal) {
+      if (personal && sameOwner()) {
         try {
           await personal.start();
         } catch (err) {
@@ -263,10 +270,12 @@ export async function adoptPersonalBot(input: BotImAdoptPersonalBotInput): Promi
   try {
     // 不合格的(伙伴不可用、已被另一位伙伴用着)在停个人 bot 之前就拒绝。
     await assertBotImConnectionAddable(credentials.input, { adoptingSettingsBot: true });
+    if (!sameOwner()) throwIpcError('PRECONDITION_FAILED', 'OWNER_SCOPE_CHANGED');
     const snapshot = snapshotPersonalSecrets(input.channel);
     const personal = current.personal[input.channel];
     if (!personal) throwIpcError('PRECONDITION_FAILED', 'PERSONAL_BOT_NOT_CONFIGURED');
     await personal.stop();
+    if (!sameOwner()) throwIpcError('PRECONDITION_FAILED', 'OWNER_SCOPE_CHANGED');
     let result: BotImConnectionAddResult;
     try {
       result = await addBotImConnection(credentials.input, {

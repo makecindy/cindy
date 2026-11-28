@@ -1,3 +1,4 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 /**
  * 个人 IM 机器人的「群聊」卡片（设置 → IM 机器人 → 某平台；Discord 叫「频道」）：版式照微信插件的
  * 「会话设置」（2026-11-24 主人裁决：要和微信插件一样）。飞书、Telegram、Discord、钉钉、企业微信同一份。
@@ -444,6 +445,7 @@ function ChatRow({
     <div className="border-t border-[var(--settings-theme-card-border)] first:border-t-0" data-im-chat={chat.chatId}>
       <button
         type="button"
+        data-settings-search-action="Open or close settings for the selected chat"
         aria-expanded={open}
         aria-label={t(`${K}.expandAria`, { name })}
         onClick={onToggle}
@@ -639,17 +641,19 @@ function ChatEditor({
   };
 
   const vars = { limit: IM_CHAT_MEMBER_BREAKER_LIMIT };
+  const setting = channel === 'feishu' ? imBotSettings.feishuGroups : imBotSettings[channel];
   return (
     <div
       data-im-chat-editor={chat.chatId}
       className="grid grid-cols-1 gap-x-3 gap-y-2.5 border-t border-[var(--settings-theme-card-border)] px-3 pb-3 pt-2.5 min-[520px]:grid-cols-[minmax(0,1fr)_minmax(0,1.55fr)_minmax(0,1.15fr)]"
     >
       <Field label={t(`${K}.project.label`)}>
-        <Select label={t(`${K}.project.label`)} value={projectValue} options={projectOptions} width="full"
+        <Select data-setting-id={setting.id} label={t(`${K}.project.label`)} value={projectValue} options={projectOptions} width="full"
           disabled={disabled} onValueChange={(value) => void changeProject(value)} />
       </Field>
       <Field label={t(`${K}.model.label`)}>
         <ModelSelector
+          data-setting-id={setting.id}
           remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: builtinAgentDeviceId }}
           deviceId={builtinAgentDeviceId ?? undefined}
           agentDevice={
@@ -732,18 +736,18 @@ function ChatEditor({
           ariaContext={`${t(`${K}.model.label`)} · ${name}`}
         />
         {customizedRoute && (
-          <button type="button" disabled={disabled} onClick={() => void onSave({ route: null })}
+          <button type="button" data-settings-search-action="Reset this chat to the inherited model" disabled={disabled} onClick={() => void onSave({ route: null })}
             className="justify-self-start text-12 leading-[1.5] text-[var(--text-secondary)] underline underline-offset-2 hover:text-[var(--text-primary)] disabled:opacity-45">
             {t(`${K}.model.reset`)}
           </button>
         )}
       </Field>
       <Field label={t(`${K}.permission.label`)}>
-        <Select label={t(`${K}.permission.label`)} value={chat.permissionMode ?? FOLLOW} options={permissionOptions}
+        <Select data-setting-id={setting.id} label={t(`${K}.permission.label`)} value={chat.permissionMode ?? FOLLOW} options={permissionOptions}
           width="full" disabled={disabled} onValueChange={(value) => void changePermission(value)} />
       </Field>
       <label className="col-span-full grid cursor-pointer grid-cols-[auto_minmax(0,1fr)] items-start gap-2 py-0.5">
-        <Checkbox className="mt-0.5" checked={chat.members} disabled={disabled}
+        <Checkbox data-setting-id={setting.id} className="mt-0.5" checked={chat.members} disabled={disabled}
           onChange={(event) => void onSave({ members: event.currentTarget.checked })} />
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="text-13 leading-[1.5] text-[var(--text-primary)]">{t(`${K}.members.label`)}</span>
@@ -756,7 +760,7 @@ function ChatEditor({
           <span className="min-w-[200px] flex-1 text-12 leading-[1.5] text-[var(--warning-fg)]" role="status">
             {t(`${K}.members.paused`, vars)}
           </span>
-          <Button size="sm" variant="secondary" disabled={disabled} onClick={onResume}>{t(`${K}.members.resume`)}</Button>
+          <Button data-settings-search-action="Resume member questions in this chat" size="sm" variant="secondary" disabled={disabled} onClick={onResume}>{t(`${K}.members.resume`)}</Button>
         </div>
       )}
       <p className="col-span-full text-12 leading-[1.5] text-[var(--text-secondary)]">{t(`${K}.fieldsNote`)}</p>

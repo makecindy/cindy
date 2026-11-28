@@ -187,7 +187,9 @@ export function useWechatBot(override?: WechatBotApi): UseWechatBotReturn {
     companionBusyRef.current = true;
     setIsUpdatingCompanion(true);
     try {
-      const next = await api().setCompanion(botId, options);
+      const next = options?.allowReassign
+        ? await api().setCompanion(botId, options)
+        : await api().setCompanion(botId);
       if (!isDataOwnerGenerationCurrent(requestOwner)) return false;
       settingsVersionRef.current += 1;
       if (!override) cachedChannelSettings = next;

@@ -7563,7 +7563,7 @@
           "discord": "在 Discord 開發者後台建立機器人，填入權杖。",
           "feishu": "在飛書或 Lark 開放平台建立應用，填入 App ID 和 App Secret。"
         },
-        "officialHint": "無需自建應用，直接與你的 Cindy 帳號綁定。"
+        "officialHint": "無需自建應用，直接連接你的 Cindy 帳號。"
       },
       "rows": {
         "model": "模型",
@@ -7572,7 +7572,7 @@
         "behavior": "表情回應和引用",
         "receiveHere": "在這台電腦上接收訊息",
         "receiveHereHint": "關掉後機器人在這台電腦上離線，憑證保留，隨時可以再開啟。",
-        "unbind": "解除綁定這個機器人",
+        "unbind": "解除繫結這個機器人",
         "ownerId": "我的使用者 ID {{id}}",
         "discordChannels": "伺服器頻道",
         "discordChannelsHint": "機器人可以在哪些伺服器頻道裡工作",

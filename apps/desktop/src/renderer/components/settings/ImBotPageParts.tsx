@@ -112,7 +112,7 @@ export function ImBotSetupGuide({ title, steps, linkLabel, onOpenLink, settingId
   const [open, setOpen] = useState(false);
   return (
     <div className="border-t border-[var(--settings-theme-card-border)] pt-3">
-      <button data-setting-id={settingId} type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+      <button data-setting-id={settingId} data-settings-search-action="Toggle the bot setup guide" type="button" onClick={() => setOpen(!open)} aria-expanded={open}
         className="flex w-full items-center justify-between gap-3 bg-transparent p-0 text-left">
         <span className="text-13 font-medium text-[var(--settings-section-title)]">{title}</span>
         <span className="text-[var(--settings-section-desc)]">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
@@ -131,7 +131,7 @@ export function ImBotSetupGuide({ title, steps, linkLabel, onOpenLink, settingId
             </div>
           ))}
           {linkLabel && onOpenLink ? (
-            <button data-setting-id={settingId} type="button" onClick={onOpenLink}
+            <button data-setting-id={settingId} data-settings-search-action="Open the external bot setup guide" type="button" onClick={onOpenLink}
               className="w-fit cursor-pointer bg-transparent p-0 text-12 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2">
               {linkLabel}
             </button>
@@ -167,7 +167,7 @@ export function ImBotSetupRow({ hint, status, settingId }: { hint: string; statu
   return (
     <SettingsCard>
       <SettingsRow wrap title={t('settings.imBot.ways.personalSetupTitle')} hint={status ?? hint}
-        trailing={<Button data-setting-id={settingId} variant="secondary" size="sm" onClick={() => nav.open('setup')}>
+        trailing={<Button data-setting-id={settingId} data-settings-search-action="Open the personal bot setup page" variant="secondary" size="sm" onClick={() => nav.open('setup')}>
           {t('settings.imBot.ways.setUp')}
         </Button>} />
     </SettingsCard>

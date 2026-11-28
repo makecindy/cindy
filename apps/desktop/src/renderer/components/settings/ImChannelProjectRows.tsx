@@ -21,6 +21,8 @@ import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings
 import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines';
 import { ImBotModelRow, ImProjectModelLinkRow } from './ImBotPageParts';
 
+import { imBotSettings } from './ImBotSection.settings-search';
+
 type Channel = PersonalChannelState['channel'];
 const DIALOGUE = '__dialogue__';
 
@@ -147,7 +149,7 @@ export function ImChannelProjectRows({ channel, appName, settingId }: {
         wrap
         title={label}
         hint={t(project ? 'settings.imBot.rows.projectHint' : 'settings.imBot.rows.projectDialogueHint')}
-        trailing={<Select data-setting-id={settingId} label={label} value={state.projectDir ?? DIALOGUE} options={options}
+        trailing={<Select data-setting-id={imBotSettings[channel].id} label={label} value={state.projectDir ?? DIALOGUE} options={options}
           width="sm" disabled={pending} onValueChange={(value) => void select(value)} />}
       />
       {/* 选了项目时保留模型与权限直达行，一键跳进「项目与模型」；项目已移除时回到平台模型。 */}

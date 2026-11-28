@@ -12,12 +12,14 @@ import { eq } from 'drizzle-orm';
 
 import type { PersonalChannelState } from '../../../shared/botImConnection';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
+import { activeOwnerScopeKey } from '../../appSessionState.js';
 import { getDbClient } from '../../localDb/client/current';
 import { botProfiles } from '../../localDb/schema';
 import { createLogger } from '../../logger';
 import { withBotProfileLocks } from '../../maker-ipc/botProfileLock';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { throwIpcError } from '../../utils/ipcValidate';
+import { assertOwnerScopeSettledForWrite } from '../ownerScopedStorage.js';
 import { switchPersonalBotReplyTarget } from './botImPersonalAdoption';
 import { listProjectsForControl } from './controlProjects';
 import { imProjectAliasForDir, syncImProjectWorkspaces } from './imProjectPorts';
@@ -44,13 +46,17 @@ async function listProjects(): Promise<PersonalChannelState['projects']> {
   }));
 }
 
-async function stateOf(channel: PersonalChannel): Promise<PersonalChannelState> {
+async function stateOf(channel: PersonalChannel, ownerKey = activeOwnerScopeKey()): Promise<PersonalChannelState> {
+  assertOwnerScopeSettledForWrite(ownerKey);
+  const projects = await listProjects();
+  assertOwnerScopeSettledForWrite(ownerKey);
   const choice = readPersonalChannelChoice(channel);
-  return { channel, projectDir: choice.projectDir, companionBotId: choice.companionBotId, projects: await listProjects() };
+  return { channel, projectDir: choice.projectDir, companionBotId: choice.companionBotId, projects };
 }
 
-async function broadcast(channel: PersonalChannel): Promise<PersonalChannelState> {
-  const state = await stateOf(channel);
+async function broadcast(channel: PersonalChannel, ownerKey: string): Promise<PersonalChannelState> {
+  const state = await stateOf(channel, ownerKey);
+  assertOwnerScopeSettledForWrite(ownerKey);
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed()) window.webContents.send('imPersonalChannel:changed', state);
   }
@@ -64,6 +70,8 @@ function channelOf(payload: unknown): PersonalChannel {
 }
 
 async function setProject(channel: PersonalChannel, projectDir: unknown): Promise<PersonalChannelState> {
+  const ownerKey = activeOwnerScopeKey();
+  assertOwnerScopeSettledForWrite(ownerKey);
   if (projectDir !== null && typeof projectDir !== 'string') throwIpcError('INVALID_PARAMS', 'projectDir is invalid');
   if (typeof projectDir === 'string') {
     // 只认侧栏里的本机项目: 这份选择同时是「IM 能驱动哪个目录」的授权。
@@ -73,54 +81,64 @@ async function setProject(channel: PersonalChannel, projectDir: unknown): Promis
       throwIpcError('NOT_FOUND', 'PROJECT_NOT_FOUND');
     }
   }
+  assertOwnerScopeSettledForWrite(ownerKey);
   writePersonalChannelChoice(channel, { projectDir: projectDir as string | null });
-  return broadcast(channel);
+  return broadcast(channel, ownerKey);
 }
 
 async function setCompanion(channel: PersonalChannel, botId: unknown): Promise<PersonalChannelState> {
+  const ownerKey = activeOwnerScopeKey();
+  assertOwnerScopeSettledForWrite(ownerKey);
   if (channel === 'wechat') throwIpcError('INVALID_PARAMS', 'wechat uses wechatBot:set-companion');
   if (botId !== null && (typeof botId !== 'string' || !BOT_ID_RE.test(botId))) {
     throwIpcError('INVALID_PARAMS', 'companionBotId is invalid');
   }
   await withBotProfileLocks(botId ? [botId as string] : [], async () => {
+    assertOwnerScopeSettledForWrite(ownerKey);
     if (botId) {
       const [row] = await getDbClient().drizzle.select({ status: botProfiles.status })
         .from(botProfiles).where(eq(botProfiles.id, botId as string)).limit(1);
       if (row?.status !== 'active') throwIpcError('NOT_FOUND', 'BOT_INACTIVE');
     }
+    assertOwnerScopeSettledForWrite(ownerKey);
     await switchPersonalBotReplyTarget(channel, () => {
+      assertOwnerScopeSettledForWrite(ownerKey);
       writePersonalChannelChoice(channel, { companionBotId: botId as string | null });
     });
   });
   log.info(`personal ${channel} bot now replies as ${botId ? 'teammate' : 'Cindy'}`);
-  return broadcast(channel);
+  return broadcast(channel, ownerKey);
 }
 
 /** 仅广播某个个人渠道状态变化(例如移交伙伴后外部已清盘)。 */
 export async function broadcastPersonalChannelState(channel: PersonalChannel): Promise<void> {
   try {
-    await broadcast(channel);
+    await broadcast(channel, activeOwnerScopeKey());
   } catch (err) {
     log.warn(`broadcast personal channel state for ${channel} failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
 /** 解绑或移交个人机器人后清空该平台的项目与伙伴归属，并广播刷新设置页。 */
-export async function clearPersonalChannelState(channel: PersonalChannel): Promise<void> {
+export async function clearPersonalChannelState(channel: PersonalChannel, ownerKey: string): Promise<void> {
   try {
+    assertOwnerScopeSettledForWrite(ownerKey);
     if (!clearPersonalChannelChoice(channel)) return;
-    await broadcast(channel);
+    await broadcast(channel, ownerKey);
   } catch (err) {
     log.warn(`clear personal channel state for ${channel} failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
 /** 伙伴被删除时，把设置页里交给这位伙伴的个人机器人安全切回普通任务并刷新界面。 */
-export async function clearPersonalChannelsForCompanion(botId: string): Promise<void> {
+export async function clearPersonalChannelsForCompanion(botId: string, ownerKey: string): Promise<void> {
+  assertOwnerScopeSettledForWrite(ownerKey);
   const channels = listPersonalChannelsForCompanion(botId);
   for (const channel of channels) {
     try {
+      assertOwnerScopeSettledForWrite(ownerKey);
       const clear = () => {
+        assertOwnerScopeSettledForWrite(ownerKey);
         if (readPersonalChannelChoice(channel).companionBotId === botId) {
           writePersonalChannelChoice(channel, { companionBotId: null });
         }
@@ -131,7 +149,7 @@ export async function clearPersonalChannelsForCompanion(botId: string): Promise<
         // 传输层尚未启动或正在切换时直接落盘，不阻塞伙伴删除。
         clear();
       }
-      await broadcast(channel);
+      await broadcast(channel, ownerKey);
     } catch (err) {
       log.warn(`clear personal ${channel} companion on delete failed: ${err instanceof Error ? err.message : String(err)}`);
     }

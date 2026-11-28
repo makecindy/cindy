@@ -97,8 +97,9 @@ type Nav =
   | null;
 
 /** 设置搜索 / 深链的落点 → 该打开哪个子页(以及更深一层)。 */
-function navForTarget(targetId: string | undefined): { app: ImBotApp; page: string | null } | null {
+function navForTarget(targetId: string | undefined): Nav {
   if (!targetId) return null;
+  if (targetId === imBotSettings.projects.targetId) return { app: 'projects', page: null };
   if (targetId === 'personal-im-feishu-groups') return { app: 'feishu', page: null };
   if (targetId === 'personal-im-discord-channels') return { app: 'discord', page: 'channels' };
   if (targetId === 'cindy-im-feishu-working-device') return { app: 'feishu', page: null };
@@ -285,7 +286,7 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
       <div id="im-bot-apps" className="flex min-w-0 flex-col">
         <SettingsPageHeader
           title={rootTitle}
-          description={t('settings.imBot.pageDescription')}
+          description={t(imBotSettings.imBot.descriptionKey)}
           adornment={<span className="rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
             {t('settings.imBot.beta')}
           </span>}
@@ -298,20 +299,17 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
             </SettingsSection>
           ) : null}
           {/* 「项目与模型」独立成组，方便查找；官方机器人、选了项目的个人机器人和插件共用这一份。 */}
-          {cindyGroupAvailable ? (
-            <SettingsSection id="im-bot-group-projects" className="scroll-mt-4" title={t('settings.imBot.groups.shared')}>
-              <SettingsCard>
-                <SettingsRow title={t('settings.imBot.list.projects')} hint={t('settings.imBot.list.projectsHint')}
-                  chevron onClick={() => openApp('projects')} />
-              </SettingsCard>
-            </SettingsSection>
-          ) : null}
+          <SettingsSection className="scroll-mt-4" title={t('settings.imBot.groups.shared')}>
+            <SettingsCard>
+              <SettingsRow title={t(imBotSettings.projects.titleKey)} hint={t(imBotSettings.projects.descriptionKey)}
+                chevron onClick={() => openApp('projects')} />
+            </SettingsCard>
+          </SettingsSection>
           {imPlugins.length > 0 ? (
             <SettingsSection id="im-bot-group-plugins" className="scroll-mt-4"
               title={t('settings.imBot.groups.plugins')}
               description={t('settings.imBot.tips.plugins')}>
               <ImPluginEntrancesCard plugins={imPlugins} />
-              {!cindyGroupAvailable ? <HookConnectionsSection projectsOnly /> : null}
             </SettingsSection>
           ) : null}
         </div>
@@ -322,7 +320,7 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
     const backTarget = nav.returnApp ? appName(nav.returnApp) : rootTitle;
     const backLabel = t('settings.imBot.nav.backTo', { page: backTarget });
     content = (
-      <SettingsPageHeader title={t('settings.imBot.list.projects')} description={t('settings.imBot.list.projectsHint')}
+      <SettingsPageHeader titleId={imBotSettings.projects.targetId} title={t(imBotSettings.projects.titleKey)} description={t(imBotSettings.projects.descriptionKey)}
         onBack={appNav.back} backLabel={backLabel} backProps={{ title: backLabel }} />
     );
   } else {
@@ -359,7 +357,9 @@ function ImBotPages({ cindyGroupAvailable }: { cindyGroupAvailable: boolean }) {
           ? 'gap-3.5 [&>*:first-child]:mb-2.5'
           : 'gap-9 [&>*:first-child]:-mb-3'))}>
           {content}
-          {cindyGroupAvailable ? <HookConnectionsSection show={officialShow} onSummary={setOfficial} /> : null}
+          {cindyGroupAvailable || officialShow === 'projects' ? (
+            <HookConnectionsSection show={officialShow} onSummary={cindyGroupAvailable ? setOfficial : undefined} />
+          ) : null}
           {personalPart}
         </div>
       </SettingsPageScope>

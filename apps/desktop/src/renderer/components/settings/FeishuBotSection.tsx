@@ -685,7 +685,7 @@ export function FeishuBotSettings({
     <>
       <ImBotPersonalWay id={imBotSettings.feishu.targetId}>
         <SettingsCard>
-          <ImReplyTargetField target={replyTarget} settingId={imBotSettings.feishu.id} />
+          <ImReplyTargetField target={replyTarget} setting="feishu" />
           {toCompanion ? null : <ImChannelProjectRows channel="feishu" appName={t('settings.imBot.apps.feishu')} settingId={imBotSettings.feishu.id} />}
         </SettingsCard>
         {/* 设置搜索「飞书群聊」落在这张卡上(锚点 id 沿用, 深链不失效)。 */}

@@ -2081,6 +2081,9 @@ export function HookConnectionsSection({ companion, projectsOnly = false, show, 
     if (!card) return null;
     const enabled = show === 'slack' ? hook.enabled : (hook[show] as ProviderHookView | undefined)?.enabled === true;
     const replyTarget = officialReplyTarget(show);
+    const replySetting = {
+      slack: 'cindySlack', telegram: 'cindyTelegram', feishu: 'cindyFeishu', discord: 'cindyDiscord', x: 'cindyX',
+    } as const;
     // 开着的官方机器人才问「谁来回复」与「项目」; 交给伙伴后用伙伴自己的项目与模型。
     const showReply = enabled && replyTarget.supported;
     const showProject = enabled && show !== 'slack' && !replyTarget.companionBotId;
@@ -2089,7 +2092,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false, show, 
         {card}
         {showReply || showProject ? (
           <SettingsCard>
-            {showReply ? <ImReplyTargetField target={replyTarget} /> : null}
+            {showReply ? <ImReplyTargetField target={replyTarget} setting={replySetting[show]} /> : null}
             {showProject ? renderOfficialProjectRow() : null}
           </SettingsCard>
         ) : null}

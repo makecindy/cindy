@@ -17,6 +17,8 @@ import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import type { PersonalReplyTargetChannel } from '../../../shared/botImConnection';
 
+import { imBotSettings } from './ImBotSection.settings-search';
+
 const CINDY_VALUE = 'cindy';
 
 export interface ImReplyTarget {
@@ -65,8 +67,10 @@ export function useImReplyTarget(channel: PersonalReplyTargetChannel): ImReplyTa
       const state = await api.setPersonalReplyTarget!({ channel, companionBotId: next });
       setCompanionBotId(state.companionBotId);
     } catch (error) {
-      const code = extractIpcError(error)?.code;
-      toast.error(t(code === 'PRECONDITION_FAILED'
+      const ipcError = extractIpcError(error);
+      const busy = ipcError?.code === 'PRECONDITION_FAILED'
+        && ipcError.message.replace(/^\[PRECONDITION_FAILED\]\s*/, '') === 'PERSONAL_BOT_BUSY';
+      toast.error(t(busy
         ? 'settings.imBot.replyTarget.busy'
         : 'settings.imBot.replyTarget.updateFailed'));
     } finally {
@@ -86,7 +90,7 @@ export function replyTargetSummary(target: ImReplyTarget, t: (key: string, optio
   });
 }
 
-export function ImReplyTargetField({ target, settingId }: { target: ImReplyTarget; settingId?: string }) {
+export function ImReplyTargetField({ target, setting }: { target: ImReplyTarget; setting: keyof typeof imBotSettings }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const bots = useBotProfiles();
@@ -119,7 +123,7 @@ export function ImReplyTargetField({ target, settingId }: { target: ImReplyTarge
           : t('settings.imBot.replyTarget.cindyHint')}
         trailing={
           <Select
-            data-setting-id={settingId}
+            data-setting-id={imBotSettings[setting].id}
             label={label}
             value={target.companionBotId ?? CINDY_VALUE}
             options={options}

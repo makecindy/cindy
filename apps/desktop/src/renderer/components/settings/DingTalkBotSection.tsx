@@ -432,7 +432,7 @@ export function DingTalkBotSettings() {
     <>
       <ImBotPersonalWay id={imBotSettings.dingtalk.targetId}>
         <SettingsCard>
-          <ImReplyTargetField target={replyTarget} settingId={imBotSettings.dingtalk.id} />
+          <ImReplyTargetField target={replyTarget} setting="dingtalk" />
           {toCompanion ? null : <ImChannelProjectRows channel="dingtalk" appName={t('settings.imBot.apps.dingtalk')} settingId={imBotSettings.dingtalk.id} />}
         </SettingsCard>
         {toCompanion ? null : <ImChatSettingsCard channel="dingtalk" />}

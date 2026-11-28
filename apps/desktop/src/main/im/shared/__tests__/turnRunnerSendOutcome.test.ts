@@ -904,6 +904,23 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     }
   });
 
+  // A group member's input must wait for permission and route validation before it becomes task history.
+  it('defers persistence for a personal bot guest while keeping the owner fast path', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    mocks.getMaker.mockReturnValue({ ...createMakerHarness(h.session), getSession: () => h.session });
+    mocks.persistUserMessage.mockResolvedValue({ clientId: 'early-client' });
+    const runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, { personalGuests: { queueLimit: 5 } });
+    const input = { botContextId: 'cli_test_bot', userId: 'ou_user', text: 'group question' };
+    try {
+      expect(await runner.persistInboundUserMessageEarly!({ ...input, requesterIsOwner: false })).toBeNull();
+      expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+      expect(await runner.persistInboundUserMessageEarly!({ ...input, requesterIsOwner: true }))
+        .toEqual({ sessionId: 'feishu-session', clientId: 'early-client' });
+    } finally {
+      runner.disposeAllSessions();
+    }
+  });
+
   it('marks early IM rows with an empty snapshot rather than parsing the user body as context', async () => {
     const h = setupSession(async () => ({ accepted: true }));
     mocks.getMaker.mockReturnValue({
