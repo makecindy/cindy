@@ -29,33 +29,21 @@ env:
   NODE_OPTIONS: '--max-old-space-size=8192'
 
 jobs:
-  # 轻量前置变更分类（稀疏检出 + GitHub API，秒级返回）。所有事件类型保留稳定的
-  # verify / Windows unit tests 汇总门禁；仅对明确无关的 job 组按路径跳过，
-  # 未知范围、API 截断或分类失败均保守全跑或阻断。
+  # 只对明确的文档或独立工作流改动跳过客户端回归。静态检查始终运行，
+  # 比较失败或被截断时运行全量检查。
   changes:
     name: Select CI jobs
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
     outputs:
-      verify_checks: ${{ steps.changes.outputs.verify_checks }}
-      typecheck_desktop: ${{ steps.changes.outputs.typecheck_desktop }}
-      typecheck_mobile: ${{ steps.changes.outputs.typecheck_mobile }}
-      unit_desktop: ${{ steps.changes.outputs.unit_desktop }}
-      unit_mobile: ${{ steps.changes.outputs.unit_mobile }}
-      unit_packages: ${{ steps.changes.outputs.unit_packages }}
-      windows_runner_checks: ${{ steps.changes.outputs.windows_runner_checks }}
-      git_integration: ${{ steps.changes.outputs.git_integration }}
+      client: ${{ steps.changes.outputs.client }}
       host: ${{ steps.changes.outputs.host }}
     steps:
-      - name: Checkout CI scripts and Host imports
+      - name: Checkout CI scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             scripts
-            apps/host
 
       - name: Classify changed paths
         id: changes
@@ -63,11 +51,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/ci-changes.mjs
 
-  # 静态检查和 runner 自测与类型检查、Linux 单测分片并行。这里不装
-  # bundled ripgrep；它只在 Desktop 单测收集时需要，由单测分片自行安装。
+  # 静态检查和 runner 自测始终运行，与变更分类并行。
   verify-checks:
-    needs: changes
-    if: needs.changes.outputs.verify_checks == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -176,7 +161,7 @@ jobs:
   typecheck-desktop-main:
     name: Typecheck (Desktop main)
     needs: changes
-    if: needs.changes.outputs.typecheck_desktop == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -223,7 +208,7 @@ jobs:
   typecheck-desktop-renderer:
     name: Typecheck (Desktop renderer)
     needs: changes
-    if: needs.changes.outputs.typecheck_desktop == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -270,7 +255,7 @@ jobs:
   typecheck-mobile:
     name: Typecheck (Mobile)
     needs: changes
-    if: needs.changes.outputs.typecheck_mobile == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -314,7 +299,7 @@ jobs:
   linux-unit-shards:
     name: Linux desktop unit tests (${{ matrix.shard }}/8)
     needs: changes
-    if: needs.changes.outputs.unit_desktop == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -327,10 +312,9 @@ jobs:
     steps:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # Unit shards only read the working tree; only shard 1 runs localDb companion
-        # regressions which load the LFS-tracked sqlite-vec extension.
+        # Desktop unit suites can load sqlite-vec on any shard.
         with:
-          lfs: ${{ matrix.shard == 1 }}
+          lfs: true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -427,7 +411,7 @@ jobs:
   linux-mobile-unit:
     name: Linux mobile unit tests
     needs: changes
-    if: needs.changes.outputs.unit_mobile == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -469,7 +453,7 @@ jobs:
   linux-packages-unit:
     name: Linux package unit tests
     needs: changes
-    if: needs.changes.outputs.unit_packages == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -504,6 +488,18 @@ jobs:
         env:
           pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-cache
         run: pnpm install --frozen-lockfile
+
+      # maker-core 的 Pi 搜索测试使用随包 ripgrep。
+      - name: Cache bundled ripgrep
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ripgrep-bin
+          key: ripgrep-bin-${{ runner.os }}-${{ hashFiles('tools/ripgrep/latest.json') }}
+
+      - name: Install bundled ripgrep
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:ripgrep
 
       - name: Run package unit tests
         run: pnpm run test:workspaces --tier unit --exclude-workspace desktop,mobile
@@ -590,18 +586,13 @@ jobs:
       - name: Require selected Linux checks, typechecks, unit suites and Host regressions
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
-          VERIFY_CHECKS_REQUIRED: ${{ needs.changes.outputs.verify_checks }}
+          CLIENT_REQUIRED: ${{ needs.changes.outputs.client }}
           VERIFY_CHECKS_RESULT: ${{ needs.verify-checks.result }}
-          TYPECHECK_DESKTOP_REQUIRED: ${{ needs.changes.outputs.typecheck_desktop }}
           TYPECHECK_DESKTOP_MAIN_RESULT: ${{ needs.typecheck-desktop-main.result }}
           TYPECHECK_DESKTOP_RENDERER_RESULT: ${{ needs.typecheck-desktop-renderer.result }}
-          TYPECHECK_MOBILE_REQUIRED: ${{ needs.changes.outputs.typecheck_mobile }}
           TYPECHECK_MOBILE_RESULT: ${{ needs.typecheck-mobile.result }}
-          UNIT_DESKTOP_REQUIRED: ${{ needs.changes.outputs.unit_desktop }}
           LINUX_UNIT_SHARDS_RESULT: ${{ needs.linux-unit-shards.result }}
-          UNIT_MOBILE_REQUIRED: ${{ needs.changes.outputs.unit_mobile }}
           LINUX_MOBILE_UNIT_RESULT: ${{ needs.linux-mobile-unit.result }}
-          UNIT_PACKAGES_REQUIRED: ${{ needs.changes.outputs.unit_packages }}
           LINUX_PACKAGES_UNIT_RESULT: ${{ needs.linux-packages-unit.result }}
           HOST_REQUIRED: ${{ needs.changes.outputs.host }}
           HOST_REGRESSIONS_RESULT: ${{ needs.host-regressions.result }}
@@ -613,13 +604,13 @@ jobs:
               *) echo "$3 did not pass (required=$1 result=$2)"; exit 1 ;;
             esac
           }
-          check_gate "$VERIFY_CHECKS_REQUIRED" "$VERIFY_CHECKS_RESULT" "verify-checks"
-          check_gate "$TYPECHECK_DESKTOP_REQUIRED" "$TYPECHECK_DESKTOP_MAIN_RESULT" "typecheck-desktop-main"
-          check_gate "$TYPECHECK_DESKTOP_REQUIRED" "$TYPECHECK_DESKTOP_RENDERER_RESULT" "typecheck-desktop-renderer"
-          check_gate "$TYPECHECK_MOBILE_REQUIRED" "$TYPECHECK_MOBILE_RESULT" "typecheck-mobile"
-          check_gate "$UNIT_DESKTOP_REQUIRED" "$LINUX_UNIT_SHARDS_RESULT" "linux-unit-shards"
-          check_gate "$UNIT_MOBILE_REQUIRED" "$LINUX_MOBILE_UNIT_RESULT" "linux-mobile-unit"
-          check_gate "$UNIT_PACKAGES_REQUIRED" "$LINUX_PACKAGES_UNIT_RESULT" "linux-packages-unit"
+          test "$VERIFY_CHECKS_RESULT" = "success"
+          check_gate "$CLIENT_REQUIRED" "$TYPECHECK_DESKTOP_MAIN_RESULT" "typecheck-desktop-main"
+          check_gate "$CLIENT_REQUIRED" "$TYPECHECK_DESKTOP_RENDERER_RESULT" "typecheck-desktop-renderer"
+          check_gate "$CLIENT_REQUIRED" "$TYPECHECK_MOBILE_RESULT" "typecheck-mobile"
+          check_gate "$CLIENT_REQUIRED" "$LINUX_UNIT_SHARDS_RESULT" "linux-unit-shards"
+          check_gate "$CLIENT_REQUIRED" "$LINUX_MOBILE_UNIT_RESULT" "linux-mobile-unit"
+          check_gate "$CLIENT_REQUIRED" "$LINUX_PACKAGES_UNIT_RESULT" "linux-packages-unit"
           check_gate "$HOST_REQUIRED" "$HOST_REGRESSIONS_RESULT" "host-regressions"
 
   # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。八个
@@ -629,7 +620,7 @@ jobs:
   windows-unit-shards:
     name: Windows desktop unit tests (${{ matrix.shard }}/8)
     needs: changes
-    if: needs.changes.outputs.unit_desktop == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: windows-latest
     timeout-minutes: 40
     strategy:
@@ -642,6 +633,8 @@ jobs:
     steps:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
 
       # 托管 Windows runner 的工作区在 D 盘，TEMP 默认在 C 盘，而 C 盘 IO 明显更慢。
       # Desktop 单测有 700 多个文件创建临时目录(electron stub 的 userData 也在 TEMP
@@ -746,7 +739,7 @@ jobs:
   windows-mobile-unit:
     name: Windows mobile unit tests (${{ matrix.shard }}/2)
     needs: changes
-    if: needs.changes.outputs.unit_mobile == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: windows-latest
     timeout-minutes: 25
     strategy:
@@ -805,7 +798,7 @@ jobs:
   windows-packages-unit:
     name: Windows package unit tests
     needs: changes
-    if: needs.changes.outputs.unit_packages == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: windows-latest
     timeout-minutes: 25
 
@@ -860,7 +853,7 @@ jobs:
   windows-runner-checks:
     name: Windows runner and database checks
     needs: changes
-    if: needs.changes.outputs.windows_runner_checks == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: windows-latest
     timeout-minutes: 25
 
@@ -869,7 +862,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          filter: blob:none
           lfs: true
 
       - name: Setup pnpm
@@ -943,13 +935,10 @@ jobs:
       - name: Require selected Windows unit suites and runner checks
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
-          UNIT_DESKTOP_REQUIRED: ${{ needs.changes.outputs.unit_desktop }}
+          CLIENT_REQUIRED: ${{ needs.changes.outputs.client }}
           WINDOWS_UNIT_SHARDS_RESULT: ${{ needs.windows-unit-shards.result }}
-          UNIT_MOBILE_REQUIRED: ${{ needs.changes.outputs.unit_mobile }}
           WINDOWS_MOBILE_UNIT_RESULT: ${{ needs.windows-mobile-unit.result }}
-          UNIT_PACKAGES_REQUIRED: ${{ needs.changes.outputs.unit_packages }}
           WINDOWS_PACKAGES_UNIT_RESULT: ${{ needs.windows-packages-unit.result }}
-          WINDOWS_RUNNER_CHECKS_REQUIRED: ${{ needs.changes.outputs.windows_runner_checks }}
           WINDOWS_RUNNER_CHECKS_RESULT: ${{ needs.windows-runner-checks.result }}
         run: |
           test "$CHANGES_RESULT" = "success"
@@ -959,15 +948,15 @@ jobs:
               *) echo "$3 did not pass (required=$1 result=$2)"; exit 1 ;;
             esac
           }
-          check_gate "$UNIT_DESKTOP_REQUIRED" "$WINDOWS_UNIT_SHARDS_RESULT" "windows-unit-shards"
-          check_gate "$UNIT_MOBILE_REQUIRED" "$WINDOWS_MOBILE_UNIT_RESULT" "windows-mobile-unit"
-          check_gate "$UNIT_PACKAGES_REQUIRED" "$WINDOWS_PACKAGES_UNIT_RESULT" "windows-packages-unit"
-          check_gate "$WINDOWS_RUNNER_CHECKS_REQUIRED" "$WINDOWS_RUNNER_CHECKS_RESULT" "windows-runner-checks"
+          check_gate "$CLIENT_REQUIRED" "$WINDOWS_UNIT_SHARDS_RESULT" "windows-unit-shards"
+          check_gate "$CLIENT_REQUIRED" "$WINDOWS_MOBILE_UNIT_RESULT" "windows-mobile-unit"
+          check_gate "$CLIENT_REQUIRED" "$WINDOWS_PACKAGES_UNIT_RESULT" "windows-packages-unit"
+          check_gate "$CLIENT_REQUIRED" "$WINDOWS_RUNNER_CHECKS_RESULT" "windows-runner-checks"
 
   git-integration:
     name: Desktop Git integration
     needs: changes
-    if: needs.changes.outputs.git_integration == 'true'
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
 

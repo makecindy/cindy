@@ -346,18 +346,13 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   const summary = workflow.jobs.verify.steps[0];
   const verifyDefaults = {
     $CHANGES_RESULT: 'success',
-    $VERIFY_CHECKS_REQUIRED: 'true',
+    $CLIENT_REQUIRED: 'true',
     $VERIFY_CHECKS_RESULT: 'success',
-    $TYPECHECK_DESKTOP_REQUIRED: 'true',
     $TYPECHECK_DESKTOP_MAIN_RESULT: 'success',
     $TYPECHECK_DESKTOP_RENDERER_RESULT: 'success',
-    $TYPECHECK_MOBILE_REQUIRED: 'true',
     $TYPECHECK_MOBILE_RESULT: 'success',
-    $UNIT_DESKTOP_REQUIRED: 'true',
     $LINUX_UNIT_SHARDS_RESULT: 'success',
-    $UNIT_MOBILE_REQUIRED: 'true',
     $LINUX_MOBILE_UNIT_RESULT: 'success',
-    $UNIT_PACKAGES_REQUIRED: 'true',
     $LINUX_PACKAGES_UNIT_RESULT: 'success',
     $HOST_REQUIRED: 'true',
     $HOST_REGRESSIONS_RESULT: 'success',
@@ -392,8 +387,21 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
       assert.equal(aggregate.status === 0, hostOk, `host required=${required} result=${hosts}`);
     }
   }
-  const propagated = runBash(renderVerify({ $VERIFY_CHECKS_RESULT: failed.status ? 'failure' : 'success' }));
-  if (!propagated) return t.skip('Git Bash is unavailable on this host');
+  const docsOnly = {
+    $CLIENT_REQUIRED: 'false',
+    $TYPECHECK_DESKTOP_MAIN_RESULT: 'skipped',
+    $TYPECHECK_DESKTOP_RENDERER_RESULT: 'skipped',
+    $TYPECHECK_MOBILE_RESULT: 'skipped',
+    $LINUX_UNIT_SHARDS_RESULT: 'skipped',
+    $LINUX_MOBILE_UNIT_RESULT: 'skipped',
+    $LINUX_PACKAGES_UNIT_RESULT: 'skipped',
+    $HOST_REQUIRED: 'false',
+    $HOST_REGRESSIONS_RESULT: 'skipped',
+  };
+  const docsPass = runBash(renderVerify(docsOnly));
+  if (!docsPass) return t.skip('Git Bash is unavailable on this host');
+  assert.equal(docsPass.status, 0);
+  const propagated = runBash(renderVerify({ ...docsOnly, $VERIFY_CHECKS_RESULT: failed.status ? 'failure' : 'success' }));
   assert.notEqual(propagated.status,0);
   fs.writeFileSync(path.join(temp,'scripts/hardcoded-color-exemptions.json'),'{bad json');
   assert.throws(()=>audit({root:temp,baseRef:commit,worktree:true}));
@@ -486,8 +494,8 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.match(colors.env.DESIGN_BASE_REF, /github\.event\.pull_request\.base\.sha/);
   assert.match(colors.env.DESIGN_HEAD_REF, /github\.sha/);
   assert.equal(checks['continue-on-error'], undefined);
-  assert.equal(checks.needs, 'changes');
-  assert.equal(checks.if, "needs.changes.outputs.verify_checks == 'true'");
+  assert.equal(checks.needs, undefined);
+  assert.equal(checks.if, undefined);
   for (const node of [colors, checks.steps.find(s=>s.name==='Check design inventory registration')]) {
     assert.equal(node['continue-on-error'], undefined);
     assert.equal(node.if, undefined);
@@ -524,8 +532,11 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
     assert.ok(shards.length>=2);
     assert.deepEqual(shards,shards.map((_,i)=>i+1));
     assert.equal(job.strategy['fail-fast'],false);
+    assert.equal(job.steps[0].with.lfs, true);
     assert.ok(job.steps.some(s=>s.run==='pnpm run test:workspaces --tier unit --workspace desktop'));
   }
+  assert.equal(workflow.jobs['windows-runner-checks'].steps[0].with.filter, undefined);
+  assert.ok(workflow.jobs['linux-packages-unit'].steps.some(s => s.run === 'pnpm install:ripgrep'));
   // Companion DB regressions run once per OS: on Linux shard 1, and on Windows
   // in the parallel one-off job instead of on a shard's critical path.
   assert.ok(workflow.jobs['linux-unit-shards'].steps.some(s=>s.name==='Run companion database regressions' && s.if==='matrix.shard == 1'));
@@ -533,13 +544,10 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
 
   const windowsGateVars = {
     $CHANGES_RESULT: 'success',
-    $UNIT_DESKTOP_REQUIRED: 'true',
+    $CLIENT_REQUIRED: 'true',
     $WINDOWS_UNIT_SHARDS_RESULT: 'success',
-    $UNIT_MOBILE_REQUIRED: 'true',
     $WINDOWS_MOBILE_UNIT_RESULT: 'success',
-    $UNIT_PACKAGES_REQUIRED: 'true',
     $WINDOWS_PACKAGES_UNIT_RESULT: 'success',
-    $WINDOWS_RUNNER_CHECKS_REQUIRED: 'true',
     $WINDOWS_RUNNER_CHECKS_RESULT: 'success',
   };
   const renderGate = (script, overrides) =>
@@ -551,11 +559,17 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
       assert.equal(run.status === 0, result === 'success', `${target}=${result}`);
     }
   }
-  // Explicitly skipped when required=false passes; failing or unexpectedly running when required=false fails.
-  const skippedPass = runBash(renderGate(windows.steps[0].run, { $UNIT_MOBILE_REQUIRED: 'false', $WINDOWS_MOBILE_UNIT_RESULT: 'skipped' }));
+  const docsOnly = {
+    $CLIENT_REQUIRED: 'false',
+    $WINDOWS_UNIT_SHARDS_RESULT: 'skipped',
+    $WINDOWS_MOBILE_UNIT_RESULT: 'skipped',
+    $WINDOWS_PACKAGES_UNIT_RESULT: 'skipped',
+    $WINDOWS_RUNNER_CHECKS_RESULT: 'skipped',
+  };
+  const skippedPass = runBash(renderGate(windows.steps[0].run, docsOnly));
   if (!skippedPass) return t.skip('Git Bash is unavailable on this host');
   assert.equal(skippedPass.status, 0);
-  const skippedFail = runBash(renderGate(windows.steps[0].run, { $UNIT_MOBILE_REQUIRED: 'false', $WINDOWS_MOBILE_UNIT_RESULT: 'failure' }));
+  const skippedFail = runBash(renderGate(windows.steps[0].run, { ...docsOnly, $WINDOWS_MOBILE_UNIT_RESULT: 'failure' }));
   assert.notEqual(skippedFail.status, 0);
 });
 
