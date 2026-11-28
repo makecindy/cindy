@@ -214,7 +214,21 @@ export function createUsagePricingObserver(
   return {
     onData: chunk => {
       if (failed) return;
-      try { decompressor.write(chunk); } catch { failed = true; }
+      // This observer must never apply backpressure to the forwarded response.
+      // Stop observing if its asynchronous inflater falls behind the upstream.
+      if (decompressor.writableLength + chunk.length > MAX_COMPRESSED_BUFFER_BYTES) {
+        failed = true;
+        decompressor.destroy();
+        return;
+      }
+      try {
+        // A false return means the inflater is behind; the bounded queue above
+        // is our limit because this side observer cannot pause the proxy.
+        decompressor.write(chunk);
+      } catch {
+        failed = true;
+        decompressor.destroy();
+      }
     },
     onEnd: () => {
       if (failed) return;
