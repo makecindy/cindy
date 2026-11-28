@@ -34,7 +34,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
   autoResumeBookkeeping: Pick<
     AutoResumeBookkeeping,
     | 'takeDeferredError' | 'surfaceSuppressedError' | 'flushSuppressedError' | 'beginAttempt' | 'schedule'
-    | 'finalizeSuppressedError' | 'abandonUnconfirmedPersistedResume' | 'surfaceSuppressedErrorForRetry'
+    | 'noteModelGroupSwitch' | 'finalizeSuppressedError' | 'abandonUnconfirmedPersistedResume' | 'surfaceSuppressedErrorForRetry'
   >;
   resumeQuotaWait?(sessionId: string, item: AgentInputQueuedMessage, signals: InterruptedTurnErrorSignals): void;
   botFallbackInputs: { has(createOpts: object): boolean };
@@ -188,7 +188,8 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
         attemptToken: decision.attemptToken,
         delayMs: decision.delayMs,
       });
-      autoResumeBookkeeping.beginAttempt(sessionId, decision.attemptToken);
+      if (modelGroupPolicy === 'enabled') autoResumeBookkeeping.beginAttempt(sessionId, decision.attemptToken, item.clientId);
+      else autoResumeBookkeeping.beginAttempt(sessionId, decision.attemptToken);
       const schedulerRunId =
         item.origin?.kind === 'scheduler' && typeof item.origin.runId === 'string'
           ? item.origin.runId
@@ -258,6 +259,9 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
               }
               if (groupSwitch && fallback.outcome === 'switched') {
                 interruptedTurnAutoResumeGuard.noteSourceSwitched(sessionId, decision.attemptToken);
+              }
+              if (fallback.modelGroupTransition) {
+                autoResumeBookkeeping.noteModelGroupSwitch(sessionId, decision.attemptToken, fallback.modelGroupTransition);
               }
               // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery
               // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),

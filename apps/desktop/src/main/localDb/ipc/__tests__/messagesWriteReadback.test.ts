@@ -176,6 +176,21 @@ describe('message write paths avoid large-content readback', () => {
     expect(page.items.map(item => item.clientId)).toEqual(['second']);
   });
 
+  // Unit, #10700: broadcaster coverage stops at the writer port. One error in
+  // isolated SQLite verifies the diagnostics survive a fresh history query.
+  it('reads the final error and model group diagnostics from persisted history', async () => {
+    const content = {
+      message: 'HTTP 429: Session limit reached',
+      modelFallbackDetails: 'Primary: HTTP 403\n\nBackup: HTTP 429: Session limit reached',
+    };
+    await createMessage('s1', { clientId: 'fallback-error', role: 'error', content });
+    const page = await getMessagesForHistory({
+      sessionIds: ['s1'], workdir: null, fromMs: null, toMs: null, agentKind: null,
+      roles: ['error'], includeRewound: false, limit: 10, cursor: null, order: 'asc',
+    });
+    expect(page.items).toMatchObject([{ clientId: 'fallback-error', role: 'error', content }]);
+  });
+
   // Unit: two plugin turns can share one session; the query must exclude other inputs,
   // tool payloads, failed attempts and the final before applying the page limit.
   it('reads only the selected run’s completed progress from the persisted history', async () => {

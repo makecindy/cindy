@@ -5,6 +5,7 @@ const summaryKey = {
   default: 'chat.errorBanner.usageLimitReached',
   narrow: 'chat.errorBanner.usageLimitReached',
   cancelled: 'chat.errorBanner.usageLimitReachedWithReset',
+  fallback: 'chat.errorBanner.usageLimitReachedWithReset',
   tail: 'chat.errorBanner.usageLimitReachedWithReset',
   history: 'chat.errorBanner.usageLimitReached',
 };
@@ -17,6 +18,7 @@ export default {
   notCovered: 'Real account limits, reset-time resolution on the computer, the automatic continuation itself and cancelling it',
   cases: {
     default: { about: 'Waiting for the reset: the summary names the usage limit without expanding details' },
+    fallback: { about: 'Details list the failed models while the summary still describes the last error' },
     cancelled: { about: 'No automatic continuation: the summary still names the limit and its expected reset' },
     tail: { about: 'Persisted error uses the same summary' },
     history: { about: 'Older error row in the message stream names the usage limit' },
@@ -37,6 +39,12 @@ export default {
     );
     assert.equal(await page.getByText(raw, { exact: true }).count(), 0);
     await page.getByRole('button', { name: await ui.t('chat.errorBanner.networkShowRaw'), exact: true }).click();
-    assert.ok(await page.getByText(raw, { exact: true }).isVisible());
+    if (ui.case === 'fallback') {
+      const details = page.locator('pre').filter({ hasText: 'grok-4.7' });
+      assert.ok(await details.isVisible());
+      assert.ok((await details.textContent()).includes(`gpt-6.1-terra: ${raw}`));
+    } else {
+      assert.ok(await page.getByText(raw, { exact: true }).isVisible());
+    }
   },
 };

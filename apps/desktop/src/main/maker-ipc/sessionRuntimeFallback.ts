@@ -187,8 +187,10 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       let groupLabels = group?.labels;
       // The candidate being tried and its own commit callbacks; advancing the chain replaces both together.
       let groupStep = group;
-      const switchedResult = (session: RuntimeSession | null): RuntimeFallbackResult<RuntimeSession> => ({
-        session, outcome: 'switched', ...(group?.candidate && groupLabels ? { sourceSwitch: groupLabels } : {}),
+      const switchedResult = (session: RuntimeSession | null, toModel?: string): RuntimeFallbackResult<RuntimeSession> => ({
+        session, outcome: 'switched',
+        ...(group?.candidate && groupLabels ? { sourceSwitch: groupLabels } : {}),
+        ...(groupStep?.candidate && toModel ? { modelGroupTransition: { fromModel: currentForFallback.model, toModel } } : {}),
       });
       if (!botFallback.isBot && !group) {
         if (profiles.effective.agentKind === 'acp') return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
@@ -394,7 +396,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             toProviderId: selected.providerId,
             toModel: selected.model,
           });
-          return switchedResult(runtimeSession);
+          return switchedResult(runtimeSession, selected.model);
         }
         let result: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
         try {
@@ -451,7 +453,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           toModel: selected.model,
           applied: !result.superseded,
         });
-        return result.superseded ? { session: runtimeSession, outcome: 'superseded' } : switchedResult(runtimeSession);
+        return result.superseded ? { session: runtimeSession, outcome: 'superseded' } : switchedResult(runtimeSession, result.deferred ? undefined : result.effectiveModelId ?? selected.model);
       }
       return { session: runtimeSession, outcome: 'exhausted' };
     } catch (error) {

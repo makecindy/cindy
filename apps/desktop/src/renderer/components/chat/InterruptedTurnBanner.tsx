@@ -122,6 +122,7 @@ export function ErrorTailErrorBanner({
   reconnectHandoff,
   toolLoop,
   outputLimit,
+  modelFallbackDetails,
   onSilentStopContinue,
   sessionSource,
   className,
@@ -155,6 +156,7 @@ export function ErrorTailErrorBanner({
   reconnectHandoff?: ReconnectHandoff;
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
+  modelFallbackDetails?: string;
   onSilentStopContinue?: () => void;
   sessionSource?: string | null;
   className?: string;
@@ -185,6 +187,7 @@ export function ErrorTailErrorBanner({
       reconnectHandoff={reconnectHandoff}
       toolLoop={toolLoop}
       outputLimit={outputLimit}
+      modelFallbackDetails={modelFallbackDetails}
       retryText={ERROR_TAIL_RETRY_TOKEN}
       onRetry={() => void onContinue()}
       onCancel={onDismiss}

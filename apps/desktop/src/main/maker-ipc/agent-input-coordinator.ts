@@ -885,7 +885,7 @@ interface SessionInputState {
   } | null;
   /** Stable error reason for live projections; null when no terminal error is active. */
   errorReason: string | null;
-  errorPersistBinding: { message: string; persistId: string } | null;
+  errorPersistBinding: { message: string; persistId: string; modelFallbackDetails?: string } | null;
   /** The failed scheduled input was persisted before its recovery was released. */
   errorCanContinue: boolean;
   /** Bounded structured details for tool-loop terminal errors. */
@@ -5591,7 +5591,11 @@ export class AgentInputCoordinator {
       queueAbortPending: state.queueAbortPending,
       error,
       ...(turnError && state.errorPersistBinding?.message === turnError
-        ? { errorPersistId: state.errorPersistBinding.persistId }
+        ? {
+            errorPersistId: state.errorPersistBinding.persistId,
+            ...(state.errorPersistBinding.modelFallbackDetails
+              ? { modelFallbackDetails: state.errorPersistBinding.modelFallbackDetails } : {}),
+          }
         : {}),
       ...(turnError && state.errorCanContinue ? { errorCanContinue: true } : {}),
       ...(reconnectHandoff && reconnectHandoff !== 'accepted' ? { reconnectHandoff } : {}),
@@ -8852,7 +8856,13 @@ export class AgentInputCoordinator {
     return state.pendingQueue.find(item => item.clientId === recovery.clientId);
   }
 
-  abandonAutoResume(sessionId: string, message?: string, attemptToken?: number): void {
+  abandonAutoResume(
+    sessionId: string,
+    message?: string,
+    attemptToken?: number,
+    persistId?: string,
+    modelFallbackDetails?: string,
+  ): void {
     const state = this.getState(sessionId);
     if (attemptToken !== undefined && state.autoResumeAttemptToken !== attemptToken) {
       return;
@@ -8867,6 +8877,7 @@ export class AgentInputCoordinator {
       state.error = message ?? null;
       clearErrorProjectionSignals(state);
       if (state.recovery && this.reconnectRecoveries.has(state.recovery)) state.errorReason = 'codex_reconnect_stalled';
+      if (persistId && message) state.errorPersistBinding = { message, persistId, modelFallbackDetails };
     }
     if (startupAdmissionInput) this.notifyRejectedUserTurn(sessionId, startupAdmissionInput);
     if (

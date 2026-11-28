@@ -7693,6 +7693,7 @@ const MessageItem = memo(function MessageItem({
           reconnectHandoff={message.reconnectHandoff}
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}
+          modelFallbackDetails={message.modelFallbackDetails}
           sessionSource={sessionSource}
           canConfigureAutoReview={canConfigureAutoReview}
           onDiagnose={onDiagnoseError}

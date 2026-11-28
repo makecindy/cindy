@@ -2049,6 +2049,7 @@ function CCAgentSessionContent({
     queueHeadRetry,
     errorCanContinue,
     errorPersistId,
+    modelFallbackDetails,
     disposedErrorPersistId,
     credentialSwitchWait,
     continuationInFlightClientId,
@@ -6442,6 +6443,7 @@ function CCAgentSessionContent({
                   reconnectHandoff={errorTailMsg?.reconnectHandoff}
                   toolLoop={errorTailMsg?.toolLoop}
                   outputLimit={errorTailMsg?.outputLimit}
+                  modelFallbackDetails={errorTailMsg?.modelFallbackDetails}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
@@ -6518,6 +6520,7 @@ function CCAgentSessionContent({
                 reconnectHandoff={reconnectHandoff}
                 toolLoop={toolLoop}
                 outputLimit={outputLimit}
+                modelFallbackDetails={modelFallbackDetails}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 queuedSendRecovery={queueHeadRetry && !remoteDeviceId && Boolean(session?.agentDeviceId

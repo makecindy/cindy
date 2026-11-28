@@ -95,6 +95,7 @@ interface ErrorBannerProps {
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;
+  modelFallbackDetails?: string;
   retryText?: string | null;
   onRetry: (text: string) => void;
   queuedSendRecovery?: boolean;
@@ -181,6 +182,7 @@ export function ErrorBanner({
   reconnectHandoff,
   toolLoop,
   outputLimit,
+  modelFallbackDetails,
   retryText,
   onRetry,
   queuedSendRecovery,
@@ -1024,10 +1026,10 @@ export function ErrorBanner({
               : renderProviderErrorExplanation(error, displayError, t)
       }
       explain={!isAttachmentAccessDenied ? explain : undefined}
-      details={canShowErrorDetails && preconditionMessage !== displayError ? preconditionMessage ?? error : undefined}
+      details={modelFallbackDetails ?? (canShowErrorDetails && preconditionMessage !== displayError ? preconditionMessage ?? error : undefined)}
       onDiagnose={
         onDiagnose
-          ? () => onDiagnose({ message: displayError, details: error, reason: errorReason })
+          ? () => onDiagnose({ message: displayError, details: modelFallbackDetails ?? error, reason: errorReason })
           : undefined
       }
       onDismiss={onCancel}

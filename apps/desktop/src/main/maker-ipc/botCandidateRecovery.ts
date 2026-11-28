@@ -206,6 +206,7 @@ export function modelGroupSwitchCause(signals: InterruptedTurnErrorSignals, scop
 /** The Session reference is only a teardown lease, never proof that a route changed. */
 export interface RuntimeFallbackResult<T> {
   session: T | null;
+  modelGroupTransition?: { fromModel: string; toModel: string };
   outcome: 'unchanged' | 'switched' | 'exhausted' | 'failed' | 'superseded';
   /** A model group moved the task to another source: the display names, for the activity line (model-groups.md §4.6). */
   sourceSwitch?: { from: string; to: string };
