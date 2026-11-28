@@ -1007,8 +1007,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   pluginGateway = createHostPluginGateway({ runtime: plugins, profileDir: dataDir, ownerId,
     version: layout.version, credentials, fileConfirmation,
     getSession: id => agentGraph?.maker.getSession(id),
-    // Under the task's send lock, as the desktop's plugin page restore (register.ts).
-    restoreSession: lockSessionRoute((id: string, check: () => Promise<void>) => inputQueue.restoreSession(id, check)),
+    // The input queue acquires the task's send lock after entering its command chain.
+    restoreSession: (id, check) => inputQueue.restoreSession(id, check),
     requestHostPermission: async (id, instance, request, signal) => {
       const session = agentGraph?.maker.getSession(id);
       if (!session || session.instanceId !== instance) return null;
@@ -2464,10 +2464,10 @@ function startDeviceLink(): void {
     },
     preparePiSkillRuntime: (id, workingDir, route) => {
       const assertPreparationCurrent = inputQueue.capturePiSkillPreparation(id);
-      return withSendToSessionLock(id, () => inputQueue.preparePiSkillRuntime(id, workingDir, {
+      return inputQueue.preparePiSkillRuntime(id, workingDir, {
         assertPreparationCurrent,
         ...(route ? { applyPendingOwnerSelection: true, expectedPiModel: route.model, nextInputChars: route.nextInputChars } : {}),
-      }));
+      });
     },
     // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
     // Coexistence plan A: a new task's runtime and a plugin page's calls are refused while held (device-link.ts).

@@ -438,6 +438,14 @@ export function createInputQueue(deps) {
       state.commands = result;
       return result;
     }
+    function inputRouteSignal(id, generation = coordinator.getGeneration(id)) {
+      return AbortSignal.any([routeStartup.signal, coordinator.getInputAbortSignal(id, generation)]);
+    }
+    function commandWithRouteLock(id, fn) {
+      const signal = inputRouteSignal(id);
+      return command(id, (state, admission) =>
+        withSessionRouteLock(id, () => fn(state, admission), signal));
+    }
     async function mutate(id, fn) {
       return command(id, async state => {
         // Editing, removing or moving a queued input writes the queue the desktop may be using.
@@ -547,7 +555,7 @@ export function createInputQueue(deps) {
           if (closing || state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
         };
       },
-      preparePiSkillRuntime: (id, dir, options = {}) => command(id, async (state, admission) => {
+      preparePiSkillRuntime: (id, dir, options = {}) => commandWithRouteLock(id, async (state, admission) => {
         const check = () => {
           refuseWhileHeld();
           options.assertPreparationCurrent?.();
@@ -568,7 +576,7 @@ export function createInputQueue(deps) {
         await executor.preparePiSkillRuntime(id, dir, check);
         check();
       }),
-      restoreSession: (id, check) => command(id, async () => {
+      restoreSession: (id, check) => commandWithRouteLock(id, async () => {
         await check(); assertCurrent();
         const session = await executor.restoreSession(id, storedSessionOptions(await deps.readSession(id)), check);
         await check(); assertCurrent(); return session;
@@ -606,7 +614,16 @@ export function createInputQueue(deps) {
         const generation = ordinaryInput ? coordinator.getGeneration(id) : undefined;
         const expectedClearBoundary = readExpectedClearBoundary(userInputOptions);
         let wakeAfterRouteLock = false;
-        const enqueue = async (state, routeLockHeld) => {
+        const assertAdmitted = state => {
+          assertCurrent();
+          refuseWhileHeld();
+          if (closing || state.closed || admission !== state.admission
+              || (generation !== undefined && !coordinator.isGenerationCurrent(id, generation))) {
+            throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
+          }
+          assertExpectedClearBoundary(id, expectedClearBoundary);
+        };
+        const enqueue = async (state, archiveRouteSignal) => {
           if (coordinator.hasKnownClientId(id, item?.clientId)) {
             handoff?.onQueueAcceptanceStarted?.();
             await flushed(id);
@@ -618,16 +635,8 @@ export function createInputQueue(deps) {
             handoff?.onQueueAcceptanceStarted?.();
             return api.projection(id);
           }
-          const assertAdmitted = () => {
-            assertCurrent();
-            refuseWhileHeld();
-            if (closing || state.closed || admission !== state.admission
-                || (generation !== undefined && !coordinator.isGenerationCurrent(id, generation))) {
-              throwIpcError('PRECONDITION_FAILED', 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded');
-            }
-            assertExpectedClearBoundary(id, expectedClearBoundary);
-          };
-          assertAdmitted();
+          const check = () => assertAdmitted(state);
+          check();
           const stored = await deps.readSession(id, handoff ? { forHandoff: true }
             : ordinaryInput ? { forUserInput: true } : undefined);
           if (handoff && !stored) {
@@ -636,7 +645,7 @@ export function createInputQueue(deps) {
           }
           const restore = ordinaryInput && stored.status === 'archived';
           if (restore) {
-            if (!routeLockHeld) return NEEDS_ARCHIVE_RESTORE_LOCK;
+            if (!archiveRouteSignal) return NEEDS_ARCHIVE_RESTORE_LOCK;
             assertHostTaskExecutionSupported(stored);
             deps.assertProviderExecutionSupported?.(id, stored.providerId, stored.sdkSessionId);
           }
@@ -646,16 +655,16 @@ export function createInputQueue(deps) {
           let accepted = false;
           try {
             if (handoff) await handoff.taskActionDeliveryGuard();
-            assertAdmitted();
+            check();
             const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
             if (restore) {
               await deps.restoreArchivedSessionForSend(id, {
-                assertAdmitted,
-                signal: AbortSignal.any([routeStartup.signal, coordinator.getInputAbortSignal(id, generation)]),
+                assertAdmitted: check,
+                signal: archiveRouteSignal,
               });
               // The restore is a durable task transition. If admission changes
               // after it commits, leave the task active without accepting this input.
-              assertAdmitted();
+              check();
             }
             state.lastUserActionAt = Date.now();
             coordinator.setExecutionPaused(id, true);
@@ -668,7 +677,7 @@ export function createInputQueue(deps) {
             await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
             commitAutoTitle?.();
             if (!state.persistenceError) {
-              if (routeLockHeld) wakeAfterRouteLock = true;
+              if (archiveRouteSignal) wakeAfterRouteLock = true;
               else unpause(id);
             }
             return api.projection(id);
@@ -676,13 +685,26 @@ export function createInputQueue(deps) {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
           }
         };
-        const result = await command(id, state => enqueue(state, false));
+        const result = await command(id, state => enqueue(state));
         if (result !== NEEDS_ARCHIVE_RESTORE_LOCK) return result;
-        // The command chain and direct send both acquire the route lock. Keep
-        // their order command -> route lock; otherwise one can hold the lock
-        // while waiting for a command that is itself waiting for the lock.
-        const projection = await command(id, state =>
-          withSessionRouteLock(id, () => enqueue(state, true)));
+        // Start-like operations and direct sends take command -> route lock.
+        // Deletion takes the route lock first; its Stop cancels lock admission
+        // before draining the commands. A write that already holds the lock
+        // must finish its own admission checks and release it normally.
+        const projection = await command(id, async state => {
+          assertAdmitted(state);
+          const signal = inputRouteSignal(id, generation);
+          let acquired = false;
+          try {
+            return await withSessionRouteLock(id, () => {
+              acquired = true;
+              return enqueue(state, signal);
+            }, signal);
+          } catch (error) {
+            if (!acquired && signal.aborted) assertAdmitted(state);
+            throw error;
+          }
+        });
         const state = states.get(id);
         // A drain scheduled inside the route lock inherits its async context.
         // Start it after release so its send takes the lock as an independent operation.
@@ -714,9 +736,10 @@ export function createInputQueue(deps) {
       },
       /** The desktop-compatible direct maker:send path, using the full turn executor transaction. */
       send(id, message, createOpts, sendOpts) {
+        const signal = inputRouteSignal(id);
         return command(id, () => {
           refuseWhileHeld();
-          return executor.send(id, message, createOpts, sendOpts);
+          return executor.send(id, message, createOpts, sendOpts, signal);
         });
       },
       stop,

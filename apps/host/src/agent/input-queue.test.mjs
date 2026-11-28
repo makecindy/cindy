@@ -2902,7 +2902,7 @@ test('the Auto-review context treats a running plugin-target input as unavailabl
 });
 
 // The task send lock (table B of the context recovery plan): a send holds it until accepted, the
-// entries that change a task's runtime or route take it, queue commands and stop never do.
+// entries that change a task's runtime or route take it. Stop interrupts lock waiters.
 function holdSendLock(sessionId) {
   let release, acquired;
   const ready = new Promise(resolve => { acquired = resolve; });
@@ -3043,6 +3043,66 @@ test('archived enqueue and direct send cannot wait on each other', { timeout: 10
   assert.equal(status, 'active');
   assert.ok(h.maker.getSession(id)?.sent.includes('direct follow-up'));
 });
+
+// Unit, PR #13672: delete and provisional discard hold the route lock while
+// calling disposeSession. Put a production command into its lock wait before
+// calling Stop. First-phase enqueue and Stop after restore don't cover this cycle.
+for (const { name, run, archived, pi } of [
+  { name: 'archived enqueue', archived: true,
+    run: (queue, id) => queue.enqueue(id, { clientId: 'archived-1', text: 'continue' }, undefined, {}) },
+  { name: 'direct send', run: (queue, id) => queue.send(id, 'continue', {}) },
+  { name: 'plugin page restore', run: (queue, id) => queue.restoreSession(id, async () => {}) },
+  { name: 'Pi prewarm', pi: true, run: (queue, id) => queue.preparePiSkillRuntime(id, os.tmpdir()) },
+]) {
+  test(`delete cancels a waiting ${name} without the route lock watchdog`, { timeout: 10_000 }, async t => {
+    const id = 'delete-waiting-command';
+    const deleteHasLock = Promise.withResolvers();
+    const allowStop = Promise.withResolvers();
+    const releaseOnFailure = Promise.withResolvers();
+    let disposal;
+    let deleted = false;
+    let restorations = 0;
+    const h = createHarness({
+      readSession: async sessionId => ({ id: sessionId, status: archived ? 'archived' : 'active',
+        agentKind: pi ? 'pi' : 'claude-code', model: 'm', workingDir: os.tmpdir(), providerId: 'xd' }),
+      restoreArchivedSessionForSend: async () => { restorations += 1; },
+    });
+    setSessionRouteLockImplementation(withSendToSessionLock);
+    t.after(() => { setSessionRouteLockImplementation(null); return h.queue.dispose(); });
+    const deleting = lockSessionRoute(async sessionId => {
+      deleteHasLock.resolve();
+      await allowStop.promise;
+      disposal = h.queue.disposeSession(sessionId).then(() => { deleted = true; });
+      // Let a failing implementation unwind only after the assertions.
+      await Promise.race([disposal, releaseOnFailure.promise]);
+    })(id);
+    await deleteHasLock.promise;
+    const holder = sendToSessionLocks.get(id);
+    const commandSettled = Promise.allSettled([run(h.queue, id)]);
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      assert.ok(holder && sendToSessionLocks.get(id) !== holder, 'the command is waiting behind deletion');
+      allowStop.resolve();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(deleted, true, 'deletion must finish with its own route lock still held');
+      const [result] = await commandSettled;
+      assert.equal(result.status, 'rejected');
+      if (archived) {
+        assert.equal(result.reason.code, 'PRECONDITION_FAILED');
+        assert.match(result.reason.message, /superseded/);
+      } else assert.equal(result.reason.name, 'AbortError');
+      assert.equal(restorations, 0);
+      assert.deepEqual(h.queue.projection(id).pendingQueue, []);
+      assert.deepEqual(h.persisted, []);
+      assert.equal(h.maker.getSession(id), null);
+    } finally {
+      allowStop.resolve();
+      releaseOnFailure.resolve();
+      await Promise.allSettled([commandSettled, deleting]);
+      await disposal?.catch(() => {});
+    }
+  });
+}
 
 // Unit: Stop after restoration commits but before admission recheck cannot
 // enqueue the input. The independent task status transition is already durable.
