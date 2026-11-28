@@ -296,6 +296,7 @@ describe('newSessionCreation pipeline', () => {
       's21',
       's22',
       's23',
+      'unsent-collab',
     ]) dismissNewSessionCreation(id);
   });
 
@@ -1692,6 +1693,22 @@ describe('newSessionCreation pipeline', () => {
         orca: { enable, listWorkers: vi.fn(async () => []) },
       });
     }
+
+    it('keeps a dropped collaboration create failed without enqueueing the first message', async () => {
+      const maker = makeMaker({
+        createSession: vi.fn(async () => { throw new Error('[NOT_CONNECTED] reliable link stalled; pending abandoned'); }),
+      });
+      startNewSessionCreation(makeParams('unsent-collab', maker, {
+        collabDraft: { role: 'reviewer', agent: 'codex', model: null, permissionMode: 'auto', initialTask: 'check' },
+      }));
+      await flushPipeline();
+      expect(getNewSessionCreationTask('unsent-collab')).toMatchObject({
+        status: 'create-failed',
+        collabDraft: expect.objectContaining({ role: 'reviewer', initialTask: 'check' }),
+      });
+      expect(maker.input.enqueue).not.toHaveBeenCalled();
+      expect(editOutbox.update).not.toHaveBeenCalled();
+    });
 
     it('brings the collaboration draft back with the draft when a failed create returns to editing', async () => {
       const maker = withOrca(makeMaker({

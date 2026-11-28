@@ -1,5 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 import { MobileHome } from '@/session/HomeSurface';
+import { UnconfirmedCreationNotice } from '@/session/UnconfirmedCreationNotice';
 import { SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
 import { useHomeMode } from '@/session/useHomeMode';
 import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
@@ -11,6 +12,7 @@ export default function HomeScreen() {
   // The teammate section's stored fold is part of the first frame.
   if (!navigation.hydrated) return null;
   return <View style={styles.home}>
+    <UnconfirmedCreationNotice />
     <MobileHome />
     <SessionHeaderNativeBlur height={headerHeight} />
   </View>;

@@ -1,4 +1,5 @@
 import type { AnnotationRegion } from "@cindy/maker-shared/image-annotation";
+import type { OrcaWorkerFormValue } from "./orcaTeam";
 import type { NewSessionDraft } from "./newSession";
 import type { ComposerDocument } from './composerDocument';
 import type { MobileOutboxItem } from "./sessionOutbox";
@@ -78,6 +79,8 @@ export interface DurableOutboxRecord {
     cancelled?: true;
     /** Creation was handed back to the editor; restore its entry after restart. */
     editReady?: true;
+    /** Collaboration settings captured before the host confirmed the task. */
+    collabDraft?: OrcaWorkerFormValue | null;
     /** Content that could not be carried back, shown beside the restored attachments. */
     notice?: string;
     /** Messages already copied into this draft; makes interrupted consolidation idempotent. */
@@ -105,6 +108,13 @@ export function isDurableCreationDraft(record: DurableOutboxRecord): boolean {
     && !!(record.creation?.editReady || record.creation?.cancelled)
     && !record.prepared && !record.template && !record.enqueueStarted && record.sendAtMs === undefined
     && !record.cancelRequested && !isDurableOutboxSettled(record);
+}
+
+/** Host never confirmed this create. A user-cancelled draft stays recoverable without the failure prompt. */
+export function isUnconfirmedCreationFailure(record: DurableOutboxRecord): boolean {
+  return isDurableCreationDraft(record)
+    && record.creation?.editReady === true
+    && record.creation.cancelled !== true;
 }
 
 /**

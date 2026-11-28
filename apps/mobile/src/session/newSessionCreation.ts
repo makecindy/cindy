@@ -951,6 +951,34 @@ function failTask(task: InternalTask, status: 'create-failed' | 'enqueue-failed'
   emit();
 }
 
+/**
+ * Load the current account's outbox, then return creation drafts the editor can reopen.
+ * A queued delivery record is left alone: the outbox still owns it, and turning it into
+ * an editor draft would steal a send that may still complete.
+ *
+ * Fault radius: one local ledger read and, only for an already failed suspended creation
+ * with no live task, the existing editor normalization. No link reset and no resend.
+ */
+export async function recoverUnconfirmedCreationDrafts(): Promise<string[]> {
+  const owner = getMobileAuthOwner();
+  if (!owner.accountKey) return [];
+  await mobileDurableOutbox.activate(owner.accountKey);
+  if (!isMobileAuthOwnerCurrent(owner)) return [];
+  const recovered: string[] = [];
+  for (const record of getCurrentMobileOutboxRecords()) {
+    if (!record.creation || hasLiveNewSessionCreation(record.item.sessionId)) continue;
+    if (isDurableCreationDraft(record)) {
+      recovered.push(record.item.sessionId);
+      continue;
+    }
+    if (record.state !== 'failed' || record.suspended !== true) continue;
+    const { mergeNewSessionEditFollowUps } = await import('./mergeNewSessionEditFollowUps');
+    const saved = await mergeNewSessionEditFollowUps(record.item.sessionId, record.deviceId);
+    if (saved && isDurableCreationDraft(saved)) recovered.push(saved.item.sessionId);
+  }
+  return recovered;
+}
+
 function forgetPrecreatedRecoveryRecord(task: InternalTask): void {
   const precreated = task.params.precreatedWorktree;
   const accountId = task.params.precreatedWorktreeAccountId?.trim();

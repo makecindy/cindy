@@ -1,4 +1,5 @@
 import type { NewSessionDraft } from './newSession';
+import type { OrcaWorkerFormValue } from './orcaTeam';
 import { i18n } from '@/i18n';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import type { DurableOutboxRecord } from './durableOutbox';
@@ -8,6 +9,8 @@ import { getCurrentMobileOutboxRecords, mobileDurableOutbox } from './mobileDura
 
 export type NewSessionDraftEdit = Partial<Pick<NewSessionDraft, 'firstMessage' | 'selectedSkill'>> & {
   removeAttachmentId?: string;
+  /** undefined keeps the saved collaboration draft; null clears it. */
+  collabDraft?: OrcaWorkerFormValue | null;
 };
 
 /** User edits replace recovered content; an empty recovery is discarded permanently. */
@@ -23,13 +26,15 @@ export async function persistNewSessionDraftEdit(record: DurableOutboxRecord, ed
     const slots = current.item.attachmentSlots.map((attachment, slot) => ({ attachment, slot }))
       .filter(({ attachment }) => attachment && attachment.id !== edit.removeAttachmentId);
     const firstMessage = edit.firstMessage ?? current.creation!.draft.firstMessage;
+    const collabDraft = edit.collabDraft !== undefined ? edit.collabDraft : current.creation!.collabDraft;
     const uploads = current.uploads.filter(upload => slots.some(({ slot }) => slot === upload.slot));
     removed = { ...current, uploads: current.uploads.filter(upload => !uploads.includes(upload)) };
-    if (!firstMessage.trim() && !slots.length) return null;
+    if (!firstMessage.trim() && !slots.length && !collabDraft) return null;
     return {
       ...current,
       creation: {
         ...current.creation!,
+        collabDraft,
         draft: {
           ...current.creation!.draft,
           firstMessage,
