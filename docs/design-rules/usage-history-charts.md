@@ -67,6 +67,10 @@ Agent/harness 表复用现有引擎身份色（09-09 所有者再次反馈）：
 - `prefers-reduced-motion: reduce` 时不播放过渡，立即落到对应大小与清晰的焦点/选中状态；触摸设备不依赖 hover，禁用柱不触发强调。
 - 原生 Enter/Space 点击继续使用原 `handleDayClick` → `day:YYYY-MM-DD` 筛选路径。图表继续显示固定窗口，概览和明细按所选日期过滤；单日模式下任务明细的既有隐藏规则不变。
 
+### Registered response: Usage History chart emphasis
+
+The enlargement above is the registered chart emphasis response of the two registered chart members (§5), in Settings → Usage History and in the provider 「远程与分享」 usage block (same components, `.usage-history-charts`); its timing, curve and reduced-motion behaviour are the bullets above. The bounded width/height transition is a one-shot non-compositor exception already allowed by the red lines: no looping, no replay on unrelated rerenders, no whole-chart motion. No other component may borrow this response.
+
 ## 日期入口与命中方案
 
 09-08 曾按所有者决定移除草稿 `UsageDateFilter`（“选择日期＋查看当天”）入口，保留预设与图表按日点击。DS-11（2026-09-15，N8）按所有者授权补回等价的任意日期入口：范围下拉旁新增带标签的标准 `Input type="date"`（36px 高），与图表按日点击共用同一条 `day:YYYY-MM-DD` 选日状态——输入与图表互相同步，清空回到最近 30 天，以 todayKey 为上限拒绝未来日期，日期基准未就绪时禁用输入。原生日期弹层外观由系统浏览器决定；亮暗浏览器验证（未加载→加载→未来拒绝→选中）见 [DS-11 证据](../design-evidence/2026-09-15/ds11-review-fixes.md)。原有所有时间、最近 30 天、最近 7 天、今天预设与图表按日点击保留；图表仍不新增点击空白取消或重复点击取消。

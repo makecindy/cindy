@@ -1432,3 +1432,57 @@ DESIGN.md 瘦身 4a 把下列历史说明从正文移到这里，原文逐字保
   > | `textPlaceholder`     | `#858581`                | `#757575`             | Input placeholder only (≈3.5:1) |
 
 现行规则见 `DESIGN.md` §2、§3、§4 Dialog & Modal、§15.1、§15.2，以及手机设计指南 §2。
+
+## 2026-11-29 · DESIGN.md 瘦身 4b：功能规格搬到专题文件时移出的来源说明
+
+下列括号里的来源与日期说明，在功能规格从 DESIGN.md 搬到专题文件时从正文移出，原文逐字记在这里。规则本身没有改，现行规则以各专题文件为准。
+
+- **15.15 Create-Page Content Position + Titlebar Hover Discipline**（现在在 [new-task-home.md](./new-task-home.md)）：`(registered 2026-11-11, maintainer ruling E-14)`
+- **Filter reminder inside display settings**（现在在 [task-sidebar.md](./task-sidebar.md)）：`(owner decision)`
+- **Desktop and Mobile task creator filters**（现在在 [task-sidebar.md](./task-sidebar.md)）：`(owner decision)`；`(2026-11-08)`
+- **Device access pills**（现在在 [settings-pages.md](./settings-pages.md)）：`(owner decision 2026-11-25)`；`(owner correction 2026-11-27)`
+- **Teammate model settings**（现在在 [settings-pages.md](./settings-pages.md)）：`(2026-11-09)`
+- **Get-started guide**（现在在 [first-run-guide.md](./first-run-guide.md)）：`(2026-11-11)`
+- **Desktop chat and operation authorization**（现在在 [chat-surfaces.md](./chat-surfaces.md)）：`(#13171)`；`(registered 2026-10-16, #6199)`
+- **Desktop group progress strip**（现在在 [chat-surfaces.md](./chat-surfaces.md)）：`(2026-10-31)`
+- **流式正文与可组合组件**（现在在 [chat-surfaces.md](./chat-surfaces.md)）：`（2026-10-29）`；`（2026-11-01）`
+- **Remote connection V2 topology**（现在在 [remote-connection-v2.md](./remote-connection-v2.md)）：`(owner request)`；`(owner request 2026-11-19)`；`(owner decision 2026-11-12)` ×2
+
+## 2026-11-29 · Worker 创建弹窗：确认现行布局，规格补齐（主人裁决，DESIGN.md 瘦身 4b）
+
+主人对照现在的弹窗截图（浅色、深色各 17 个状态）确认了现行布局，去掉「layout pending sign-off」。规格一节搬到 [collaboration-worker.md](./collaboration-worker.md)，并补上截图核对时发现规格没写的部分：工具栏的语音输入按钮、模型面板里的智能路由与插件引擎、「上次选择的模型或来源不可用」与没有可用模型的提示、旧版本远程电脑的 Agent 切换与 Fast 开关、远程不支持 Worker 权限档时的提示、远程读不到角色清单时不能移除角色、新任务草稿省略项目字段与内置起手句、「更多设置」里的项目与运行设备细节、Agent 在另一台电脑时的供应商标识。选了插件引擎时权限菜单取引擎档位与 Worker 档位的交集，主人确认这是预期。同时按 #13716 写入关闭按钮改用共享图标按钮并带提示、Esc 先收起提示，以及含设备名的标签不转大写。
+
+搬动时从正文移出的来源说明：标题 `(owner-requested simplification, 2026-11-10; layout pending sign-off)`；Roles `owner request, 2026-11-10:`；Remove role `(owner decisions, 2026-11-10)`、`(owner request)`；First task `(owner decision, 2026-11-10)`；Mobile `(owner request, 2026-11-10)`。
+
+## 2026-11-29 · DESIGN.md 瘦身 4c：段落级功能规格搬到专题文件时移出的来源说明
+
+下列括号里的来源与日期说明，在夹在例外登记里的功能规格段落搬到专题文件时从正文移出，原文逐字记在这里。规则本身没有改。
+
+- **§2 Remote connection V2 状态色**（现在在 [remote-connection-v2.md](./remote-connection-v2.md)）：`(owner request 2026-11-18)`
+- **§2 Gradient：Windows 托盘额度卡**（现在在 [macos-menu-bar-quota.md](./macos-menu-bar-quota.md)）：`(owner decision, 2026-11-18, PR #11277)`
+- **§14.4 macOS 菜单栏额度填充动效**（现在在 [macos-menu-bar-quota.md](./macos-menu-bar-quota.md)）：`(owner request, 2026-10-16)`；`(registered 2026-11-11, maintainer ruling D-16)`；`(owner request, 2026-11-19)`
+- **§14.4 开始引导入场动效**（现在在 [first-run-guide.md](./first-run-guide.md)）：`(2026-11-11)`
+- **§14.4 Composer 通话 / 发送 / 停止动效**（现在在 [composer.md](./composer.md)）：`(owner-approved prototype, 2026-10-22)`；`(owner correction, 2026-10-29)`
+
+## 2026-11-29 · DESIGN.md 瘦身 4c：颜色登记搬出时移出的来源说明
+
+下列括号里的来源与日期说明，在颜色例外从 DESIGN.md 搬到登记文件时从正文移出，原文逐字记在这里。规则本身没有改。
+
+- **§2 Semantic & Accent：窄范围颜色例外**（现在在 [exceptions/color.md](./exceptions/color.md)）：`(owner decision 2026-10-31)` ×2；`(user decision 2026-11-11)`；`(2026-10-23)`；`(2026-09-20, refined 2026-09-21)`；`(finalized 2026-07-17)`；`(A-15)`；`(owner-approved 2026-09-08, extended 2026-09-09)`；`(owner approved the prototype)`；`(registered 2026-08-17)` ×2；`(registered 2026-10-30)`；`(registered 2026-10-26, owner-approved)`；`(registered 2026-11-20, maintainer ruling)`；`(2026-11-11)` ×2
+- **Semantic Exemption Colors (theme-invariant)**（现在在 [exceptions/color.md](./exceptions/color.md)）：`(2026-08-17)` ×3；`(finalized 2026-07-17)` ×4；`(registered 2026-11-11, A-14)`；`(2026-07-27)`；`(2026-09-29)`；`(2026-10-28)`；`(2026-09-08)`；`(2026-11-13)`；`(2026-08-06)`；`(user-approved 2026-11-09)`；`(user request, 2026-11-14)`
+- **15.4 Cross-Theme Exemptions (not covered by CINDY overrides)**（现在在 [exceptions/color.md](./exceptions/color.md)）：`(2026-07-17)`
+
+## 2026-11-29 · DESIGN.md 瘦身 4c：间距与内容形状例外搬出时移出的来源说明
+
+下列括号里的来源与日期说明，在间距与内容形状例外从 DESIGN.md 搬到登记文件时从正文移出，原文逐字记在这里。规则本身没有改。
+
+- **§5 Spacing System：间距例外与保留债务**（现在在 [exceptions/layout.md](./exceptions/layout.md)）：`(owner decision 2026-11-22)`
+- **§5 Content and unresolved shapes：已登记的内容形状**（现在在 [exceptions/layout.md](./exceptions/layout.md)）：`(owner decision 2026-11-22)` ×2；`(owner decision 2026-11-23)` ×2；`(owner decision 2026-11-25)` ×2
+
+## 2026-11-29 · DESIGN.md 瘦身 4c：动效与品牌界面例外搬出时移出的来源说明
+
+下列括号里的来源与日期说明，在动效与品牌界面例外从 DESIGN.md 搬到登记文件时从正文移出，原文逐字记在这里。规则本身没有改。
+
+- **§14.4 Motion tokens：已登记的循环动效**（现在在 [exceptions/motion.md](./exceptions/motion.md)）：`(maintainer rulings D-05 / D-06 / D-07, 2026-11-11)`；`(owner-approved 2026-11-18)`；`(D-06)` ×3
+- **Other sanctioned motion classes**（现在在 [exceptions/motion.md](./exceptions/motion.md)）：`(approved 2026-07-23)`；`(updated by user decision, 2026-09-12)`；`(user-approved 2026-11-09)`；`(approved 2026-07-29)`；`(2026-11-16)`；`(approved 2026-08-10)`；`(approved 2026-10-16)`；`(maintainer ruling D-11, 2026-11-11)`
+- **15.7 Brand Assets (icon + logo)**（现在在 [exceptions/brand-surfaces.md](./exceptions/brand-surfaces.md)）：`(registered 2026-11-11, maintainer ruling D-07)`；`(owner-requested 2026-11-11)`；`(approved 2026-07-25)`；`(owner-requested 2026-11-16)` ×2；`(owner-approved 2026-11-19)`；`(approved 2026-07-29)`；`(approved 2026-08-04)`

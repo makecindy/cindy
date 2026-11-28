@@ -26,7 +26,21 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 | [`wallpaper.md`](./wallpaper.md) | 应用壁纸（§2） | `DESIGN.md` 专题，规范效力相同 |
 | [`macos-menu-bar-quota.md`](./macos-menu-bar-quota.md) | macOS 菜单栏额度面板（§4） | `DESIGN.md` 专题，规范效力相同 |
 | [`attachment-preview.md`](./attachment-preview.md) | 附件预览的结构与交互 | 专题补充 |
-| [`usage-history-charts.md`](./usage-history-charts.md) | 用量历史图表与日期选择 | 专题补充 |
+| [`usage-history-charts.md`](./usage-history-charts.md) | 用量历史图表与日期选择；图表强调动效（迁自 §14.4） | 专题补充；迁入的动效段规范效力相同 |
+| [`new-task-home.md`](./new-task-home.md) | 新建任务页的内容位置、提示卡片与标题栏悬停（§1.1、§15.15） | `DESIGN.md` 专题，规范效力相同 |
+| [`task-sidebar.md`](./task-sidebar.md) | 任务侧栏、伙伴侧栏与任务创建者筛选（§2、§5） | `DESIGN.md` 专题，规范效力相同 |
+| [`provider-settings-ui.md`](./provider-settings-ui.md) | 模型供应商详情页头部与供应商弹窗折叠区（§4） | `DESIGN.md` 专题，规范效力相同 |
+| [`settings-pages.md`](./settings-pages.md) | 设置里的单页：设备访问、伙伴模型与能力、harness 版本（§4） | `DESIGN.md` 专题，规范效力相同 |
+| [`collaboration-worker.md`](./collaboration-worker.md) | 「开启协同」「创建新 Worker」弹窗与手机端 Worker 表单（§4） | `DESIGN.md` 专题，规范效力相同 |
+| [`first-run-guide.md`](./first-run-guide.md) | 首次登录后的开始引导及其入场动效（§4、§14.4） | `DESIGN.md` 专题，规范效力相同 |
+| [`chat-surfaces.md`](./chat-surfaces.md) | 聊天正文、群聊、频道与对话里的附件图片（§4 与文末无编号章） | `DESIGN.md` 专题，规范效力相同 |
+| [`remote-connection-v2.md`](./remote-connection-v2.md) | 远程连接 V2 的拓扑、状态色与消息流动画（§4） | `DESIGN.md` 专题，规范效力相同 |
+| [`composer.md`](./composer.md) | 输入框的发送 / 停止按钮、工作中光晕与伙伴私聊通话按钮（§2、§14.4） | `DESIGN.md` 专题，规范效力相同 |
+| [`exceptions/color.md`](./exceptions/color.md) | 颜色例外：灰度以外的颜色在哪些组件可以用（原 §2 窄例外、§10 语义豁免表、§15.4） | 例外登记，规范效力相同 |
+| [`exceptions/typography.md`](./exceptions/typography.md) | 排版例外：字号、字重、行高的豁免文件（原 §3 排版豁免登记表与排版 non-goals） | 例外登记，规范效力相同 |
+| [`exceptions/layout.md`](./exceptions/layout.md) | 间距与内容形状例外：写死的间距值、内容和自带形状元素的圆角（原 §5） | 例外登记，规范效力相同 |
+| [`exceptions/motion.md`](./exceptions/motion.md) | 动效例外：认可的动效类别与循环动效（原 §14.4 登记段） | 例外登记，规范效力相同 |
+| [`exceptions/brand-surfaces.md`](./exceptions/brand-surfaces.md) | 品牌界面：品牌图像、字标与吉祥物能出现在哪里（原 §15.7） | 例外登记，规范效力相同 |
 | [`design-governance.md`](./design-governance.md) | 设计系统治理合同：管道与记账（§1.1）、四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图、已知边界（§13） | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
 | [`design-inventory.md`](./design-inventory.md) | Cindy Desktop / Mobile 生产可达 UI 台账：GENERATED 登记事实（稳定 ID / 平台 / 标题 / 入口 / 路由覆盖）+ 人工迁移状态；组件、样式来源与 Token / 裸值统计不入库 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`，统计报告 `pnpm design:inventory:report`） |
 | [`desktop-bot-list-status.md`](./desktop-bot-list-status.md) | Desktop 伙伴与群列表状态、未读提示、时间保留和收起头像选中态 | 平台补充（由 DESIGN §2 Thinking Orange / Bot Unread Badge 与 §5 伙伴列表指针授权） |
@@ -43,7 +57,7 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 | [`gamepads/switch-joy-con/`](./gamepads/switch-joy-con/) | 设置页 Joy-Con 交稿包（SVG / PNG / 热区 / 键位表） | 交稿包 |
 | [`gamepads/ultimate-c1/`](./gamepads/ultimate-c1/) | 设置页 Ultimate C1 / 通用手柄交稿包（SVG / PNG / 热区 / 键位表） | 交稿包 |
 
-供应商设置的顶部视觉合同见 [DESIGN §4](./DESIGN.md#provider-detail-header)，身份、状态和操作语义见 [供应商设置](../product-rules/provider-settings.md)。
+供应商设置的顶部视觉合同见 [供应商设置页](./provider-settings-ui.md#provider-detail-header)，身份、状态和操作语义见 [供应商设置](../product-rules/provider-settings.md)。
 
 ## 新贡献者从这里开始
 
@@ -62,6 +76,8 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 以上仓内入口即可开始贡献；无需访问个人桌面记录。此阅读路径检查不代替 G2 的独立贡献者试用。
 
 ## 版本记录
+
+- **2026-11-29（`DESIGN.md` 瘦身 4b/4c：单功能规格与窄例外迁出，纯文档）**：24 节单功能界面规格、Worker 创建弹窗，以及夹在例外登记里的 8 段功能规格，迁到 9 份新专题文件（新建任务页、任务侧栏、供应商设置页、设置里的单页、Worker 创建弹窗、开始引导、聊天界面、远程连接 V2、输入框发送按钮），另向 `usage-history-charts.md`、`macos-menu-bar-quota.md` 追加迁入段；颜色、排版、间距与内容形状、动效、品牌界面五个领域的窄例外迁到 `exceptions/` 下的登记文件；§15.1 色板表并入 §15.16。正文逐字搬动（Worker 创建弹窗按 2026-11-29 截图补齐，见 `design-decision-log.md`），原位置保留标题和「正文已移至」指针，章节编号不变；正文里的日期与来源括号移到 `design-decision-log.md`；「阅读路由」、本索引和 `README.md` 同步登记，`README.md` 新增「往哪里写」写入规则。不改任何界面数值。
 
 - **2026-11-04（规范矛盾第二轮清理，纯文档）**：统一 CINDY 色值的决策记录与数值源指向；§9 示例改用 Token；红色白名单收敛到 §15.10；登录禁用态按两端分写；焦点写法明确为 box-shadow；语言范围改为全部支持语言；退役已不存在的群聊进度胶囊登记。不改任何界面数值，详见 `design-decision-log.md` 11-04。
 

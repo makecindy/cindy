@@ -41,8 +41,32 @@ test("从 DESIGN.md 拆出的专题按带 .md 的确切文件名算设计依据"
 	assert.equal(passes("login-flow.md §16.3 区域徽标"), true);
 	assert.equal(passes("wallpaper.md 壁纸透明度"), true);
 	assert.equal(passes("container-transform.md 工具栏分档"), true);
+	assert.equal(passes("feature-introduction.md 场景动画"), true);
+	assert.equal(passes("collaboration-worker.md Worker 创建弹窗"), true);
+	assert.equal(passes("chat-surfaces.md 聊天内容宽度"), true);
+	assert.equal(passes("composer.md 发送按钮工作中光晕"), true);
 	assert.equal(passes("wallpaper 相关"), false);
 	assert.equal(passes("my-wallpaper.md"), false);
+	assert.equal(passes("my-composer.md"), false);
+});
+
+// 保护 DESIGN.md 瘦身 4c 拆出的例外登记目录：必须带 exceptions/ 前缀才算设计依据，
+// 防止裸写 color.md / layout.md 这类泛化文件名误过 check:pr-design-basis。
+test("例外登记文件需带 exceptions/ 前缀并按确切文件名算设计依据", () => {
+	for (const basis of [
+		"exceptions/color.md 窄范围颜色例外",
+		"exceptions/typography.md 排版豁免登记表",
+		"exceptions/layout.md 已登记内容形状",
+		"exceptions/motion.md 循环动效",
+		"exceptions/brand-surfaces.md 品牌界面登记",
+	]) assert.equal(passes(basis), true, basis);
+	for (const basis of [
+		"color.md",
+		"layout.md",
+		"exceptions/other.md",
+		"my-exceptions/color.md",
+		"exceptions/color.md.bak",
+	]) assert.equal(passes(basis), false, basis);
 });
 
 test("任意 *-design.md 或小写 design.md 不再误算设计依据", () => {

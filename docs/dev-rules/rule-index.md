@@ -15,7 +15,21 @@
 | --- | --- | --- |
 | [agent-net：多设备互联网络方案](../agent-net-plan.md) | 新增或修改 agent-net 的传输核心、节点模型、能力清单、加密、中继选择、网络分享或拓扑界面之前， 与产品规则 `product-rules/agent-net.md` 一起读。 | 路径 |
 | [Cindy Design System](../design-rules/DESIGN.md) | 新增或修改任何界面、组件、布局、样式、动效或 UI 文案之前。先读下面的「阅读路由」， 再按路由读相关章节与专题，不需要通读全文；设计文档索引见 `cindy-design-system.md`。 | 路径 |
+| [聊天界面](../design-rules/chat-surfaces.md) | 改动聊天正文、群聊、频道或附件图片在对话里的显示之前 | 路径 |
+| [Worker 创建弹窗](../design-rules/collaboration-worker.md) | 改动「开启协同」「创建新 Worker」弹窗或手机端的 Worker 表单之前 | 路径 |
+| [输入框的发送与停止按钮](../design-rules/composer.md) | 改动输入框的发送 / 停止按钮、工作中光晕或伙伴私聊输入框的通话按钮之前 | 路径 |
 | [Cindy UI 设计系统治理合同](../design-rules/design-governance.md) | 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁 脚本，或参与设计系统迁移 PR 之前；做 UI 圆角分类或点击目标尺寸审查时，同时读 `DESIGN.md` §5 与本文 §13（普通 UI 改动同样适用，不限于设计系统迁移 PR）。 | 路径 |
+| [品牌界面登记](../design-rules/exceptions/brand-surfaces.md) | 在界面里放品牌图像、字标或吉祥物，或改到已登记品牌界面之前 | 主题 |
+| [颜色例外登记](../design-rules/exceptions/color.md) | 给界面加灰度以外的颜色、判断某个颜色能不能用，或改到已登记颜色例外的组件之前 | 主题 |
+| [间距与内容形状例外登记](../design-rules/exceptions/layout.md) | 写死间距值、给内容或自带形状的元素定圆角，或改到已登记例外的位置之前 | 主题 |
+| [动效例外登记](../design-rules/exceptions/motion.md) | 加循环动效或新的动效类别，或改到已登记动效的组件之前 | 主题 |
+| [排版例外登记](../design-rules/exceptions/typography.md) | 加字号、字重或行高例外，或改到已登记排版例外的文件之前 | 主题 |
+| [开始引导](../design-rules/first-run-guide.md) | 改动首次登录后的开始引导之前 | 路径 |
+| [新建任务页](../design-rules/new-task-home.md) | 改动新建任务页的内容位置、提示卡片或标题栏悬停之前 | 路径 |
+| [模型供应商设置页](../design-rules/provider-settings-ui.md) | 改动供应商详情页头部或供应商弹窗里的折叠区之前 | 路径 |
+| [远程连接 V2](../design-rules/remote-connection-v2.md) | 改动远程连接 V2 的拓扑、状态色或消息流动画之前 | 路径 |
+| [设置里的单页](../design-rules/settings-pages.md) | 改动设备访问胶囊、伙伴模型与能力页或「关于」里的 harness 版本之前 | 路径 |
+| [任务侧栏](../design-rules/task-sidebar.md) | 改动桌面任务侧栏、伙伴侧栏或任务创建者筛选之前 | 路径 |
 | [Desktop 登录托管回调（跨仓契约）](../desktop-login-hosted-callback.md) | 改动 auth-server 侧托管回调路由、结果展示页模板，或调整 desktop 系统浏览器登录链路之前 | 路径 |
 | [ACP 插件执行引擎与插件模型工程规范](acp-plugin-harness.md) | 新增或修改 ACP 引擎（`packages/maker-core/src/agents/acp/**`）、插件执行引擎注册／准入／切换／账号池／远程与分享调用／用量统计、插件路由模型、或任何可能受第 4 种引擎 `acp` 影响的跨模块任务入口之前 | 路径 |
 | [架构原则与不变量](architecture-invariants.md) | 修改 package 依赖方向、main 进程模块加载方式、桌面与 Node Host（`apps/host`）共用的 业务主体（`*.desktop.ts` 装配、工厂端口注入），或主界面布局树结构之前 | 路径 |
@@ -88,7 +102,16 @@
 | --- | --- |
 | [agent-net：多设备互联网络方案](../agent-net-plan.md) | `packages/agent-net*/**`<br>`packages/device-link-relay/src/agentNet.ts`<br>`packages/device-link/src/agentNetSwitch.ts`<br>`apps/desktop/src/main/device-link/**/agentNet*`<br>`apps/desktop/src/renderer/features/remote-connection-v2/**`<br>`apps/mobile/modules/cindy-agent-net/**`<br>`apps/mobile/src/**/{agentNet,AgentNet}*`<br>`prototypes/agent-net-spike/**`<br>`scripts/check-agent-net-native.mjs`<br>`.github/workflows/agent-net-native.yml` |
 | [Cindy Design System](../design-rules/DESIGN.md) | `apps/desktop/src/renderer/**`<br>`apps/mobile/app/**`<br>`apps/mobile/src/**/*.tsx`<br>`apps/mobile/src/theme/**`<br>`packages/design-tokens/**` |
+| [聊天界面](../design-rules/chat-surfaces.md) | `apps/desktop/src/renderer/components/chat/**`<br>`apps/desktop/src/renderer/features/bots/BotChannelsPage.tsx`<br>`apps/desktop/src/renderer/features/bots/BotGroupAssistantDeviceCard.tsx` |
+| [Worker 创建弹窗](../design-rules/collaboration-worker.md) | `apps/desktop/src/renderer/features/cc-agent/CreateWorkerPopover.tsx`<br>`apps/mobile/src/session/ContextSheetCollabView.tsx` |
+| [输入框的发送与停止按钮](../design-rules/composer.md) | `apps/desktop/src/renderer/components/new-chat/SendButton.tsx` |
 | [Cindy UI 设计系统治理合同](../design-rules/design-governance.md) | `packages/design-tokens/**`<br>`apps/desktop/src/renderer/themes/**`<br>`apps/desktop/src/renderer/components/ui/**`<br>`apps/mobile/src/theme/**`<br>`scripts/design-inventory.mjs`<br>`scripts/hardcoded-color-audit.mjs`<br>`scripts/hardcoded-color-exemptions.json`<br>`scripts/shared/design-*.mjs`<br>`scripts/shared/hardcoded-color-match.mjs`<br>`scripts/check-pr-design-basis.mjs`<br>`docs/design-rules/design-inventory.md`<br>`apps/desktop/src/renderer/__tests__/{designEffectsDiscipline,motionDiscipline}.test.ts` |
+| [开始引导](../design-rules/first-run-guide.md) | `apps/desktop/src/renderer/features/first-run-guide/**` |
+| [新建任务页](../design-rules/new-task-home.md) | `apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx`<br>`apps/desktop/src/renderer/components/layout/ContentHeader.tsx` |
+| [模型供应商设置页](../design-rules/provider-settings-ui.md) | `apps/desktop/src/renderer/components/settings/Provider*.tsx` |
+| [远程连接 V2](../design-rules/remote-connection-v2.md) | `apps/desktop/src/renderer/features/remote-connection-v2/**` |
+| [设置里的单页](../design-rules/settings-pages.md) | `apps/desktop/src/renderer/components/settings/MyDevicesPanel.tsx`<br>`apps/desktop/src/renderer/components/settings/CloudComputerRow.tsx`<br>`apps/desktop/src/renderer/components/settings/HarnessVersionMenuRow.tsx`<br>`apps/desktop/src/renderer/features/bots/BotCapabilitySettings.tsx`<br>`apps/desktop/src/renderer/features/bots/BotModelChainEditor.tsx` |
+| [任务侧栏](../design-rules/task-sidebar.md) | `apps/desktop/src/renderer/features/cc-agent/sidebar/**`<br>`apps/desktop/src/renderer/features/bots/TeammatesSection.tsx`<br>`apps/mobile/src/session/HomeDisplayMenu*.tsx`<br>`apps/mobile/src/session/homeChromeMenus.ts`<br>`apps/mobile/src/session/homeDisplaySettings.ts`<br>`apps/mobile/src/session/homeViewPreferenceStore.ts`<br>`apps/mobile/src/platform/chrome/useNativeMenuReminderImage.ts` |
 | [Desktop 登录托管回调（跨仓契约）](../desktop-login-hosted-callback.md) | `apps/desktop/src/main/{authHostedCallback,authLoopbackCallback,oauthResultPage}.ts`<br>`apps/desktop/scripts/export-login-callback-template.ts`<br>`apps/desktop/scripts/lib/loginCallbackCopy.ts`<br>`apps/host/src/auth/login.mjs` |
 | [ACP 插件执行引擎与插件模型工程规范](acp-plugin-harness.md) | `packages/maker-core/src/agents/acp/**`<br>`packages/maker-core/src/types/common.ts`<br>`packages/plugin-protocol/src/{pluginHarnesses,pluginHarnessUsageReader,pluginModels}*`<br>`apps/desktop/src/main/cindy-brain/pluginHarnesses*`<br>`apps/desktop/src/main/cindy-brain/runtime/{ghostHarnessesEndpoint,ghostModelsEndpoint}*`<br>`apps/desktop/src/main/plugin-engine-accounts/**`<br>`apps/desktop/src/main/maker-host/{plugin-engine-prefs-store,pluginEngineModelCache,pluginEngineRemoteUse,pluginEngineSkills}*`<br>`apps/desktop/src/main/maker-ipc/{pluginEngineSessionAdmission,sessionAgentSwitchHandler,pluginEnginesIpc}*`<br>`apps/desktop/src/main/device-link/pluginEngineSwitchIntentPush*`<br>`apps/desktop/src/main/im/shared/pluginEngineCatalog*`<br>`apps/desktop/src/main/learn-host/pluginEngineLearnSession*`<br>`apps/desktop/src/main/mcp-integrations/antigravityToolCatalog*`<br>`apps/desktop/src/shared/{agentKindConversion,pluginEngines,pluginModelPicker}.ts` |
 | [架构原则与不变量](architecture-invariants.md) | `apps/host/**`<br>`apps/desktop/src/main/**/*.desktop.ts`<br>`apps/desktop/src/main/**/*Core.ts`<br>`apps/desktop/src/main/layout/**`<br>`apps/desktop/src/shared/layoutTree.ts`<br>`apps/desktop/src/renderer/panels/registry.ts`<br>`{apps,packages}/*/package.json` |

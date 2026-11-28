@@ -12,7 +12,8 @@ review 的完整口径见 `docs/dev-rules/development-workflow.md` §3，本文�
 - `docs/dev-rules/rule-index.md` —— 规则索引：每份规则的读取时机与适用路径，由各规则文档
   开头的声明生成。
 - `docs/dev-rules/` —— 工程规则；`docs/product-rules/` —— 产品行为规则；
-  `docs/design-rules/DESIGN.md` —— 权威视觉规范。
+  `docs/design-rules/DESIGN.md` —— 权威视觉规范；单个功能的界面规格在同目录的专题文件，窄例外在
+  `docs/design-rules/exceptions/` 下的登记文件，DESIGN.md 原位置留有指向它们的指针。
 - `.github/PULL_REQUEST_TEMPLATE.md` —— 风险分类的口径。
 
 拿 diff 改到的每个路径去规则索引「适用路径」一表里比对，命中的规则都要读；判定为「主题」
@@ -128,8 +129,8 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   大小，也不因「是 bugfix／纯技术改动」豁免。
 - **UI 双模式**：新增或修改的界面必须同时实现 Light 与 Dark，颜色走语义 token；
   只适配一种模式的硬编码或条件补丁视为未完成。见 `docs/design-rules/DESIGN.md`。
-- **UI 圆角分类与点击目标尺寸**：普通 UI 改动同样先读 `docs/design-rules/DESIGN.md §5` 与
-  `docs/design-rules/design-governance.md §13`，不只在设计系统迁移 PR 中读取。先识别
+- **UI 圆角分类与点击目标尺寸**：普通 UI 改动同样先读 `docs/design-rules/DESIGN.md §5`（间距例外与已登记的内容形状在
+  `docs/design-rules/exceptions/layout.md`）与 `docs/design-rules/design-governance.md §13`，不只在设计系统迁移 PR 中读取。先识别
   已登记成员覆盖的具体可见层，再核对登记值和交互约束；不得仅凭 DOM 标签、可访问名称
   或局部样式类推导 pill。未决分类、证据缺口、违反登记值分别报告；已登记的待迁移差异
   按 `design-inventory.md` 对应条目处理，不用相反的改形建议替代缺失裁决。

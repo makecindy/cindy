@@ -241,7 +241,7 @@ squash 后分支里的提交不会出现在 `main` 的历史中，对日常开�
 | 实现约束、固定输入、自动判定 | 代码、配置与测试；能机判的同时落到 lint、测试或契约脚本 |
 | 工程规则、环境与工具链的坑、排错结论 | `docs/dev-rules/` 对应专题；单模块的放嵌套 `AGENTS.md`；何时要读写在专题自己的开头（见下），不往根 `AGENTS.md` 登记 |
 | 产品行为裁决与理由 | `docs/product-rules/` 对应专题；跨专题的放 `core-product-principles.md` |
-| 视觉、交互裁决与理由 | `docs/design-rules/`；带日期的取舍记进 `design-decision-log.md` |
+| 视觉、交互裁决与理由 | `docs/design-rules/`：全局规则写 `DESIGN.md`，单个功能的界面规格写对应专题文件，`DESIGN.md` 只留一行入口；新例外写进 `docs/design-rules/exceptions/` 下对应领域的登记文件；新标题和新规则不写日期与来源括号，带日期的取舍记进 `design-decision-log.md`（细则见 [设计专题](../design-rules/README.md)「往哪里写」） |
 | 已发生的回归、复现与验证证据 | 对应测试；任务体验类归 `docs/dev-rules/session-regressions.md`；大图和录屏挂到 issue 或 PR |
 | 未完成的改进 | issue 或计划文档，写明缺口与验收条件，不只记在个人待办 |
 | 个人目录、设备标识、账号偏好、凭据、私聊原文 | 本地；仓库只放脱敏后的结论 |
