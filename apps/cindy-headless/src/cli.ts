@@ -9,11 +9,13 @@ import { capabilityCatalog, compatibilityReport, CINDY_HEADLESS_VERSION, CINDY_U
 import { generateProfileFromManifest } from './profile-generation.js';
 import { applyGatewayConfig, loadGatewayConfig } from './gateway-config.js';
 import { resolveHeadlessTimeout } from './defaults.js';
+import { exportPiSessions, parseSessionsExportArgs } from './session-export.js';
 
 const args = process.argv.slice(2);
 const command = args[0] ?? 'help';
 function flag(name: string): string | undefined { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; }
 function requireFlag(name: string): string { const value = flag(name); if (!value) throw new Error(`${name} is required`); return value; }
+function repeatedFlag(name: string): string[] { return args.flatMap((arg, index) => (arg === name && args[index + 1] !== undefined ? [args[index + 1] as string] : [])); }
 function positiveNumberFlag(name: string): number | undefined {
   const raw = flag(name);
   if (raw === undefined) return undefined;
@@ -131,7 +133,14 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(validateOracleGate(manifest.dataset.taskIds, results), null, 2));
     return;
   }
-  console.error('cindy-headless commands: version, doctor, verify-agent, compatibility-report, profile validate, capabilities [--manifest <bundle-manifest.json>], run [--turns-file] [--timeout-owner headless|external] [--timeout-ms N], plan [--paired|--scheduled], paired-summary, report, freeze-hard-30, oracle-gate');
+  if (command === 'sessions' && args[1] === 'export') {
+    const parsed = parseSessionsExportArgs(args.slice(2));
+    const result = await exportPiSessions(parsed);
+    console.log(JSON.stringify(result, null, 2));
+    if (result.problems.length > 0) process.exitCode = 1;
+    return;
+  }
+  console.error('cindy-headless commands: version, doctor, verify-agent, compatibility-report, profile validate, capabilities [--manifest <bundle-manifest.json>], sessions export --source <dir> [--source <dir>] --dest <dir> [--copy] [--dry-run], run [--turns-file] [--timeout-owner headless|external] [--timeout-ms N], plan [--paired|--scheduled], paired-summary, report, freeze-hard-30, oracle-gate');
   process.exitCode = 2;
 }
 
