@@ -15193,7 +15193,11 @@
       "editSaveAria": "Änderung speichern (Enter)",
       "editCancelAria": "Bearbeitung abbrechen (Esc)",
       "syntheticContinueLabel": "Unvollendete Aufgabe fortsetzen (Systemanweisung)",
-      "syntheticTriggerLabel": "Systemanweisung"
+      "syntheticTriggerLabel": "Systemanweisung",
+      "holdAction": "Pausieren",
+      "releaseHoldAction": "Fortsetzen",
+      "heldRowLabel": "Ab dieser Nachricht pausiert",
+      "heldHint": "Diese und die folgenden Nachrichten werden vorerst nicht gesendet; die laufende Aufgabe wird weiter ausgeführt."
     },
     "newChatView": {
       "missing": {

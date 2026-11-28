@@ -15138,7 +15138,11 @@
       "editSaveAria": "편집 저장 (Enter)",
       "editCancelAria": "편집 취소 (Esc)",
       "syntheticContinueLabel": "미완료 작업 계속(시스템 지시)",
-      "syntheticTriggerLabel": "시스템 지시"
+      "syntheticTriggerLabel": "시스템 지시",
+      "holdAction": "일시 정지",
+      "releaseHoldAction": "계속",
+      "heldRowLabel": "이 메시지부터 일시 정지",
+      "heldHint": "이 메시지와 뒤의 메시지는 보내지 않고, 진행 중인 작업은 그대로 완료됩니다."
     },
     "newChatView": {
       "missing": {

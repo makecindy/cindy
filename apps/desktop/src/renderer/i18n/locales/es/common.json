@@ -15313,7 +15313,11 @@
       "editCancelAria": "Cancelar edición (Esc)",
       "syntheticContinueLabel": "Continuar la tarea inconclusa (instrucción del sistema)",
       "syntheticTriggerLabel": "Instrucción del sistema",
-      "showMore_many": "{{count}} más"
+      "showMore_many": "{{count}} más",
+      "holdAction": "Pausar",
+      "releaseHoldAction": "Reanudar",
+      "heldRowLabel": "En pausa desde este mensaje",
+      "heldHint": "Este mensaje y los siguientes no se envían por ahora; la tarea actual termina igual."
     },
     "newChatView": {
       "missing": {

@@ -15138,7 +15138,11 @@
       "editSaveAria": "儲存編輯（Enter）",
       "editCancelAria": "取消編輯（Esc）",
       "syntheticContinueLabel": "繼續未完成的任務（系統指令）",
-      "syntheticTriggerLabel": "系統指令"
+      "syntheticTriggerLabel": "系統指令",
+      "holdAction": "暫停",
+      "releaseHoldAction": "繼續",
+      "heldRowLabel": "從這條開始暫停",
+      "heldHint": "這條和後面的訊息先不送出，目前任務會照常完成"
     },
     "newChatView": {
       "missing": {

@@ -41,8 +41,11 @@ export function buildOrcaQueueDispatchNote(
 ): string | null {
   if (!isOrcaCollaborationMessage(item)) return null;
   const headSenderSessionId = item.origin.senderSessionId;
+  // 停点是队列的分界：它自己及其之后的消息都还没到送达时机，内容一律不进本轮上下文。
+  const holdIndex = pendingQueue.findIndex((queued) => queued.held === true);
+  const untilHold = holdIndex === -1 ? pendingQueue : pendingQueue.slice(0, holdIndex);
   return buildOrcaQueueNote(
-    pendingQueue.flatMap((queued) =>
+    untilHold.flatMap((queued) =>
       isOrcaCollaborationMessage(queued)
         ? [
             {

@@ -15138,7 +15138,11 @@
       "editSaveAria": "存所修（Enter）",
       "editCancelAria": "罷修（Esc）",
       "syntheticContinueLabel": "續未竟之差事（系統指令）",
-      "syntheticTriggerLabel": "系統之令"
+      "syntheticTriggerLabel": "系統之令",
+      "holdAction": "暫止",
+      "releaseHoldAction": "續發",
+      "heldRowLabel": "自此暫止",
+      "heldHint": "此條及後續暫不發送，當前任務照常完成"
     },
     "newChatView": {
       "missing": {

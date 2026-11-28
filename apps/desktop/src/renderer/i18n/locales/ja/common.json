@@ -15138,7 +15138,11 @@
       "editSaveAria": "編集を保存（Enter）",
       "editCancelAria": "編集をキャンセル（Esc）",
       "syntheticContinueLabel": "未完了のタスクを続行（システム指示）",
-      "syntheticTriggerLabel": "システム指示"
+      "syntheticTriggerLabel": "システム指示",
+      "holdAction": "一時停止",
+      "releaseHoldAction": "再開",
+      "heldRowLabel": "このメッセージから一時停止",
+      "heldHint": "このメッセージ以降は送信せず、実行中のタスクはそのまま完了します。"
     },
     "newChatView": {
       "missing": {

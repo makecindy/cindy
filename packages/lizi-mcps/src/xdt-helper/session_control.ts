@@ -11,6 +11,8 @@ export type SessionQueueControlErrorCode =
   | 'NOT_FOUND'
   | 'QUEUED_MESSAGE_NOT_FOUND'
   | 'MESSAGE_CONSUMING'
+  | 'MESSAGE_HELD'
+  | 'QUEUE_HELD_BOUNDARY'
   | 'NOT_AUTHORIZED'
   | 'UNSUPPORTED_CAPABILITY'
   | 'INVALID_ARGS';
@@ -95,6 +97,17 @@ export interface SessionControlDeps {
   }): Promise<
     ControlResult<{ queuedMessageId: string; position: number }, SessionQueueControlErrorCode>
   >;
+  /** 把队列停点移到这条消息上(至多一个)。 */
+  holdQueuedMessage(params: {
+    callerSessionId: string;
+    targetSessionId: string;
+    queuedMessageId: string;
+  }): Promise<ControlResult<{ queuedMessageId: string }, SessionQueueControlErrorCode>>;
+  /** 解掉自己队列上的停点。 */
+  releaseQueueHold(params: {
+    callerSessionId: string;
+    targetSessionId: string;
+  }): Promise<ControlResult<{ released: true }, SessionQueueControlErrorCode>>;
   steerSession(params: {
     callerSessionId?: string;
     targetSessionId: string;
@@ -323,6 +336,66 @@ export function registerMoveSessionQueuedMessageTool(
         queued_message_id: result.queuedMessageId,
         position: result.position,
       });
+    },
+  });
+}
+
+export function registerHoldSessionQueuedMessageTool(
+  registry: XdtHelperToolRegistry,
+  deps: SessionControlDeps,
+): void {
+  registry.register({
+    name: 'hold_session_queued_message',
+    category: 'control',
+    description:
+      '把队列停点挂到一条排队消息上:它之前的消息照常执行,到它为止不再自动发送,等你决定。' +
+      '至多一个停点,设新的会把旧的(包括用户手设的)顶掉。' +
+      SESSION_QUEUE_MANAGEABLE_SCOPE +
+      '失败码: QUEUED_MESSAGE_NOT_FOUND / MESSAGE_CONSUMING(已开始投递,停点没设上) / NOT_AUTHORIZED。',
+    inputShape: {
+      session_id: z.string().min(1).describe('目标 session id(操作自己任务的队列时传当前 session id)。'),
+      queued_message_id: z.string().min(1).describe('来自 send_to_session 或 list_session_queue 的消息 id。'),
+    },
+    handler: async ({ session_id, queued_message_id }) => {
+      const callerSessionId = requireCallerSession(deps);
+      if (!callerSessionId) {
+        return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
+      }
+      const result = await deps.holdQueuedMessage({
+        callerSessionId,
+        targetSessionId: session_id,
+        queuedMessageId: queued_message_id,
+      });
+      if (!result.ok) return mapControlFailure(result);
+      return okPayload({ session_id, queued_message_id: result.queuedMessageId, held: true });
+    },
+  });
+}
+
+export function registerReleaseSessionQueueHoldTool(
+  registry: XdtHelperToolRegistry,
+  deps: SessionControlDeps,
+): void {
+  registry.register({
+    name: 'release_session_queue_hold',
+    category: 'control',
+    description:
+      '解掉自己队列上的停点,队列恢复自动派发。只能解自己任务的队列(session_id 必须是调用方自己);' +
+      '要清掉别处或用户设的停点,请让用户处理。',
+    inputShape: {
+      session_id: z.string().min(1).describe('要解除停点的 session id,必须是调用方自己。'),
+    },
+    handler: async ({ session_id }) => {
+      const callerSessionId = requireCallerSession(deps);
+      if (!callerSessionId) {
+        return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
+      }
+      const result = await deps.releaseQueueHold({
+        callerSessionId,
+        targetSessionId: session_id,
+      });
+      if (!result.ok) return mapControlFailure(result);
+      return okPayload({ session_id, held: false });
     },
   });
 }

@@ -52,6 +52,7 @@ function setupMergeRegistry() {
         source: 'user' as const,
         content: 'merged',
         consuming: false,
+        held: false,
       },
     ],
   }));
@@ -132,6 +133,15 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
       queuedMessageId: 'queued-1',
       position: 0,
     })),
+    holdWorkerQueuedMessage: vi.fn(async () => ({
+      ok: true as const,
+      workerId: 'worker-1',
+      queuedMessageId: 'queued-1',
+    })),
+    releaseOwnQueueHold: vi.fn(async (_params: { callerLeadSessionId: string }) => ({
+      ok: true as const,
+      released: true as const,
+    })),
     idleWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
     endTeam: vi.fn(async () => ({ ok: true as const })),
     archiveWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
@@ -197,8 +207,8 @@ describe('dynamic lizi MCP session context', () => {
     const first = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
     const second = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
 
-    // 19 个 team 工具 + 3 个只读诊断工具。
-    expect(first).toHaveLength(22);
+    // 21 个 team 工具 + 3 个只读诊断工具。
+    expect(first).toHaveLength(24);
     expect(first).toEqual(second);
     expect(first).toContain('create_worker');
     expect(first).toContain('create_workers');
@@ -356,9 +366,9 @@ describe('dynamic lizi MCP session context', () => {
         ok: true, workerId: 'worker-1', workerSessionId: 'worker-session-1', status: 'running',
         isWorking: true, willQueue: true, queuePaused: false,
         messages: [
-          { queuedMessageId: 'queued-1', position: 0, source: 'lead', content: 'Use the v1 endpoint\nand retry', consuming: false },
-          { queuedMessageId: 'typed-1', position: 1, source: 'user', content: 'typed by the user', consuming: false },
-          { queuedMessageId: 'queued-2', position: 2, source: 'lead', content: 'Use the v2 endpoint', consuming: false },
+          { queuedMessageId: 'queued-1', position: 0, source: 'lead', content: 'Use the v1 endpoint\nand retry', consuming: false, held: false },
+          { queuedMessageId: 'typed-1', position: 1, source: 'user', content: 'typed by the user', consuming: false, held: false },
+          { queuedMessageId: 'queued-2', position: 2, source: 'lead', content: 'Use the v2 endpoint', consuming: false, held: false },
         ],
       })),
     });
@@ -444,6 +454,7 @@ describe('dynamic lizi MCP session context', () => {
             source: 'worker' as const,
             content: 'worker report',
             consuming: false,
+            held: false,
           },
         ],
       })),
@@ -631,6 +642,7 @@ describe('dynamic lizi MCP session context', () => {
             source: 'lead' as const,
             content: 'being accepted',
             consuming: true,
+            held: false,
           },
         ],
       })),
@@ -663,6 +675,7 @@ describe('dynamic lizi MCP session context', () => {
       source: 'lead' as const,
       content: 'crossing dispatch boundary',
       consuming: true,
+      held: false,
     };
     const deps = createOrcaDeps({
       getWorkspaceInfo: vi.fn(async () => ({
@@ -731,6 +744,7 @@ describe('dynamic lizi MCP session context', () => {
             source: 'user' as const,
             content: 'latest',
             consuming: false,
+            held: false,
           },
         ],
       })),

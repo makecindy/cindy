@@ -25,6 +25,7 @@ import {
 import {
   createSessionQueueControlService,
   type QueuedSteerOutcome,
+  type SessionQueueHoldReleaseResult,
   type SessionQueueMoveResult,
   type SessionQueueSteerResult,
 } from './sessionQueueControl.js';
@@ -37,6 +38,8 @@ export type SessionQueuedMessageControlResult =
       | 'NOT_FOUND'
       | 'QUEUED_MESSAGE_NOT_FOUND'
       | 'MESSAGE_CONSUMING'
+      | 'MESSAGE_HELD'
+      | 'QUEUE_HELD_BOUNDARY'
       | 'NOT_AUTHORIZED'
       | 'INVALID_ARGS'
       | 'UNSUPPORTED_CAPABILITY'
@@ -162,6 +165,8 @@ export interface SessionControlServiceDeps {
   removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
   steerStoredQueuedMessage(sessionId: string, clientId: string): Promise<QueuedSteerOutcome>;
   moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
+  holdQueuedMessage(sessionId: string, clientId: string): void;
+  releaseQueueHold(sessionId: string): void;
   createId(): string;
 }
 
@@ -172,6 +177,8 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     removeQueuedMessage: deps.removeQueuedMessage,
     steerQueuedMessage: deps.steerStoredQueuedMessage,
     moveQueuedMessage: deps.moveQueuedMessage,
+    holdQueuedMessage: deps.holdQueuedMessage,
+    releaseQueueHold: deps.releaseQueueHold,
   });
 
   async function ensureTarget(sessionId: string): Promise<Failure<'NOT_FOUND'> | null> {
@@ -309,6 +316,43 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         beforeMutation: combineInputGuards(assertTaskActionCurrent, plugin ? async () => plugin.assertCurrent() : undefined),
         authorize: (item) =>
           plugin ? { ok: true } : authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
+      });
+    },
+
+    /** 把队列停点移到这条消息上；权限口径与插话/排序一致。 */
+    async holdQueuedMessage(params: {
+      callerSessionId: string;
+      targetSessionId: string;
+      queuedMessageId: string;
+    }): Promise<SessionQueuedMessageControlResult | Failure<'NOT_FOUND'>> {
+      const missing = await ensureTarget(params.targetSessionId);
+      if (missing) return missing;
+      return queueControl.hold({
+        sessionId: params.targetSessionId,
+        queuedMessageId: params.queuedMessageId,
+        beforeMutation: assertTaskActionCurrent,
+        authorize: (item) =>
+          authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
+      });
+    },
+
+    /** 解掉目标队列的停点；只能解自己的队列。 */
+    async releaseQueueHold(params: {
+      callerSessionId: string;
+      targetSessionId: string;
+    }): Promise<SessionQueueHoldReleaseResult | Failure<'NOT_FOUND' | 'NOT_AUTHORIZED'>> {
+      const missing = await ensureTarget(params.targetSessionId);
+      if (missing) return missing;
+      if (params.callerSessionId !== params.targetSessionId) {
+        return {
+          ok: false,
+          errorCode: 'NOT_AUTHORIZED',
+          message: 'only the session that owns the queue can release its stop point',
+        };
+      }
+      return queueControl.releaseHold({
+        sessionId: params.targetSessionId,
+        beforeMutation: assertTaskActionCurrent,
       });
     },
 

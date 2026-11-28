@@ -24,6 +24,8 @@ export interface WorkerQueuedMessageEntry {
   source: 'lead' | 'user' | 'scheduler' | 'worker';
   content: string;
   consuming: boolean;
+  /** 队列停点:这一条及其之后的条目都不会自动执行(用户手动挂起)。 */
+  held: boolean;
 }
 
 export interface GetWorkerQueueStatusDeps {
@@ -45,6 +47,8 @@ export interface GetWorkerQueueStatusDeps {
         isWorking: boolean;
         willQueue: boolean;
         queuePaused: boolean;
+        /** 队列里有用户停点:排队条目不会自动执行,直到用户恢复。 */
+        queueHeld?: boolean;
         messages: WorkerQueuedMessageEntry[];
       },
       'WORKER_NOT_FOUND'
@@ -60,6 +64,8 @@ const DESCRIPTION =
   'source=lead / worker 的条目可用 steer_queued_message / move_queued_message 转插话或调整顺序。' +
   'source=user / scheduler 的条目正文可见(供理解排队顺序与内容),但不可修改/撤回。' +
   'consuming=true 表示该条正在投递中,已不可修改/撤回。' +
+  'held=true 是用户设置的队列停点:该条及其之后的条目都不会自动执行,也不能转插话,' +
+  '需要用户先恢复;此时 queue_held=true。' +
   '失败码: LEAD_NOT_SUPPORTED / WORKER_NOT_FOUND。';
 
 export function registerGetWorkerQueueStatusTool(
@@ -97,12 +103,14 @@ export function registerGetWorkerQueueStatusTool(
         will_queue: result.willQueue,
         queued_count: result.messages.length,
         queue_paused: result.queuePaused,
+        queue_held: result.queueHeld === true,
         queue: result.messages.map((entry) => ({
           queued_message_id: entry.queuedMessageId,
           position: entry.position,
           source: entry.source,
           content: entry.content,
           consuming: entry.consuming,
+          held: entry.held,
         })),
       });
     },

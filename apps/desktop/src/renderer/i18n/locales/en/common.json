@@ -15193,7 +15193,11 @@
       "editSaveAria": "Save edit (Enter)",
       "editCancelAria": "Cancel edit (Esc)",
       "syntheticContinueLabel": "Continue the unfinished task (system instruction)",
-      "syntheticTriggerLabel": "System instruction"
+      "syntheticTriggerLabel": "System instruction",
+      "holdAction": "Pause",
+      "releaseHoldAction": "Resume",
+      "heldRowLabel": "Paused from this message on",
+      "heldHint": "This message and the ones after it stay queued for now; the current task still finishes."
     },
     "newChatView": {
       "missing": {

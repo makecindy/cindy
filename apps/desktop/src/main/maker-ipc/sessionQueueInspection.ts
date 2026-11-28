@@ -13,6 +13,8 @@ export interface SessionQueueInspectionEntry {
   enqueuedAtMs: number | null;
   content: string;
   consuming: boolean;
+  /** 队列停点:这一条及其之后的条目都不会自动派发(用户手动挂起)。 */
+  held: boolean;
 }
 
 export interface SessionQueueCountDeps {
@@ -73,6 +75,7 @@ export function projectSessionQueueForInspection(
           ? (item.origin.displayText ?? item.text)
           : item.text,
       consuming,
+      held: item.held === true,
     });
   };
 
