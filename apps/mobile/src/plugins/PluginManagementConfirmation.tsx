@@ -85,7 +85,10 @@ export function PluginManagementConfirmation(
   const measuredAll = consentSheetMeasured(sizes, lineCount);
   useEffect(() => {
     if (fitKey && !compact && measuredAll && !consentIdentityShown(sizes)) setCrampedFor(fitKey);
-  }, [fitKey, compact, measuredAll, sizes]);
+    // Once compact for this consent at this window and text size, for whatever reason (the plan too), it stays compact:
+    // a later size report cannot turn the review button's place back into a regular Allow (maintainer review 06:44).
+    if (fitKey && plan.mode === "compact" && !cramped) setCrampedFor(fitKey);
+  }, [fitKey, compact, cramped, measuredAll, sizes, plan.mode]);
   // Allow answers in the regular layout only once this consent's sizes have all arrived and confirm it (maintainer review
   // 18:13: on first mount, or with only some sizes, the plan can say regular before it knows). Until then Allow looks the
   // same but does not answer: pressed, the sheet goes compact (review first) instead. Read from the newest reports when

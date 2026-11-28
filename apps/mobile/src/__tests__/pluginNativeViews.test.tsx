@@ -2275,6 +2275,22 @@ describe("pinned high-risk permission", () => {
     expect(answer).toHaveBeenCalledTimes(1);
     expect(answer).toHaveBeenCalledWith(true);
   });
+  it("Android: compact from the plan stays compact when later sizes would plan regular, so the review button's place never becomes a regular Allow", () => {
+    bridge.fontScale = 2;
+    const p = props(allFive);
+    const { container } = mount(AndroidManagementConfirmation, p);
+    const chrome = 20 * 2 + 12 + 12 * 2 + 4;
+    const layout = (id: string, height: number) => act(() => bridge.props.get(id).onLayout({ nativeEvent: { layout: { height } } }));
+    // The maintainer's numbers: compact by the plan.
+    layout("plugins.management.actions", Math.floor(844 * 0.85) - chrome - 100);
+    layout("plugins.management.identity", 384);
+    expect(container.querySelector('[data-testid="plugins.management.review"]'), "compact: review first").not.toBeNull();
+    // Later reports shrink everything so the plan alone would say regular, and the list shows the whole identity block.
+    layOutSheet({ identity: 100, visible: 2000, content: 400 });
+    expect(container.querySelector('[data-testid="plugins.management.review"]'), "still compact").not.toBeNull();
+    act(() => bridge.props.get("plugins.management.review").onPress());
+    expect(p.controller.answer, "pressing the review button's place reviews, never answers").not.toHaveBeenCalled();
+  });
   it("Android: a regular Allow's callback from before a rotation, called once the new layout's sizes confirm it, answers nothing; the new layout's own Allow answers", () => {
     bridge.fontScale = 1;
     const p = props(allFive);
