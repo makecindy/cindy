@@ -45,7 +45,9 @@ import {
   modelGroupBindingMatchesTarget,
   projectModelGroupSessionBinding,
   readModelGroupSessionBinding,
+  readActiveModelGroupBindingForDispatch,
   readModelGroupBindingForDispatch,
+  readModelGroupRoutedAccount,
   unbindModelGroupSession,
 } from '../sessionBindings.js';
 import { createModelGroupHandlers } from '../handlersCore.js';
@@ -569,6 +571,46 @@ describe('model group session bindings', () => {
     };
     await applyPendingAgentSwitchIfIdle(deps, sessionId);
     expect(Boolean(readModelGroupSessionBinding(sessionId))).toBe(routed);
+  });
+
+  // #13658 review (unit): the task row has only the base route, but recovery needs
+  // to recognize the binding and preserve the suffix when the provider has several accounts.
+  it('keeps the selected account when matching an ordinary task for recovery', async () => {
+    const pickedKey = modelGroupCandidateKey({ ...CANDIDATES[0]!, accountId: 'first' });
+    const selection = { type: 'route', id: 'r1' } as const;
+    bindModelGroupSession('ordinary', selection, pickedKey, 10);
+    expect(await readActiveModelGroupBindingForDispatch('ordinary', ROW)).toEqual({ selection, pickedKey, at: 10 });
+    expect(await readActiveModelGroupBindingForDispatch('ordinary', { ...ROW, agentDeviceId: 'other-device' })).toBeNull();
+    expect(await readActiveModelGroupBindingForDispatch('ordinary', { ...ROW, model: 'gpt-mini' })).toBeNull();
+  });
+
+  // #13658 review (unit): during pre-send account handoff, the production dispatch lookup
+  // must see the target account inside eager bootstrap, while a rejected switch keeps the old one.
+  it.each([false, true])('publishes the account at the pre-send switch commit (committed=%s)', async committed => {
+    const sessionId = 'presend-account';
+    const selection = { type: 'route', id: 'r1' } as const;
+    bindModelGroupSession(sessionId, selection, modelGroupCandidateKey({ ...CANDIDATES[0]!, accountId: 'first' }), 10);
+    const bootstrapAccount = vi.fn();
+    const result = await runModelGroupBeforeSend({
+      readSession: async () => ROW,
+      evaluateTurnRouting: async () => ({
+        action: 'switch', selection, groupName: 'OpenAI', cause: 'preflight-unavailable',
+        target: { ...CANDIDATES[0]!, accountId: 'second', agentDeviceId: null },
+        fromLabel: 'first', toLabel: 'second', crossEngine: false, crossLocation: false, crossAccount: true,
+      }),
+      applySameEngineRoute: vi.fn(async () => ({})),
+      performCrossSwitch: async ({ commitLocalRoute, skipBootstrap }) => {
+        expect(skipBootstrap).toBe(false);
+        if (committed) {
+          commitLocalRoute?.();
+          bootstrapAccount(await readModelGroupRoutedAccount(sessionId, ROW.providerId!));
+        }
+        return { switched: committed };
+      },
+    }, sessionId, { bootstrapAfterSwitch: true });
+    expect(result.switched).toBe(committed);
+    expect(bootstrapAccount.mock.calls).toEqual(committed ? [['second']] : []);
+    expect(await readModelGroupRoutedAccount(sessionId, ROW.providerId!)).toBe(committed ? 'second' : 'first');
   });
 
   it('persists detached state for companion sessions so bot profile modelGroup does not re-manage them', async () => {

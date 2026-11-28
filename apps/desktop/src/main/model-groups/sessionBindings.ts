@@ -314,6 +314,15 @@ function targetMatchesPickedKey(pickedKey: string, target?: ModelGroupSessionTar
   }) === modelGroupCandidateBaseKey(pickedKey);
 }
 
+/** Dispatch validates the execution route, keeping the full key for account-level recovery. */
+export async function readActiveModelGroupBindingForDispatch(
+  sessionId: string,
+  target: ModelGroupSessionTarget,
+): Promise<ModelGroupSessionBinding | null> {
+  const entry = await readModelGroupBindingForDispatch(sessionId);
+  return entry && targetMatchesPickedKey(entry.pickedKey, target) ? entry : null;
+}
+
 /** 当前任务的智能路由绑定是否正是为了切到这个目标（用于发前落地 pending intent 时保留绑定）。 */
 export function modelGroupBindingMatchesTarget(
   sessionId: string,

@@ -548,7 +548,7 @@ const CANDIDATE_ACCOUNT_MARKER = '\u0000\u0000acct:';
  * 本机多账号池拆平后的单个账号再附账号后缀。本机未拆账号的键与旧版存下的轮流位置和任务记录一致。
  */
 export function modelGroupCandidateKey(
-  value: Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model'> & { agentDeviceId?: string | null; accountId?: string | null },
+  value: Pick<ModelGroupCandidate, 'providerId' | 'model'> & { agentKind: ModelGroupAgentKind | 'claude-code'; agentDeviceId?: string | null; accountId?: string | null },
 ): string {
   const base = `${value.agentKind}\u0000${value.providerId}\u0000${value.model}`;
   const located = value.agentDeviceId ? `${base}\u0000${value.agentDeviceId}` : base;

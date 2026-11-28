@@ -1531,7 +1531,7 @@ import {
   isModelGroupSessionDetachedForDispatch,
   peekModelGroupSessionBinding,
   projectModelGroupSessionBinding,
-  readModelGroupBindingForDispatch,
+  readActiveModelGroupBindingForDispatch,
   readModelGroupSessionBinding,
   subscribeModelGroupSessionBindings,
   unbindModelGroupSession,
@@ -5340,10 +5340,18 @@ async function pinRoutedLocalSource(sessionId: string, providerId: string, accou
 }
 
 /** 换到本机来源的切换：任务已绑定的账号与选中的不同就要重建原生会话，切换提交后再改绑。 */
-function routedLocalAccountStep(sessionId: string, providerId: string, accountId: string | undefined, changes = false) {
+function routedLocalAccountStep(
+  sessionId: string, providerId: string, accountId: string | undefined, changes = false, commitRoute?: () => void,
+) {
   const bound = accountId ? readSessionBoundSubscriptionAccount(sessionId, providerId) : undefined;
   const moves = changes || (!!accountId && !!bound && bound !== accountId);
-  return { changes: moves, commit: () => pinRoutedLocalSource(sessionId, providerId, accountId, moves) };
+  return {
+    changes: moves,
+    commit: async () => {
+      await pinRoutedLocalSource(sessionId, providerId, accountId, moves);
+      commitRoute?.();
+    },
+  };
 }
 
 async function readSubscriptionRuntimeSession(id: string) {
@@ -18676,8 +18684,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       providerId: row.providerId,
       agentDeviceId: row.agentDeviceId || undefined,
     });
-    const binding = await readModelGroupBindingForDispatch(sessionId);
-    if (binding && binding.pickedKey === currentKey) return binding;
+    const binding = await readActiveModelGroupBindingForDispatch(sessionId, row);
+    if (binding) return binding;
     if (row.source === 'bot' && !(await isModelGroupSessionDetachedForDispatch(sessionId))) {
       const profileSelection = await readBotProfileModelGroupSelection(sessionId).catch(() => null);
       if (profileSelection) {
@@ -18769,7 +18777,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               fastExplicit: Boolean(fastMode),
             },
           ),
-        performCrossSwitch: ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap, accountId, accountChanges }) =>
+        performCrossSwitch: ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap, accountId, accountChanges, commitLocalRoute }) =>
           performSessionAgentSwitch(agentSwitchDeps, {
             sessionId: sid,
             targetAgentKind,
@@ -18782,7 +18790,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             skipBootstrap,
             configStaged: true,
             preserveModelGroupBinding: true,
-            ...(!agentDeviceId ? { localSubscriptionAccount: routedLocalAccountStep(sid, providerId, accountId, accountChanges === true) } : {}),
+            ...(!agentDeviceId ? {
+              localSubscriptionAccount: routedLocalAccountStep(sid, providerId, accountId, accountChanges === true, commitLocalRoute),
+            } : {}),
           }),
         pinLocalSource: (sid, { providerId, accountId }) => pinRoutedLocalSource(sid, providerId, accountId),
         writeSwitchNote: async (sid, note, clientId) => {
@@ -18827,6 +18837,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           providerId: candidate.providerId,
           model: candidate.model,
           agentDeviceId: candidate.agentDeviceId ?? null,
+          accountId: candidate.accountId,
         }),
         current: {
           agentKind: makerToDbEngineKind(current.agentKind),
@@ -18851,6 +18862,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           model: offer.model,
           providerId: offer.providerId,
           agentDeviceId: offer.agentDeviceId ?? null,
+          accountId: offer.accountId,
           effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null,
           fastMode: offer.agentKind === 'acp' ? false : (offer.fastMode ?? false),
         },
@@ -18861,7 +18873,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             model: profile.model,
             providerId: profile.providerId,
             agentDeviceId: profile.agentDeviceId || undefined,
-            ...(offer.accountId ? { accountId: offer.accountId } : {}),
+            accountId: profile.accountId,
           }));
         },
         ...(localAccount ? { localAccount } : {}),

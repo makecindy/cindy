@@ -338,6 +338,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             const result = await withSendToSessionLock(sessionId, async () => {
               if (!isCurrent() || !sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch) ||
                   !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) return null;
+              const localAccount = step?.localAccount;
               const switched = await performSessionAgentSwitch(agentSwitchDeps, {
                 sessionId,
                 targetAgentKind: selected.agentKind,
@@ -349,10 +350,19 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
                 applyNow: true,
                 configStaged: true,
                 preserveModelGroupBinding: true,
-                ...(step?.localAccount ? { localSubscriptionAccount: step.localAccount } : {}),
+                ...(localAccount ? {
+                  localSubscriptionAccount: {
+                    changes: localAccount.changes,
+                    commit: async () => {
+                      await localAccount.commit();
+                      // Dispatch reads the selected route account during bootstrap, not after the switch returns.
+                      if (sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) step?.bindCommittedRoute?.(selected);
+                    },
+                  },
+                } : {}),
               });
               if (switched.switched && sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
-                step?.bindCommittedRoute?.(selected);
+                if (!localAccount) step?.bindCommittedRoute?.(selected);
                 acceptSessionRuntimeMutation({
                   sessionId,
                   source: 'fallback',

@@ -30,8 +30,12 @@ vi.mock('../../maker-host/rehydrateCloseSuppression.js', () => ({
 }));
 
 import { sessions } from '../../localDb/schema.js';
+import { dbToMakerEngineKind } from '../../../shared/agentKindConversion.js';
+import { modelGroupCandidateKey, type ModelGroupCandidate } from '../../../shared/modelGroups.js';
+import { computeModelGroupSwitchOffer } from '../../model-groups/switchOffer.js';
+import type { performSessionAgentSwitch as switchImplementation } from '../sessionAgentSwitchHandler.js';
 import { createSessionRuntimeFallback, type FallbackRouteProfile } from '../sessionRuntimeFallback.js';
-import { getSessionRuntimeControlSnapshot } from '../sessionRuntimeControl.js';
+import { getSessionRuntimeControlSnapshot, recordFailedSessionRuntimeFallbackCandidate } from '../sessionRuntimeControl.js';
 
 function createMemoryDb() {
   const sqlite = new Database(':memory:');
@@ -268,32 +272,56 @@ describe('createSessionRuntimeFallback with plugin engine model groups', () => {
     const profile: FallbackRouteProfile = {
       agentKind: 'codex', agentDeviceId: null, model: 'gpt-5.4', providerId: 'openai', effort: null, fastMode: false,
     };
-    const committed: string[] = [];
-    const steps = ['second', 'third'].map((accountId) => ({
-      accountId,
-      localAccount: { changes: true, commit: vi.fn(async () => {}) },
-    }));
-    let offered = 0;
-    const performSessionAgentSwitch = vi.fn()
-      .mockRejectedValueOnce(new Error('account could not start'))
-      .mockResolvedValueOnce({ switched: true, engineReady: true });
+    const selection = { type: 'route', id: 'openai-route' } as const;
+    const source = { agentKind: 'codex', providerId: 'openai', model: profile.model } as const;
+    const candidates: ModelGroupCandidate[] = ['first', 'second', 'third'].map(accountId => ({ ...source, accountId }));
+    const attempts: string[] = [];
+    let routedAccount = 'first';
+    let boundAccount = 'first';
+    const bootstrap = vi.fn(() => [routedAccount, boundAccount]);
+    const performSessionAgentSwitch = vi.fn<typeof switchImplementation>(async (_deps, params) => {
+      // This port starts the new engine inside the switch, not after returning.
+      await params.localSubscriptionAccount?.commit();
+      bootstrap();
+      return { switched: true, engineReady: true } as Awaited<ReturnType<typeof switchImplementation>>;
+    }).mockRejectedValueOnce(new Error('second account rejected before commit'));
     const applySessionRuntimeSelection = vi.fn();
     const fallback = createSessionRuntimeFallback({
       maker: { getSession: () => undefined, closeSession: vi.fn(async () => {}) },
       readSessionRuntimeProfiles: async () => ({
         effective: profile,
-        control: { pending: null, generation, visitedRoutes: [], fallbackHop: 0 },
+        control: getSessionRuntimeControlSnapshot('s-accounts'),
       }),
       canApplyAutomaticRuntimeSelection: () => true,
       readBotFallbackCandidate: async () => ({ isBot: false, candidate: null }),
-      readModelGroupFallbackCandidate: async () => {
-        const step = steps[offered++];
-        if (!step) return null;
+      readModelGroupFallbackCandidate: async (sessionId, _current, visited, recovery) => {
+        // Use the production picker against the actual session runtime's visited set.
+        const offer = await computeModelGroupSwitchOffer({
+          readBinding: () => ({ selection, pickedKey: modelGroupCandidateKey(candidates[0]!), at: 1 }),
+          readSession: async () => source,
+          isShared: () => false,
+          hasGoal: async () => false,
+          config: () => ({ routes: [{ ...selection, name: 'OpenAI', strategy: 'order', candidates }] }),
+          candidateFacts: async () => candidates.map(c => ({
+            available: true, modelName: 'GPT-5.4', sourceName: c.accountId!, windows: null,
+          })),
+          now: () => 1,
+        }, sessionId, {
+          ...recovery,
+          current: source,
+          visited: new Set(visited),
+          recordUnavailable: c => recordFailedSessionRuntimeFallbackCandidate(
+            sessionId, generation, { ...c, agentKind: dbToMakerEngineKind(c.agentKind) },
+          ),
+        });
+        const accountId = offer?.accountId;
+        if (!accountId) return { candidate: null };
+        attempts.push(accountId);
         return {
-          candidate: { ...profile },
-          labels: { from: 'GPT-5.4 · OpenAI', to: `GPT-5.4 · ${step.accountId}` },
-          bindCommittedRoute: () => { committed.push(step.accountId); },
-          localAccount: step.localAccount,
+          candidate: { ...profile, accountId },
+          labels: { from: 'GPT-5.4 · OpenAI', to: `GPT-5.4 · ${accountId}` },
+          bindCommittedRoute: selected => { routedAccount = selected.accountId!; },
+          localAccount: { changes: true, commit: async () => { boundAccount = accountId; } },
         };
       },
       readSessionAgentDeviceId: async () => null,
@@ -318,8 +346,10 @@ describe('createSessionRuntimeFallback with plugin engine model groups', () => {
 
     expect(result).toMatchObject({ outcome: 'switched', sourceSwitch: { to: 'GPT-5.4 · third' } });
     expect(applySessionRuntimeSelection).not.toHaveBeenCalled();
-    expect(performSessionAgentSwitch.mock.calls.map(([, params]) => params.localSubscriptionAccount))
-      .toEqual([steps[0]!.localAccount, steps[1]!.localAccount]);
-    expect(committed).toEqual(['third']);
+    expect(attempts).toEqual(['second', 'third']);
+    expect(bootstrap.mock.results).toEqual([{ type: 'return', value: ['third', 'third'] }]);
+    const control = getSessionRuntimeControlSnapshot('s-accounts');
+    expect(control.visitedRoutes).toEqual(expect.arrayContaining(candidates.map(modelGroupCandidateKey)));
+    expect(control.effectiveOverride).not.toHaveProperty('accountId');
   });
 });
