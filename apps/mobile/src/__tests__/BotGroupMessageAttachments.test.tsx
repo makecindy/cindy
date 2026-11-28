@@ -90,7 +90,7 @@ vi.mock('expo-image', async () => {
   return { Image: Object.assign(({ source, onLoad, onError, onDisplay, transition, style }: any) => {
     imageEvents.set(source.uri, { onLoad, onError, onDisplay, transition });
     const frame = Object.assign({}, ...[style].flat().filter(Boolean));
-    return createElement('img', { src: source.uri, 'data-width': frame.width, 'data-height': frame.height });
+    return createElement('img', { src: source.uri, 'data-cache-key': source.cacheKey, 'data-width': frame.width, 'data-height': frame.height });
   }, { getCachePathAsync: async (key: string) => cachedImagePaths.get(key) ?? null }) };
 });
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }), useFocusEffect: vi.fn(), useNavigation: () => ({ isFocused: () => true, addListener: () => () => {} }) }));
@@ -106,7 +106,8 @@ vi.mock('@/theme', async () => {
   return { ...tokens, monoFont: 'monospace', useTheme: () => ({ colors, mode: 'light' }), useThemedStyles: (make: any) => make(colors) };
 });
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text, MAX_FONT_SIZE_MULTIPLIER: 2 }));
-vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
+const auth = vi.hoisted(() => ({ accountGeneration: 1, user: undefined as { id: string } | undefined }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('@/session/usePluginResultCard', () => ({ usePluginResultCard: () => ({}), useSessionPluginResource: () => ({ title: 'Art' }) }));
 vi.mock('@/session/remoteMediaDiskCacheExpo', () => ({ downloadRemoteMediaShareTemp: vi.fn() }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
@@ -172,7 +173,8 @@ import { MessageLoadingImage } from '@/session/MessageLoadingImage';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { MessageContentLongPressContext } from '@/session/messageContentLongPress';
 import { SelectionQuoteContext } from '@/session/selectionQuote';
-import { chatServerMediaCacheKey, resolveChatServerMediaOwner } from '@/chat/chatServerMediaCache';
+import { __testing as mediaCacheTesting } from '@/chat/chatServerMediaCache';
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
@@ -325,12 +327,12 @@ describe('direct-server group image previews', () => {
   const original = { ...photo, url: 'https://example.invalid/signed/original' };
   const thumbnail = { ...photo, mimeType: 'image/webp', url: 'https://example.invalid/signed/thumbnail', thumbnail: true as const };
   // Each case uses its own room: the in-memory authorized-URL cache is per room and module-wide.
-  const renderServer = async (resolveServerMedia: any, roomId: string) => {
+  const renderServer = async (resolveServerMedia: any, roomId: string, historyRevision?: string) => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
     await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
-      messageId: 'direct-photo', roomId, align: 'left', onResolveRemoteMedia: resolveMedia, resolveServerMedia, attachments: [photo],
+      messageId: 'direct-photo', roomId, historyRevision, align: 'left', onResolveRemoteMedia: resolveMedia, resolveServerMedia, attachments: [photo],
     })));
     return host;
   };
@@ -345,19 +347,87 @@ describe('direct-server group image previews', () => {
     expect(view.querySelector('img')?.getAttribute('src')).toBe(original.url);
   });
 
-  it('shows an image cached by an earlier launch without authorizing it again, then opens the original', async () => {
-    const owner = resolveChatServerMediaOwner(undefined, 1)!;
-    cachedImagePaths.set(`${chatServerMediaCacheKey(owner, 'room-relaunch', 'photo')}~thumbnail`, '/cache/expo-image/photo.webp');
-    const resolveServerMedia = vi.fn(async () => original);
-    const view = await renderServer(resolveServerMedia, 'room-relaunch');
-    await vi.waitFor(async () => {
-      await act(async () => undefined);
-      expect(view.querySelector('img')?.getAttribute('src')).toBe('file:///cache/expo-image/photo.webp');
-    });
-    expect(resolveServerMedia).not.toHaveBeenCalled();
-    await act(async () => view.querySelector<HTMLElement>('[data-testid="message.mediaPreviewButton"]')!.click());
-    expect(resolveServerMedia).toHaveBeenCalledExactlyOnceWith('photo', expect.any(AbortSignal));
-    expect(view.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe(original.url);
+  // Unit regression for PR #13705: the mocked decoder records the actual write key.
+  // Reopen with the same persisted history and the cold-start auth generation;
+  // the old test used the same process generation for both sides of the cache hit.
+  it('uses the image from the prior launch, but never from a previous history revision', async () => {
+    auth.user = { id: 'group-test-user' };
+    setMobileAuthOwner(auth.user.id);
+    try {
+      const resolveServerMedia = vi.fn(async (_id: string, _signal?: AbortSignal, options?: { thumbnail?: boolean }) => options?.thumbnail ? thumbnail : original);
+      const initial = await renderServer(resolveServerMedia, 'room-relaunch', 'history-before-leave');
+      const diskKey = initial.querySelector('img')!.getAttribute('data-cache-key')!;
+      expect(diskKey).toBeTruthy();
+      cachedImagePaths.set(diskKey, '/cache/expo-image/photo.webp');
+      act(() => root!.unmount());
+      host!.remove();
+      mediaCacheTesting.reset();
+      auth.accountGeneration = 0;
+      resolveServerMedia.mockClear();
+
+      const view = await renderServer(resolveServerMedia, 'room-relaunch', 'history-before-leave');
+      await vi.waitFor(async () => {
+        await act(async () => undefined);
+        expect(view.querySelector('img')?.getAttribute('src')).toBe('file:///cache/expo-image/photo.webp');
+      });
+      expect(resolveServerMedia).not.toHaveBeenCalled();
+      await act(async () => view.querySelector<HTMLElement>('[data-testid="message.mediaPreviewButton"]')!.click());
+      expect(resolveServerMedia).toHaveBeenCalledExactlyOnceWith('photo', expect.any(AbortSignal));
+      expect(view.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe(original.url);
+
+      // Also leave a freshly authorized thumbnail in memory before the history changes.
+      act(() => root!.unmount());
+      host!.remove();
+      cachedImagePaths.delete(diskKey);
+      await renderServer(resolveServerMedia, 'room-relaunch', 'history-before-leave');
+      cachedImagePaths.set(diskKey, '/cache/expo-image/photo.webp');
+      act(() => root!.unmount());
+      host!.remove();
+      resolveServerMedia.mockClear();
+      const rejoined = await renderServer(resolveServerMedia, 'room-relaunch', 'history-after-rejoin');
+      expect(rejoined.querySelector('img')?.getAttribute('src')).toBe(thumbnail.url);
+      expect(resolveServerMedia).toHaveBeenCalledExactlyOnceWith('photo', expect.any(AbortSignal), { thumbnail: true });
+    } finally {
+      auth.accountGeneration = 1;
+      auth.user = undefined;
+      act(() => setMobileAuthOwner(null));
+    }
+  });
+
+  // Unit regression for PR #13705: a local decode error used to consume the one
+  // attempt reserved for a failed server thumbnail, even with the original accessible.
+  it('tries the original when a stale local thumbnail and its remote replacement both fail', async () => {
+    auth.user = { id: 'group-test-user' };
+    setMobileAuthOwner(auth.user.id);
+    try {
+      const diskUri = 'file:///cache/expo-image/stale.webp';
+      const resolveServerMedia = vi.fn(async (_id: string, _signal?: AbortSignal, options?: { thumbnail?: boolean }) => options?.thumbnail ? thumbnail : original);
+      const initial = await renderServer(resolveServerMedia, 'room-stale-local', 'history-with-image');
+      const diskKey = initial.querySelector('img')!.getAttribute('data-cache-key')!;
+      expect(diskKey).toBeTruthy();
+      cachedImagePaths.set(diskKey, diskUri);
+      act(() => root!.unmount());
+      host!.remove();
+      mediaCacheTesting.reset();
+      resolveServerMedia.mockClear();
+
+      const view = await renderServer(resolveServerMedia, 'room-stale-local', 'history-with-image');
+      await vi.waitFor(async () => {
+        await act(async () => undefined);
+        expect(view.querySelector('img')?.getAttribute('src')).toBe(diskUri);
+      });
+      await act(async () => imageEvents.get(diskUri)!.onError());
+      expect(view.querySelector('img')?.getAttribute('src')).toBe(thumbnail.url);
+      await act(async () => imageEvents.get(thumbnail.url)!.onError());
+      expect(view.querySelector('img')?.getAttribute('src')).toBe(original.url);
+      expect(resolveServerMedia.mock.calls.map(([, , options]) => options)).toEqual([{ thumbnail: true }, undefined]);
+      await act(async () => imageEvents.get(original.url)!.onError());
+      expect(resolveServerMedia).toHaveBeenCalledTimes(2);
+      expect(view.querySelector('[data-testid="message.mediaThumbFallback"]')).not.toBeNull();
+    } finally {
+      auth.user = undefined;
+      act(() => setMobileAuthOwner(null));
+    }
   });
 });
 

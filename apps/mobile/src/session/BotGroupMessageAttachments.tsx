@@ -8,6 +8,7 @@
 import { useAuth } from "@/auth/AuthContext";
 import {
   chatServerMediaCacheKey,
+  chatServerMediaDiskCacheKey,
   chatServerMediaRoomEpoch,
   invalidateCachedServerMedia,
   peekCachedServerMedia,
@@ -96,6 +97,7 @@ export function botGroupAttachmentGallery(
 export function BotGroupMessageAttachments({
   messageId,
   roomId,
+  historyRevision,
   attachments,
   align,
   onResolveRemoteMedia,
@@ -105,6 +107,7 @@ export function BotGroupMessageAttachments({
   messageId: string;
   /** Chat Server conversation ID for session-scoped preview URL reuse and stable cache keys. */
   roomId?: string;
+  historyRevision?: string;
   attachments: readonly BotGroupAttachment[];
   align: "left" | "right";
   onResolveRemoteMedia: ResolveRemoteMediaFn;
@@ -135,8 +138,9 @@ export function BotGroupMessageAttachments({
   if (resolveServerMedia)
     return (
       <ServerAttachments
-        key={`${accountGeneration}:${mediaOwner ?? ""}:${roomId ?? ""}:${messageId}`}
+        key={`${accountGeneration}:${mediaOwner ?? ""}:${roomId ?? ""}:${historyRevision ?? ""}:${messageId}`}
         roomId={roomId}
+        historyRevision={historyRevision}
         mediaOwner={mediaOwner}
         runs={runs}
         visible={previewVisible}
@@ -315,7 +319,7 @@ const CHAT_SERVER_THUMBNAIL_CACHE_SUFFIX = "~thumbnail";
  * Bytes an earlier visit or launch already left in the image cache for this attachment, so the
  * timeline shows them at once without an authorization round trip per image. The image cache is
  * wiped on logout, account switch and lost room access (`registerChatServerNativeImageCacheClearer`),
- * and keys carry the account and room epoch, so a hit never crosses those boundaries.
+ * and keys carry the account and the persisted room history revision.
  */
 async function cachedServerImage(baseKey: string): Promise<{ uri: string; thumbnail: boolean } | null> {
   const ExpoImage = await import("expo-image").then((m) => m.Image).catch(() => null);
@@ -379,6 +383,7 @@ function drainPreviews() {
  */
 function ServerAttachments({
   roomId,
+  historyRevision,
   mediaOwner,
   runs,
   visible,
@@ -388,6 +393,7 @@ function ServerAttachments({
   resolve,
 }: {
   roomId?: string;
+  historyRevision?: string;
   mediaOwner: string | null;
   visible: boolean;
   previewServerImages: boolean;
@@ -412,7 +418,7 @@ function ServerAttachments({
             roomId,
             item.id,
             Date.now(),
-            { allowExpiredImage: true },
+            { allowExpiredImage: true, historyRevision },
           );
           if (cached) {
             initial[item.id] = cached.attachment;
@@ -449,15 +455,12 @@ function ServerAttachments({
         : [],
     ),
   );
-  // Previews shown from the local image cache: a later decode failure re-authorizes the same
-  // rendition instead of treating it as a broken thumbnail.
-  const localPreviewIds = useRef(new Set<string>());
   useEffect(() => {
     if (!canUseCache || !roomId) return;
     return subscribeChatServerMediaInvalidation((invalidatedRoomId) => {
       if (invalidatedRoomId !== null && invalidatedRoomId !== roomId) return;
       previewExpiresAtRef.current = {};
-      localPreviewIds.current.clear();
+      originalPreviewIds.current.clear();
       failedPreviewIds.current.clear();
       retriedPreviews.current.clear();
       previewsRef.current = {};
@@ -468,6 +471,9 @@ function ServerAttachments({
     let cancelled = false;
     if (!visible) return;
     const cancelJobs: Array<() => void> = [];
+    const roomEpoch = canUseCache && roomId ? chatServerMediaRoomEpoch(roomId) : undefined;
+    const current = () => !cancelled
+      && (!roomId || roomEpoch === undefined || chatServerMediaRoomEpoch(roomId) === roomEpoch);
     const schedule = (id: string) => {
       cancelJobs.push(
         authorizePreview(async (signal) => {
@@ -475,26 +481,19 @@ function ServerAttachments({
           const expiresAt = previewExpiresAtRef.current[id];
           const expired = expiresAt !== undefined && Date.now() >= expiresAt;
           if (
-            cancelled ||
+            !current() ||
             (previewsRef.current[id] && !refreshing && !expired)
           )
             return;
           const previousPreview = previewsRef.current[id];
-          const startEpoch =
-            canUseCache && roomId ? chatServerMediaRoomEpoch(roomId) : 0;
           try {
             const value = await resolveRef.current(id, signal,
               originalPreviewIds.current.has(id) ? undefined : { thumbnail: true });
             const preview =
               value.category === "image" ? value : { ...value, url: null };
-            const epochValid =
-              !canUseCache ||
-              !roomId ||
-              chatServerMediaRoomEpoch(roomId) === startEpoch;
             if (
-              !cancelled &&
+              current() &&
               !signal.aborted &&
-              epochValid &&
               previewsRef.current[id] === previousPreview
             ) {
               if (canUseCache && roomId && mediaOwner) {
@@ -502,6 +501,8 @@ function ServerAttachments({
                   mediaOwner,
                   roomId,
                   preview,
+                  Date.now(),
+                  historyRevision,
                 );
                 if (nextExpiresAt !== null) {
                   previewExpiresAtRef.current[id] = nextExpiresAt;
@@ -521,7 +522,7 @@ function ServerAttachments({
                 }));
             }
           } catch {
-            if (!cancelled && previewsRef.current[id] === previousPreview)
+            if (current() && previewsRef.current[id] === previousPreview)
               failedPreviewIds.current.delete(id);
             // Keep the chip / fallback available for an explicit retry on tap.
           }
@@ -543,7 +544,7 @@ function ServerAttachments({
           roomId,
           id,
           Date.now(),
-          { allowExpiredImage: true },
+          { allowExpiredImage: true, historyRevision },
         );
         if (cached) {
           previewExpiresAtRef.current[id] = cached.expiresAtMs;
@@ -564,15 +565,19 @@ function ServerAttachments({
         schedule(id);
         continue;
       }
-      const baseKey = chatServerMediaCacheKey(mediaOwner, roomId, id);
+      const baseKey = chatServerMediaDiskCacheKey(mediaOwner, roomId, id, historyRevision);
+      if (!baseKey) {
+        schedule(id);
+        continue;
+      }
+      const previousPreview = previewsRef.current[id];
       const item = runs.flatMap((run) => (run.kind === "ready" ? run.attachments : [])).find((a) => a.id === id);
       void cachedServerImage(baseKey).then((local) => {
-        if (cancelled) return;
-        if (!local || !item || chatServerMediaCacheKey(mediaOwner, roomId, id) !== baseKey) {
+        if (!current() || previewsRef.current[id] !== previousPreview || failedPreviewIds.current.has(id)) return;
+        if (!local || !item || chatServerMediaDiskCacheKey(mediaOwner, roomId, id, historyRevision) !== baseKey) {
           schedule(id);
           return;
         }
-        localPreviewIds.current.add(id);
         previewExpiresAtRef.current[id] = Number.POSITIVE_INFINITY;
         previewsRef.current = {
           ...previewsRef.current,
@@ -586,7 +591,7 @@ function ServerAttachments({
       retryPreview.current = null;
       cancelJobs.forEach((cancel) => cancel());
     };
-  }, [previewIds, imageIds, visible, canUseCache, roomId, mediaOwner]);
+  }, [previewIds, imageIds, visible, canUseCache, roomId, mediaOwner, historyRevision]);
   const displayRuns = botGroupAttachmentRuns(
     runs.flatMap((run): BotGroupAttachment[] =>
       run.kind === "pending"
@@ -629,8 +634,9 @@ function ServerAttachments({
                     mediaOwner &&
                     item.category === "image" &&
                     item.url
-                    ? chatServerMediaCacheKey(mediaOwner, roomId, item.id) +
-                      (previews[item.id]?.thumbnail ? CHAT_SERVER_THUMBNAIL_CACHE_SUFFIX : "")
+                    ? (chatServerMediaDiskCacheKey(mediaOwner, roomId, item.id, historyRevision)
+                      ?? chatServerMediaCacheKey(mediaOwner, roomId, item.id))
+                      + (previews[item.id]?.thumbnail ? CHAT_SERVER_THUMBNAIL_CACHE_SUFFIX : "")
                     : undefined,
                 ),
               )}
@@ -653,12 +659,18 @@ function ServerAttachments({
                 if (!attachment) return;
                 const currentPreview = previewsRef.current[attachment.id];
                 if (!currentPreview || currentPreview.url !== attachment.url) return;
-                const alreadyRetried = retriedPreviews.current.has(attachment.id);
+                const previousFailure = retriedPreviews.current.get(attachment.id);
+                if (previousFailure === currentPreview) return;
+                const wasLocal = currentPreview.url?.startsWith("file://");
+                const useOriginal = !wasLocal && currentPreview.thumbnail
+                  && !originalPreviewIds.current.has(attachment.id);
+                if (previousFailure && !useOriginal) return;
+                // Renew a failed local rendition first. A failed remote thumbnail still gets
+                // one original request, even if obtaining the thumbnail used the local retry.
                 retriedPreviews.current.set(attachment.id, currentPreview);
-                // A cache file evicted since lookup is re-authorized as the same rendition.
-                const wasLocal = localPreviewIds.current.delete(attachment.id);
-                if (currentPreview.thumbnail && !wasLocal) originalPreviewIds.current.add(attachment.id);
-                if (alreadyRetried) return;
+                if (useOriginal || (wasLocal && !currentPreview.thumbnail)) {
+                  originalPreviewIds.current.add(attachment.id);
+                }
                 if (canUseCache && roomId && mediaOwner) {
                   invalidateCachedServerMedia(
                     mediaOwner,
@@ -708,6 +720,8 @@ function ServerAttachments({
                   mediaOwner,
                   roomId,
                   value,
+                  Date.now(),
+                  historyRevision,
                 );
                 if (nextExpiresAt !== null) {
                   previewExpiresAtRef.current[filePreview.id] = nextExpiresAt;

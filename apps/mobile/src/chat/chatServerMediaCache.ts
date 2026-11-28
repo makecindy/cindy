@@ -30,6 +30,7 @@ interface StoredMediaEntry {
   owner: string;
   roomId: string;
   mediaId: string;
+  historyRevision?: string;
   attachment: BotGroupAttachment;
   expiresAtMs: number;
   staleUntilMs: number;
@@ -184,6 +185,22 @@ export function chatServerMediaCacheKey(
   return `${CHAT_SERVER_MEDIA_CACHE_KEY_PREFIX}${encodeURIComponent(owner)}:${encodeURIComponent(roomId)}:${epoch}:${encodeURIComponent(mediaId)}`;
 }
 
+/**
+ * Disk bytes follow the durable room history's access boundary and the realm-qualified
+ * account. In-flight requests still use the separate, process-local room epoch.
+ */
+export function chatServerMediaDiskCacheKey(
+  owner: string,
+  roomId: string,
+  mediaId: string,
+  historyRevision: string | undefined,
+): string | undefined {
+  const { accountKey } = getMobileAuthOwner();
+  if (!historyRevision || !accountKey || owner.slice(0, owner.lastIndexOf(':')) !== accountKey
+    || purgedRooms?.has(roomId) || purgedBeforeLoad.has(roomId)) return undefined;
+  return `${CHAT_SERVER_MEDIA_CACHE_KEY_PREFIX}${encodeURIComponent(accountKey)}:${encodeURIComponent(roomId)}:history-${encodeURIComponent(historyRevision)}:${encodeURIComponent(mediaId)}`;
+}
+
 export function isChatServerMediaCacheKeyForRoom(
   key: string,
   roomId: string,
@@ -294,13 +311,13 @@ export function peekCachedServerMedia(
   roomId: string,
   mediaId: string,
   now = Date.now(),
-  options: { allowExpiredImage?: boolean } = {},
+  options: { allowExpiredImage?: boolean; historyRevision?: string } = {},
 ): CachedChatServerMediaEntry | null {
   if (!owner || !roomId || !mediaId) return null;
   enforceSingleActiveOwner(owner);
   const key = entryKey(owner, roomId, mediaId);
   const entry = mediaCache.get(key);
-  if (!entry) return null;
+  if (!entry || entry.historyRevision !== options.historyRevision) return null;
   const expired = now >= entry.expiresAtMs;
   if (expired) {
     const canServeStaleImage =
@@ -331,6 +348,7 @@ export function setCachedServerMedia(
   roomId: string,
   attachment: BotGroupAttachment,
   now = Date.now(),
+  historyRevision?: string,
 ): number | null {
   if (!owner || !roomId || !attachment.id) return null;
   enforceSingleActiveOwner(owner);
@@ -353,6 +371,7 @@ export function setCachedServerMedia(
     owner,
     roomId,
     mediaId: attachment.id,
+    historyRevision,
     attachment,
     expiresAtMs,
     staleUntilMs: Math.max(expiresAtMs, now + MAX_SIGNED_URL_TTL_MS),
