@@ -1,6 +1,6 @@
 /**
  * 分享中转(中转页那一行的分享图标):与供应商分享同一个弹窗外框和链接写法——一次性链接、倒计时、
- * 过期后重新生成;多一个二维码给手机扫。打开时沿用还在有效期内的链接,「重新生成链接」才另要一条,
+ * 过期后重新生成;多一个二维码给手机扫,可以放大到二级弹窗里扫。打开时沿用还在有效期内的链接,「重新生成链接」才另要一条,
  * 旧链接仍按自己的有效期作废。收到的申请由全局审批弹窗处理,这里不显示。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -33,6 +33,9 @@ export function RelayShareDialog({ relayName, onClose }: { relayName: string; on
   const { t } = useTranslation();
   const [state, setState] = useState<LinkState>({ status: 'creating' });
   const [qr, setQr] = useState<string | null>(null);
+  const [enlarged, setEnlarged] = useState<string | null>(null);
+  const [enlargeOpen, setEnlargeOpen] = useState(false);
+  const [enlargeButton, setEnlargeButton] = useState<HTMLButtonElement | null>(null);
   const [copied, setCopied] = useState(false);
   const requestSeq = useRef(0);
   const copiedTimer = useRef<number | null>(null);
@@ -74,10 +77,15 @@ export function RelayShareDialog({ relayName, onClose }: { relayName: string; on
   const link = state.status === 'ready' ? state.link : null;
   useEffect(() => {
     setQr(null);
+    setEnlarged(null);
     if (!link) return;
     let active = true;
     void QRCode.toDataURL(link, { margin: 2, width: 224 }).then((url) => {
       if (active) setQr(url);
+    });
+    // 放大版按大尺寸单独生成,不把小图拉伸到看不清、扫不上。
+    void QRCode.toDataURL(link, { margin: 2, width: 640 }).then((url) => {
+      if (active) setEnlarged(url);
     });
     return () => {
       active = false;
@@ -89,6 +97,8 @@ export function RelayShareDialog({ relayName, onClose }: { relayName: string; on
   // 中转还不能给其他账号用(没开 Agent-Net 或服务器版本旧):链接只对本账号的设备有效,也不是端到端加密,
   // 讲给其他账号的说明都不适用。
   const ownOnly = state.status === 'ready' && !state.otherAccounts;
+  // 链接过期、重新生成或出错时,放大的旧二维码不能留在屏幕上。
+  const showEnlarged = enlargeOpen && enlarged !== null && !expired;
 
   const copy = useCallback(async () => {
     if (state.status !== 'ready' || expired) return;
@@ -106,7 +116,14 @@ export function RelayShareDialog({ relayName, onClose }: { relayName: string; on
     <ProviderShareDialog
       open
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (open) return;
+        // 放大的二维码叠在上面时,这一层的 Radix 仍会先收到 Esc(实测外层先关、两层一起消失):
+        // 只收起放大层,分享窗口留着。
+        if (showEnlarged) {
+          setEnlargeOpen(false);
+          return;
+        }
+        onClose();
       }}
       maxWidth={500}
       initialFocusRef={doneRef}
@@ -170,6 +187,17 @@ export function RelayShareDialog({ relayName, onClose }: { relayName: string; on
               <span>{t(`${K}.regenerateHint`)}</span>
             </p>
             <p className="mt-1 text-12 text-[var(--text-tertiary)]">{t(ownOnly ? `${K}.scanHintOwn` : `${K}.scanHint`)}</p>
+            <div className="mt-2 flex">
+              <Button
+                ref={setEnlargeButton}
+                variant="secondary"
+                size="sm"
+                disabled={!enlarged || expired}
+                onClick={() => setEnlargeOpen(true)}
+              >
+                {t(`${K}.enlarge`)}
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -205,6 +233,31 @@ export function RelayShareDialog({ relayName, onClose }: { relayName: string; on
           {t(`${K}.regenerate`)}
         </Button>
       </ProviderShareDialogFooter>
+
+      <ProviderShareDialog
+        nested
+        open={showEnlarged}
+        onOpenChange={(open) => {
+          if (!open) setEnlargeOpen(false);
+        }}
+        maxWidth={520}
+        returnFocusTo={enlargeButton}
+        testId="relay-share-qr-enlarged"
+      >
+        <ProviderShareDialogTitle>{t(`${K}.qrTitle`)}</ProviderShareDialogTitle>
+        <p className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">{t(ownOnly ? `${K}.scanHintOwn` : `${K}.scanHint`)}</p>
+        {/* 窗口很矮(最小窗口加界面缩放)时二维码跟着缩小,保底 120px;再矮由弹窗滚动,关闭按钮仍可达。 */}
+        <div className="mt-4 flex min-h-[120px] justify-center">
+          {enlarged ? (
+            <img src={enlarged} alt={t(`${K}.qrAlt`)} className="aspect-square w-full max-w-[min(440px,60vh)] rounded-xl object-contain" />
+          ) : null}
+        </div>
+        <ProviderShareDialogFooter>
+          <Button variant="secondary" palette="confirmation" size="lg" onClick={() => setEnlargeOpen(false)}>
+            {t(`${K}.close`)}
+          </Button>
+        </ProviderShareDialogFooter>
+      </ProviderShareDialog>
     </ProviderShareDialog>
   );
 }

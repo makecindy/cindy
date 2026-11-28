@@ -16,6 +16,8 @@ export default {
     tenant: { about: 'Another account asks to use the relay: the approval names the account and explains its separate line; the shared-with list allows stopping after a confirmation' },
     shared: { about: 'A relay shared by another account is in use: it is labelled as shared, has no share icon, and leaving warns that this account\'s devices on it disconnect' },
     'share-own': { about: 'A relay that cannot be shared with other accounts yet says so in the share dialog' },
+    'share-enlarge': { about: 'Enlarge in the share dialog opens a nested dialog with a large, sharply rendered QR code; Close and Esc close only it and return focus to Enlarge' },
+    'share-enlarge-zoomed': { about: 'Zooming the minimum window to 200% and 300% with the enlarged QR open: the QR keeps a scannable size and Close QR Code stays reachable' },
     'retry-replace': { about: 'A failed replacement rechecks the server and asks again before clearing its relay' },
     'retry-own': { about: 'A failed deployment retains its elapsed time and retries its own relay without clearing it' },
     'retry-existing': { about: 'An existing complete relay keeps an entry to view and retry a redeployment that failed before changing the server' },
@@ -270,6 +272,57 @@ export default {
       await ui.capture('shared-leave');
       await confirmation.getByRole('button', { name: await ui.t(`${relay}.actions.useOfficial`), exact: true }).click();
       await page.getByRole('listitem').filter({ hasText: 'Lizi relay' }).waitFor({ state: 'detached', timeout: 3_000 });
+    } else if (ui.case.startsWith('share-enlarge')) {
+      const share = `${relay}.share`;
+      await serverRow.getByRole('button', { name: await ui.t(`${share}.action`), exact: true }).click();
+      const shareDialog = page.getByTestId('relay-share-dialog');
+      const enlarge = shareDialog.getByRole('button', { name: await ui.t(`${share}.enlarge`), exact: true });
+      await page.waitForFunction((label) => [...document.querySelectorAll('[data-testid="relay-share-dialog"] button')].some((b) => b.textContent === label && !b.disabled), await ui.t(`${share}.enlarge`), { timeout: 3_000 });
+      await enlarge.click();
+      const dialog = page.getByTestId('relay-share-qr-enlarged');
+      await dialog.getByRole('heading', { name: await ui.t(`${share}.qrTitle`), exact: true }).waitFor();
+      const qr = dialog.getByRole('img', { name: await ui.t(`${share}.qrAlt`), exact: true });
+      const close = dialog.getByRole('button', { name: await ui.t(`${share}.close`), exact: true });
+      if (ui.case === 'share-enlarge-zoomed') {
+        // The 800x600 minimum window at 200% and at the 300% maximum interface zoom. When the dialog can't fit,
+        // it scrolls: the QR keeps a scannable size and Close QR Code stays reachable.
+        for (const [zoom, viewport] of [['2x', { width: 400, height: 300 }], ['3x', { width: 267, height: 200 }]]) {
+          await page.setViewportSize(viewport);
+          await qr.scrollIntoViewIfNeeded();
+          const qrBox = await qr.boundingBox();
+          assert.ok(qrBox.y >= 0 && qrBox.y + qrBox.height <= viewport.height && qrBox.height >= 96, `QR is not usable at ${zoom}: ${qrBox.height}px tall at ${qrBox.y}`);
+          await ui.capture(`qr-zoomed-${zoom}`);
+          await close.scrollIntoViewIfNeeded();
+          const closeBox = await close.boundingBox();
+          assert.ok(closeBox.y >= 0 && closeBox.y + closeBox.height <= viewport.height, `Close QR Code is not reachable at ${zoom}: ${closeBox.y}..${closeBox.y + closeBox.height}`);
+        }
+        await close.click();
+        await dialog.waitFor({ state: 'detached' });
+        return;
+      }
+      // 放大版按大尺寸重新生成,不是把小图拉伸;叠在分享窗口之上。
+      const { natural, shown } = await qr.evaluate((img) => ({ natural: img.naturalWidth, shown: img.getBoundingClientRect().width }));
+      assert.ok(natural >= shown, `enlarged QR is upscaled: ${natural}px shown at ${shown}px`);
+      assert.ok(shown > 300, `enlarged QR is not larger than the inline one: ${shown}px`);
+      const layers = await page.evaluate(() => {
+        const z = (el) => Number(getComputedStyle(el).zIndex);
+        const panel = (id) => document.querySelector(`[data-testid="${id}"]`);
+        return { share: z(panel('relay-share-dialog')), nested: z(panel('relay-share-qr-enlarged')), scrim: z(panel('relay-share-qr-enlarged').parentElement) };
+      });
+      assert.ok(layers.nested > layers.share && layers.scrim > layers.share, `enlarged QR is not above the share dialog: ${JSON.stringify(layers)}`);
+      await ui.capture('qr-enlarged');
+      await close.click();
+      await dialog.waitFor({ state: 'detached' });
+      // Closing the nested dialog keeps the share dialog open and hands focus back to Enlarge, with the button or Esc.
+      const enlargeFocused = () => enlarge.evaluate((el) => el === document.activeElement);
+      assert.ok(await shareDialog.isVisible(), 'share dialog closed together with the enlarged QR');
+      assert.ok(await enlargeFocused(), 'focus not restored to Enlarge after Close');
+      await page.keyboard.press('Enter');
+      await dialog.waitFor();
+      await page.keyboard.press('Escape');
+      await dialog.waitFor({ state: 'detached' });
+      assert.ok(await shareDialog.isVisible(), 'Esc on the enlarged QR also closed the share dialog');
+      assert.ok(await enlargeFocused(), 'focus not restored to Enlarge after Esc');
     } else if (ui.case === 'share-own') {
       await serverRow.getByRole('button', { name: await ui.t(`${relay}.share.action`), exact: true }).click();
       const dialog = page.getByTestId('relay-share-dialog');

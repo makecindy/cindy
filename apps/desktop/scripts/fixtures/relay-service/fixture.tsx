@@ -52,10 +52,10 @@ const sharedRelay = {
  * share:正在用服务器中转,打开分享窗口;pending:收到一条加入申请,自动弹出审批;
  * account:官方在用,同账号另一台电脑的中转出现在列表里,切换后自动加入;
  * tenant:另一个账号申请使用,已分享给一个账号;shared:用着别人分享的中转;
- * share-own:中转还不能分享给其他账号时的分享窗口。
+ * share-own:中转还不能分享给其他账号时的分享窗口;share-enlarge(-zoomed):分享窗口里放大二维码。
  */
 function initialState(name: string): SelfHostedRelayState {
-  const server = ['server', 'multi', 'share', 'pending', 'tenant', 'share-own'].includes(name);
+  const server = ['server', 'multi', 'share', 'pending', 'tenant', 'share-own'].includes(name) || name.startsWith('share-enlarge');
   const shared = name === 'shared';
   const host = name === 'host';
   const recovering = name.startsWith('retry-');
@@ -187,7 +187,7 @@ void mountPage({
             };
             return { state };
           }
-          if (ctx.case === 'share' && command.type === 'create-join-link') {
+          if ((ctx.case === 'share' || ctx.case.startsWith('share-enlarge')) && command.type === 'create-join-link') {
             // 打开时沿用、「重新生成」另要一条,都换一个可辨认的加入码。
             const code = command.fresh ? 'second' : 'first';
             state = {
