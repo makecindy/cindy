@@ -35,6 +35,7 @@ import {
   type AgentSessionHandle,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
+import { AppServerResponseError } from './app-server/client.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
 import { ACCOUNT_PROVIDER_ID, CODEX_AUTH_ADAPTER_ENTRY_INPUTS, CODEX_AUTH_ADAPTER_INPUTS_BY_PATH } from './__tests__/authAdapterEntryInputs.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
@@ -1134,6 +1135,33 @@ describe('Codex official OAuth host isolation', () => {
       expect(prepare).toHaveBeenCalledOnce();
       expect(retired).toHaveBeenCalledOnce();
       expect(createdTransports).toHaveLength(0);
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  // #13314 (unit): forkSdkSession must select the same frozen Responses identity
+  // in the one-shot process and the first fork RPC, only for a matching model.
+  it.each([
+    ['responses-model', 'isolated'], ['responses-model', 'legacy-shared'], ['chat-model', 'isolated'],
+  ] as const)('uses the fork host route for %s (%s)', async (model, policy) => {
+    const modelProvider = 'cindy_custom_0123456789abcdefabcd';
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexLocalAuthPolicy: () => policy,
+      prepareCodexExtraSpawnConfig: async (_providers, ctx) => ({
+        extraArgs: [], extraEnv: {}, codexProxyActive: true,
+        codexCustomProviderRoutes: ctx.hostPurpose === 'control-plane' && (ctx.hostScopeKey || ctx.accountHostKey)
+          ? [{ providerId: 'cprov-test', modelProviderId: modelProvider, capabilities: {}, responseModels: ['responses-model'] }]
+          : [],
+      }),
+    }));
+    try {
+      await agent.forkSdkSession({ sourceSdkSessionId: 'source', upToMessageId: undefined, providerId: 'cprov-test', model });
+      expect(createdTransports).toHaveLength(1);
+      const forks = createdTransports[0]!.lines.map(line => JSON.parse(line)).filter(req => req.method === Method.ThreadFork);
+      expect(forks).toHaveLength(1);
+      expect(forks[0].params.modelProvider).toBe(model === 'responses-model' ? modelProvider : undefined);
+      expect(createdStdioOptions[0]?.extraArgs?.includes(`model_provider=${JSON.stringify(modelProvider)}`)).toBe(model === 'responses-model');
     } finally {
       await agent.dispose();
     }
@@ -6160,13 +6188,19 @@ describe('CodexAgent.startSession developerInstructions', () => {
   // wording, authentication failures and a wrong process route stay errors.
   it.each([
     { code: -32600, data: undefined },
+    new AppServerResponseError(Method.ThreadResume, {
+      code: -32600, message: "failed to load configuration: Cannot change this thread's model provider from `cindy_openai` to `cindy_gateway` on resume.",
+    }),
+    new AppServerResponseError(Method.ThreadResume, {
+      code: -32600, message: "failed to load configuration: Cannot change this thread's model provider from `cindy_openai` to `cindy_openai` on resume.",
+    }),
     { code: -32600, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_openai', currentModelProvider: 'cindy_gateway' } },
     { code: -32600, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_openai', currentModelProvider: 'cindy_openai' } },
     { code: -32000, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_gateway', currentModelProvider: 'cindy_openai' } },
   ])('does not fork history for a non-matching native refusal ($code, $data)', async (error) => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
-      if (method === Method.ThreadResume) throw Object.assign(new Error('This chat uses another provider'), error);
+      if (method === Method.ThreadResume) throw error instanceof Error ? error : Object.assign(new Error('This chat uses another provider'), error);
       return undefined;
     }, { codexProxyActive: true, remoteCompactionProviderId: 'cindy_openai' });
     await expect(agent.startSession({ sessionId: 'resume-provider-refusal', model: 'gpt-6.1-sol', providerId: 'openai',
@@ -6183,10 +6217,13 @@ describe('CodexAgent.startSession developerInstructions', () => {
   // provider-oauth route resolved threadModelProvider to undefined and this fork
   // was only reachable through the integration fixture that declares every
   // provider unconditionally (provider-compatibility.integration.test.ts).
-  it('forks history when a switched provider resumes a thread saved on cindy_openai', async () => {
+  it.each(['structured', 'configuration'])('forks saved history on the %s provider refusal', async format => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method, params) => {
       if (method === Method.ThreadResume) {
+        if (format === 'configuration') throw new AppServerResponseError(Method.ThreadResume, {
+          code: -32600, message: "failed to load configuration: Cannot change this thread's model provider from `cindy_openai` to `cindy_gateway` on resume.",
+        });
         throw Object.assign(
           new Error('This chat uses model provider "cindy_openai", which is no longer configured'),
           { code: -32600, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_openai', currentModelProvider: 'cindy_gateway' } },
