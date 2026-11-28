@@ -96,6 +96,9 @@ function supportsWindowsSystemBackdrop(options?: ResolveVibrancyConfigOptions): 
 // window with the same material is stable, and so is a transparent window without a material.
 // `transparent` is fixed at creation: choose it from what the window has to show, and keep a
 // running window usable when that need changes before the next launch.
+// Windows 10 and earlier Windows 11 (no system backdrop) follow the same rule: Electron drops
+// WS_CAPTION / WS_THICKFRAME from transparent windows, so tiling window managers such as
+// Komorebi stop recognising them as application windows (Windows 10 build 19045, 2026-11-26).
 const windowsTransparentWindows = new WeakSet<BrowserWindow>();
 
 export function markWindowsTransparentWindow(win: BrowserWindow): void {
@@ -113,30 +116,36 @@ export function needsWindowsTransparentWindow(config: VibrancyConfig): boolean {
 
 /**
  * `rememberedNeed` is the last need the main window reported (writeWindowTransparencyHint).
- * Systems without a system backdrop have no material to conflict with, and clear desktop
- * transparency must stay available there without a restart.
+ * Only a clear desktop needs a transparent window, with or without a system backdrop.
  */
 export function resolveWindowsWindowTransparent(
   creationConfig: VibrancyConfig,
   rememberedNeed: boolean | undefined,
-  options?: ResolveVibrancyConfigOptions,
 ): boolean {
-  if (!supportsWindowsSystemBackdrop(options)) return true;
   return rememberedNeed === true || needsWindowsTransparentWindow(creationConfig);
 }
 
 /**
- * A regular window cannot be clear, so it keeps the frosted desktop until the next launch
- * creates a transparent one. A transparent window shows whatever is requested.
+ * A regular window cannot be clear, so until the next launch creates a transparent one it keeps
+ * the frosted desktop, or the opaque theme surface where no system backdrop exists (an alpha-0
+ * background on a regular window would not reveal the desktop). A transparent window shows
+ * whatever is requested.
  */
 export function fitWindowsBackdropToWindow(
   config: VibrancyConfig,
   windowIsTransparent: boolean,
+  isDark: boolean,
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
   if (windowIsTransparent || !needsWindowsTransparentWindow(config)) return config;
-  if (!supportsWindowsSystemBackdrop(options)) return config;
+  if (!supportsWindowsSystemBackdrop(options)) {
+    return { ...config, backgroundColor: opaqueSurfaceColor(isDark) };
+  }
   return { ...config, backgroundMaterial: 'acrylic' };
+}
+
+function opaqueSurfaceColor(isDark: boolean): string {
+  return isDark ? '#1f1f1e' : '#f8f8f6';
 }
 
 // macOS: a BrowserWindow created with `transparent: true` sets NSWindow.backgroundColor to
@@ -215,7 +224,7 @@ export function resolveVibrancyConfig(
   platform: string,
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
-  const opaqueBg = isDark ? '#1f1f1e' : '#f8f8f6';
+  const opaqueBg = opaqueSurfaceColor(isDark);
   const gpuFallback = options?.gpuFallback ?? isHardwareAccelerationDisabled();
   if (gpuFallback) {
     // 软件渲染回退模式关闭透明窗、原生 vibrancy 与桌面模糊，规避 GPU 合成花屏/黑块。

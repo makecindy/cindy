@@ -154,7 +154,13 @@ carrying Acrylic flickers (2026-11-11; see the research document's Windows devic
 finding). `transparent` is fixed at creation, so turning desktop blur off in a regular
 window keeps Acrylic until the next launch, and turning it on in a transparent window
 may flicker until then; the switch hint tells users to restart after turning it off.
-Systems without a system backdrop always create transparent windows. A successful native
+Systems without a system backdrop (Windows 10, Windows 11 before 22H2) follow the same
+rule: a window is created transparent only when the last session ended on a clear
+desktop. Electron removes the caption and thick-frame styles from transparent windows,
+so tiling window managers such as Komorebi stop managing them (Windows 10, 2026-11-26).
+Turning desktop transparency on in such a regular window keeps the opaque theme surface
+until the next launch; on Windows the transparency hint tells users to restart when the
+desktop does not show through. A successful native
 call alone is not visual acceptance; keep the research document's validation limits.
 Selecting artwork restores the image/video controls. Reset removes these overrides.
 While a window's opaque in-app wallpaper canvas is active, disable its covered

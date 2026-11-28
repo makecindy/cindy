@@ -415,7 +415,11 @@ export function WallpaperSection() {
             </span>
           </div>
           <p id="wallpaper-visibility-hint" className={SETTINGS_HINT}>
-            {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopVisibilityHint' : 'settings.appearance.wallpaper.visibilityHint')}
+            {t(wallpaperId !== 'none'
+              ? 'settings.appearance.wallpaper.visibilityHint'
+              : desktopBlurSwitch
+                ? 'settings.appearance.wallpaper.desktopVisibilityHintWindows'
+                : 'settings.appearance.wallpaper.desktopVisibilityHint')}
           </p>
           {!desktopBlurSwitch && (
             <>
