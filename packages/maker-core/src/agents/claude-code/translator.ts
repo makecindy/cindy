@@ -32,6 +32,7 @@ import {
   type StandaloneStopTokenHold,
 } from '@cindy/maker-shared/internal-citation';
 import type { createAsyncQueue } from '../shared/async-queue.js';
+import { isNetworkishErrorMessage } from '../shared/network-error.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { formatOverloadRetryMessage, parseOverloadError } from '../shared/overload-error.js';
 import {
@@ -101,6 +102,8 @@ export interface TurnState {
     retryAttempt?: number;
     maxRetries?: number;
   } | null;
+  /** Session-level quota candidates received since the preceding turn settled. */
+  rejectedSubscriptionWindows?: Map<string, number>;
   /**
    * 本 turn 是否由 maker 侧主动 interrupt(用户点停止 handle.abort() / upstream
    * idle watchdog, 都走 q.interrupt())。SDK 被 interrupt 后会 drain 出
@@ -388,6 +391,7 @@ function resetTurnState(turn: TurnState): void {
   turn.hasEmittedText = false;
   turn.uiEmittedText = '';
   turn.pendingApiError = null;
+  turn.rejectedSubscriptionWindows = undefined;
   turn.interruptRequested = false;
   turn.lastAssistantMsgHadSubstance = true;
   turn.lastAssistantRequestId = undefined;
@@ -703,6 +707,7 @@ interface TranslateContext {
   getModel: () => string;
   /** 当前 turn 的 provider 路由；null = 兼容旧会话的隐式默认来源。 */
   getProviderId?: () => string | null;
+  nativeSubscription?: boolean;
   /**
    * Maker capabilities 中当前模型的 contextWindow。
    * Claude Code SDK 对未知第三方模型会回 200K 默认值; maker 侧配置更准时用它覆盖。
@@ -994,14 +999,20 @@ export function translateSdkMessage(
       }).rate_limit_info;
       if (typeof info?.status !== 'string') return;
       const windowKey = typeof info.rateLimitType === 'string' ? info.rateLimitType : '';
-      const resetsAt = typeof info.resetsAt === 'number' && info.resetsAt > 0 ? info.resetsAt : null;
+      const resetsAt = typeof info.resetsAt === 'number' && Number.isFinite(info.resetsAt) && info.resetsAt > 0
+        ? info.resetsAt : null;
       if (info.status === 'rejected' && resetsAt != null) {
         // resetsAt 是 epoch 秒;误给毫秒时不再放大。
         const resetAtMs = resetsAt > 1e12 ? resetsAt : resetsAt * 1000;
         ctx.rt.rateLimitRejectedResetAtMs.set(windowKey, resetAtMs);
+        if (ctx.nativeSubscription && !ctx.turn.interruptRequested &&
+            /^(?:five_hour|seven_day(?:_opus|_sonnet|_overage_included)?)$/.test(windowKey)) {
+          (ctx.turn.rejectedSubscriptionWindows ??= new Map()).set(windowKey, resetAtMs);
+        }
         ctx.log.info('SDK ▷ rate limit rejected', { rateLimitType: windowKey, resetAtMs });
       } else if (info.status !== 'rejected') {
         ctx.rt.rateLimitRejectedResetAtMs.delete(windowKey);
+        ctx.turn.rejectedSubscriptionWindows?.delete(windowKey);
       }
       return;
     }
@@ -2545,10 +2556,24 @@ function handleResult(
       );
     const usageLimit =
       !isSafetyRefusal && (pendingApiError?.usageLimit === true || resultSignals.usageLimit);
+    // SDKRateLimitEvent has no request or parent-tool ID. The terminal result
+    // must corroborate the candidate before it can override a transport envelope.
+    const resultConfirmsPeriodicLimit =
+      /\byou(?:'|’)ve hit your (?:session|weekly|5[- ]hour) limit\b/i.test(rawResult);
+    const rejectedThisTurn = !isSafetyRefusal && msg.terminal_reason === 'api_error' && resultConfirmsPeriodicLimit
+      ? ctx.turn.rejectedSubscriptionWindows : undefined;
+    const confirmedSubscriptionLimit = Boolean(rejectedThisTurn?.size);
     // 多个窗口同时被拒时取最晚的重置,早醒只会再撞一次限额。已过点也照带:
     // 下游按零延迟立即续跑,丢掉反而只能等手动恢复。但过点的只用一次——到点后
     // 仍被本地短路拒绝时不会有新事件,反复带同一个过期时刻会让下游无限立即重试。
-    const rejectedResets = isSafetyRefusal ? [] : [...ctx.rt.rateLimitRejectedResetAtMs.values()];
+    // A cached deadline still helps SDK short-circuit quota failures. Keep it out
+    // of a later ordinary 429 or transport failure.
+    const terminalText = rawResult || pendingApiError?.message || '';
+    const unrelatedFailure = ctx.nativeSubscription
+      && (errorStatus === 429 || /\btoo\s+many\s+requests\b/i.test(terminalText) || isNetworkishErrorMessage(terminalText));
+    const rejectedResets = rejectedThisTurn?.size
+      ? [...rejectedThisTurn.values()]
+      : isSafetyRefusal || unrelatedFailure ? [] : [...ctx.rt.rateLimitRejectedResetAtMs.values()];
     const usageReset = rejectedResets.length > 0
       ? { usageResetAt: Math.max(...rejectedResets) }
       : {};
@@ -2587,7 +2612,15 @@ function handleResult(
           : {};
     queue.push({
       type: 'error',
-      data: pendingApiError
+      data: confirmedSubscriptionLimit
+        ? {
+            message: errDetail || pendingApiError?.message || 'Claude subscription usage limit reached.',
+            sdkError: 'rate_limit',
+            isTerminal: true,
+            usageLimit: true,
+            ...usageReset,
+          }
+        : pendingApiError
         ? {
             message: errorMessage,
             sdkError: pendingApiError.sdkError,

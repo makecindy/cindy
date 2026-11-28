@@ -3499,6 +3499,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       turnState.uiEmittedText = '';
       runtimeState.streamStopTokenByKey.clear();
       turnState.pendingApiError = null;
+      turnState.rejectedSubscriptionWindows = undefined;
       turnState.lastAssistantRequestId = undefined;
       turnState.lastAssistantMsgHadSubstance = true;
       // 代际前进: 迟到的被打断 result 据此被 translator 识别为已被本 send 接管。
@@ -6059,6 +6060,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // q 换代: 上一代 q 的 pending interrupted result 不可能从新 q drain 出来,
       // 残留的 interruptRequested 会错误抑制新 q 首个真实 is_error 终态 —— 兜底清。
       turnState.interruptRequested = false;
+      turnState.rejectedSubscriptionWindows = undefined;
       continuationCancellationGeneration = null;
       // Any successfully installed replacement Query isolates the cancelled
       // provider tail. This also covers rewind / invalid-resume rebuilds, so a
@@ -6100,7 +6102,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
             if (
               continuationCancellationGeneration !== null &&
-              (rawType === 'assistant' || rawType === 'stream_event' || rawType === 'result')
+              (rawType === 'assistant' || rawType === 'stream_event' || rawType === 'result' || rawType === 'rate_limit_event')
             ) {
               log.debug('ignoring provider activity from cancelled continuation query', {
                 rawType,
@@ -6263,7 +6265,11 @@ export class ClaudeCodeAgent extends BaseAgent {
                 rawType,
                 sdkSessionId,
               });
+              // A session-level rate-limit event may precede the first assistant
+              // frame. Only provider-initiated registration can carry that candidate.
+              const earlyRejections = turnState.rejectedSubscriptionWindows;
               beginNewTurn(mutableFastMode ? 'priority' : 'standard');
+              turnState.rejectedSubscriptionWindows = earlyRejections;
               resetToolLoopGuards();
               turnInFlight = true;
               // An API-error envelope produces no text/thinking/tool event. Tell
@@ -6287,6 +6293,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               log,
               getModel: () => mutableModel,
               getProviderId: () => mutableProviderId,
+              nativeSubscription: nativeCliAuth,
               getModelContextWindow: () => appliedContextWindow,
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
@@ -7597,6 +7604,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async abort() {
+        turnState.rejectedSubscriptionWindows = undefined;
         const bashStopGeneration = lastExplicitSendGeneration;
         // 只 interrupt 当前 turn, 不能 abortController.abort() ——
         // 那会杀掉整个 SDK Query, 让 streaming-input 流断开 (for await 抛
