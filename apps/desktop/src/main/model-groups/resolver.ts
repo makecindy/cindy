@@ -368,6 +368,8 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           ? { views: sshCodex ?? [], agents: ['codex'] }
           : { views, agents };
       const view = catalog.views.find((item) => item.id === candidate.providerId);
+      // 已归并的旧连接只为历史任务保留，不是独立的新选路来源；否则会绕过池内逐账号开关。
+      const mergedAlias = view?.subscriptionPoolAlias === true;
       const model = view?.models[agent]?.find((item) => item.id === candidate.model);
       const modelName = model?.name ?? candidate.model;
       const accountFact = !agentDeviceId && candidate.accountId && deps.localAccount
@@ -379,7 +381,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         .map(({ usedPercent, resetAtMs, windowMs }) => ({ usedPercent, resetAtMs, windowMs }));
       const exact = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model, effort: '', fastMode: false as const };
       // 拆平后的单账号候选与供应商路由（route.parent）不再套第二层内层自动选路。
-      const inner = !agentDeviceId && !sshHostId && !candidate.accountId && !route.parent && deps.innerQuota
+      const inner = !mergedAlias && !agentDeviceId && !sshHostId && !candidate.accountId && !route.parent && deps.innerQuota
         ? await deps.innerQuota({ providerId: candidate.providerId, model: candidate.model, agentKind: candidate.agentKind }).catch(() => null)
         : null;
       const sshAllowed = !sshHostId
@@ -397,7 +399,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
           // SSH 原生 Codex 以远端 SSH 主机目录与远端就绪态为准，不要求本机登录 openai 或安装本机 codex。
           ? !!sshCodex && isPluginModelPickerRouteAvailable(exact, sshCodex, ['codex'])
           : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents));
-      const available = baseAvailable && (!candidate.accountId || !deps.localAccount || accountFact?.available === true);
+      const available = !mergedAlias && baseAvailable && (!candidate.accountId || !deps.localAccount || accountFact?.available === true);
       const baseSourceName = view?.name ?? candidate.providerId;
       const sourceName = accountFact?.label && accountFact.label !== baseSourceName
         ? `${baseSourceName} · ${accountFact.label}`

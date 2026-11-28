@@ -145,6 +145,42 @@ describe('createModelGroupResolver', () => {
     now: () => now,
   });
 
+  // 用户停用池中的 B 后，存量路由里的旧 B 连接不能成为绕过开关的第二个来源。
+  // §3 候选准入；最小输入：旧连接仍在目录且标记 alias，账号 B 已在路由中关闭。unit，真实 resolver。
+  it.each([true, false])('rejects a merged saved alias in preview and dispatch (dryRun=%s)', async (dryRun) => {
+    const group: ModelGroupRoute = {
+      id: 'saved', name: 'Saved route', strategy: 'order',
+      candidates: [
+        { agentKind: 'codex', providerId: 'old-b', model: 'gpt' },
+        { agentKind: 'codex', providerId: 'openai', accountId: 'b', model: 'gpt', off: true },
+        { agentKind: 'codex', providerId: 'openai', accountId: 'a', model: 'gpt' },
+      ],
+    };
+    let merged = true;
+    const resolver = createModelGroupResolver({
+      config: () => ({ routes: [group] }),
+      views: async () => [
+        { ...view('old-b', 'B'), ...(merged ? { subscriptionPoolAlias: true as const, subscriptionPoolTarget: 'openai' } : {}) },
+        view('openai', 'OpenAI'),
+      ],
+      agents: () => ['codex'],
+      harnessInstalled: async () => true,
+      localAccount: (_providerId, accountId) => ({ available: true, label: accountId }),
+      quotaWindows: async () => new Map(),
+      scope: () => 'owner', now: () => NOW,
+    });
+    const request = { selection: { type: 'route', id: group.id } as const, dryRun };
+    const withA = await resolver.resolve(request);
+    expect(withA).toMatchObject({ outcome: 'routed', route: { providerId: 'openai', accountId: 'a' } });
+    expect(withA.trace[0]).toMatchObject({ state: 'skipped', why: 'unavailable' });
+    expect(withA.trace[1]).toMatchObject({ state: 'skipped', why: 'off' });
+    group.candidates[2].off = true;
+    expect(await resolver.resolve(request)).toMatchObject({ outcome: 'unavailable' });
+    // 拆出后目录不再标 alias，同一旧配置的真实独立来源可重新使用。
+    merged = false;
+    expect(await resolver.resolve(request)).toMatchObject({ outcome: 'routed', route: { providerId: 'old-b' } });
+  });
+
   // #12353 / unit: resolve a configured group when a billing hold outlives the failing task.
   it('routes around a held connection only to selectable members of the configured group', async () => {
     const group = route('order');
