@@ -890,7 +890,8 @@ export class AcpSession {
     return sessionCapabilities.resume || loadSession;
   }
 
-  private hasBackgroundWork(): boolean {
+  /** Synchronous so the plugin host can check activity immediately before stopping the engine. */
+  hasBackgroundWork(): boolean {
     if (this.ended || this.turn) return false;
     if (this.translator.openToolCount() > 0) return true;
     return this.lastBackgroundAt > 0 && this.now() - this.lastBackgroundAt <= ACP_BACKGROUND_QUIET_MS;

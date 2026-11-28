@@ -1,3 +1,8 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import type { Logger } from '@cindy/maker-core';
+import { GhostNodeRuntimeBroker } from '../../cindy-brain/nodeRuntimeBroker.js';
+import { buildAcpAgentCore } from '../../maker-host/acpHostCore.js';
 import { MarketSourceStore } from '../sources/store';
 import { compareCindyVersions, getPluginToolUi, parsePluginResolveRequest, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 import crypto from 'node:crypto';
@@ -14,7 +19,7 @@ import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { emptyPluginInstanceRegistry } from '../../cindy-brain/pluginInstanceRegistry.js';
 import { trackPluginEngineSession } from '../../cindy-brain/pluginHarnesses.js';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   ghostInstallApprovalToken,
@@ -114,6 +119,7 @@ vi.mock('../../authManager.js', () => ({
   ),
 }));
 vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: vi.fn(() => runtime.session.dataOwnerId ?? 'local'),
   getActiveAppSession: vi.fn(() => ({ ...runtime.session })),
   isAppSessionBoundaryPending: vi.fn(() => runtime.boundaryPending),
   ownerScopedUserDataPath: vi.fn((...parts: string[]) =>
@@ -122,6 +128,11 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: vi.fn(() => runtime.pluginApiBaseUrl),
+}));
+vi.mock('../../maker-host/pluginEngineModelCache.js', () => ({
+  observePluginEngineContextWindow: () => () => {},
+  observePluginEngineModelDetails: () => () => {},
+  rememberPluginHarnessModels: () => {},
 }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -4509,6 +4520,204 @@ describe('PluginMarketService migration and defaultInstall', () => {
       runtime[signal] = false;
       await h.service.snapshot();
       expect(runtime.install).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  // Unit, #13404: market snapshot must preserve the installed version and a live
+  // buildAcpAgentCore session at each check. Existing turn-only coverage misses
+  // a single in-progress tool after session/prompt has already returned.
+  it.each([
+    ['turn', 'before-check'],
+    ['turn', 'during-download'],
+    ['turn', 'during-stop-preparation'],
+    ['background tool', 'before-check'],
+    ['background tool', 'during-download'],
+    ['background tool', 'during-stop-preparation'],
+  ] as const)(
+    'keeps an ACP %s running %s, then upgrades at idle',
+    async (work, when) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-acp-'));
+      roots.push(root);
+      const manager = new GhostManager({
+        getRootDir: () => path.join(root, 'ghosts'),
+        mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir),
+      });
+      runtime.receiptManager = manager;
+      const item = summary({ ghostId: 'acp-fixture', namespace: null, defaultInstall: false });
+      const acpManifest = (version: string) => normalizedManifest({
+        ...manifest(item.ghostId, version),
+        node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['engine.cjs'] },
+        harnesses: [{ id: 'test', name: 'Test engine', protocol: 'acp', entry: 'engine.cjs' }],
+      });
+      const old = acpManifest('1.0.0');
+      const next = acpManifest('2.0.0');
+      const contents = { 'main.js': '// fixture', 'engine.cjs': '// ACP endpoint fixture', 'worker.cjs': '// fixture' };
+      const oldFile = await writeTestCindyPackage(path.join(root, 'v1.cindy'), old, contents);
+      const nextFile = await writeTestCindyPackage(path.join(root, 'v2.cindy'), next, contents);
+      const seed = await manager.install(oldFile, { initiallyEnabled: true, namespace: null, approvedHarnesses: ['test'] });
+      expect(seed).toHaveProperty('ghost');
+      const installed = manager.list()[0]!;
+      const nextBytes = fs.readFileSync(nextFile);
+      item.currentRelease = { ...item.currentRelease, id: 'release-2', version: '2.0.0',
+        sha256: crypto.createHash('sha256').update(nextBytes).digest('hex'), sizeBytes: nextBytes.length };
+      const h = harness([item]);
+      h.ledger.upsertInstallation(recordForTest(item, {
+        releaseId: 'release-1', version: '1.0.0', namespace: null,
+        rawManifestSha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(installed.dir, 'ghost.json'))).digest('hex'),
+        manifestDigest: ghostManifestDigest(installed.manifest),
+      }));
+      h.api.detail.mockResolvedValue(parsedDetail(item, { ...next, namespace: item.namespace }));
+      h.api.download.mockImplementation(async () => ({
+        url: 'https://downloads.test.invalid/plugin.cindy', expiresAt: '2099-01-01T00:00:00.000Z',
+        sha256: item.currentRelease.sha256, sizeBytes: item.currentRelease.sizeBytes,
+        pluginId: item.id, releaseId: item.currentRelease.id, ghostId: item.ghostId, namespace: null,
+      }));
+
+      const logger: Logger = {
+        trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn(),
+        child: () => logger,
+      };
+      const createProcess = () => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const stdin = new PassThrough();
+        const process = Object.assign(new EventEmitter(), {
+          stdin, stdout, stderr,
+          kill: vi.fn(() => { queueMicrotask(() => process.emit('exit', null, 'SIGTERM')); return true; }),
+          sendControl: () => { process.emit('exit', 0, null); return true; },
+        });
+        const reply = (result: unknown, id: number) => stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
+        let promptId: number | undefined;
+        const resumed = vi.fn();
+        stdin.on('data', (chunk: Buffer) => {
+          const { id, method } = JSON.parse(Buffer.from(chunk.toString(), 'base64').toString());
+          if (method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: { loadSession: true } }, id);
+          if (method === 'session/load') { resumed(); reply({}, id); }
+          if (method === 'session/new') reply({ sessionId: 'fixture' }, id);
+          if (method === 'session/prompt') promptId = id;
+        });
+        return Object.assign(process, {
+          resumed,
+          finish: () => { if (promptId !== undefined) reply({ stopReason: 'end_turn' }, promptId); },
+          tool: (update: Record<string, unknown>) => stdout.write(JSON.stringify({
+            jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'fixture', update },
+          }) + '\n'),
+        });
+      };
+      const instanceId = installedGhostStoragePart(installed);
+      const broker = new GhostNodeRuntimeBroker({
+        getGhost: () => manager.list()[0],
+        spawnProcess: () => { throw new Error('Unexpected plugin worker'); },
+        spawnChildProcess: () => {
+          const proc = createProcess();
+          queueMicrotask(() => proc.emit('spawn'));
+          return proc;
+        },
+      });
+      const spawn = async (resumeSessionId?: string) => {
+        let process: ReturnType<typeof createProcess> | undefined;
+        const agent = buildAcpAgentCore({
+          logger,
+          appVersion: '1',
+          preparePiExtraSpawnConfig: async () => null,
+          spawnHarness: async () => {
+            process = await broker.spawnHarness(instanceId, 'test') as ReturnType<typeof createProcess>;
+            return process;
+          },
+        });
+        const session = await agent.startSession({
+          workingDir: root, model: '', providerId: `acp-plugin:${instanceId}:test`, resumeSessionId,
+        });
+        if (!process) throw new Error('ACP endpoint not started');
+        return { process, session };
+      };
+      vi.useFakeTimers({ toFake: ['Date'] });
+      onTestFinished(() => { vi.useRealTimers(); });
+      const engine = await spawn();
+      const startWork = async () => {
+        await engine.session.send({ type: 'user', content: 'Run fixture' });
+        if (work === 'background tool') {
+          engine.process.tool({ sessionUpdate: 'tool_call', toolCallId: 'job', title: 'Work', status: 'in_progress' });
+          engine.process.finish();
+          await vi.waitFor(() => expect(engine.session.isTurnRunning?.()).toBe(false));
+          expect(await engine.session.hasLiveBackgroundWork?.()).toBe(true);
+        }
+      };
+      const downloadStarted = deferred();
+      const downloadGate = deferred();
+      const prepareStarted = deferred();
+      const prepareGate = deferred();
+      vi.mocked(downloadVerifiedPlugin).mockImplementation(async (_url, _expected, target) => {
+        if (when === 'during-download') {
+          downloadStarted.resolve();
+          await downloadGate.promise;
+        }
+        fs.copyFileSync(nextFile, target);
+      });
+      runtime.install.mockImplementation(async (file, options) => {
+        options.beforeCommitInLock?.();
+        const inspected = await manager.inspect(file, 'stored-release');
+        if ('rejection' in inspected) throw new Error(inspected.rejection.reason);
+        assertGhostInstallConsent(options.consent, installed, inspected.manifest, inspected.packageSha256);
+        if (when === 'during-stop-preparation') {
+          prepareStarted.resolve();
+          await prepareGate.promise;
+        }
+        options.beforeRuntimeStopInLock?.();
+        const stopped = broker.stopAndWait(instanceId);
+        await expect(spawn()).rejects.toThrow('stopping or updating');
+        await stopped;
+        const result = await manager.update(file, {
+          namespace: null, manifestSource: 'stored-release', approvedHarnesses: ['test'],
+          expectedPackageSha256: inspected.packageSha256, expectedInstalledApproval: options.expectedInstalledApproval,
+        });
+        if ('rejection' in result) throw new Error(result.rejection.reason);
+        broker.resumeHarnesses(instanceId);
+        return result.ghost;
+      });
+      try {
+        if (when === 'before-check') await startWork();
+        const check = h.service.snapshot();
+        if (when !== 'before-check') {
+          const preparingStop = when === 'during-stop-preparation';
+          const started = preparingStop ? prepareStarted : downloadStarted;
+          const gate = preparingStop ? prepareGate : downloadGate;
+          await Promise.race([started.promise, check.then(() => { throw new Error('Update did not reach the fixture gate'); })]);
+          await startWork();
+          gate.resolve();
+        }
+        await check;
+        expect(engine.process.kill).not.toHaveBeenCalled();
+        expect(engine.session.isTurnRunning?.()).toBe(work === 'turn');
+        expect(manager.list()[0]?.manifest.version).toBe('1.0.0');
+
+        if (work === 'turn') {
+          engine.process.finish();
+          await vi.waitFor(() => expect(engine.session.isTurnRunning?.()).toBe(false));
+        } else {
+          expect(await engine.session.hasLiveBackgroundWork?.()).toBe(true);
+          engine.process.tool({ sessionUpdate: 'tool_call_update', toolCallId: 'job', status: 'completed' });
+          vi.setSystemTime(Date.now() + 30_001);
+        }
+        expect(await engine.session.hasLiveBackgroundWork?.()).toBe(false);
+        await h.service.snapshot();
+        expect(engine.process.kill).toHaveBeenCalledTimes(1);
+        expect(manager.list()[0]?.manifest.version).toBe('2.0.0');
+        const replacement = await spawn('fixture');
+        try {
+          await replacement.session.send({ type: 'user', content: 'Next turn' });
+          expect(replacement.session.isTurnRunning?.()).toBe(true);
+          expect(replacement.process.resumed).toHaveBeenCalledOnce();
+          replacement.process.finish();
+        } finally {
+          await replacement.session.close();
+        }
+      } finally {
+        downloadGate.resolve();
+        prepareGate.resolve();
+        if (!engine.process.kill.mock.calls.length && engine.session.isTurnRunning?.()) engine.process.finish();
+        await engine.session.close();
+      }
     },
   );
 

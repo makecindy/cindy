@@ -157,8 +157,8 @@ export function buildAcpAgentCore(opts: BuildAcpAgentCoreOpts): AcpAgent {
 }
 
 /**
- * 把每个引擎任务会话登记到插件实例名下,直到它关闭。后台自动更新据此在有回合运行时延后,
- * 不再停掉插件进程打断正在跑的任务。
+ * 把每个引擎任务会话登记到插件实例名下，直到它关闭。回合结束后仍在运行的后台工具
+ * 也需要保留原引擎进程，后台自动更新应延后到空闲时。
  */
 function withPluginEngineTurnTracking(agent: AcpAgent): AcpAgent {
   return new Proxy(agent, {
@@ -167,11 +167,13 @@ function withPluginEngineTurnTracking(agent: AcpAgent): AcpAgent {
         return async (options: StartSessionOptions) => {
           const ref = parsePluginEngineProviderId(options.providerId);
           if (!ref) return target.startSession(options);
-          let handle: AgentSessionHandle | null = null;
+          let handle: Awaited<ReturnType<AcpAgent['startSession']>> | null = null;
           let opening = true;
           let preparingSends = 0;
           const untrack = trackPluginEngineSession(ref.ghostId, {
-            isTurnRunning: () => opening || preparingSends > 0 || handle?.isTurnRunning?.() === true,
+            isTurnRunning: () =>
+              opening || preparingSends > 0 ||
+              handle?.isTurnRunning() === true || handle?.hasBackgroundWork?.() === true,
           });
           try {
             handle = await target.startSession(options);
