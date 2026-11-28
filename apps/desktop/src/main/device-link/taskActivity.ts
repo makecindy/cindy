@@ -3,7 +3,39 @@ import {
   type HostTaskActivity,
   type HostTaskActivityCompanion,
 } from '@cindy/device-link';
+import { taskInboxSection } from '@cindy/maker-shared/live-task-priority';
+import { resolveTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
+import type { SessionInboxFacts } from '../localDb/sessionInboxFacts.js';
+
+/**
+ * The phone counts only what the app shows and lets the user clear. Tasks follow the inbox
+ * rules: a snoozed task, or a teammate's own task with nothing but a result, is not in the inbox
+ * and cannot be cleared from it, so it does not count. A teammate's main conversation is not an
+ * inbox row (2026-11-28): the teammate section shows its waiting, error, running and unread
+ * states, there is no snooze for it, and opening it clears them, so it counts unless idle.
+ * A row whose facts are not loaded yet keeps counting; the loader republishes once they arrive.
+ */
+export function keepInboxCountedTasks(
+  rows: readonly AgentIslandSessionSnapshot[],
+  factsFor: (sessionId: string) => SessionInboxFacts | null | undefined,
+  now: number,
+): AgentIslandSessionSnapshot[] {
+  return rows.filter((row) => {
+    const facts = factsFor(row.sessionId);
+    if (!facts) return true;
+    if (facts.status === 'archived') return false;
+    const waiting = row.phase === 'needs-interaction';
+    const failed = row.phase === 'error' && row.attention;
+    const running = row.phase === 'running';
+    const unread = row.phase === 'completed' && row.attention;
+    if (facts.kind === 'canonical') {
+      return resolveTeammateStatus({ waiting, failed, working: running, unread }) !== 'idle';
+    }
+    const section = taskInboxSection(facts, { waiting: waiting || failed, running, unread, teammate: facts.kind === 'teammate-task' }, now);
+    return section === 'inbox' || section === 'working';
+  });
+}
 
 /**
  * Execution-host counts from the island overview (not Home pagination), so the phone matches this computer.

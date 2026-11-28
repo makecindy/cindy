@@ -123,7 +123,7 @@ import {
   type PersistSessionFieldsOptions,
 } from '../sessionFieldPersistence.js';
 import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
-import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
+import { notifyAgentIslandInboxFactsChanged, notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
 import { recoverGeneratedImagesForHistory } from '../../cindy-media/generatedImageRecovery';
 import { noteSessionClearBoundary } from '../../messagePersistBroadcaster.desktop';
@@ -612,6 +612,9 @@ export function broadcastSessionPatched(
     } catch {
       // Teammate roster refresh never blocks the task patch itself.
     }
+  }
+  if (('snoozedUntil' in patch || 'snoozedAt' in patch || 'userSendAt' in patch || 'lastTurnEndedAt' in patch) && !isProvisionalSession(sessionId)) {
+    notifyAgentIslandInboxFactsChanged(sessionId);
   }
   let windows: ReturnType<typeof BrowserWindow.getAllWindows> = [];
   try {

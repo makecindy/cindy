@@ -464,7 +464,7 @@ export interface OrcaTeamServiceDeps {
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
-  closeWorkerSession(sessionId: string, beforeClose?: () => Promise<void>): Promise<void>;
+  closeWorkerSession(sessionId: string, beforeClose?: () => Promise<void>, intent?: 'archive'): Promise<void>;
   /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
   closeWorkerSessionIfIdle(sessionId: string, sendLockHeld?: boolean, options?: { intent: 'explicit-release' }): Promise<boolean>;
   /** pending / dispatch-boundary / recovery 输入任一存在时返回 true。 */
@@ -486,6 +486,7 @@ export interface OrcaTeamServiceDeps {
     message: string;
     workerId: string;
     delivery?: 'queue' | 'steer';
+    initialTask?: boolean;
     imagePaths?: string[];
     dispatchMeta: {
       source: string;
@@ -1219,6 +1220,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
       dispatchMeta: params.dispatchMeta,
       assertCurrent,
+      initialTask: true,
       // Creation can queue its first task too; acceptance then lands after this call.
       assertDeliveryCurrent: await deps.captureDeliveryAuthority?.(link.leadSessionId),
     });
@@ -1278,6 +1280,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     resolved: ResolvedWorker;
     message: string;
     mode: 'normal' | 'interrupt';
+    initialTask?: boolean;
     delivery?: 'queue' | 'steer';
     imagePaths?: string[];
     dispatchMeta: DispatchWorkerTaskParams['dispatchMeta'];
@@ -1425,6 +1428,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             targetSessionId: target.sessionId,
             message: params.message,
             workerId: link.workerId,
+            ...(params.initialTask ? { initialTask: true } : {}),
             ...(params.delivery ? { delivery: params.delivery } : {}),
             ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
             dispatchMeta: params.dispatchMeta,
@@ -2237,7 +2241,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       catch (err) { authorityRejected = true; throw err; }
     } : undefined;
     try {
-      if (beforeClose) await deps.closeWorkerSession(sessionId, beforeClose);
+      if (owner === 'archiveWorker') await deps.closeWorkerSession(sessionId, beforeClose, 'archive');
+      else if (beforeClose) await deps.closeWorkerSession(sessionId, beforeClose);
       else await deps.closeWorkerSession(sessionId);
     } catch (err) {
       if (authorityRejected) throw err;

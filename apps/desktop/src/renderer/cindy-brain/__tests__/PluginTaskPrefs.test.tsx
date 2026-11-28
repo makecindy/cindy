@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { PluginTaskPrefs } from '../PluginTaskPrefs';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 
 const state = vi.hoisted(() => ({
@@ -42,6 +43,11 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({ ModelSelector: (props: a
     providerId: 'acp-plugin:antigravity:agy', modelId: 'gemini-4-neon', effort: 'high',
   })}>acp</button> : null}
   <span data-testid="trigger-catalog">{props.deviceId ?? 'local'}</span>
+  {props.deviceId ? (
+    <button onClick={props.readModelGroupDevices}>
+      {props.modelGroups?.config.routes[0]?.name ?? 'Open model picker'}
+    </button>
+  ) : null}
   </>
 ) }));
 vi.mock('@/components/new-chat/PermissionSelector', () => ({ PermissionSelector: (props: any) => (
@@ -142,6 +148,40 @@ it.each([
   } } : {})} />);
   expect(screen.getByTestId('trigger-catalog').textContent).toBe(expected);
 });
+// Test value (unit/jsdom): model-groups.md §6.3 requires reopening to fetch the remote
+// snapshot. The existing panel test covers mounting the selector, but not the settings
+// caller's wiring. A transient failure in the first GET must still allow a successful
+// GET from the model field. The picker double only exposes the read and returned routes.
+it('reloads remote plugin routes from the model field after the initial read fails', async () => {
+  const owner = getDataOwnerGeneration();
+  setDataOwnerGeneration('plugin-prefs-test', owner.generation + 1);
+  const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+    if (channel !== 'model-groups:get') return {};
+    return { routes: [{ id: 'fallback', name: 'Remote fallback', strategy: 'order', candidates: [] }] };
+  });
+  invoke.mockRejectedValueOnce(new Error('Temporary model-groups read failure'));
+  Object.assign(window.electronAPI, { deviceLink: { invoke } });
+  const reads = () => invoke.mock.calls.filter(([, channel]) => channel === 'model-groups:get');
+
+  try {
+    await act(async () => {
+      render(<PluginTaskPrefs ghostId="plugin" remote={{
+        deviceId: 'host',
+        value: { revision: '1', config: {}, permissionModes: ['ask'], defaultPermissionMode: 'ask' },
+        auxiliaryModelLabel: null,
+        onChange: vi.fn(),
+      }} />);
+    });
+    expect(reads()).toHaveLength(1);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open model picker' })));
+    expect(reads()).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Remote fallback' })).toBeTruthy();
+  } finally {
+    cleanup();
+    setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+  }
+});
+
 it('quick-answer-only plugins show just the model row', () => {
   render(<PluginTaskPrefs ghostId="plugin" showTaskRows={false} />);
   expect(screen.queryByTestId('remote-row')).toBeNull();

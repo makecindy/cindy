@@ -12,7 +12,11 @@
  */
 import type { ModelSelectorContentBaseProps } from '../components/new-chat/ModelSelector';
 import type { Effort } from '@/lib/userPreferences.types';
-import type { ModelGroupsConfig } from '../../shared/modelGroups';
+import {
+  modelGroupsConfigForRemote,
+  modelGroupsConfigFromRemote,
+  type ModelGroupsConfig,
+} from '../../shared/modelGroups';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -724,5 +728,192 @@ describe('合并供应商路由的成员在分享上：选中行按草稿实际�
     await act(async () => { fireEvent.keyDown(slider(), { key: 'Home' }); });
     expect(onEffortChange).toHaveBeenCalledWith('low');
     expect(slider().getAttribute('aria-valuetext')).toBe('低');
+  });
+});
+
+/**
+ * 测试价值（engineering-conventions §3.2）
+ * - 生产入口与可观察结果：真实 `ModelSelectorContent` + `modelGroupsConfigForRemote` / `modelGroupsConfigFromRemote`
+ *   渲染远控另一台电脑（`deviceId="mac-studio"`, `homeDeviceId="mac-studio"`, `catalogHostDeviceId="mac-studio"`）时的
+ *   左栏合并供应商格、点击合并模型行触发真实成员选择与 `onAttach` 绑定，以及打开面板触发 `readDevices` 刷新。
+ * - 规则／Bug 依据：2026-11-28 远控 Mac Studio 反馈供应商聚合未显示/不可选，排查确认远端选择器打开未触发
+ *   `deviceModelGroups.read` 刷新，同时需锁住新旧被控端 `includeSourceRoutes` 协议回包与远控合并选路链路。
+ * - 现有覆盖缺口：本文件既有测试仅覆盖本机草稿下分享成员的合并路由，未覆盖远控另一台电脑（`homeDeviceId` +
+ *   `catalogHostDeviceId`）同时含本机多连接与跨机成员的合并供应商路由端到端解析与选择。
+ * - 最小失败输入：被控端返回 `modelGroupsConfigForRemote(hostConfig, { includeSourceRoutes: true })` 后，
+ *   3 个 OpenAI 连接仍分散成 3 格、点选未触发 `onAttach`，或首次读取失败（没有配置）后
+ *   重开面板不能继续读取路由。
+ * - tier：unit/jsdom。
+ */
+describe('远控另一台电脑时的供应商聚合路由（sourceRoutes）', () => {
+  const hostId = 'mac-studio';
+  const peerId = 'mac-peer';
+  const peerCatalogKey = `model-catalog:${JSON.stringify([hostId, peerId])}`;
+  const openAiProvider = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    name,
+    source: 'user',
+    logoKind: 'openai',
+    agents: ['codex'],
+    auth: { method: 'oauth' },
+    routing: { codex: {} },
+    connected: true,
+    models: {
+      codex: [{
+        id: 'gpt-6.2-astra',
+        name: 'GPT-6.2-Astra',
+        contextWindow: 200000,
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'high',
+      }],
+    },
+    ...extra,
+  });
+  const hostFullConfig: ModelGroupsConfig = {
+    routes: [
+      {
+        id: 'auto-task',
+        name: '自动化任务',
+        strategy: 'expiring',
+        candidates: [{ agentKind: 'codex', providerId: 'openai-1', model: 'gpt-6.2-astra' }],
+      },
+      {
+        id: 'src:gpt-6-2',
+        name: 'GPT-6.2-Astra',
+        strategy: 'expiring',
+        parent: { id: 'auto:openai', name: 'OpenAI' },
+        candidates: [
+          { agentKind: 'codex', providerId: 'openai-1', model: 'gpt-6.2-astra' },
+          { agentKind: 'codex', providerId: 'openai-2', model: 'gpt-6.2-astra' },
+          { agentKind: 'codex', providerId: 'openai-3', model: 'gpt-6.2-astra' },
+          { agentKind: 'codex', providerId: 'openai-peer', model: 'gpt-6.2-astra', agentDeviceId: peerId },
+        ],
+      },
+    ],
+    sourceRoutes: [
+      {
+        id: 'auto:openai',
+        name: 'OpenAI',
+        strategy: 'expiring',
+        auto: true,
+        sources: [
+          { providerId: 'openai-1' },
+          { providerId: 'openai-2' },
+          { providerId: 'openai-3' },
+          { providerId: 'openai-peer', agentDeviceId: peerId },
+        ],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    catalogs.byDevice[hostId] = [
+      openAiProvider('openai-1', 'OpenAI 1'),
+      openAiProvider('openai-2', 'OpenAI 2'),
+      openAiProvider('openai-3', 'OpenAI 3'),
+    ];
+    catalogs.byDevice[peerCatalogKey] = [
+      openAiProvider('openai-peer', 'OpenAI Peer', { remoteInvocationEnabled: true }),
+    ];
+  });
+
+  afterEach(() => {
+    delete catalogs.byDevice[hostId];
+    delete catalogs.byDevice[peerCatalogKey];
+  });
+
+  it('首次读取失败后重开面板可补读并选中合并供应商路由', async () => {
+    const wire = modelGroupsConfigForRemote(hostFullConfig, { includeSourceRoutes: true });
+    const received = modelGroupsConfigFromRemote(wire);
+    const onUnifiedSelect = vi.fn(async () => true);
+    const onAttach = vi.fn();
+    const readDevices = vi.fn();
+
+    const panel = (config?: ModelGroupsConfig) => (
+      <ModelSelectorContent
+        deviceId={hostId}
+        modelId="gpt-6.2-astra"
+        effort="high"
+        currentProviderId="openai-1"
+        vendorKey="codex"
+        actualRoute={false}
+        onModelChange={vi.fn()}
+        onEffortChange={vi.fn()}
+        onUnifiedSelect={onUnifiedSelect}
+        remoteAgent={{
+          homeDeviceId: hostId,
+          catalogHostDeviceId: hostId,
+          devices: [{ deviceId: peerId, name: 'Mac Peer' }],
+          selectedDeviceId: null,
+        }}
+        readModelGroupDevices={readDevices}
+        modelGroups={config ? { config, active: null, onSelect: vi.fn(), onAttach } : undefined}
+      />
+    );
+
+    const firstOpen = render(panel());
+    expect(readDevices).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-rail-item="provider:sroute:auto:openai"]')).toBeNull();
+    firstOpen.unmount();
+
+    const secondOpen = render(panel());
+    expect(readDevices).toHaveBeenCalledTimes(2);
+    secondOpen.rerender(panel(received));
+    expect(readDevices).toHaveBeenCalledTimes(2);
+    const railKeys = Array.from(document.querySelectorAll('[data-rail-item]')).map((el) => el.getAttribute('data-rail-item'));
+    expect(railKeys).toContain('model-groups');
+    expect(railKeys).toContain('provider:sroute:auto:openai');
+    expect(railKeys).not.toContain('provider:openai-1');
+    expect(railKeys).not.toContain('provider:openai-2');
+    expect(railKeys).not.toContain('provider:openai-3');
+    expect(railKeys.some((key) => key?.startsWith('remote:'))).toBe(false);
+
+    const row = within(list()).getByText('GPT-6.2-Astra').closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(onUnifiedSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'openai-1',
+        modelId: 'gpt-6.2-astra',
+        agentDevice: null,
+      }),
+    );
+    expect(onAttach).toHaveBeenCalledWith({ type: 'route', id: 'src:gpt-6-2' });
+  });
+
+  it('旧版被控端未下发 sourceRoutes 时保留自定义路由，供应商回退为各自独立显示', () => {
+    const legacyWire = modelGroupsConfigForRemote(hostFullConfig);
+    const received = modelGroupsConfigFromRemote(legacyWire);
+
+    render(
+      <ModelSelectorContent
+        deviceId={hostId}
+        modelId="gpt-6.2-astra"
+        effort="high"
+        currentProviderId="openai-1"
+        vendorKey="codex"
+        actualRoute={false}
+        onModelChange={vi.fn()}
+        onEffortChange={vi.fn()}
+        onUnifiedSelect={vi.fn(async () => true)}
+        remoteAgent={{
+          homeDeviceId: hostId,
+          catalogHostDeviceId: hostId,
+          devices: [{ deviceId: peerId, name: 'Mac Peer' }],
+          selectedDeviceId: null,
+        }}
+        modelGroups={{
+          config: received,
+          active: null,
+          onSelect: vi.fn(),
+          onAttach: vi.fn(),
+        }}
+      />,
+    );
+
+    expect(received.sourceRoutes).toBeUndefined();
+    expect(within(list()).getByText('自动化任务')).toBeTruthy();
+    expect(within(list()).getAllByText('GPT-6.2-Astra').length).toBe(3);
   });
 });
