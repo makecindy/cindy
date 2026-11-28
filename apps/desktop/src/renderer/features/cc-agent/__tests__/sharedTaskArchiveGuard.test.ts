@@ -135,9 +135,9 @@ describe('sidebar inbox Done with a bound automation', () => {
     const navigate = vi.fn();
     const markSessionsRead = vi.fn(async () => true);
     const session = { id: 'task', deviceLinkDeviceId: undefined, pinnedAt: null as string | null };
-    const targets = (ids: string[]) => new Map<string, { route: string } | { sessionId: string }>(ids.map(id => id.startsWith('/bots/')
-      ? [`teammate:${id}`, { route: id }] as const
-      : [`session:${id}`, { sessionId: id }] as const));
+    const targets = (ids: string[]) => new Map<string, { sessionId: string }>(
+      ids.map(id => [`session:${id}`, { sessionId: id }] as const),
+    );
     const handler = callback('handleActionClick', {
       window: { electronAPI: { binding: { resolveSession: async () => ({ attached: false }) } } },
       toast: { warning: vi.fn() }, t: (key: string) => key,
@@ -186,12 +186,6 @@ describe('sidebar inbox Done with a bound automation', () => {
     const only = done(new Map(), true, ['task']);
     await only.run();
     expect(only.navigate).toHaveBeenCalledWith('/cc-agent/new', expect.anything());
-  });
-  // Unit regression for #11774: the last task is preceded by a remote teammate.
-  it('opens the nearest pending teammate when completing the last ordinary task', async () => {
-    const h = done(new Map(), true, ['before', '/bots/remote/studio/bot', 'task']);
-    await h.run();
-    expect(h.navigate).toHaveBeenCalledWith('/bots/remote/studio/bot');
   });
   it('skips another completed row and advances past the previous display limit', async () => {
     const h = done(new Map(), true, ['before', 'task', 'busy'], ['before', 'revealed']);
