@@ -42,6 +42,8 @@ describe('remote Claude environment', () => {
       CLAUDE_CODE_SUBSCRIPTION_TYPE: 'stale-tier',
       CLAUDE_CODE_RATE_LIMIT_TIER: 'stale-rate-limit',
       CLAUDE_CODE_SUBAGENT_MODEL: 'stale-model',
+      // #13169 (unit): an unpinned session must use the CLI default even on a polluted SSH host.
+      ANTHROPIC_SMALL_FAST_MODEL: 'shell/model',
       ANTHROPIC_BASE_URL: 'https://stale.example',
       ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer stale',
       CLAUDE_CONFIG_DIR: '/home/remote/.claude',
@@ -62,6 +64,9 @@ describe('remote Claude environment', () => {
       CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
       CLAUDE_CONFIG_DIR: '/home/remote/.xdt-server/v1/claude-home',
     });
+    // Both an explicit override and a session pin arrive in the controller env.
+    const pinned = buildRemoteClaudeSdkEnv({ ANTHROPIC_SMALL_FAST_MODEL: 'session/model' }, daemonEnv);
+    expect(pinned.ANTHROPIC_SMALL_FAST_MODEL).toBe('session/model');
     expect(daemonEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe('stale-remote-oauth');
   });
 

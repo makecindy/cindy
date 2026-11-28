@@ -170,6 +170,8 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   // host 接管标记:非订阅会话由 buildClaudeEnv 显式写 '1';继承来的残留(终端里的 cc
   // 会话跑 dev)会让订阅会话的 CLI 不读自己的登录凭证,而 SDK merge 只能覆盖、删不掉。
   'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
+  // 内部小模型由会话钉定或应用显式配置；继承值会抢在会话钉定之前生效。
+  'ANTHROPIC_SMALL_FAST_MODEL',
   // 子代理派发覆盖:这是 host 独占的键(值由「Subagent 模型」设置经
   // subagent-model-default.ts 解析决定),继承来的残留会以最高优先级盖掉用户手写 agent 的
   // `model:`,而且**盖得静默**。典型泄漏路径:终端里的 cc 会话跑 dev,Electron 从

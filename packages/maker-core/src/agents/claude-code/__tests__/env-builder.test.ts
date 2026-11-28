@@ -11,6 +11,7 @@ import {
   buildClaudeEnv,
   exploreInheritCapEnvNeedsSync,
   shouldDisableExploreInheritCap,
+  stripSensitiveAnthropicEnv,
 } from '../env-builder.js';
 
 const MODEL_CONTEXT_WINDOWS_ENV = 'XDT_MAKER_MODEL_CONTEXT_WINDOWS';
@@ -156,28 +157,23 @@ describe('buildClaudeEnv', () => {
     expect(env).toEqual({ CLAUDE_CODE_ENTRYPOINT: entrypoint, [credential]: 'route-token' });
   });
 
-  it('pins ANTHROPIC_SMALL_FAST_MODEL to the session wire model when provided (#3557)', async () => {
-    // 网关路由会话:CLI 内部小模型调用不能用内置裸名默认值(网关白名单按
-    // 字面比对必 403),钉到会话自身已授权的 wire 模型。
-    const env = await buildClaudeEnv(createAuthAdapter(), {}, {
-      smallFastModel: 'anthropic/claude-opus-5',
-    });
-
-    expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe('anthropic/claude-opus-5');
+  // #13169 (unit): a value inherited from the launcher used to bypass the session
+  // pin. Exercise both host startup (before SDK env merging) and local env assembly.
+  it('removes the inherited small fast model from the host startup environment', () => {
+    const startupEnv = { ANTHROPIC_SMALL_FAST_MODEL: 'parent/model' };
+    stripSensitiveAnthropicEnv(startupEnv);
+    expect(startupEnv.ANTHROPIC_SMALL_FAST_MODEL).toBeUndefined();
   });
 
-  it('leaves ANTHROPIC_SMALL_FAST_MODEL untouched when not provided or already set (#3557)', async () => {
-    // 裸名会话(订阅直连/自定义中继)不传 → 保持 CLI 默认行为零变化。
-    const absent = await buildClaudeEnv(createAuthAdapter(), {});
-    expect(absent.ANTHROPIC_SMALL_FAST_MODEL).toBeUndefined();
-
-    // behaviorFlags / 用户显式覆盖优先,不被会话值盖掉。
-    const overridden = await buildClaudeEnv(
-      createAuthAdapter(),
-      { behaviorFlags: { ANTHROPIC_SMALL_FAST_MODEL: 'anthropic/claude-haiku-4-5' } },
-      { smallFastModel: 'anthropic/claude-opus-5' },
-    );
-    expect(overridden.ANTHROPIC_SMALL_FAST_MODEL).toBe('anthropic/claude-haiku-4-5');
+  it.each([
+    { source: 'CLI default', pin: undefined, explicit: undefined, expected: undefined },
+    { source: 'session model', pin: 'session/model', explicit: undefined, expected: 'session/model' },
+    { source: 'explicit override', pin: 'session/model', explicit: 'user/model', expected: 'user/model' },
+  ])('uses the $source for internal calls despite an inherited small fast model', async ({ pin, explicit, expected }) => {
+    vi.stubEnv('ANTHROPIC_SMALL_FAST_MODEL', 'parent/model');
+    const behaviorFlags = explicit ? { ANTHROPIC_SMALL_FAST_MODEL: explicit } : undefined;
+    const env = await buildClaudeEnv(createAuthAdapter(), { behaviorFlags }, { smallFastModel: pin });
+    expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe(expected);
   });
 
   it('passes requested credential mode to the auth adapter', async () => {
