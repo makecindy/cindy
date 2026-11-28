@@ -4,6 +4,7 @@
  * failed recycle records). Tier: unit; no real Git processes or DB access.
  */
 import { describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 import { computeWorkspaceClutterTier } from '../../../shared/worktreeWorkspaceClutter';
 import { parseLinkedWorktreePaths, readWorkspaceClutterSummary } from '../workspaceClutter';
 
@@ -149,10 +150,34 @@ describe('readWorkspaceClutterSummary', () => {
   });
 
   it('ignores the primary checkout path when parsing porcelain output', () => {
+    const repoRoot = path.resolve('/repo');
+    const linkedPath = path.join(repoRoot, '.cindy-worktrees', 'wt-1');
     const linked = parseLinkedWorktreePaths(
-      'worktree /repo\nHEAD 111\n\nworktree /repo/.cindy-worktrees/wt-1\nHEAD 222\n',
-      '/repo',
+      `worktree ${repoRoot}\nHEAD 111\n\nworktree ${linkedPath}\nHEAD 222\n`,
+      process.platform === 'win32' ? repoRoot.toLowerCase() : repoRoot,
     );
-    expect(linked).toEqual(['/repo/.cindy-worktrees/wt-1']);
+    expect(linked).toEqual([linkedPath]);
+  });
+
+  it('protects a worktree used from a nested task directory and fails closed when references cannot be read', async () => {
+    const gitExec = vi.fn(async (args: readonly string[]) => ({
+      stdout: args[0] === 'worktree' ? 'worktree /repo\n\nworktree /repo/.cindy-worktrees/live\n' : 'main\ncindy/old\n',
+      stderr: '',
+    }));
+    const deps = {
+      gitExec: gitExec as never,
+      realpath: async (p: string) => p,
+      listFailedRecyclePaths: async () => [],
+    };
+    const summary = await readWorkspaceClutterSummary('/repo', {
+      ...deps,
+      readActiveWorktreePaths: async () => ['/repo/.cindy-worktrees/live/packages/app'],
+    });
+    expect(summary.activeWorktreeCount).toBe(1);
+    expect(summary.protectedWorktreePaths).toEqual(['/repo/.cindy-worktrees/live']);
+    await expect(readWorkspaceClutterSummary('/repo', {
+      ...deps,
+      readActiveWorktreePaths: async () => { throw new Error('DB unavailable'); },
+    })).rejects.toThrow('DB unavailable');
   });
 });

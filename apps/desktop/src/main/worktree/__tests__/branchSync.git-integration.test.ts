@@ -71,6 +71,9 @@ function fixture() {
   const branch = `case-${++sequence}`;
   const repo = path.join(root, branch);
   git(root, 'clone', remote, repo);
+  // Production rebase invokes Git without the helper's per-command identity.
+  git(repo, 'config', 'user.name', 'Cindy Test');
+  git(repo, 'config', 'user.email', 'test@example.invalid');
   git(repo, 'checkout', '-b', branch);
   git(repo, 'push', '-u', 'origin', branch);
   git(seed, 'checkout', '-B', branch, 'main');
@@ -368,6 +371,33 @@ it('reports conflicting paths via merge-tree and refuses rebase without leaving 
   expect(fs.existsSync(path.join(f.repo, '.git', 'rebase-merge'))).toBe(false);
 });
 
+it('keeps an ignored file when the remote starts tracking its path', async () => {
+  const f = fixture();
+  commit(f.repo, '.gitignore', 'config.json\n');
+  fs.writeFileSync(path.join(f.repo, 'config.json'), 'private local config');
+  f.advance('config.json');
+  const local = commit(f.repo, 'local-file', 'local change');
+  git(f.repo, 'fetch', 'origin');
+  expect(await readBranchSyncStatus(f.req)).toMatchObject({ blocked: 'diverged', divergedConflict: true });
+  expect(await syncBranch({ ...f.req, strategy: 'rebase' })).toMatchObject({ updated: 0 });
+  expect(git(f.repo, 'rev-parse', 'HEAD')).toBe(local);
+  expect(fs.readFileSync(path.join(f.repo, 'config.json'), 'utf8')).toBe('private local config');
+});
+
+it('refuses automatic rebase of local merge commits', async () => {
+  const f = fixture();
+  git(f.repo, 'checkout', '-b', 'side');
+  commit(f.repo, 'side-file', 'side change');
+  git(f.repo, 'checkout', f.branch);
+  git(f.repo, 'merge', '--no-ff', 'side', '-m', 'merge side');
+  const local = git(f.repo, 'rev-parse', 'HEAD');
+  f.advance('remote-file');
+  git(f.repo, 'fetch', 'origin');
+  expect(await readBranchSyncStatus(f.req)).toMatchObject({ blocked: 'diverged', divergedConflict: true });
+  expect(await syncBranch({ ...f.req, strategy: 'rebase' })).toMatchObject({ updated: 0 });
+  expect(git(f.repo, 'rev-parse', 'HEAD')).toBe(local);
+});
+
 it('auto fast-forwards clean default branch after merge and skips dirty or ahead checkouts', async () => {
   const repo = path.join(root, `auto-ff-${++sequence}`);
   git(root, 'clone', remote, repo);
@@ -389,6 +419,10 @@ it('auto fast-forwards clean default branch after merge and skips dirty or ahead
 
   // Clean checkout fast-forwards automatically.
   fs.unlinkSync(path.join(repo, 'scratch.txt'));
+  expect(await tryFastForwardDefaultBranchAfterMerge(repo, async () => true)).toEqual({
+    status: 'skipped', reason: 'busy',
+  });
+  expect(git(repo, 'rev-parse', 'HEAD')).toBe(dirtyBefore);
   expect(await tryFastForwardDefaultBranchAfterMerge(repo)).toEqual({
     status: 'updated',
     branch: 'main',

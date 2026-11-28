@@ -137,6 +137,7 @@ const toggleWorktreeSwitch = async () => {
   });
 };
 const refreshButton = () => screen.getByTestId('workspace-sync-header-btn');
+const syncButton = () => screen.getByRole('button', { name: 'newChat.workspaceCapsule.syncNow' });
 // Regression: remote Git continues after the old 90s request budget; follow the
 // operation handle rather than repeating the mutation. Unit tier, real hook/UI.
 it('continues waiting for the same remote fetch and shows its final result', async () => {
@@ -152,13 +153,13 @@ it('continues waiting for the same remote fetch and shows its final result', asy
   render(<BranchWorktreeChip {...props} deviceId="remote-a" />);
   await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
-  fireEvent.click(refreshButton());
-  await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
+  fireEvent.click(syncButton());
+  await waitFor(() => expect(invoke.mock.calls.filter((call) => call[1] === 'worktree:sync-branch')).toHaveLength(3));
   const writes = invoke.mock.calls.filter((call) => call[1] === 'worktree:sync-branch');
   expect(writes.map((call) => call[2])).toEqual([
-    [{ baseRepo: '/repo', branch: 'main', waitForResult: true }],
-    [{ baseRepo: '/repo', branch: 'main', waitForResult: true, operationId }],
-    [{ baseRepo: '/repo', branch: 'main', waitForResult: true, operationId }],
+    [{ baseRepo: '/repo', branch: 'main', waitForResult: true, strategy: 'ff-only' }],
+    [{ baseRepo: '/repo', branch: 'main', waitForResult: true, strategy: 'ff-only', operationId }],
+    [{ baseRepo: '/repo', branch: 'main', waitForResult: true, strategy: 'ff-only', operationId }],
   ]);
   expect(mocks.toast).not.toHaveBeenCalled();
 });
@@ -181,29 +182,28 @@ it.each(['transport', 'terminal', 'selection-change'] as const)(
     const view = render(<BranchWorktreeChip {...props} deviceId="remote-a" />);
     await openPopover();
     await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
-    fireEvent.click(refreshButton());
-    let retry = await screen.findByRole('button', { name: /newChat.branchSync.failed/ });
+    fireEvent.click(syncButton());
+    await waitFor(() => expect(polls).toBe(2));
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalled());
+    let retry = syncButton();
+    await waitFor(() => expect(retry.hasAttribute('disabled')).toBe(false));
     expect(polls).toBe(2);
     if (failure === 'selection-change') {
       view.rerender(<BranchWorktreeChip {...props} branchLabel="next" deviceId="remote-a" />);
       await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
-      retry = await screen.findByRole('button', { name: /newChat.branchSync.action/ });
+      retry = syncButton();
     }
     fireEvent.click(retry);
-    await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
+    await waitFor(() => expect(polls).toBe(3));
     expect(invoke.mock.calls.filter((call) => call[1] === 'worktree:sync-branch')[2][2]).toEqual([
       {
         baseRepo: '/repo',
         branch: failure === 'selection-change' ? 'next' : 'main',
         waitForResult: true,
+        strategy: 'ff-only',
         ...(failure === 'transport' ? { operationId } : {}),
       },
     ]);
-    fireEvent.click(screen.getByRole('button', { name: /newChat.branchSync.updated/ }));
-    await waitFor(() => expect(polls).toBe(4));
-    expect(
-      invoke.mock.calls.filter((call) => call[1] === 'worktree:sync-branch')[3][2][0],
-    ).not.toHaveProperty('operationId');
   },
 );
 
@@ -380,8 +380,8 @@ it('offers origin sources and remote refresh while unchecked', async () => {
   expect(screen.getByRole('group', { name: 'newChat.branchSync.remoteGroup' })).toBeTruthy();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
   fireEvent.click(refreshButton());
-  await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
-  expect(sync).toHaveBeenCalled();
+  await waitFor(() => expect(status).toHaveBeenCalledTimes(3));
+  expect(sync).not.toHaveBeenCalled();
   fireEvent.click(screen.getAllByRole('option', { name: /origin\/main/ })[0]);
   expect(props.onPick).toHaveBeenCalledWith('refs/remotes/origin/main');
 });
@@ -406,20 +406,20 @@ it('blocks duplicate refresh clicks while leaving branch selection usable', asyn
   render(<BranchWorktreeChip {...props} />);
   await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
+  fireEvent.click(syncButton());
   fireEvent.click(refreshButton());
-  fireEvent.click(screen.getByRole('button', { name: /newChat.branchSync.fetching/ }));
   expect(screen.getByRole('combobox')).toBeTruthy();
   expect(sync).toHaveBeenCalledOnce();
   await act(async () => resolve({ status: baseStatus, updated: 3 }));
-  expect(screen.getByRole('button', { name: /newChat.branchSync.updated/ })).toBeTruthy();
+  expect(refreshButton()).toBeTruthy();
 });
 it('explains a disabled conflict, then rechecks locally on hover', async () => {
   status.mockResolvedValue({ ...baseStatus, blocked: 'conflict' });
   render(<BranchWorktreeChip {...props} />);
   await waitFor(() => expect(status).toHaveBeenCalledTimes(1));
   await openPopover();
-  const button = await screen.findByRole('button', { name: /newChat.branchSync.conflict/ });
-  expect(button.getAttribute('aria-disabled')).toBe('true');
+  const notice = await screen.findByText(/newChat.branchSync.conflict/);
+  expect(notice).toBeTruthy();
   expect(mocks.warning).not.toHaveBeenCalled();
   status.mockResolvedValue(baseStatus);
   vi.useFakeTimers();
@@ -434,12 +434,14 @@ it('reports failed fetches in a toast and permits retry without selecting anythi
   render(<BranchWorktreeChip {...props} />);
   await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
-  fireEvent.click(refreshButton());
-  const retry = await screen.findByRole('button', { name: /newChat.branchSync.failed/ });
+  fireEvent.click(syncButton());
+  await waitFor(() => expect(mocks.toast).toHaveBeenCalledOnce());
+  const retry = syncButton();
+  await waitFor(() => expect(retry.hasAttribute('disabled')).toBe(false));
   expect(mocks.toast).toHaveBeenCalledOnce();
   expect(retry.hasAttribute('disabled')).toBe(false);
   fireEvent.click(retry);
-  await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
+  await waitFor(() => expect(sync).toHaveBeenCalledTimes(2));
   expect(props.onPick).not.toHaveBeenCalled();
 });
 it('routes to the selected device and discards a late status from the previous branch', async () => {
@@ -463,11 +465,12 @@ it('routes to the selected device and discards a late status from the previous b
   expect(screen.queryByRole('button', { name: /newChat.branchSync.conflict/ })).toBeNull();
   fireEvent.click(refreshButton());
   await waitFor(() =>
-    expect(invoke).toHaveBeenLastCalledWith('pc', 'worktree:sync-branch', [
-      { baseRepo: '/repo', branch: 'next', waitForResult: true },
+    expect(invoke).toHaveBeenLastCalledWith('pc', 'worktree:branch-sync-status', [
+      { baseRepo: '/repo', branch: 'next' },
     ]),
   );
   expect(status).not.toHaveBeenCalled();
+  expect(invoke.mock.calls.some((call) => call[1] === 'worktree:sync-branch')).toBe(false);
 });
 
 it('keeps a fetched missing-remote result disabled across local rechecks, but clears it after changing branch', async () => {
@@ -475,9 +478,9 @@ it('keeps a fetched missing-remote result disabled across local rechecks, but cl
   const view = render(<BranchWorktreeChip {...props} />);
   await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
-  fireEvent.click(refreshButton());
-  const blocked = await screen.findByRole('button', { name: /newChat.branchSync.missing-remote/ });
-  expect(mocks.warning).toHaveBeenCalledExactlyOnceWith(blocked.getAttribute('aria-label'));
+  fireEvent.click(syncButton());
+  const blocked = await screen.findByText(/newChat.branchSync.missing-remote/);
+  expect(blocked).toBeTruthy();
   expect(mocks.toast).not.toHaveBeenCalled();
   // Close and reopen popover to trigger local recheck
   await act(async () => {
@@ -485,12 +488,7 @@ it('keeps a fetched missing-remote result disabled across local rechecks, but cl
   });
   await openPopover();
   await waitFor(() => expect(status).toHaveBeenCalledTimes(3));
-  expect(mocks.warning).toHaveBeenCalledOnce();
-  expect(
-    screen
-      .getByRole('button', { name: /newChat.branchSync.missing-remote/ })
-      .hasAttribute('disabled'),
-  ).toBe(true);
+  expect(screen.getByText(/newChat.branchSync.missing-remote/)).toBeTruthy();
   view.rerender(<BranchWorktreeChip {...props} branchLabel="other" />);
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
 });
@@ -618,8 +616,8 @@ it('keeps remote refresh available while worktree is off and disables capsule du
   await openPopover();
   await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
   fireEvent.click(refreshButton());
-  await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
-  expect(sync).toHaveBeenCalled();
+  await waitFor(() => expect(status).toHaveBeenCalledTimes(3));
+  expect(sync).not.toHaveBeenCalled();
 
   let resolve!: (reply: unknown) => void;
   checkout.mockImplementation(async (req) => {

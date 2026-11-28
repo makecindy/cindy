@@ -44,6 +44,8 @@ import { GITHUB_EVENT_CACHE_TTL_MS, type GithubPrRefresh } from '../scheduler-ho
 import { cachedGithubPrHeads, refreshGithubPrEvents } from './githubPrEvents';
 import { eq, inArray } from 'drizzle-orm';
 import path from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { getMakerIfReady } from '../maker-host/index.js';
 
 import { createLogger } from '../logger.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current';
@@ -58,7 +60,6 @@ import {
 import type { GithubReadService } from './githubReadService';
 import type { GithubReadMethod } from '@cindy/maker-shared';
 import { optionalNullableString, requireString, throwIpcError } from '../utils/ipcValidate';
-import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
 import { registerGithubSetupIpc } from './githubSetupIpc.js';
 import { GitContextService } from './GitContextService.js';
 import {
@@ -135,9 +136,6 @@ function broadcastToAllWindows(
     }
   }
 }
-
-/** gh CLI 登录态来源(进程内共享单例,内置 5min 正 / 30s 负缓存)。 */
-const ghCliTokenSource = getSharedGhCliTokenSource();
 
 async function readGithubToken() {
   return readGithubTokenDetailed();
@@ -232,7 +230,19 @@ async function findLocalBaseReposForPr(query: PrStatusQuery): Promise<string[]> 
 /** Auto fast-forwards local default branch when an observed PR transitions to merged. */
 const prMergedAutoSync = new PrMergedAutoSync({
   findLocalBaseReposForPr,
-  fastForwardDefaultBranch: tryFastForwardDefaultBranchAfterMerge,
+  fastForwardDefaultBranch: (repo) => tryFastForwardDefaultBranchAfterMerge(repo, async (checkoutPath) => {
+    const maker = getMakerIfReady();
+    if (!maker) return false;
+    const checkout = await realpath(checkoutPath);
+    for (const session of maker.listActiveSessions()) {
+      if (session.remoteHostId) continue;
+      if (!session.isTurnRunning() && session.listBackgroundTasks().length === 0) continue;
+      // A task in a subdirectory still owns the checkout while its turn is running.
+      const workDir = await realpath(session.workDir).catch(() => null);
+      if (workDir && (workDir === checkout || workDir.startsWith(`${checkout}${path.sep}`))) return true;
+    }
+    return false;
+  }),
   log,
 });
 /** Re-read current facts before running the existing follow-up gate. No new agent task. */

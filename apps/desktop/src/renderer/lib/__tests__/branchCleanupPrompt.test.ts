@@ -44,6 +44,16 @@ describe('buildBranchCleanupPrompt', () => {
     expect(prompt).toContain('newChat.workspaceCleanup.promptFocusWorktrees');
     expect(prompt).not.toContain('newChat.workspaceCleanup.promptProtectedList');
   });
+
+  it('includes every protected path even after the old 12-item display limit', () => {
+    const paths = Array.from({ length: 15 }, (_, index) => `/repo/.cindy-worktrees/live-${index}`);
+    const prompt = buildBranchCleanupPrompt(t, {
+      scopes: { merged: true, worktrees: true, unpushed: false },
+      protectedWorktreePaths: paths,
+    });
+    expect(prompt).toContain(paths[14]);
+    expect(prompt).not.toContain('(+');
+  });
 });
 
 describe('workspace clutter 7-day red-dot snooze', () => {

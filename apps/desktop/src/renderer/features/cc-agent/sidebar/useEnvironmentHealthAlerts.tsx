@@ -158,7 +158,6 @@ export function useEnvironmentHealthAlerts({
   }, [enabled, dataOwnerId, dataOwnerGeneration]);
 
   // Load and reactively refresh active schedule failures only while Inbox mode is active.
-  const scheduleRefreshSeq = useRef(0);
   useEffect(() => {
     if (!enabled) {
       setScheduleRuns([]);
@@ -167,15 +166,26 @@ export function useEnvironmentHealthAlerts({
     const scheduleApi = window.electronAPI?.maker?.schedule;
     if (!scheduleApi?.listSidebarIndexRuns) return;
     let disposed = false;
+    let inFlight = false;
+    let pending = false;
     const refresh = () => {
-      const seq = ++scheduleRefreshSeq.current;
+      if (inFlight) {
+        pending = true;
+        return;
+      }
+      inFlight = true;
       void loadScheduleSidebarIndexRuns()
         .then((runs) => {
-          if (!disposed && scheduleRefreshSeq.current === seq) {
-            setScheduleRuns(runs);
-          }
+          if (!disposed) setScheduleRuns(runs);
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          inFlight = false;
+          if (!disposed && pending) {
+            pending = false;
+            refresh();
+          }
+        });
     };
     refresh();
     const off = scheduleApi.onEvent?.((raw, ownerStamp) => {
@@ -208,6 +218,19 @@ export function useEnvironmentHealthAlerts({
       scheduleFocusPath,
     });
   }, [enabled, providers, prAuth, auxiliaryHealth, auxiliaryRoutes, scheduleRuns]);
+
+  const previousAlertFingerprints = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const current = new Set(rawAlerts.map((alert) => alert.fingerprint));
+    const previous = previousAlertFingerprints.current;
+    previousAlertFingerprints.current = current;
+    setDismissedFingerprints((dismissed) => {
+      if (![...dismissed].some((fingerprint) => previous.has(fingerprint) && !current.has(fingerprint))) {
+        return dismissed;
+      }
+      return new Set([...dismissed].filter((fingerprint) => !previous.has(fingerprint) || current.has(fingerprint)));
+    });
+  }, [rawAlerts]);
 
   const alerts = useMemo(
     () => filterDismissedEnvironmentHealthAlerts(rawAlerts, dismissedFingerprints),

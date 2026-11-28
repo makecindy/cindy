@@ -51,7 +51,7 @@ export function WorktreeModeCard({
 
   return (
     <div className="border-b border-[var(--border-default)] px-2.5 py-2">
-      <div className="rounded-[10px] border border-[var(--border-default)] bg-[var(--surface)] px-2.5 py-2">
+      <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface)] px-2.5 py-2">
         <div className="flex items-start justify-between gap-2.5">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
@@ -229,13 +229,16 @@ export function BranchSyncStatusSection({
   if (errorText) {
     return (
       <div className="border-b border-[var(--border-default)] px-3 py-2.5">
-        <div className="rounded-[10px] border border-[var(--border-default)] bg-[var(--warning-bg-soft)] p-2.5">
+        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--warning-bg-soft)] p-2.5">
           <div className="flex items-start gap-2">
             <AlertTriangle size={14} aria-hidden className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
             <div className="min-w-0 flex-1 text-12 leading-[1.45] text-[var(--text-primary)]">
               {t('newChat.branchSync.failed', { reason: errorText })}
             </div>
           </div>
+          <Button compact size="sm" variant="secondary" disabled={syncDisabled} onClick={() => onSync(canRebaseDiverged ? 'rebase' : 'ff-only')}>
+            {t('newChat.workspaceCapsule.syncNow')}
+          </Button>
         </div>
       </div>
     );
@@ -264,7 +267,7 @@ export function BranchSyncStatusSection({
       <div className="border-b border-[var(--border-default)] px-3 py-2.5">
         <div
           className={cn(
-            'rounded-[10px] border p-2.5',
+            'rounded-xl border p-2.5',
             isConflict
               ? 'border-[var(--border-default)] bg-[var(--warning-bg-soft)]'
               : 'border-[var(--border-default)] bg-[var(--surface)]',
@@ -390,7 +393,7 @@ export function BranchSyncStatusSection({
   if (status && behind > 0) {
     return (
       <div className="border-b border-[var(--border-default)] px-3 py-2.5">
-        <div className="rounded-[10px] border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
+        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
           <div className="flex items-start gap-2">
             <ArrowDownCircle size={14} aria-hidden className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
             <div className="min-w-0 flex-1">
@@ -569,7 +572,7 @@ export function WorkspaceCleanupEntryRow({
           <span
             aria-hidden
             className={cn(
-              'inline-flex size-[22px] shrink-0 items-center justify-center rounded-md',
+              'inline-flex size-[22px] shrink-0 items-center justify-center rounded-lg',
               showRedDot
                 ? 'bg-[var(--error-bg)] text-[var(--error-fg)]'
                 : 'bg-[var(--warning-bg-soft)] text-[var(--warning-fg)]',
@@ -616,12 +619,12 @@ export function WorkspaceCleanupEntryRow({
 export function BranchGuidePane({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation();
   return (
-    <div data-testid="workspace-guide-pane" className="flex flex-col">
-      <div className="flex items-center justify-between border-b border-[var(--border-default)] px-2.5 py-2">
+    <div data-testid="workspace-guide-pane" className="flex min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-[var(--border-default)] px-2.5 py-2">
         <button
           type="button"
           onClick={onBack}
-          className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-12 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="inline-flex cursor-pointer items-center gap-1 rounded-lg px-1.5 py-1 text-12 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
           <ArrowLeft size={13} aria-hidden />
           <span>{t('newChat.workspaceCapsule.back')}</span>
@@ -632,8 +635,8 @@ export function BranchGuidePane({ onBack }: { onBack: () => void }) {
         <span className="w-11" aria-hidden />
       </div>
 
-      <div className="space-y-2.5 p-3">
-        <div className="rounded-[10px] border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
+      <div className="min-h-0 space-y-2.5 overflow-y-auto p-3">
+        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
           <div className="mb-1 flex items-center justify-between gap-2">
             <span className="text-12 font-semibold text-[var(--text-primary)]">
               {t('newChat.workspaceCapsule.guideBranchTitle')}
@@ -690,7 +693,7 @@ export function BranchGuidePane({ onBack }: { onBack: () => void }) {
           </div>
         </div>
 
-        <div className="rounded-[10px] border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
+        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
           <div className="mb-1 flex items-center justify-between gap-2">
             <span className="text-12 font-semibold text-[var(--text-primary)]">
               {t('newChat.workspaceCapsule.guideWorktreeTitle')}
@@ -704,7 +707,7 @@ export function BranchGuidePane({ onBack }: { onBack: () => void }) {
           </p>
         </div>
 
-        <div className="rounded-[10px] border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
+        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
           <div className="mb-1.5 text-12 font-semibold text-[var(--text-primary)]">
             {t('newChat.workspaceCapsule.guideChoiceTitle')}
           </div>
@@ -764,12 +767,12 @@ export function WorkspaceCleanupPane({
   };
 
   return (
-    <div data-testid="workspace-cleanup-pane" className="flex flex-col">
-      <div className="flex items-center justify-between border-b border-[var(--border-default)] px-2.5 py-2">
+    <div data-testid="workspace-cleanup-pane" className="flex min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-[var(--border-default)] px-2.5 py-2">
         <button
           type="button"
           onClick={onBack}
-          className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-12 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="inline-flex cursor-pointer items-center gap-1 rounded-lg px-1.5 py-1 text-12 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
           <ArrowLeft size={13} aria-hidden />
           <span>{t('newChat.workspaceCapsule.back')}</span>
@@ -780,8 +783,8 @@ export function WorkspaceCleanupPane({
         <span className="w-11" aria-hidden />
       </div>
 
-      <div className="space-y-2.5 p-3">
-        <div className="flex items-start gap-2 rounded-[10px] border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
+      <div className="min-h-0 space-y-2.5 overflow-y-auto p-3">
+        <div className="flex items-start gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
           <ShieldCheck
             size={15}
             aria-hidden
@@ -798,11 +801,11 @@ export function WorkspaceCleanupPane({
         </div>
 
         <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-[9px] border border-[var(--border-default)] bg-[var(--surface)] px-2.5 py-2">
+          <div className="rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-2.5 py-2">
             <div className="text-10 text-[var(--text-tertiary)]">
               {t('newChat.workspaceCleanup.statBranchesLabel')}
             </div>
-            <div className="mt-0.5 text-15 font-bold text-[var(--text-primary)]">
+            <div className="mt-0.5 text-15 font-semibold text-[var(--text-primary)]">
               {t('newChat.workspaceCleanup.statCount', { count: summary.localBranchCount })}
             </div>
             <div className="mt-0.5 text-10 text-[var(--text-secondary)]">
@@ -810,11 +813,11 @@ export function WorkspaceCleanupPane({
             </div>
           </div>
 
-          <div className="rounded-[9px] border border-[var(--border-default)] bg-[var(--surface)] px-2.5 py-2">
+          <div className="rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-2.5 py-2">
             <div className="text-10 text-[var(--text-tertiary)]">
               {t('newChat.workspaceCleanup.statWorktreesLabel')}
             </div>
-            <div className="mt-0.5 text-15 font-bold text-[var(--text-primary)]">
+            <div className="mt-0.5 text-15 font-semibold text-[var(--text-primary)]">
               {t('newChat.workspaceCleanup.statCount', { count: summary.worktreeCount })}
             </div>
             <div className="mt-0.5 text-10 text-[var(--text-secondary)]">

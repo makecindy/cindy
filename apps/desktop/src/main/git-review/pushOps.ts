@@ -7,6 +7,7 @@
 
 import { GitRunError, runGit } from './gitRunner.js';
 import { parseMergeTreeConflictFiles } from '../worktree/branchSync.js';
+import { isSafeAutomaticRebase } from '../worktree/rebaseSafety.js';
 import type { ReviewPushConfirmForce, ReviewScope, ReviewStatus } from './types.js';
 
 const GIT_WRITE_MAX_STDOUT_BYTES = 4 * 1024 * 1024;
@@ -226,6 +227,12 @@ async function preflightMergeTreeForPush(
   }
 }
 
+async function safeRebaseForPush(repoRoot: string, localRef: string, trackingRef: string): Promise<boolean> {
+  return isSafeAutomaticRebase(repoRoot, localRef, trackingRef, async (...args) =>
+    (await runGit(args, { cwd: repoRoot, timeoutMs: 10_000 })).stdout,
+  );
+}
+
 async function fetchTrackingBranchForPush(
   repoRoot: string,
   target: PushTarget,
@@ -282,12 +289,13 @@ async function needsForceResult(
   }
   const remoteOid = await readTrackingOid(repoRoot, target);
   const localRef = `refs/heads/${branch}`;
-  const [counts, preflight] = await Promise.all([
+  const [counts, preflight, safeRebase] = await Promise.all([
     readAheadBehindForPush(repoRoot, localRef, target.trackingRef, status.scope.aheadBehind),
     preflightMergeTreeForPush(repoRoot, localRef, target.trackingRef),
+    safeRebaseForPush(repoRoot, localRef, target.trackingRef),
   ]);
   const dirty = status.dirty;
-  const canSyncCleanly = !dirty && status.inProgress.length === 0 && !preflight.conflict;
+  const canSyncCleanly = !dirty && status.inProgress.length === 0 && !preflight.conflict && safeRebase;
   return {
     kind: 'needs-force',
     remote: target.remote,
@@ -359,7 +367,7 @@ async function syncAndPush(
   );
   if (counts.behind > 0) {
     const preflight = await preflightMergeTreeForPush(repoRoot, localRef, target.trackingRef);
-    if (preflight.conflict) {
+    if (preflight.conflict || !(await safeRebaseForPush(repoRoot, localRef, target.trackingRef))) {
       return needsForceResult(repoRoot, branch, status, target);
     }
     try {

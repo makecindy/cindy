@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { access, realpath } from 'node:fs/promises';
 import { gitExec, GitExecError } from './gitExec';
+import { isSafeAutomaticRebase } from './rebaseSafety';
 import type {
   BranchSyncRequest,
   BranchSyncResult,
@@ -207,14 +208,17 @@ export async function readBranchSyncStatus(req: BranchSyncRequest): Promise<Bran
     .map(Number);
   [status.ahead, status.behind] = counts;
   if (status.ahead && status.behind) {
-    const [preflight, inProgressOp] = await Promise.all([
+    const [preflight, inProgressOp, safeRebase] = await Promise.all([
       preflightDivergedMergeTree(baseRepo, localRef, status.remoteRef!),
       status.checkoutPath ? hasGitOperationInProgress(status.checkoutPath) : Promise.resolve(false),
+      status.checkoutPath
+        ? isSafeAutomaticRebase(status.checkoutPath, localRef, status.remoteRef!, (...args) => git(status.checkoutPath!, ...args))
+        : Promise.resolve(false),
     ]);
     return {
       ...status,
       blocked: 'diverged',
-      divergedConflict: preflight.conflict,
+      divergedConflict: preflight.conflict || !safeRebase,
       ...(preflight.conflictFiles.length > 0
         ? { divergedConflictFiles: preflight.conflictFiles }
         : {}),
@@ -404,6 +408,7 @@ export type AutoFastForwardResult =
  */
 export async function tryFastForwardDefaultBranchAfterMerge(
   baseRepo: string,
+  hasRunningTaskInCheckout: (checkoutPath: string) => Promise<boolean> = async () => false,
 ): Promise<AutoFastForwardResult> {
   if (!path.isAbsolute(baseRepo)) {
     return { status: 'skipped', reason: 'invalid-path' };
@@ -425,6 +430,9 @@ export async function tryFastForwardDefaultBranchAfterMerge(
       }
       if (before.ahead > 0) return { status: 'skipped', reason: 'ahead' };
       if (before.checkoutPath) {
+        if (await hasRunningTaskInCheckout(before.checkoutPath)) {
+          return { status: 'skipped', reason: 'busy' };
+        }
         if (before.dirtyFiles > 0) return { status: 'skipped', reason: 'dirty' };
         if (await hasGitOperationInProgress(before.checkoutPath)) {
           return { status: 'skipped', reason: 'in-progress' };
@@ -446,6 +454,9 @@ export async function tryFastForwardDefaultBranchAfterMerge(
       if (afterFetch.ahead > 0) return { status: 'skipped', reason: 'ahead' };
       if (!afterFetch.behind) return { status: 'skipped', reason: 'up-to-date' };
       if (afterFetch.checkoutPath) {
+        if (await hasRunningTaskInCheckout(afterFetch.checkoutPath)) {
+          return { status: 'skipped', reason: 'busy' };
+        }
         if (afterFetch.dirtyFiles > 0) return { status: 'skipped', reason: 'dirty' };
         if (await hasGitOperationInProgress(afterFetch.checkoutPath)) {
           return { status: 'skipped', reason: 'in-progress' };
@@ -458,6 +469,9 @@ export async function tryFastForwardDefaultBranchAfterMerge(
       const next = await git(baseRepo, 'rev-parse', '--verify', `${afterFetch.remoteRef}^{commit}`);
       await git(baseRepo, 'merge-base', '--is-ancestor', old, next);
       if (afterFetch.checkoutPath) {
+        if (await hasRunningTaskInCheckout(afterFetch.checkoutPath)) {
+          return { status: 'skipped', reason: 'busy' };
+        }
         await gitExec(
           ['merge', '--ff-only', '--no-autostash', '--no-overwrite-ignore', next],
           afterFetch.checkoutPath,

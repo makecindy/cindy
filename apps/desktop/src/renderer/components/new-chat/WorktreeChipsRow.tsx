@@ -861,7 +861,7 @@ export function BranchWorktreeChip({
     if (checkingRemote || syncDisabled) return;
     setCheckingRemote(true);
     try {
-      await Promise.all([sync.sync(), clutter.refresh()]);
+      await Promise.all([sync.refresh(), clutter.refresh()]);
     } finally {
       setCheckingRemote(false);
     }
@@ -1029,7 +1029,7 @@ export function BranchWorktreeChip({
             setSecondaryPane(null);
           }
         }}
-        className="flex max-h-[min(600px,var(--radix-popover-content-available-height))] w-[min(356px,calc(100vw-32px))] flex-col overflow-hidden rounded-[14px] border border-[var(--border-default)] bg-popover p-0 shadow-[shadow:var(--shadow-menu)]"
+        className="flex max-h-[min(600px,var(--radix-popover-content-available-height))] w-[min(356px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-popover p-0 shadow-[shadow:var(--shadow-menu)]"
       >
         {secondaryPane === 'guide' ? (
           <BranchGuidePane onBack={() => setSecondaryPane(null)} />
@@ -1062,9 +1062,9 @@ export function BranchWorktreeChip({
                     disabled={checkingRemote || syncDisabled}
                     aria-disabled={checkingRemote || syncDisabled}
                     onClick={() => void handleHeaderRefresh()}
-                    aria-label={sync.hint}
-                    title={sync.hint}
-                    className="inline-flex h-6 cursor-pointer items-center gap-1 rounded-md px-1.5 text-11 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label={t('newChat.workspaceCapsule.checkUpdates')}
+                    title={t('newChat.workspaceCapsule.checkUpdates')}
+                    className="inline-flex h-6 cursor-pointer items-center gap-1 rounded-lg px-1.5 text-11 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Spinner
                       icon={RefreshCw}
@@ -1086,7 +1086,7 @@ export function BranchWorktreeChip({
                     onClick={() => setSecondaryPane('guide')}
                     aria-label={t('newChat.workspaceCapsule.openGuideAria')}
                     title={t('newChat.workspaceCapsule.openGuideAria')}
-                    className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                    className="inline-flex size-6 cursor-pointer items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                   >
                     <HelpCircle size={13} aria-hidden />
                   </button>

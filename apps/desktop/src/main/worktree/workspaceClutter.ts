@@ -17,7 +17,7 @@ export interface WorkspaceClutterDeps {
 }
 
 const CINDY_BRANCH_PATTERN = /^(?:cindy|xdt)\//;
-const MAX_PROTECTED_PATHS_IN_SUMMARY = 30;
+const MAX_PROTECTED_PATHS_IN_SUMMARY = 100;
 const REALPATH_CONCURRENCY = 16;
 
 async function mapBounded<T, R>(
@@ -38,7 +38,10 @@ async function mapBounded<T, R>(
   return results;
 }
 
-async function safeRealpath(target: string, realpathFn: (p: string) => Promise<string>): Promise<string> {
+async function safeRealpath(
+  target: string,
+  realpathFn: (p: string) => Promise<string>,
+): Promise<string> {
   try {
     return await realpathFn(target);
   } catch {
@@ -64,20 +67,17 @@ export function parseLinkedWorktreePaths(porcelain: string, repoRootKey: string)
 }
 
 async function defaultReadActiveWorktreePaths(): Promise<string[]> {
-  try {
-    const db = getDbClient();
-    const refs = (await db.readLocalWorktreeReferences?.()) ?? [];
-    const out: string[] = [];
-    for (const ref of refs) {
-      // Terminal archived/deleted sessions are not live; null/unknown status stays protected (fail-closed).
-      if (ref.status === 'archived' || ref.status === 'deleted') continue;
-      if (ref.worktreePath) out.push(ref.worktreePath);
-      if (ref.workingDir) out.push(ref.workingDir);
-    }
-    return out;
-  } catch {
-    return [];
+  const db = getDbClient();
+  if (!db.readLocalWorktreeReferences) throw new Error('Active worktree references unavailable');
+  const refs = await db.readLocalWorktreeReferences();
+  const out: string[] = [];
+  for (const ref of refs) {
+    // Terminal archived/deleted sessions are not live; null/unknown status stays protected (fail-closed).
+    if (ref.status === 'archived' || ref.status === 'deleted') continue;
+    if (ref.worktreePath) out.push(ref.worktreePath);
+    if (ref.workingDir) out.push(ref.workingDir);
   }
+  return out;
 }
 
 async function defaultListFailedRecyclePaths(): Promise<string[]> {
@@ -145,16 +145,18 @@ export async function readWorkspaceClutterSummary(
     linkedWorktrees.push(entry);
   }
 
-  const activeKeySet = new Set<string>(
-    await mapBounded([...new Set(activePathsRaw)], REALPATH_CONCURRENCY, async (p) =>
-      normalizePathKey(await safeRealpath(p, realpathFn)),
-    ),
+  const activeKeys = await mapBounded(
+    [...new Set(activePathsRaw)],
+    REALPATH_CONCURRENCY,
+    async (p) => normalizePathKey(await safeRealpath(p, realpathFn)),
   );
 
   const protectedWorktreePaths: string[] = [];
   let activeWorktreeCount = 0;
   for (const wt of linkedWorktrees) {
-    if (activeKeySet.has(wt.key)) {
+    if (
+      activeKeys.some((active) => active === wt.key || active.startsWith(`${wt.key}${path.sep}`))
+    ) {
       activeWorktreeCount += 1;
       if (protectedWorktreePaths.length < MAX_PROTECTED_PATHS_IN_SUMMARY) {
         protectedWorktreePaths.push(wt.physical);
@@ -165,7 +167,8 @@ export async function readWorkspaceClutterSummary(
   const worktreeCount = linkedWorktrees.length;
   const idleWorktreeCount = Math.max(0, worktreeCount - activeWorktreeCount);
 
-  const cindyManagedPrefix = normalizePathKey(path.join(physicalRepo, '.cindy-worktrees')) + path.sep;
+  const cindyManagedPrefix =
+    normalizePathKey(path.join(physicalRepo, '.cindy-worktrees')) + path.sep;
   const xdtManagedPrefix = normalizePathKey(path.join(physicalRepo, '.xdt-worktrees')) + path.sep;
   const linkedKeySet = new Set(linkedWorktrees.map((w) => w.key));
   const failedKeys = new Set<string>();
@@ -182,12 +185,15 @@ export async function readWorkspaceClutterSummary(
   }
   const failedCleanupCount = failedKeys.size;
 
-  const tier = computeWorkspaceClutterTier({
-    localBranchCount,
-    cindyBranchCount,
-    idleWorktreeCount,
-    failedCleanupCount,
-  });
+  const tier =
+    activeWorktreeCount > MAX_PROTECTED_PATHS_IN_SUMMARY
+      ? 'healthy'
+      : computeWorkspaceClutterTier({
+          localBranchCount,
+          cindyBranchCount,
+          idleWorktreeCount,
+          failedCleanupCount,
+        });
 
   return {
     localBranchCount,

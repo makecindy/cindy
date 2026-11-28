@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { EnvironmentHealthAction, EnvironmentHealthAlert } from './environmentHealth';
 
@@ -74,14 +75,16 @@ export function EnvironmentHealthStrip({
               </Button>
             </div>
           </div>
-          <button
-            type="button"
-            aria-label={t('ccAgent.sidebar.inbox.health.dismiss')}
-            onClick={() => onDismiss(alert.fingerprint)}
-            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-          >
-            <X size={13} aria-hidden />
-          </button>
+          <Tip text={t('ccAgent.sidebar.inbox.health.dismiss')}>
+            <button
+              type="button"
+              aria-label={t('ccAgent.sidebar.inbox.health.dismiss')}
+              onClick={() => onDismiss(alert.fingerprint)}
+              className="inline-flex size-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+              <X size={13} aria-hidden />
+            </button>
+          </Tip>
         </div>
       </div>
     );
@@ -144,14 +147,16 @@ export function EnvironmentHealthStrip({
                   </Button>
                 </div>
               </div>
-              <button
-                type="button"
-                aria-label={t('ccAgent.sidebar.inbox.health.dismiss')}
-                onClick={() => onDismiss(alert.fingerprint)}
-                className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-              >
-                <X size={13} aria-hidden />
-              </button>
+              <Tip text={t('ccAgent.sidebar.inbox.health.dismiss')}>
+                <button
+                  type="button"
+                  aria-label={t('ccAgent.sidebar.inbox.health.dismiss')}
+                  onClick={() => onDismiss(alert.fingerprint)}
+                  className="inline-flex size-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  <X size={13} aria-hidden />
+                </button>
+              </Tip>
             </div>
           ))}
         </div>

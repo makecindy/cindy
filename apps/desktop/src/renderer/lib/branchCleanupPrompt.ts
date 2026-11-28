@@ -42,13 +42,10 @@ export function buildBranchCleanupPrompt(
 
   const protectedPaths = (params.protectedWorktreePaths ?? []).filter(Boolean);
   if (protectedPaths.length > 0) {
-    const shown = protectedPaths.slice(0, 12);
-    const suffix =
-      protectedPaths.length > shown.length ? ` (+${protectedPaths.length - shown.length})` : '';
     lines.push(
       t('newChat.workspaceCleanup.promptProtectedList', {
         count: protectedPaths.length,
-        paths: `${shown.join(', ')}${suffix}`,
+        paths: protectedPaths.join(', '),
       }),
     );
   }

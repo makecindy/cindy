@@ -3099,7 +3099,7 @@ describe('local Worker project selection', () => {
     fireEvent.click(await screen.findByRole('option', {name: 'main'}));
     fireEvent.click(screen.getByRole('button', {name: 'Create'}));
     expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({worktree: {sourceBranch: 'main'}}));
-    expect(branchButton.textContent).toBe('main');
+    expect(screen.getByRole('button', {name: 'newChat.branchChip.label'}).textContent).toContain('main');
   });
   // #12391: Git can shorten a local origin/main to the same label as the remote.
   // Click each real picker group and verify it submits the corresponding ref.
@@ -3115,8 +3115,8 @@ describe('local Worker project selection', () => {
     expect(window.electronAPI.worktreeListBranches).not.toHaveBeenCalled();
     fireEvent.click(branchButton);
     const branchGroup = await screen.findByRole('group', {name: `newChat.branchSync.${group}Group`});
-    fireEvent.click(within(branchGroup).getByRole('option', {name: 'origin/main'}));
-    expect(branchButton.textContent).toBe('origin/main');
+    fireEvent.click(within(branchGroup).getByRole('option', {name: /origin\/main/}));
+    expect(screen.getByRole('button', {name: 'newChat.branchChip.label'}).textContent).toContain('origin/main');
     expect(screen.getByText('orca.workerProject.splitWarning origin/main')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', {name: 'Create'}));
     const sourceBranch = group === 'local' ? 'refs/heads/origin/main' : 'refs/remotes/origin/main';
