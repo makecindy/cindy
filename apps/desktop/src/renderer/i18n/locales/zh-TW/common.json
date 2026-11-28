@@ -1,4 +1,9 @@
 {
+  "attachmentPathConfirm": {
+    "title": "新增這次拖曳中的本機檔案？",
+    "description": "這次拖曳來自文字資料，不是系統檔案拖曳。僅在你確認要新增這些檔案時繼續：",
+    "askAgain": "拖入本機檔案時先詢問"
+  },
   "antigravityVerification": {
     "title": "驗證 Google 帳戶",
     "note": "請掃描 QR 碼或開啟 Google 頁面完成驗證。Antigravity 確認可存取帳戶後，任務會自動繼續。",
@@ -1813,6 +1818,13 @@
     }
   },
   "settings": {
+    "localPathDropConfirm": {
+      "cell": {
+        "label": "拖入本機檔案時先詢問",
+        "description": "從網頁拖入的文字也可能包含本機路徑。開啟後 Cindy 會先詢問再讀取；關閉時直接新增拖入的檔案。"
+      },
+      "toggleAria": "拖入本機檔案時先詢問"
+    },
     "newChatDefaults": {
       "title": "新任務預設權限"
     },

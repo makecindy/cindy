@@ -232,7 +232,7 @@ function TaskComposer(props: ComponentProps<typeof ChatInput>) {
 
 function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}, taskRoster = false) {
   const attachmentState: ComponentProps<typeof ChatInput>['attachmentState'] = {
-    attachments: [], hasAttachments: false, addFiles: vi.fn(), addClipboardImage: vi.fn(),
+    attachments: [], hasAttachments: false, addFiles: vi.fn(), addFilePaths: vi.fn(), addClipboardImage: vi.fn(),
     rejections: [], dismissRejection: noOp, clearRejections: noOp, addFolderPath: noOp,
     pendingFoldersVersion: 0, consumePendingFolders: () => [], addFileMention: noOp,
     pendingFileMentionsVersion: 0, consumePendingFileMentions: () => [],
@@ -1499,7 +1499,7 @@ it('restores text, attachments and strokes after an aborted annotated send', asy
   const restoreFiles = vi.fn((files: readonly AttachedFile[]) => [...files]);
   const clearFiles = vi.fn();
   const attachmentState: ComponentProps<typeof ChatInput>['attachmentState'] = {
-    attachments: [annotatedImage], hasAttachments: true, addFiles: vi.fn(), addClipboardImage: vi.fn(),
+    attachments: [annotatedImage], hasAttachments: true, addFiles: vi.fn(), addFilePaths: vi.fn(), addClipboardImage: vi.fn(),
     rejections: [], dismissRejection: noOp, clearRejections: noOp, addFolderPath: noOp,
     pendingFoldersVersion: 0, consumePendingFolders: () => [], addFileMention: noOp,
     pendingFileMentionsVersion: 0, consumePendingFileMentions: () => [],

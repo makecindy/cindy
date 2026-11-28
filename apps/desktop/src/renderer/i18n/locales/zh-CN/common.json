@@ -1,4 +1,9 @@
 {
+  "attachmentPathConfirm": {
+    "title": "添加这次拖拽中的本地文件？",
+    "description": "这次拖拽来自文本数据，不是系统文件拖拽。仅在你确认要添加这些文件时继续：",
+    "askAgain": "拖入本地文件时先询问"
+  },
   "antigravityVerification": {
     "title": "Google 账号需要验证",
     "note": "请扫码或打开 Google 页面完成验证。Antigravity 确认账号恢复后，任务会自动继续。",
@@ -1813,6 +1818,13 @@
     }
   },
   "settings": {
+    "localPathDropConfirm": {
+      "cell": {
+        "label": "拖入本地文件时先询问",
+        "description": "从网页拖入的文本也可能包含本地路径。开启后 Cindy 会先询问再读取；关闭时直接添加拖入的文件。"
+      },
+      "toggleAria": "拖入本地文件时先询问"
+    },
     "newChatDefaults": {
       "title": "新任务默认权限"
     },

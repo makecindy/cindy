@@ -141,6 +141,7 @@ export type BotGroupComposerAttachments = Pick<
   UseAttachmentsReturn,
   | 'attachments'
   | 'addFiles'
+  | 'addFilePaths'
   | 'addClipboardImage'
   | 'rejections'
   | 'dismissRejection'

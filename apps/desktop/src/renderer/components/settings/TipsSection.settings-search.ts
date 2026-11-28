@@ -11,6 +11,15 @@ export const tipsSettings = defineSettings({
     sectionKey: 'settings.sections.compatMode',
     descriptionKey: 'settings.promptRecommendation.description',
   },
+  localPathDropConfirm: {
+    id: 'personalization.localPathDropConfirm',
+    tab: 'personalization',
+    targetId: 'settings-local-path-drop-confirm',
+    titleKey: 'settings.localPathDropConfirm.cell.label',
+    descriptionKey: 'settings.localPathDropConfirm.cell.description',
+    sectionKey: 'settings.sections.compatMode',
+    aliases: ['拖入文件', '拖拽文件', 'VS Code 拖入', 'drag and drop', 'confirm drag'],
+  },
 });
 
 export default {

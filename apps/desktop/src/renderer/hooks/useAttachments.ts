@@ -14,15 +14,21 @@
  *     is used for the input-area chip and persistent message rendering).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
+import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import type { ComposerFileMentionPayload } from '@/lib/composerMentionDrag';
 import { isDangerousAttachmentName } from '../../shared/attachmentSafety';
 import { readPluginUiEntries } from '@/cindy-brain/PluginUiContributions';
 import { processPluginUiAttachment } from '@/cindy-brain/pluginUiAttachments';
 import { assertPluginUiDraftWritable } from '@/cindy-brain/pluginUiContext';
+import {
+  getLocalPathDropConfirmEnabled,
+  setLocalPathDropConfirmEnabled,
+} from '@/hooks/useLocalPathDropConfirmPreference';
+import { GHOST_HANDOFF_MAX_BYTES_PER_FILE } from '../../shared/ghost';
 import { insertComposerDocumentForRestore, plainTextToComposerDocument } from '@/lib/composerListDocument';
 
 const log = createLogger('UseAttachments');
@@ -65,10 +71,24 @@ export interface AttachmentRejection {
 
 export type PendingFolder = string | { path: string; source: 'task' } | { path: string; source: 'local'; file: File };
 
+interface DroppedRawFile {
+  name: string;
+  path: string;
+  size: number;
+  file: File | null;
+}
+
+export interface AddFilePathsOptions {
+  /** Whether a dropped directory becomes an @dir mention (default) or is left to window-level routing. */
+  directories?: 'mention' | 'skip';
+}
+
 export interface UseAttachmentsReturn {
   attachments: AttachedFile[];
   hasAttachments: boolean;
   addFiles: (fileList: FileList | readonly File[]) => Promise<void>;
+  /** Attach files by absolute path, for drops whose source exposes no native File objects (VS Code). */
+  addFilePaths: (paths: readonly string[], options?: AddFilePathsOptions) => Promise<void>;
   addClipboardImage: (blob: Blob) => Promise<void>;
   /**
    * Files rejected on the most recent add attempt (oversize / empty / blocked
@@ -111,7 +131,10 @@ interface AttachmentDraftScope {
 }
 
 /** Only this add event retains File objects; draft/history never stores them. */
-type AddedAttachmentSources = Uint8Array | ReadonlyMap<string, Blob>;
+type AddedAttachmentSources =
+  | Uint8Array
+  | ReadonlyMap<string, Blob>
+  | ((file: AttachedFile) => Promise<Uint8Array | Blob | null>);
 
 interface AttachmentOperationScope extends AttachmentDraftScope {
   sessionId: string | undefined;
@@ -144,6 +167,18 @@ function isSameAttachmentOperationScope(
 ): boolean {
   return left.sessionId === right.sessionId && isSameAttachmentDraftScope(left, right);
 }
+
+function fileNameFromPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  return normalized.slice(normalized.lastIndexOf('/') + 1);
+}
+
+/**
+ * Path-only drops probe each path with one classifyPath + one peekFileHeader.
+ * Run them in bounded batches so a large multi-select cannot fire an unbounded
+ * number of IPC calls at once, while keeping the dropped order.
+ */
+const PATH_PROBE_BATCH = 8;
 
 function mergeAttachmentsById(
   existing: readonly AttachedFile[],
@@ -194,6 +229,7 @@ export function cleanupRemovedCachedImage(file: Pick<AttachedFile, 'url'> | unde
  */
 export function useAttachments(sessionId?: string, draftKey?: string): UseAttachmentsReturn {
   const { t } = useTranslation();
+  const confirmDialog = useOptionalConfirmDialog();
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const attachmentsRef = useRef<AttachedFile[]>(attachments);
   const mountedRef = useRef(false);
@@ -316,7 +352,11 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       try {
         output = await processPluginUiAttachment(file, scope.sessionId ?? null, controller.signal, async () => {
           if (!bytes) {
-            const source = sources instanceof Uint8Array ? sources : sources.get(file.path);
+            const source = sources instanceof Uint8Array
+              ? sources
+              : typeof sources === 'function'
+                ? await sources(file)
+                : sources.get(file.path);
             if (!source) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
             bytes = source instanceof Uint8Array ? source : new Uint8Array(await source.arrayBuffer());
           }
@@ -533,46 +573,17 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     return payloads;
   }, []);
 
-  const addFiles = useCallback(
-    async (fileList: FileList | readonly File[]) => {
-      const operationScope = attachmentOperationScopeRef.current;
-      const attachmentCountAtStart = attachmentsRef.current.length;
-      // Fresh attempt: clear stale rejections so the inline strip reflects only
-      // this drop's failures.
-      setRejections([]);
-      // ── Step 1: collect rawFiles, intercept obvious failure cases up-front ──
-      // In sandboxed Electron (20+), File.path is unavailable — use
-      // webUtils.getPathForFile() exposed via preload bridge instead.
-      type RawFile = { name: string; path: string; size: number; file: File };
-      const rawFiles: RawFile[] = [];
-      const earlyErrors: { name: string; reason: string }[] = [];
-      for (const f of Array.from(fileList)) {
-        let filePath = '';
-        try {
-          filePath = window.electronAPI.getFilePath(f);
-        } catch {
-          // Fallback: try legacy File.path (non-sandboxed builds)
-          filePath = (f as File & { path?: string }).path ?? '';
-        }
-        if (!filePath) {
-          pushScopedRejections(operationScope, [
-            t('logic.toasts.attachmentLocalOnly', { name: f.name }),
-          ]);
-          continue;
-        }
-        // F-FI-8 spec step 1: 0-byte files are intercepted here so they never
-        // reach the peek IPC (would otherwise produce an "无法识别" instead of
-        // the more accurate "文件为空" error).
-        if (f.size === 0) {
-          earlyErrors.push({ name: f.name, reason: t('logic.fileTypes.fileEmpty') });
-          continue;
-        }
-        rawFiles.push({ name: f.name, path: filePath, size: f.size, file: f });
-      }
-
+  const addRawFiles = useCallback(
+    async (
+      operationScope: AttachmentOperationScope,
+      attachmentCountAtStart: number,
+      rawFiles: DroppedRawFile[],
+      earlyErrors: { name: string; reason: string }[],
+      pathSourceLoader?: (file: AttachedFile) => Promise<Uint8Array | Blob | null>,
+    ) => {
       // ── Step 2: split into known / unknown by extension/filename ──
-      const knownRaw: RawFile[] = [];
-      const unknownRaw: RawFile[] = [];
+      const knownRaw: DroppedRawFile[] = [];
+      const unknownRaw: DroppedRawFile[] = [];
       for (const raw of rawFiles) {
         const ext = extractExt(raw.name);
         const category = ext ? categorizeFile(ext) : categorizeByFilename(raw.name);
@@ -586,7 +597,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       // ── Step 3: enrich unknown files via peek-IPC + magic/UTF-8 inference ──
       // Promise.all is fine: max 20 files per drop, IPC pressure negligible.
       type EnrichResult =
-        { ok: true; raw: RawFile; ext: string } | { ok: false; raw: RawFile; reason: string };
+        { ok: true; raw: DroppedRawFile; ext: string } | { ok: false; raw: DroppedRawFile; reason: string };
 
       const enrichmentResults: EnrichResult[] = await Promise.all(
         unknownRaw.map(async (r): Promise<EnrichResult> => {
@@ -656,8 +667,15 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
 
       // IPC read for each valid file
       const newAttachments: AttachedFile[] = [];
-      const pluginSources = readPluginUiEntries('composer.attachment').length
-        ? new Map<string, Blob>(rawFiles.map(raw => [raw.path, raw.file])) : undefined;
+      const pluginSourceEntries: Array<[string, Blob]> = rawFiles.flatMap((raw) =>
+        raw.file ? [[raw.path, raw.file] as [string, Blob]] : [],
+      );
+      const hasAttachmentProviders = readPluginUiEntries('composer.attachment').length > 0;
+      const pluginSources: AddedAttachmentSources | undefined = hasAttachmentProviders
+        ? (pluginSourceEntries.length > 0
+          ? new Map<string, Blob>(pluginSourceEntries)
+          : pathSourceLoader)
+        : undefined;
       const currentSessionId = operationScope.sessionId;
 
       for (const item of valid) {
@@ -785,7 +803,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
             }),
           ]);
         }
-        if (pluginSources && newAttachments.length > previousCount) {
+        if (pluginSources instanceof Map && newAttachments.length > previousCount) {
           const source = pluginSources.get(item.path);
           if (source) pluginSources.set(newAttachments[newAttachments.length - 1]!.path, source);
         }
@@ -794,6 +812,201 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       settleUserAddedAttachments(operationScope, newAttachments, pluginSources);
     },
     [isAttachmentOperationScopeCurrent, pushScopedRejections, settleUserAddedAttachments, t],
+  );
+
+  const addFiles = useCallback(
+    async (fileList: FileList | readonly File[]) => {
+      const operationScope = attachmentOperationScopeRef.current;
+      const attachmentCountAtStart = attachmentsRef.current.length;
+      // Fresh attempt: clear stale rejections so the inline strip reflects only
+      // this drop's failures.
+      setRejections([]);
+      // ── Step 1: collect rawFiles, intercept obvious failure cases up-front ──
+      // In sandboxed Electron (20+), File.path is unavailable — use
+      // webUtils.getPathForFile() exposed via preload bridge instead.
+      const rawFiles: DroppedRawFile[] = [];
+      const earlyErrors: { name: string; reason: string }[] = [];
+      for (const f of Array.from(fileList)) {
+        let filePath = '';
+        try {
+          filePath = window.electronAPI.getFilePath(f);
+        } catch {
+          // Fallback: try legacy File.path (non-sandboxed builds)
+          filePath = (f as File & { path?: string }).path ?? '';
+        }
+        if (!filePath) {
+          pushScopedRejections(operationScope, [
+            t('logic.toasts.attachmentLocalOnly', { name: f.name }),
+          ]);
+          continue;
+        }
+        // F-FI-8 spec step 1: 0-byte files are intercepted here so they never
+        // reach the peek IPC (would otherwise produce an "无法识别" instead of
+        // the more accurate "文件为空" error).
+        if (f.size === 0) {
+          earlyErrors.push({ name: f.name, reason: t('logic.fileTypes.fileEmpty') });
+          continue;
+        }
+        rawFiles.push({ name: f.name, path: filePath, size: f.size, file: f });
+      }
+      if (rawFiles.length === 0) {
+        if (earlyErrors.length > 0) {
+          pushScopedRejections(
+            operationScope,
+            earlyErrors.map((err) =>
+              t('logic.toasts.attachmentReadError', { name: err.name, reason: err.reason }),
+            ),
+          );
+        }
+        return;
+      }
+      await addRawFiles(operationScope, attachmentCountAtStart, rawFiles, earlyErrors);
+    },
+    [addRawFiles, pushScopedRejections, t],
+  );
+
+  /**
+   * Attach files whose drag payload only exposed paths. VS Code's explorer
+   * provides ResourceURLs / text/plain instead of native File objects, so the
+   * renderer cannot obtain a File with Electron path metadata.
+   */
+  const addFilePaths = useCallback(
+    async (paths: readonly string[], options?: AddFilePathsOptions) => {
+      const operationScope = attachmentOperationScopeRef.current;
+      const attachmentCountAtStart = attachmentsRef.current.length;
+      const rawFiles: DroppedRawFile[] = [];
+      const earlyErrors: { name: string; reason: string }[] = [];
+      const seen = new Set<string>();
+      const uniquePaths: string[] = [];
+
+      for (const input of paths) {
+        const filePath = input.trim();
+        if (!filePath) continue;
+        const key = /^[A-Za-z]:/.test(filePath) || filePath.startsWith('\\\\')
+          ? filePath.toLowerCase()
+          : filePath;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        uniquePaths.push(filePath);
+      }
+
+      if (uniquePaths.length === 0) return;
+      // A text/uri-list payload can be produced by any web page, so a path in
+      // it does not prove the user picked that local file. The confirmation
+      // setting (default on) asks before reading; the dialog itself can switch
+      // the setting off. Each drag asks again while it stays on.
+      if (getLocalPathDropConfirmEnabled()) {
+        if (!confirmDialog) {
+          // Without the shared dialog this read cannot be authorized: skip the
+          // drop instead of silently reading paths that nobody confirmed.
+          log.warn('path drop ignored: confirm dialog provider unavailable');
+          return;
+        }
+        const result = await confirmDialog.confirmWithCheckbox({
+          title: t('attachmentPathConfirm.title'),
+          description: t('attachmentPathConfirm.description'),
+          content: createElement(
+            'div',
+            { className: 'max-h-48 overflow-auto whitespace-pre-wrap break-all text-12' },
+            uniquePaths.join('\n'),
+          ),
+          checkboxLabel: t('attachmentPathConfirm.askAgain'),
+          checkboxDefaultChecked: true,
+          confirmText: t('commonUi.confirmDialog.confirm'),
+          cancelText: t('commonUi.confirmDialog.cancel'),
+        });
+        if (!result.ok || !isAttachmentDraftScopeActive(operationScope)) return;
+        if (!result.checked) setLocalPathDropConfirmEnabled(false);
+      }
+      setRejections([]);
+
+      const pathSourceLoader = readPluginUiEntries('composer.attachment').length > 0
+        ? async (file: AttachedFile) => {
+          const result = await window.electronAPI.readFileBytes({
+            filePath: file.path,
+            maxSize: GHOST_HANDOFF_MAX_BYTES_PER_FILE,
+          });
+          return result.bytes;
+        }
+        : undefined;
+
+      type PathProbe =
+        | { kind: 'directory'; path: string }
+        | { kind: 'file'; raw: DroppedRawFile }
+        | { kind: 'error'; name: string; reason: string };
+
+      const probePath = async (filePath: string): Promise<PathProbe> => {
+        let kind: 'share' | 'directory' | 'other' = 'other';
+        try {
+          kind = (await window.electronAPI.localDb.sessionShare.classifyPath({ path: filePath })).kind;
+        } catch {
+          // Classification is best-effort; let the attachment read report a real failure.
+        }
+        if (kind === 'directory') return { kind: 'directory', path: filePath };
+
+        const name = fileNameFromPath(filePath);
+        if (!name) return { kind: 'error', name: filePath, reason: t('logic.fileTypes.readFailed') };
+        try {
+          const peek = await window.electronAPI.peekFileHeader({ filePath, bytes: 0 });
+          if (!peek.success) {
+            return { kind: 'error', name, reason: t('logic.fileTypes.readFailed') };
+          }
+          if (peek.totalSize === 0) {
+            return { kind: 'error', name, reason: t('logic.fileTypes.fileEmpty') };
+          }
+          return { kind: 'file', raw: { name, path: filePath, size: peek.totalSize, file: null } };
+        } catch {
+          return { kind: 'error', name, reason: t('logic.fileTypes.readFailed') };
+        }
+      };
+
+      for (let start = 0; start < uniquePaths.length; start += PATH_PROBE_BATCH) {
+        const probes = await Promise.all(
+          uniquePaths.slice(start, start + PATH_PROBE_BATCH).map(probePath),
+        );
+        if (!isAttachmentDraftScopeActive(operationScope)) return;
+        for (const probe of probes) {
+          if (probe.kind === 'file') {
+            rawFiles.push(probe.raw);
+          } else if (probe.kind === 'error') {
+            earlyErrors.push({ name: probe.name, reason: probe.reason });
+          } else if (
+            options?.directories !== 'skip'
+            && isAttachmentOperationScopeCurrent(operationScope)
+          ) {
+            addFolderPath(probe.path);
+          }
+        }
+      }
+
+      if (!isAttachmentDraftScopeActive(operationScope)) return;
+      if (rawFiles.length === 0) {
+        if (earlyErrors.length > 0) {
+          pushScopedRejections(
+            operationScope,
+            earlyErrors.map((err) =>
+              t('logic.toasts.attachmentReadError', { name: err.name, reason: err.reason }),
+            ),
+          );
+        }
+        return;
+      }
+      await addRawFiles(
+        operationScope,
+        attachmentCountAtStart,
+        rawFiles,
+        earlyErrors,
+        pathSourceLoader,
+      );
+    },
+    [
+      addFolderPath,
+      addRawFiles,
+      confirmDialog,
+      isAttachmentOperationScopeCurrent,
+      pushScopedRejections,
+      t,
+    ],
   );
 
   /**
@@ -948,6 +1161,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     attachments,
     hasAttachments: attachments.length > 0,
     addFiles,
+    addFilePaths,
     addClipboardImage,
     rejections,
     dismissRejection,

@@ -1,4 +1,9 @@
 {
+  "attachmentPathConfirm": {
+    "title": "Lokale Dateien aus diesem Ziehen hinzufügen?",
+    "description": "Dieses Ziehen stammt aus Textdaten, nicht aus einem System-Dateiziehen. Fahren Sie nur fort, wenn Sie diese Dateien bewusst gezogen haben:",
+    "askAgain": "Vor dem Hinzufügen gezogener lokaler Dateien fragen"
+  },
   "antigravityVerification": {
     "title": "Google-Konto bestätigen",
     "note": "Scanne den QR-Code oder öffne die Google-Seite. Sobald Antigravity den Zugriff bestätigt, wird die Aufgabe fortgesetzt.",
@@ -1843,6 +1848,13 @@
     }
   },
   "settings": {
+    "localPathDropConfirm": {
+      "cell": {
+        "label": "Vor dem Hinzufügen gezogener lokaler Dateien fragen",
+        "description": "Aus einer Webseite gezogener Text kann lokale Pfade enthalten. Aktiviert fragt Cindy vor dem Lesen; deaktiviert werden gezogene Dateien direkt hinzugefügt."
+      },
+      "toggleAria": "Vor dem Hinzufügen gezogener lokaler Dateien fragen"
+    },
     "newChatDefaults": {
       "title": "Standardberechtigung für neue Aufgaben"
     },

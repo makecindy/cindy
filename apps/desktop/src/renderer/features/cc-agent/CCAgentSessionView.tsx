@@ -440,6 +440,7 @@ import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import {
   classifyUnclassifiedDroppedItems,
   getDroppedFileItems,
+  getDroppedExternalFilePaths,
   type DroppedFileItems,
 } from '@/lib/fileDrop';
 import { getCollaborationStartErrorMessage, workerAgentDeviceErrorMessage } from './collaborationErrors';
@@ -6819,6 +6820,8 @@ function CCAgentSessionContent({
                 window.electronAPI.localDb.sessionShare.classifyPath({ path }),
             }).then(attachDroppedItems);
           }
+          const externalPaths = getDroppedExternalFilePaths(e.dataTransfer);
+          if (externalPaths.length > 0) void attachmentState.addFilePaths(externalPaths);
         }}
       >
         {ownsRoute && session?.sideChatPromoted && (

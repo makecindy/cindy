@@ -1,4 +1,9 @@
 {
+  "attachmentPathConfirm": {
+    "title": "このドラッグのローカルファイルを追加しますか？",
+    "description": "このドラッグはテキストデータ由来で、システムのファイルドラッグではありません。追加するファイルを確認してください：",
+    "askAgain": "ローカルファイルをドラッグしたときに確認"
+  },
   "antigravityVerification": {
     "title": "Google アカウントの確認",
     "note": "QR コードをスキャンするか、Google のページを開いて確認してください。Antigravity がアクセスを確認すると、タスクが再開します。",
@@ -1813,6 +1818,13 @@
     }
   },
   "settings": {
+    "localPathDropConfirm": {
+      "cell": {
+        "label": "ローカルファイルをドラッグしたときに確認",
+        "description": "Web ページからドラッグしたテキストにもローカルパスが含まれる場合があります。オンにすると読み取り前に確認し、オフにすると直接追加します。"
+      },
+      "toggleAria": "ローカルファイルをドラッグしたときに確認"
+    },
     "newChatDefaults": {
       "title": "新しいタスクのデフォルト権限"
     },

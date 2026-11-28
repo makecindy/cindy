@@ -1,4 +1,9 @@
 {
+  "attachmentPathConfirm": {
+    "title": "添加此次拖拽之本地文件？",
+    "description": "此拖拽出于文本之数，非系统文件之拖拽。唯确认欲加此文件时，方继续：",
+    "askAgain": "拖入本地文件时先询"
+  },
   "antigravityVerification": {
     "title": "验 Google 账户",
     "note": "请扫码，或启 Google 页以验之。Antigravity 确认可用，则续前事。",
@@ -1813,6 +1818,13 @@
     }
   },
   "settings": {
+    "localPathDropConfirm": {
+      "cell": {
+        "label": "拖入本地文件时先询",
+        "description": "自网页拖入之文本亦或含本地路径。开启则先询后读；关闭则径加拖入之文件。"
+      },
+      "toggleAria": "拖入本地文件时先询"
+    },
     "newChatDefaults": {
       "title": "新差事预设权柄"
     },

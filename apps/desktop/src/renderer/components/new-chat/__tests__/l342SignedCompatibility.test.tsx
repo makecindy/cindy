@@ -60,7 +60,7 @@ vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => [
 
 const noop = () => {};
 const attachmentState: ComponentProps<typeof ChatInput>['attachmentState'] = {
-  attachments: [], hasAttachments: false, addFiles: vi.fn(), addClipboardImage: vi.fn(),
+  attachments: [], hasAttachments: false, addFiles: vi.fn(), addFilePaths: vi.fn(), addClipboardImage: vi.fn(),
   rejections: [], dismissRejection: noop, clearRejections: noop, addFolderPath: noop, addFileMention: noop,
   pendingFoldersVersion: 0, consumePendingFolders: () => [],
   pendingFileMentionsVersion: 0, consumePendingFileMentions: () => [],

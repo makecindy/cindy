@@ -320,7 +320,11 @@ import {
   getGhostMediaHandoverFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
-import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
+import {
+  classifyUnclassifiedDroppedItems,
+  getDroppedExternalFilePaths,
+  getDroppedFileItems,
+} from '@/lib/fileDrop';
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import { isRemoteEngineMissing } from '@/lib/remoteCapabilityNotices';
@@ -8372,6 +8376,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }).then(({ files }) => {
               if (files.length > 0) attachmentState.addFiles(files);
             });
+          }
+          // VS Code paths: files become attachments; directories keep bubbling
+          // so the window-level handler can still turn one into the workdir.
+          const externalPaths = getDroppedExternalFilePaths(e.dataTransfer);
+          if (externalPaths.length > 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            void attachmentState.addFilePaths(externalPaths, { directories: 'skip' });
           }
         }}
       >

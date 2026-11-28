@@ -65,6 +65,19 @@ async function codeOf(promise: Promise<unknown>): Promise<string> {
 const ABS = '/Users/x/project/paper.pdf';
 
 describe('readFileBytesForPreview', () => {
+  it('allows an explicit plugin-size max above the 30MB preview default', async () => {
+    const size = READ_FILE_BYTES_CAP - 1024;
+    const res = await readFileBytesForPreview(
+      { filePath: ABS, maxSize: READ_FILE_BYTES_CAP },
+      deps({
+        stat: async () => statStub(size, true, 1, 1),
+        open: async () => fakeHandle({ statSize: size, data: Buffer.from([7]) }),
+      }),
+    );
+    expect(res.size).toBe(1);
+    expect(res.bytes.byteLength).toBe(1);
+  });
+
   it('returns an exact-copy Uint8Array + real size on success', async () => {
     const res = await readFileBytesForPreview({ filePath: ABS }, deps());
     expect(Array.from(res.bytes)).toEqual([1, 2, 3, 4]);

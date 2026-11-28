@@ -106,6 +106,7 @@ import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import {
   classifyUnclassifiedDroppedItems,
   getDroppedFileItems,
+  getDroppedExternalFilePaths,
   type DroppedFileItems,
 } from '@/lib/fileDrop';
 import {
@@ -809,6 +810,7 @@ interface ChatInputProps {
     attachments: AttachedFile[];
     hasAttachments: boolean;
     addFiles: (fileList: FileList | readonly File[]) => Promise<void>;
+    addFilePaths: (paths: readonly string[]) => Promise<void>;
     addClipboardImage: (blob: Blob) => Promise<void>;
     rejections: { id: string; message: string }[];
     dismissRejection: (id: string) => void;
@@ -1681,6 +1683,7 @@ export function ChatInput({
     attachments,
     hasAttachments,
     addFiles,
+    addFilePaths,
     addClipboardImage,
     rejections,
     dismissRejection,
@@ -2800,6 +2803,12 @@ export function ChatInput({
         // Consume the event here first so ProseMirror does not also insert the
         // drag source's `text/plain` fallback (the raw session id).
         if (event.dataTransfer?.getData(SESSION_LINK_DROP_MIME).trim()) {
+          event.preventDefault();
+          return true;
+        }
+        // VS Code path drops are consumed by the outer composer handler. Stop
+        // ProseMirror from inserting the raw text/plain path list as text.
+        if (getDroppedExternalFilePaths(event.dataTransfer).length > 0) {
           event.preventDefault();
           return true;
         }
@@ -9847,6 +9856,10 @@ export function ChatInput({
                     window.electronAPI.localDb.sessionShare.classifyPath({ path }),
                 }).then(attachDroppedItems);
               }
+              // VS Code's explorer drag carries paths, not File objects. Keep
+              // this last so native and item-less file drags stay authoritative.
+              const externalPaths = getDroppedExternalFilePaths(e.dataTransfer);
+              if (externalPaths.length > 0) void addFilePaths(externalPaths);
             }}
           >
             {/* Drop overlay (F-FI-1) */}

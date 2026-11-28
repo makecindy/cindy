@@ -20,6 +20,8 @@ const toastWarning = vi.hoisted(() => vi.fn());
 const stageChatAttachment = vi.hoisted(() => vi.fn());
 const cleanupStaged = vi.hoisted(() => vi.fn(async () => {}));
 const plugins = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[], call: vi.fn() }));
+const confirmPathDrop = vi.hoisted(() => vi.fn(async () => true));
+const confirmPathDropWithCheckbox = vi.hoisted(() => vi.fn(async () => ({ ok: true, checked: true })));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => plugins.ghosts, readInstalledGhostsSnapshot: () => plugins.ghosts }));
 
 vi.mock('react-i18next', () => ({
@@ -35,6 +37,13 @@ vi.mock('@/lib/toast', () => ({
   toast: { warning: toastWarning, error: vi.fn(), success: vi.fn() },
 }));
 
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useOptionalConfirmDialog: () => ({
+    confirm: confirmPathDrop,
+    confirmWithCheckbox: confirmPathDropWithCheckbox,
+  }),
+}));
+
 import { useAttachments } from '@/hooks/useAttachments';
 import {
   clearDraft,
@@ -44,6 +53,11 @@ import {
   setComposerDraftOwner,
 } from '@/lib/composerDraftStore';
 import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
+import {
+  _resetLocalPathDropConfirmPreferenceForTests,
+  getLocalPathDropConfirmEnabled,
+  setLocalPathDropConfirmEnabled,
+} from '@/hooks/useLocalPathDropConfirmPreference';
 import {
   __testing as dataOwnerTesting,
   setDataOwnerGeneration,
@@ -83,6 +97,12 @@ beforeEach(() => {
   dataOwnerTesting.reset();
   setComposerDraftOwner(null);
   toastWarning.mockClear();
+  confirmPathDrop.mockReset();
+  confirmPathDrop.mockResolvedValue(true);
+  confirmPathDropWithCheckbox.mockReset();
+  confirmPathDropWithCheckbox.mockResolvedValue({ ok: true, checked: true });
+  _resetLocalPathDropConfirmPreferenceForTests();
+  setLocalPathDropConfirmEnabled(false);
   stageChatAttachment.mockReset();
   plugins.ghosts = []; plugins.call.mockReset();
   cleanupStaged.mockClear();
@@ -102,6 +122,186 @@ afterEach(() => {
 });
 
 describe('useAttachments inline rejections', () => {
+  it('reads the confirmation setting from storage without a mounted settings row', () => {
+    localStorage.setItem('composer.localPathDropConfirm.enabled', 'true');
+    expect(getLocalPathDropConfirmEnabled()).toBe(true);
+    localStorage.setItem('composer.localPathDropConfirm.enabled', 'false');
+    expect(getLocalPathDropConfirmEnabled()).toBe(false);
+  });
+
+  it('asks before reading a path drop when no preference is stored', async () => {
+    // 依据:路径来源不可验证,默认必须先确认再读盘(设置默认开启)。
+    _resetLocalPathDropConfirmPreferenceForTests();
+    localStorage.removeItem('composer.localPathDropConfirm.enabled');
+    confirmPathDropWithCheckbox.mockResolvedValueOnce({ ok: true, checked: true });
+    const peekFileHeader = vi.fn(async () => ({
+      success: true,
+      actualBytes: 0,
+      totalSize: 12,
+    }));
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      localDb: { sessionShare: { classifyPath: vi.fn(async () => ({ kind: 'other' })) } },
+      peekFileHeader,
+      cleanupCachedImages: vi.fn(async () => undefined),
+    };
+    const { result, unmount } = renderHook(() => useAttachments('default-confirm-path-drop'));
+
+    await act(async () => {
+      await result.current.addFilePaths(['C:\\work\\README.md']);
+    });
+
+    expect(getLocalPathDropConfirmEnabled()).toBe(true);
+    expect(confirmPathDropWithCheckbox).toHaveBeenCalledOnce();
+    expect(result.current.attachments).toHaveLength(1);
+    unmount();
+    clearDraft('default-confirm-path-drop');
+  });
+
+  it('attaches a path-only drop coming from VS Code', async () => {
+    const peekFileHeader = vi.fn(async () => ({
+      success: true,
+      actualBytes: 0,
+      totalSize: 12,
+    }));
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      localDb: { sessionShare: { classifyPath: vi.fn(async () => ({ kind: 'other' })) } },
+      peekFileHeader,
+      cleanupCachedImages: vi.fn(async () => undefined),
+    };
+    const { result, unmount } = renderHook(() => useAttachments('vscode-path-drop'));
+
+    await act(async () => {
+      await result.current.addFilePaths(['C:\\work\\README.md']);
+    });
+
+    expect(result.current.attachments).toEqual([
+      expect.objectContaining({
+        name: 'README.md',
+        path: 'C:\\work\\README.md',
+        size: 12,
+      }),
+    ]);
+    expect(peekFileHeader).toHaveBeenCalledWith({ filePath: 'C:\\work\\README.md', bytes: 0 });
+    unmount();
+    clearDraft('vscode-path-drop');
+  });
+
+  it('does not read a path-only drop when the user declines confirmation', async () => {
+    setLocalPathDropConfirmEnabled(true);
+    confirmPathDropWithCheckbox.mockResolvedValueOnce({ ok: false, checked: false });
+    const classifyPath = vi.fn(async () => ({ kind: 'other' }));
+    const peekFileHeader = vi.fn(async () => ({ success: true, actualBytes: 0, totalSize: 12 }));
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      localDb: { sessionShare: { classifyPath } },
+      peekFileHeader,
+      cleanupCachedImages: vi.fn(async () => undefined),
+    };
+    const { result, unmount } = renderHook(() => useAttachments('declined-path-drop'));
+
+    await act(async () => {
+      await result.current.addFilePaths(['C:\\work\\.env']);
+    });
+
+    expect(confirmPathDropWithCheckbox).toHaveBeenCalledOnce();
+    expect(classifyPath).not.toHaveBeenCalled();
+    expect(peekFileHeader).not.toHaveBeenCalled();
+    expect(result.current.attachments).toEqual([]);
+    expect(getLocalPathDropConfirmEnabled()).toBe(true);
+    unmount();
+    clearDraft('declined-path-drop');
+  });
+
+  it('turns the confirmation setting off when the dialog checkbox is cleared', async () => {
+    setLocalPathDropConfirmEnabled(true);
+    confirmPathDropWithCheckbox.mockResolvedValueOnce({ ok: true, checked: false });
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      localDb: { sessionShare: { classifyPath: vi.fn(async () => ({ kind: 'other' })) } },
+      peekFileHeader: vi.fn(async () => ({ success: true, actualBytes: 0, totalSize: 12 })),
+      cleanupCachedImages: vi.fn(async () => undefined),
+    };
+    const { result, unmount } = renderHook(() => useAttachments('checkbox-path-drop'));
+
+    await act(async () => {
+      await result.current.addFilePaths(['C:\\work\\README.md']);
+    });
+
+    expect(result.current.attachments).toHaveLength(1);
+    expect(getLocalPathDropConfirmEnabled()).toBe(false);
+    unmount();
+    clearDraft('checkbox-path-drop');
+  });
+
+  it('keeps a delayed path drop bound to the session captured before navigation', async () => {
+    const classify = deferred<{ kind: 'other' }>();
+    const peekFileHeader = vi.fn(async () => ({ success: true, actualBytes: 0, totalSize: 5 }));
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      localDb: { sessionShare: { classifyPath: vi.fn(() => classify.promise) } },
+      peekFileHeader,
+      cleanupCachedImages: vi.fn(async () => undefined),
+    };
+    const { result, rerender, unmount } = renderHook(
+      ({ sid }: { sid: string }) => useAttachments(sid),
+      { initialProps: { sid: 'path-session-A' } },
+    );
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.addFilePaths(['C:\\work\\README.md']);
+    });
+    act(() => rerender({ sid: 'path-session-B' }));
+    await act(async () => {
+      classify.resolve({ kind: 'other' });
+      await pending;
+    });
+
+    expect(result.current.attachments).toEqual([]);
+    expect(getDraft('path-session-A')?.attachments).toEqual([
+      expect.objectContaining({ name: 'README.md', path: 'C:\\work\\README.md' }),
+    ]);
+    expect(getDraft('path-session-B')?.attachments ?? []).toEqual([]);
+    unmount();
+    clearDraft('path-session-A');
+    clearDraft('path-session-B');
+  });
+
+  it('reads path-only bytes on demand so attachment plugins can run', async () => {
+    enableAttachmentProvider(['.pdf']);
+    plugins.call.mockResolvedValue({ handled: false });
+    const readFileBytes = vi.fn(async () => ({ bytes: new Uint8Array(5), size: 5 }));
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      localDb: { sessionShare: { classifyPath: vi.fn(async () => ({ kind: 'other' })) } },
+      peekFileHeader: vi.fn(async () => ({ success: true, actualBytes: 0, totalSize: 5 })),
+      readFileBytes,
+      maker: { mcpApps: plugins.call },
+      cleanupCachedImages: vi.fn(async () => undefined),
+    };
+    const { result, unmount } = renderHook(() => useAttachments(undefined, 'path-plugin'));
+
+    await act(async () => {
+      await result.current.addFilePaths(['/tmp/input.pdf']);
+    });
+
+    expect(readFileBytes).toHaveBeenCalledWith({
+      filePath: '/tmp/input.pdf',
+      maxSize: 64 * 1024 * 1024,
+    });
+    await vi.waitFor(() => {
+      expect(plugins.call).toHaveBeenCalledWith(null, expect.objectContaining({
+        op: 'plugin-action',
+        input: {
+          attachment: {
+            name: 'input.pdf',
+            bytes: new Uint8Array(5),
+            size: 5,
+            mimeType: 'application/pdf',
+          },
+        },
+      }));
+    });
+    unmount();
+    clearDraft('path-plugin');
+  });
+
   // Tier: unit at the production MCP App → composer boundary. The mounted
   // composer must mirror a Main-delivered attachment written through the same
   // helper used by McpAppCard, while preserving the existing text draft.

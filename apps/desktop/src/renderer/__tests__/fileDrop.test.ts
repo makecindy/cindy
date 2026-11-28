@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
+import {
+  classifyUnclassifiedDroppedItems,
+  getDroppedExternalFilePaths,
+  getDroppedFileItems,
+} from '@/lib/fileDrop';
+import { COMPOSER_MENTION_MIME } from '@/lib/composerMentionDrag';
 
 function transfer(
   items: Array<{
@@ -16,6 +21,17 @@ function transfer(
       webkitGetAsEntry: () => ({ isDirectory: item.directory === true }),
     })),
     files,
+  } as unknown as DataTransfer;
+}
+
+function textTransfer(
+  values: Record<string, string>,
+  files: File[] = [],
+): DataTransfer {
+  return {
+    files,
+    types: Object.keys(values),
+    getData: (type: string) => values[type] ?? '',
   } as unknown as DataTransfer;
 }
 
@@ -89,5 +105,95 @@ describe('getDroppedFileItems', () => {
       files: [file],
       directories: [],
     });
+  });
+});
+
+describe('getDroppedExternalFilePaths', () => {
+  it('reads VS Code ResourceURLs and dedupes the plain-text path', () => {
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({
+          ResourceURLs: JSON.stringify(['file:///c%3A/Users/me/report.ts']),
+          'text/plain': 'C:\\Users\\me\\report.ts\r\n',
+        }),
+      ),
+    ).toEqual(['c:\\Users\\me\\report.ts']);
+  });
+
+  it('reads text/uri-list entries and skips comments', () => {
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({
+          'text/uri-list': '# copied from VS Code\r\nfile:///Users/me/src/a.ts\r\nfile:///Users/me/src/b.ts\r\n',
+        }),
+      ),
+    ).toEqual(['/Users/me/src/a.ts', '/Users/me/src/b.ts']);
+  });
+
+  it('reads a plain-text path list', () => {
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({
+          'text/plain': 'C:\\work\\a.ts\r\nD:\\work\\c.ts\r\n',
+        }),
+      ),
+    ).toEqual(['C:\\work\\a.ts', 'D:\\work\\c.ts']);
+  });
+
+  it('keeps a text drop as text once any line is not a path', () => {
+    // 依据:代码片段/日志里常有一行独立路径,整段不是路径列表时不能变成附件。
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({ 'text/plain': 'C:\\work\\a.ts\r\nconst answer = 42;\r\n' }),
+      ),
+    ).toEqual([]);
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({ 'text/plain': 'C:\\work\\a.ts\r\nrelative\\b.ts' }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('reads VS Code CodeFiles payloads', () => {
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({
+          CodeFiles: JSON.stringify(['C:\\work\\a.ts', 'https://example.com/b.ts']),
+        }),
+      ),
+    ).toEqual(['C:\\work\\a.ts']);
+  });
+
+  it('leaves native file drags to the File-object pipeline', () => {
+    const file = { name: 'report.txt' } as File;
+
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({ 'text/plain': 'C:\\work\\report.txt' }, [file]),
+      ),
+    ).toEqual([]);
+  });
+
+  it('leaves internal composer mention drags to the mention pipeline', () => {
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({
+          [COMPOSER_MENTION_MIME]: JSON.stringify({
+            type: 'file',
+            relPath: 'C:\\work\\README.md',
+            name: 'README.md',
+          }),
+          'text/plain': 'C:\\work\\README.md',
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('does not treat a code selection or link as a file path', () => {
+    expect(
+      getDroppedExternalFilePaths(
+        textTransfer({ 'text/plain': 'const answer = 42;\nhttps://example.com/a.ts' }),
+      ),
+    ).toEqual([]);
   });
 });

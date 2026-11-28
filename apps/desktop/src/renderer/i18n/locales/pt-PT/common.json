@@ -1,4 +1,9 @@
 {
+  "attachmentPathConfirm": {
+    "title": "Adicionar os ficheiros locais deste arrastamento?",
+    "description": "Este arrastamento veio de dados de texto, não de um arrastamento de ficheiros do sistema. Continue apenas se arrastou estes ficheiros intencionalmente:",
+    "askAgain": "Perguntar antes de adicionar ficheiros locais arrastados"
+  },
   "antigravityVerification": {
     "title": "Valide a sua Conta Google",
     "note": "Leia o código QR ou abra a página da Google. A tarefa será retomada quando o Antigravity confirmar o acesso.",
@@ -1881,6 +1886,13 @@
     }
   },
   "settings": {
+    "localPathDropConfirm": {
+      "cell": {
+        "label": "Perguntar antes de adicionar ficheiros locais arrastados",
+        "description": "Texto arrastado de uma página web pode conter caminhos locais. Ativado, a Cindy pergunta antes de ler; desativado, adiciona os ficheiros diretamente."
+      },
+      "toggleAria": "Perguntar antes de adicionar ficheiros locais arrastados"
+    },
     "newChatDefaults": {
       "title": "Permissão predefinida para novas tarefas"
     },
