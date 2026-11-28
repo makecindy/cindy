@@ -57,6 +57,16 @@ afterEach(() => {
 });
 
 describe('analytics settings store', () => {
+  it('reports a fresh display state from disk without replacing corrupt records', async () => {
+    const store = await importStore();
+    await expect(store.readAnalyticsConsentFromDisk()).resolves.toBe(false);
+    fs.writeFileSync(settingsFile(), JSON.stringify({ privacyConsentAccepted: true }));
+    await expect(store.readAnalyticsConsentFromDisk()).resolves.toBe(true);
+    fs.writeFileSync(settingsFile(), '{invalid');
+    await expect(store.readAnalyticsConsentFromDisk()).resolves.toBeNull();
+    expect(fs.readFileSync(settingsFile(), 'utf-8')).toBe('{invalid');
+  });
+
   it('defaults to unconsented — nothing may be reported on a fresh install', async () => {
     const store = await importStore();
 
@@ -66,6 +76,7 @@ describe('analytics settings store', () => {
       legacyConsentMigrationClosed: false,
     });
     expect(store.isAnalyticsAllowed()).toBe(false);
+    expect(store.readCompanyTokenReportingPreference()).toBe(true);
     expect(fs.existsSync(settingsFile())).toBe(false);
   });
 
@@ -141,6 +152,17 @@ describe('analytics settings store', () => {
     expect(store.isAnalyticsAllowed()).toBe(false);
   });
 
+  it('preserves an opt-out saved after the first settings read and before login migration', async () => {
+    const store = await importStore();
+    store.readAnalyticsSettings();
+    fs.writeFileSync(settingsFile(), JSON.stringify({ analyticsEnabled: false }));
+    expect(store.migrateExistingLoginAsConsented(true)).toBe(false);
+    store.closeLegacyConsentMigration();
+    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))).toEqual({
+      analyticsEnabled: false, legacyConsentMigrationClosed: true,
+    });
+  });
+
   it('normalizes hostile file contents to the safe default', async () => {
     const store = await importStore();
 
@@ -176,27 +198,24 @@ describe('analytics settings store', () => {
     expect(store.isAnalyticsAllowed()).toBe(false);
   });
 
-  it('still refuses to migrate when an earlier read already deleted the corrupted file', async () => {
-    // 真实启动顺序:renderer 挂载后先发 analytics:settings-get,它早于 auth:initialize。
-    // 那次读会把坏 JSON **删掉**并缓存默认态,等迁移执行时盘上已经什么都没有了。
-    // 只靠 existsSync 判定会在这里失守,把一份损坏的记录(可能原本是显式 opt-out)
-    // 迁移成「已同意 + 默认开启」。
+  it('keeps an unreadable opt-out across settings reads, migration and restart until an explicit repair', async () => {
     fs.writeFileSync(settingsFile(), '{not json', 'utf-8');
     const store = await importStore();
-
-    // ① renderer 的首次读取(破坏性:override-settings-file 会 unlink)
     store.readAnalyticsSettings();
-    expect(fs.existsSync(settingsFile())).toBe(false);
-
-    // ② 之后才轮到 auth:initialize 触发迁移
+    expect(store.closeLegacyConsentMigration()).toBe(false);
     expect(store.migrateExistingLoginAsConsented(true)).toBe(false);
     expect(store.isAnalyticsAllowed()).toBe(false);
+    expect(fs.readFileSync(settingsFile(), 'utf8')).toBe('{not json');
+    const restarted = await importStore();
+    expect(restarted.readCompanyTokenReportingPreference()).toBeNull();
+    restarted.acceptPrivacyConsent();
+    expect(restarted.readCompanyTokenReportingPreference()).toBe(false);
+    restarted.setAnalyticsEnabled(true);
+    expect(restarted.readCompanyTokenReportingPreference()).toBe(true);
   });
 
   it('refuses to migrate a corrupted record — damaged is not the same as absent', async () => {
-    // createOverrideSettingsFile 读到坏 JSON 会把文件删掉并返回 isCustomized=false。
-    // 只看 isCustomized 的话,一份损坏的记录(可能原本就是显式 opt-out)会被当成
-    // 「从没有过记录」,于是这次冷启动就把采集静默重新打开。
+    // A damaged record may have contained an opt-out.
     fs.writeFileSync(settingsFile(), '{not json', 'utf-8');
     const store = await importStore();
 
@@ -219,6 +238,21 @@ describe('analytics settings store', () => {
       privacyConsentAccepted: true,
     });
     expect(store.isAnalyticsAllowed()).toBe(true);
+  });
+
+  it('resets the usage override using the latest consent and keeps other saved fields', async () => {
+    const store = await importStore();
+    store.setAnalyticsEnabled(false);
+    fs.writeFileSync(settingsFile(), JSON.stringify({
+      analyticsEnabled: false, privacyConsentAccepted: true, legacyConsentMigrationClosed: 'bad',
+      futureSetting: 'keep',
+    }));
+    store.clearAnalyticsEnabledOverride();
+    const saved = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+    expect(saved).not.toHaveProperty('analyticsEnabled');
+    expect(saved).toMatchObject({ privacyConsentAccepted: true, futureSetting: 'keep' });
+    expect(store.readCompanyTokenReportingPreference()).toBe(true);
+    expect(await store.readAnalyticsConsentFromDisk()).toBe(true);
   });
 
   it('tracks whether the toggle was explicitly set', async () => {
@@ -332,6 +366,7 @@ describe('analytics build gate', () => {
     const devStore = await importStore();
     devStore.acceptPrivacyConsent();
     expect(devStore.isAnalyticsAllowed()).toBe(false);
+    expect(devStore.readCompanyTokenReportingPreference()).toBe(false);
 
     // 同一份盘上记录,换成正式构建立刻放行 —— 证明差异只来自构建 flavor。
     isPackaged = true;

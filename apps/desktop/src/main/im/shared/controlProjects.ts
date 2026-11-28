@@ -24,7 +24,6 @@ import { sessions } from '../../localDb/schema';
 import { isProvisionalSession } from '../../localDb/provisionalSessions';
 import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../../shared/sessionSource.js';
 import { normalizeWorkingDirForGrouping } from '../../../shared/workingDir.js';
-import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 /** 侧栏本机项目的只读快照(最近使用在前)。 */
 export interface ControlProjectCatalog {
@@ -133,8 +132,8 @@ export async function listProjectsForControl(
     if (isProvisionalSession(r.id)) continue;
     const dir = normalizeWorkingDir(r.projectDir ?? r.workingDir);
     if (!dir) continue;
-    // 侧栏里移除的项目、伙伴自己的项目不进清单(与侧栏一致)。
-    if (catalog !== null && (catalog.isRemoved(dir) || isTeammateProjectPath(dir))) continue;
+    // 侧栏里移除的项目不进清单。
+    if (catalog?.isRemoved(dir)) continue;
     const t = r.userSendAt ?? r.updatedAt;
     if (!latestByDir.has(dir) || t > (latestByDir.get(dir) ?? 0)) {
       latestByDir.set(dir, t);

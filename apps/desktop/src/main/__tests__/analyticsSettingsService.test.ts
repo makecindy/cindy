@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** 广播到 renderer 的 payload 序列 —— 本地模式的 opt-out 必须真的被重播出去。 */
 const broadcasts: Array<Record<string, unknown>> = [];
+const migrationClosedAtBroadcast: boolean[] = [];
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/analytics-service-test' },
   ipcMain: { handle: vi.fn() },
@@ -25,6 +26,7 @@ vi.mock('electron', () => ({
         webContents: {
           send: (_channel: string, payload: Record<string, unknown>) => {
             broadcasts.push(payload);
+            migrationClosedAtBroadcast.push(fakeSettings.legacyConsentMigrationClosed);
           },
         },
       },
@@ -397,8 +399,8 @@ describe('local-mode reporting gate', () => {
   });
 
   // 真实设置入口必须区分用户主动打开与登录态重播，避免把旧的企业退出偏好覆盖。
-  it('distinguishes an explicit switch change from an auth-state refresh', async () => {
-    fakeSettings.privacyConsentAccepted = true;
+  it.each([true, false])('distinguishes an explicit switch change from an auth-state refresh (personal consent: %s)', async consent => {
+    fakeSettings.privacyConsentAccepted = consent;
     const service = await importService();
     service.initAnalyticsSettingsService();
     const onChange = vi.fn();
@@ -410,7 +412,7 @@ describe('local-mode reporting gate', () => {
     setter(event, false);
     setter(event, true);
     authStateListener?.();
-    expect(onChange.mock.calls).toEqual([[false, false], [true, true], [true, undefined]]);
+    expect(onChange.mock.calls).toEqual([[false, false], [consent, true], [consent, undefined]]);
 
     unsubscribe();
     setter(event, false);
@@ -433,11 +435,19 @@ describe('local-mode reporting gate', () => {
     hasNoPersistedAuthCredentials.mockReturnValue(false);
     const service = await importService();
     service.initAnalyticsSettingsService();
+    broadcasts.length = 0;
+    migrationClosedAtBroadcast.length = 0;
+    hasNoPersistedAuthCredentials.mockClear();
 
     isLocalMode.mockReturnValue(true);
     authStateListener?.();
 
     expect(fakeSettings.legacyConsentMigrationClosed).toBe(true);
+    expect(hasNoPersistedAuthCredentials).not.toHaveBeenCalled();
+    // Observe the persisted verdict at broadcast time, independently of function names.
+    expect(migrationClosedAtBroadcast).toEqual([true]);
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]).toMatchObject({ allowed: false, privacyConsentAccepted: false });
 
     // 之后从本地模式走免协议 SSO,下一次冷启动恢复出真实账号:不得写入同意。
     isLocalMode.mockReturnValue(false);

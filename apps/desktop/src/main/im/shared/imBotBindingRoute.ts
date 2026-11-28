@@ -4,8 +4,8 @@
  * 连接交给伙伴后的路由契约(纯函数 + 注入接口, 不 import 数据库 / Electron)。
  *
  * turnRunner 在「找任务」这一步多做一次归属解析: 连接已交给伙伴 → 主人私聊走
- * 伙伴主任务, 群 / 话题 / 获准的陌生人私聊走伙伴的 `channel` 专线; 未交出或伙伴
- * 解析失败 → 原逻辑。真实实现见 imBotBindingRuntime.ts(由 orchestrator 注入),
+ * 伙伴主任务, 群 / 话题 / 获准的陌生人私聊走伙伴的 `channel` 专线; 未交出 → 原逻辑;
+ * 伙伴解析失败 → 拒绝并回「伙伴暂时不可用」, 不回落渠道自己的路由。真实实现见 imBotBindingRuntime.ts(由 orchestrator 注入),
  * 单测直接注入替身。
  */
 

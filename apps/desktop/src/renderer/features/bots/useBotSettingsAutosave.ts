@@ -50,8 +50,8 @@ export interface BotSettingsAutosaveController {
   errorKey: string | null;
   /** 字段变化:文本走防抖,离散选择走即时合并窗口。 */
   onEdit: (trigger: BotAutosaveTrigger) => void;
-  /** Flush pending edits and return the latest error key for navigation guards. */
-  flush: () => Promise<string | null>;
+  /** blur / 返回聊天等显式边界的冲刷。 */
+  flush: () => Promise<void>;
   /** 失败后重发。 */
   retry: () => Promise<void>;
   /** 是否有已改但未落库的内容。 */
@@ -103,7 +103,6 @@ export function useBotSettingsAutosave(
   const [modelSelectionSaved, setModelSelectionSaved] = useState(false);
   const completedModelSelectionRef = useRef(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
-  const latestErrorKey = useRef<string | null>(null);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
 
@@ -115,8 +114,7 @@ export function useBotSettingsAutosave(
     }
     setStatus(next);
     setModelSelectionSaved(next === 'saved' && completedModelSelectionRef.current);
-    latestErrorKey.current = next === 'error' ? botSettingsSaveErrorKey(error) : null;
-    setErrorKey(latestErrorKey.current);
+    setErrorKey(next === 'error' ? botSettingsSaveErrorKey(error) : null);
     if (next !== 'saved') return;
     savedTimerRef.current = setTimeout(() => {
       savedTimerRef.current = null;
@@ -185,10 +183,9 @@ export function useBotSettingsAutosave(
     [autosave, captureIntentOwner],
   );
 
-  const flush = useCallback(async () => {
-    if (!enabledRef.current) return null;
-    await autosave.flush();
-    return latestErrorKey.current;
+  const flush = useCallback(() => {
+    if (!enabledRef.current) return Promise.resolve();
+    return autosave.flush();
   }, [autosave]);
 
   const retry = useCallback(() => {

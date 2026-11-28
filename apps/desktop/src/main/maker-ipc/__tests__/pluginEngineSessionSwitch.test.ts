@@ -14,7 +14,14 @@
  * - tier：unit(依赖注入，与 sessionAgentSwitchHandler.test.ts 同一套 harness 形状)。
  */
 import { describe, expect, it, vi } from 'vitest';
+import { estimateHandoffTokens } from '../agentHandoff';
+import {
+  getPluginEngineHandoffWindow,
+  observePluginEngineContextWindow,
+  resetPluginHarnessModelCacheForTests,
+} from '../../maker-host/pluginEngineModelCache';
 import { providerShareGuestPeer } from '@cindy/device-link';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
 
 import {
   applyPendingAgentSwitchIfIdle,
@@ -76,7 +83,186 @@ function makeDeps(row: AgentSwitchSessionRow, overrides: Partial<MakerSessionAge
   return { deps, pendingSwitches };
 }
 
+describe('handoff budget when switching engines', () => {
+  const model = 'fixture-model';
+  // The shared builder must trim long history rather than only passing through a short fixture.
+  const history = Array.from({ length: 48 }, (_, index) => ({
+    role: 'user' as const, content: `[fixture:${index}] ${'文'.repeat(3950)}`, createdAt: index,
+  }));
+
+  async function switchWithHistory(
+    targetAgentKind: 'acp' | 'codex',
+    options: { windows?: number[]; nextInputChars?: number; observedProvider?: string;
+      observedModel?: string; agentDeviceId?: string } = {},
+  ): Promise<string> {
+    resetPluginHarnessModelCacheForTests();
+    const observe = observePluginEngineContextWindow(options.observedProvider ?? ENGINE);
+    for (const size of options.windows ?? []) observe(options.observedModel ?? model, size);
+    const row = makeRow();
+    const { deps } = makeDeps(row, {
+      listMessagesForHandoff: async () => history,
+      resolveLocalPluginHandoffWindow: getPluginEngineHandoffWindow,
+      resolveHandoffWindow: async () => 100_000,
+      admitRemotePluginEngineTarget: async (_device, target) => ({
+        model: target.model, effort: '', permissionMode: 'default', engineName: 'Fixture engine',
+      }),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: row.id,
+      targetAgentKind,
+      model,
+      providerId: targetAgentKind === 'acp' ? ENGINE : 'fixture-provider',
+      agentDeviceId: options.agentDeviceId,
+    });
+    await applyPendingAgentSwitchIfIdle(deps, row.id, { nextInputChars: options.nextInputChars });
+    const handoff = vi.mocked(deps.setPendingHandoff).mock.calls.at(-1)?.[1];
+    expect(handoff).toBeTruthy();
+    return handoff!;
+  }
+
+  it.each([
+    { name: 'reported million-token window', target: 'acp', windows: [1_000_000], min: 90_000, cap: 100_000 },
+    { name: 'latest valid report and next input reserve', target: 'acp',
+      windows: [1_000_000, 100_000, 4_000_001], nextInputChars: 40_000, min: 20_000, cap: 25_000 },
+    { name: 'unchanged built-in path', target: 'codex',
+      windows: [1_000_000], nextInputChars: 40_000, min: 26_000, cap: 30_000 },
+  ] satisfies Array<{ name: string; target: 'acp' | 'codex'; windows: number[];
+    nextInputChars?: number; min: number; cap: number }>)('uses the expected budget: $name', async (example) => {
+    const text = await switchWithHistory(example.target, example);
+    expect(estimateHandoffTokens(text)).toBeGreaterThan(example.min);
+    expect(estimateHandoffTokens(text)).toBeLessThanOrEqual(example.cap);
+  });
+
+  it.each([
+    { name: 'no report' },
+    { name: 'zero', windows: [0] },
+    { name: 'negative', windows: [-1] },
+    { name: 'non-finite', windows: [Infinity, NaN] },
+    { name: 'overlarge', windows: [4_000_001] },
+    { name: 'another model', windows: [1_000_000], observedModel: 'other-model' },
+    { name: 'another provider', windows: [1_000_000], observedProvider: 'acp-plugin:fixture:other' },
+    { name: 'remote target', windows: [1_000_000], agentDeviceId: 'fixture-remote' },
+    { name: 'shared target', windows: [1_000_000], agentDeviceId: 'share:fixture' },
+  ])('keeps the 16,000-character fallback: $name', async (example) => {
+    const text = await switchWithHistory('acp', example);
+    expect(text.length).toBeGreaterThan(12_000);
+    expect(text.length).toBeLessThanOrEqual(16_000);
+  });
+});
+
 describe('switching a task onto a plugin engine', () => {
+  // #12397: a finished, separate automation task keeps its conversation and
+  // hands it to the selected plugin on the next manual send. Unit, same harness.
+  it.each([false, true])('applies a local plugin selection on next send from a completed automation (remote=%s)', async (remote) => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
+      canSwitchCompletedAutomationSession: vi.fn(async () => true),
+    });
+    const staged = await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+      localWindowRequest: true,
+    });
+
+    expect(staged).toMatchObject({ deferred: true, agentKind: 'acp' });
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    const send = () => applyPendingAgentSwitchIfIdle(deps, 's1');
+    await (remote ? runDeviceLinkInvokeContext({ controllerDeviceId: 'my-device', channel: 'maker:send' }, send) : send());
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', sdkSessionId: null,
+    }));
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('DeepSeek Harness'), undefined);
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+  // #12397: deleting a schedule can remove the run while keeping its task.
+  it('can return a kept automation task to a builtin after its run is gone', async () => {
+    const { deps } = makeDeps(makeRow({ source: 'scheduler', agentKind: 'acp', providerId: ENGINE }), {
+      canSwitchCompletedAutomationSession: vi.fn(async (_sessionId, returningToBuiltin) => returningToBuiltin),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'claude-code', model: 'claude-fable-5', localWindowRequest: true,
+    });
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'cc', providerId: null, model: 'claude-fable-5',
+    }));
+  });
+
+  // #12397: at the production pre-send entry, a stale builtin route must
+  // reject the send and retain the choice. The success case above cannot
+  // detect fallback to the old plugin. Unit input: disable the selected
+  // provider after staging a switch from a completed automation's plugin.
+  it('blocks a manual automation send when the selected builtin route becomes unavailable', async () => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler', agentKind: 'acp', providerId: ENGINE }), {
+      canSwitchCompletedAutomationSession: vi.fn(async (_sessionId, returningToBuiltin) => returningToBuiltin),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'claude-code', model: 'claude-fable-5', providerId: 'xd',
+      localWindowRequest: true,
+    });
+    const routeError = new Error('Selected provider is disabled');
+    vi.mocked(deps.assertModelRouteUsable!).mockRejectedValueOnce(routeError);
+
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toBe(routeError);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'claude-code', providerId: 'xd' });
+  });
+
+  // 2026-11-27: bound scheduler tasks are open for plugin engine switches just like built-in
+  // engines, so a staged plugin choice applies on the next scheduled send instead of refusing.
+  it('applies a staged plugin choice on the next scheduled send from a scheduler task', async () => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }));
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE,
+    });
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1', { scheduled: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', providerId: ENGINE, model: 'default', sdkSessionId: null,
+    }));
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+  // #12397: a persistent automation that uses its task's model should
+  // continue applying any staged builtin-to-builtin choice on its next send.
+  it('applies a builtin engine choice on the next scheduled send from a bound task', async () => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }));
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-5.4', localWindowRequest: true,
+    });
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1', { scheduled: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'codex', model: 'gpt-5.4',
+    }));
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+  // #13003: scheduledModelScope temporarily switches a standalone scheduler-created
+  // task (e.g. a PR opened inside an Antigravity automation run) to an explicit PR
+  // follow-up model and restores its original plugin engine before the next send.
+  it('allows main-internal scheduledModelSwitch to switch and restore a scheduler-created plugin task', async () => {
+    const schedulerRow = makeRow({ source: 'scheduler', agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', sdkSessionId: null });
+    const { deps } = makeDeps(schedulerRow);
+
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-5.4', providerId: 'openai',
+      applyNow: true, configStaged: true, scheduledModelSwitch: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai',
+    }));
+
+    Object.assign(schedulerRow, { agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai', sdkSessionId: 'sdk-codex' });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+      applyNow: true, configStaged: true, scheduledModelSwitch: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, sdkSessionId: null,
+    }));
+  });
+
   it('stages the choice, then commits it as the plugin engine with a full handoff and no native resume', async () => {
     const { deps, pendingSwitches } = makeDeps(makeRow());
     const staged = await performSessionAgentSwitch(deps, {
@@ -108,16 +294,115 @@ describe('switching a task onto a plugin engine', () => {
     expect(handoff).toContain('帮我改一下登录页');
   });
 
+  // 2026-11-27 regression: side-chat sessions were excluded from plugin-engine switches, blocking
+  // switching a side chat onto a plugin engine or switching a plugin-engine side chat back to a
+  // built-in engine. Coverage gap: source tests only covered desktop/bot/scheduler/feishu. Minimal
+  // failing input: row.source === 'side-chat' switching cc -> acp and acp -> pi. Tier: unit.
+  it('allows a side-chat session to switch onto a plugin engine and back to a built-in engine', async () => {
+    const toPlugin = makeDeps(makeRow({ source: 'side-chat', agentKind: 'cc' }));
+    await performSessionAgentSwitch(toPlugin.deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+    });
+    expect(toPlugin.pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4',
+    });
+
+    const toBuiltin = makeDeps(makeRow({
+      source: 'side-chat', agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4',
+    }));
+    await performSessionAgentSwitch(toBuiltin.deps, {
+      sessionId: 's1', targetAgentKind: 'pi', model: 'glm-5', providerId: 'xd',
+    });
+    expect(toBuiltin.pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'pi', providerId: 'xd', model: 'glm-5',
+    });
+  });
+
+  // 2026-11-27: plugin engines are open across IM (Telegram/Feishu/X/Discord hook), Orca
+  // collaboration, scheduler, and learn tasks just like built-in engines, while review tasks,
+  // SSH workspaces, and shared-task guests stay fail-closed.
   it.each([
-    { name: 'an IM task', row: { source: 'feishu' }, code: 'UNSUPPORTED_CAPABILITY' },
-    { name: 'a collaboration lead', row: { orcaRole: 'lead' }, code: 'UNSUPPORTED_CAPABILITY' },
-  ])('refuses $name before staging anything', async ({ row, code }) => {
+    { name: 'a Telegram IM task', row: { source: 'telegram' } },
+    { name: 'a Feishu IM task', row: { source: 'feishu' } },
+    { name: 'a collaboration lead', row: { orcaRole: 'lead' as const } },
+    // #12276: combine the companion source and Lead role so the unit test checks
+    // that the pending plugin model commits for the reported task, too.
+    { name: 'a companion collaboration lead', row: { source: 'bot', orcaRole: 'lead' as const } },
+    { name: 'a collaboration worker', row: { orcaRole: 'worker' as const } },
+    { name: 'a scheduler task', row: { source: 'scheduler' } },
+    { name: 'a learn task', row: { source: 'learn' } },
+  ])('stages and commits switching $name onto a plugin engine', async ({ row }) => {
+    const { deps, pendingSwitches } = makeDeps(makeRow(row));
+    const staged = await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+    });
+    expect(staged).toMatchObject({ deferred: true, agentKind: 'acp' });
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp', providerId: ENGINE });
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', sdkSessionId: null,
+    }));
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+  // 回归：IM / 官方 hook 会话支持切换本机与远程插件引擎。
+  it.each([
+    { source: 'x', agentDeviceId: 'mini' },
+    { source: 'feishu', agentDeviceId: null },
+    { source: 'telegram', agentDeviceId: null },
+    { source: 'discord-hook', agentDeviceId: 'mini' },
+  ])('allows $source task to switch onto a plugin engine (device=$agentDeviceId)', async ({ source, agentDeviceId }) => {
+    const admitRemotePluginEngineTarget = vi.fn(async () => ({
+      model: 'gemini-4-neon', effort: 'high', permissionMode: 'default', engineName: 'Antigravity',
+    }));
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source }), { admitRemotePluginEngineTarget });
+    const staged = await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: ENGINE,
+      ...(agentDeviceId ? { agentDeviceId } : {}),
+    });
+    expect(staged).toMatchObject({ deferred: true, agentKind: 'acp', model: 'gemini-4-neon' });
+    expect(pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: ENGINE,
+      ...(agentDeviceId ? { targetAgentDeviceId: agentDeviceId } : {}),
+    });
+  });
+
+  it.each([
+    { name: 'a review task', row: { source: 'review' }, code: 'UNSUPPORTED_CAPABILITY' },
+    { name: 'an SSH task', row: { remoteHostId: 'ssh-host' }, code: 'SSH_HARNESS_SWITCH_UNSUPPORTED' },
+  ])('still refuses $name before staging anything', async ({ row, code }) => {
     const { deps, pendingSwitches } = makeDeps(makeRow(row));
     await expect(performSessionAgentSwitch(deps, {
       sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE,
     })).rejects.toThrow(`[${code}]`);
     expect(pendingSwitches.get('s1')).toBeUndefined();
     expect(deps.admitPluginEngineTarget).not.toHaveBeenCalled();
+  });
+
+  it('allows a plugin task (source=plugin) to switch to and from a plugin engine', async () => {
+    const toAcp = makeDeps(makeRow({ source: 'plugin' }));
+    const stagedToAcp = await performSessionAgentSwitch(toAcp.deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, runtimeSource: 'agent',
+    });
+    expect(stagedToAcp).toMatchObject({ deferred: true, agentKind: 'acp' });
+    expect(toAcp.pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, runtimeSource: 'agent',
+    });
+
+    const fromAcp = makeDeps(makeRow({ source: 'plugin', agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4' }));
+    const stagedToBuiltin = await performSessionAgentSwitch(fromAcp.deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-5.4', providerId: 'openai', runtimeSource: 'agent',
+    });
+    expect(stagedToBuiltin).toMatchObject({ deferred: true, agentKind: 'codex' });
+    expect(fromAcp.pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'codex', model: 'gpt-5.4', providerId: 'openai', runtimeSource: 'agent',
+    });
   });
 
   it('refuses an engine whose plugin was turned off, and blocks the send instead of staying on the old engine', async () => {
@@ -187,6 +472,60 @@ describe('switching a task onto a plugin engine', () => {
     }));
     expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId: null }));
     expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：performSessionAgentSwitch / applyPendingAgentSwitchIfIdle 提交切到插件引擎(acp)时
+  //   清除旧的供应商组绑定；仅登记意图或准入失败时不动绑定，DB 已提交后清绑定失败不推翻切换。
+  // - Bug／规则依据：2026-11-28 实机反馈（供应商组任务切到远程 Antigravity 因旧绑定未清导致远程 open
+  //   带 groupAssigned: true 被拒）；docs/product-rules/provider-groups.md §6、docs/dev-rules/acp-plugin-harness.md。
+  // - 现有覆盖缺口：已有用例只验证切入组时的 commitBinding，未覆盖切到插件引擎时清除既有组绑定。
+  // - 最小失败输入：内置任务(cc on mini)切到本地或远程插件引擎(acp)并提交。
+  // - tier：unit（与本文件同 harness 依赖注入）。
+  it.each([
+    { label: 'local plugin engine', targetDeviceId: undefined, failClear: false },
+    { label: 'remote plugin engine', targetDeviceId: 'studio', failClear: false },
+    { label: 'binding clear failure after DB commit', targetDeviceId: 'studio', failClear: true },
+  ])('clears stale provider-group binding only after committing switch to $label', async ({ targetDeviceId, failClear }) => {
+    const order: string[] = [];
+    const clearProviderGroupBinding = vi.fn(async () => {
+      order.push('clear');
+      if (failClear) throw new Error('binding file lock timeout');
+    });
+    const admitRemotePluginEngineTarget = vi.fn(async () => ({
+      model: 'gemini-4-neon',
+      effort: 'high',
+      permissionMode: 'default',
+      engineName: 'Antigravity',
+    }));
+    const { deps } = makeDeps(makeRow({ agentDeviceId: 'mini', providerId: 'anthropic' }), {
+      clearProviderGroupBinding,
+      ...(targetDeviceId ? { admitRemotePluginEngineTarget } : {}),
+      applyAgentSwitchToDb: vi.fn(async () => {
+        order.push('db');
+      }),
+    });
+
+    // Staging intent must not clear the binding before the switch actually commits.
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'acp',
+      model: targetDeviceId ? 'gemini-4-neon' : 'deepseek-v4',
+      providerId: ENGINE,
+      ...(targetDeviceId ? { agentDeviceId: targetDeviceId } : {}),
+    });
+    expect(clearProviderGroupBinding).not.toHaveBeenCalled();
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(clearProviderGroupBinding).toHaveBeenCalledTimes(1);
+    expect(clearProviderGroupBinding).toHaveBeenCalledWith('s1');
+    expect(order).toEqual(['db', 'clear']);
+    if (failClear) {
+      expect(deps.log.warn).toHaveBeenCalledWith(
+        'agent-switch: provider group binding clear failed after switch committed',
+        expect.objectContaining({ sessionId: 's1' }),
+      );
+    }
   });
 
   it('switches to a shared plugin engine via remote admission, while rejecting raw wire peers or unwired remote targets', async () => {

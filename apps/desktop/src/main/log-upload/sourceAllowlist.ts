@@ -131,6 +131,9 @@ const ALLOWED_EXACT_SCOPES: readonly string[] = [
   // Linux 远程桌面黑屏诊断(#9712,remote-desktop/index.ts):每次运行至多一条,只有固定标签
   // 与 `wayland-N` socket 名,不带路径、窗口标题或画面内容。`remote-desktop` 根与其他子 scope 不放行。
   'remote-desktop:display-backend',
+  // 任务启动分段计时(maker-ipc/sessionStartTiming.ts):查「手机新建任务要等二三十秒」卡在哪一步。
+  // 只有固定阶段名、Agent 种类枚举、启动方式、结果与毫秒数,不带任务 id、路径、模型名、供应商或错误原文。
+  'session-start-timing',
 ];
 
 /**

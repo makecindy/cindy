@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { XdGatewayModelInfo } from '../../maker-host/active-catalog.js';
+import { resolveSilentGatewaySwitchTarget } from '../../maker-ipc/silentGatewaySwitch.js';
 import type { ModelAccessStatus } from '../../../shared/modelAccess.js';
 
 import {
@@ -264,6 +266,12 @@ describe('waitForModelsSyncRefresh', () => {
     expect(XD_MODELS_SYNC_TIMEOUT_MS).toBeGreaterThan(0);
   });
 
+  it('negotiates silent switching through the existing capability header when both rollout engines can run', () => {
+    const request = buildModelsSyncRequest('https://model-access.example.com', true);
+    expect(request.options.headers['X-Cindy-Model-Capabilities'].split(',')).toContain('silent_switch');
+    expect(request.path).toBe('/api/model-access/models?schemaVersion=5');
+  });
+
   it('preserves a live endpoint resolver for post-refresh realm changes', () => {
     const resolveBaseUrl = vi.fn(() => 'https://model-access.global.example.com');
     const request = buildModelsSyncRequest(resolveBaseUrl);
@@ -466,5 +474,46 @@ describe('cindyAutoModelIdsChanged', () => {
       false,
     );
     expect(cindyAutoModelIdsChanged([], [])).toBe(false);
+  });
+});
+
+describe('Cindy AI silent switching through the production catalog parser', () => {
+  const model = {
+    id: 'auto', name: 'Auto', mode: 'chat', currency: 'CNY', availability: 'available',
+    contextWindow: 400_000, maxOutputTokens: 128_000,
+    agents: ['pi', 'codex'],
+    perAgent: { pi: { wireProtocol: 'openai-responses' }, codex: { wireProtocol: 'openai-responses' } },
+  };
+  const parse = (entry: Record<string, unknown>): XdGatewayModelInfo => {
+    const response = parseModelsSyncPayload({ schemaVersion: 5, accountTier: 'not_applicable', models: [entry] });
+    if (!response.ok) throw new Error(response.error);
+    return response.models[0]!;
+  };
+
+  it.each([['pi', 'codex'], ['codex', 'pi']] as const)(
+    'switches from %s to the one usable target %s', async (from, to) => {
+      const route = { ...model, agents: [to], perAgent: { [to]: model.perAgent[to] } };
+      const entry = parse({ ...route, silentSwitch: true });
+      expect(await resolveSilentGatewaySwitchTarget(entry, from, ['codex', 'pi'], async () => true)).toBe(to);
+      expect(await resolveSilentGatewaySwitchTarget(entry, from, [from], async () => true)).toBeUndefined();
+      expect(await resolveSilentGatewaySwitchTarget(entry, from, ['codex', 'pi'], async () => false)).toBeUndefined();
+      expect(await resolveSilentGatewaySwitchTarget(entry, to, [to], async () => true)).toBeUndefined();
+      const legacy = parse(route);
+      expect(await resolveSilentGatewaySwitchTarget(legacy, from, ['codex', 'pi'], async () => true)).toBeUndefined();
+    },
+  );
+
+  it.each([undefined, false, null, 'true', 1])('keeps older or unsupported switch values %j usable', async silentSwitch => {
+    const entry = parse({ ...model, silentSwitch, agents: ['pi'], perAgent: { pi: model.perAgent.pi } });
+    expect(entry.agents).toEqual(['pi']);
+    expect(entry.silentSwitch).toBeUndefined();
+    expect(await resolveSilentGatewaySwitchTarget(entry, 'codex', ['codex', 'pi'], async () => true)).toBeUndefined();
+  });
+
+  it('preserves both engines and ignores the switch when the target is ambiguous', async () => {
+    const entry = parse({ ...model, silentSwitch: true });
+    expect(entry.agents).toEqual(['pi', 'codex']);
+    expect(entry.silentSwitch).toBeUndefined();
+    expect(await resolveSilentGatewaySwitchTarget(entry, 'pi', ['codex', 'pi'], async () => true)).toBeUndefined();
   });
 });

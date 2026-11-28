@@ -113,6 +113,19 @@ describe('Host task action authorization', () => {
     expect(await withToolCallAuthority(h.authorize, { ...call('manage_media_guide'), args: { change: { action: 'save' } } }, write)).toMatchObject({ isError: true });
     expect(write).not.toHaveBeenCalled();
   });
+  // #10568: a background turn without a current runtime permission cannot leave
+  // future disk-move intent without the same host admission used by task writes.
+  it('admits workspace relocation mutations while keeping preview and status read-only', async () => {
+    const h = fixture();
+    for (const action of ['preview', 'status']) {
+      expect(await withToolCallAuthority(h.authorize, { ...call('teammate_workspace_migration'), args: { action } }, async () => 'read')).toBe('read');
+    }
+    const write = vi.fn();
+    for (const action of ['request', 'cancel']) {
+      expect(await withToolCallAuthority(h.authorize, { ...call('teammate_workspace_migration'), args: { action } }, write)).toMatchObject({ isError: true });
+    }
+    expect(write).not.toHaveBeenCalled();
+  });
   it('permits observation and notification, but rejects every alternate task-write entrance before effects', async () => {
     const h = fixture();
     const queue: string[] = [];

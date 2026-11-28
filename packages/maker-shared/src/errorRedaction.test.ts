@@ -7,8 +7,10 @@ import {
   isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isGatewayProxyTokenInvalidError,
+  isProviderSafetyRefusalError,
   isResponsesLiteParallelToolCallsError,
   matchesDeterministicUsageExhaustionText,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
   redactSensitiveTextDeep,
   parseAgentErrorCode,
@@ -135,6 +137,8 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     '账户余额不足，请充值',
     '账户欠费',
     'You hit your spend cap set by the owner of your workspace. Ask them to raise it.',
+    'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+    'You have exhausted your quota',
   ])('recognizes deterministic usage exhaustion: %s', (message) => {
     expect(matchesDeterministicUsageExhaustionText(message)).toBe(true);
   });
@@ -168,6 +172,9 @@ describe('isAccountUsageLimitReachedText', () => {
     'Usage limit reached. Try again in 1h.',
     '{"error":{"type":"usage_limit_reached","resets_at":1790000000}}',
     'usageLimitExceeded',
+    'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+    'The plugin engine account has reached its usage limit.',
+    'You have exhausted your quota. Resets in 1h.',
   ])('recognizes an account usage limit: %s', (message) => {
     expect(isAccountUsageLimitReachedText(message)).toBe(true);
   });
@@ -180,6 +187,12 @@ describe('isAccountUsageLimitReachedText', () => {
     "You've hit your rate limit",
     "You've hit your session limit: budget_exceeded",
     'insufficient_quota: usage limit reached',
+    'Credit balance too low: individual quota reached',
+    'HTTP 402: Usage limit reached',
+    '402: Usage limit reached',
+    'upstream error (402): Individual quota reached',
+    '402 Payment Required: usage limit reached',
+    '{"error":{"code":"credit_balance_exhausted","message":"Usage limit reached"}}',
     'You hit your spend cap set by the owner of your workspace.',
     'Shared task limit reached',
   ])('leaves other failures to their own guidance: %s', (message) => {
@@ -577,5 +590,58 @@ describe('Gemini minute-limit retry advice', () => {
     expect(parse({ message: 'Prepaid balance exhausted' })).toBeNull();
     expect(parse({ details: [...error.details, { '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
       violations: [{ quotaMetric: metric, quotaId: 'InputTokensPerDay' }] }] })).toBeNull();
+  });
+});
+
+// 测试价值：依据供应商安全拦截准确解释且不换号换模型绕过的产品要求；此前缺少跨引擎共享的精确安全拦截识别器，
+// 既漏识 JSON/流式拦截又可能误把本地插件或权限文本当成上游安全拦截；失效后果是把安全拦截当普通故障切号重发或把插件报错说成安全违规；
+// 生产入口 isProviderSafetyRefusalError / extractNonSecretErrorSignals；最小失败输入为 OpenAI/Anthropic/Gemini 安全拦截负载与本地插件伪例；tier: unit。
+describe('isProviderSafetyRefusalError', () => {
+  it.each([
+    ['stable reason', 'opaque error', PROVIDER_SAFETY_REFUSAL_REASON],
+    ['Claude cybersecurity flag (exact log original)', 'This request was flagged for possible cybersecurity risk.', undefined],
+    ['Claude API Error JSON cybersecurity flag', 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"This request was flagged for possible cybersecurity risk."}}', undefined],
+    ['Claude SDK retry wrapper cybersecurity flag', 'SDK API request failed: This request was flagged for possible cybersecurity risk. (HTTP 400, retry 1/2)', undefined],
+    [
+      'Pi nested gateway JSON cybersecurity flag',
+      `400: ${JSON.stringify({
+        message: JSON.stringify({
+          error: {
+            type: 'invalid_request_error',
+            message: 'This request was flagged for possible cybersecurity risk.',
+          },
+        }),
+      })}`,
+      undefined,
+    ],
+    ['OpenAI JSON code', '{"error":{"type":"invalid_request_error","code":"content_policy_violation","message":"Blocked"}}', undefined],
+    ['Codex stream safety_violation JSON with status suffix', '{"type":"error","error":{"code":"safety_violation","message":"Output blocked"}} (HTTP 400)', undefined],
+    ['Codex flattened output stream block', "OpenAI's safety system blocked the output stream (safety_violation).", undefined],
+    ['OpenAI usage policy refusal', 'Invalid prompt: your prompt was flagged as potentially violating our usage policy.', undefined],
+    ['Anthropic content filtering policy', 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}', undefined],
+    ['Gemini safety finish reason', '{"candidates":[{"finishReason":"PROHIBITED_CONTENT"}]}', undefined],
+  ] as const)('matches upstream provider safety block: %s', (_label, message, reason) => {
+    expect(isProviderSafetyRefusalError(message, reason)).toBe(true);
+    expect(extractNonSecretErrorSignals(message).usageLimit).toBe(false);
+  });
+
+  it.each([
+    'Synthetic local plugin startup failed: safety_violation label in plugin metadata.',
+    'Local plugin hook failed while scanning log: "This request was flagged for possible cybersecurity risk."',
+    'Tool execution failed: grep matched {"error":{"code":"safety_violation"}} in fixture.json',
+    'User note: why did someone say This request was flagged for possible cybersecurity risk.?',
+    JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        code: 'invalid_argument',
+        message: 'Synthetic plugin blocked the output stream.',
+      },
+    }),
+    'Permission denied by user',
+    '[MCP_APPROVAL_AUTO_BLOCKED] Automatic approval review blocked this tool call.',
+    "You've hit your usage limit. Try again at 3:05 PM.",
+    'HTTP 429 Too Many Requests: rate_limit_exceeded',
+  ])('does not misclassify ordinary chat quotes, plugin/tool errors, or quota errors: %s', (message) => {
+    expect(isProviderSafetyRefusalError(message)).toBe(false);
   });
 });

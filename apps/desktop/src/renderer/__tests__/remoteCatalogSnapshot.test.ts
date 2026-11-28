@@ -1,14 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { __testing as dataOwnerTesting, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { ensureProviderShareReceivedStarted, resetProviderShareStoreForTests } from '@/features/provider-share/providerShareStore';
 import * as providers from '@/hooks/useDeviceProviders';
+import type { ProviderShareReceived } from '@cindy/device-link';
+import type { ProviderShareCommand } from '../../shared/providerShare';
 import * as capabilities from '@/hooks/useAgentCapabilities';
-import { invalidateRemoteCatalogSnapshots, refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
-import { CONTROLLED_MODEL_CATALOG_CHANNEL, modelCatalogKey } from '../../shared/controlledModelCatalog';
+import { invalidateControlledCatalogRoutes, invalidateRemoteCatalogSnapshots, refreshDiscoveredCatalogRoutes, refreshRemoteCatalogSnapshot, retryProviderShareCatalog } from '@/lib/remoteCatalogSnapshot';
+import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_RETRY_SHARE, modelCatalogKey } from '../../shared/controlledModelCatalog';
 
 beforeEach(() => {
   invalidateRemoteCatalogSnapshots();
   vi.clearAllMocks();
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  resetProviderShareStoreForTests();
+  dataOwnerTesting.reset();
+  vi.unstubAllGlobals();
+});
 
 function deferred() {
   let resolve!: () => void;
@@ -17,6 +25,156 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+
+describe('explicit shared catalog retries', () => {
+  // Unit: the button's shared refresh entry must confirm membership before reading models.
+  // A duplicate click joins it, and a retired share cannot be reopened by that pending retry.
+  it.each([false, true])('does not read ahead of membership or reopen a retired share (%s)', async (retired) => {
+    const deviceId = 'share:retry';
+    const confirmation = deferred();
+    const command = vi.fn(() => confirmation.promise);
+    const invoke = vi.fn(async (_device: string, channel: string) => (
+      channel === 'maker:provider:list' ? { providers: [] }
+        : { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] }
+    ));
+    vi.stubGlobal('window', { electronAPI: { providerShare: { command }, deviceLink: { invoke } } });
+    const first = retryProviderShareCatalog(deviceId);
+    const second = retryProviderShareCatalog(deviceId);
+    expect(command).toHaveBeenCalledExactlyOnceWith({ action: 'retry-model-catalog', agentDeviceId: deviceId });
+    expect(invoke).not.toHaveBeenCalled();
+    if (retired) await refreshRemoteCatalogSnapshot(deviceId, undefined, { retireOnly: true });
+    confirmation.resolve();
+    await Promise.all([first, second]);
+    expect(invoke.mock.calls.filter(([, channel]) => channel === 'maker:provider:list')).toHaveLength(retired ? 0 : 1);
+  });
+});
+
+// Unit: older task computers still support the ordinary routed read. Only their
+// unsupported retry operation falls back, while a current host refusal stops.
+it.each([
+  ['INVALID_PARAMS', 'Invalid model catalog read', true],
+  ['REMOTE_AGENT_SHARE_PAUSED', 'the owner has paused this share', false],
+] as const)('keeps routed retry compatibility for %s', async (code, message, compatible) => {
+  const taskDeviceId = 'task-host';
+  const shareDeviceId = 'share:retry';
+  const invoke = vi.fn(async (_host: string, _channel: string, [request]: Array<{ op: string; channel?: string }>) => {
+    if (request.op === CONTROLLED_MODEL_CATALOG_RETRY_SHARE) throw new Error(`[${code}] ${message}`);
+    return request.channel === 'maker:provider:list' ? { providers: [] }
+      : { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] };
+  });
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const retry = retryProviderShareCatalog(modelCatalogKey(shareDeviceId, taskDeviceId)!);
+  if (compatible) await retry;
+  else await expect(retry).rejects.toThrow(code);
+  expect(invoke).toHaveBeenNthCalledWith(1, taskDeviceId, CONTROLLED_MODEL_CATALOG_CHANNEL, [{
+    op: CONTROLLED_MODEL_CATALOG_RETRY_SHARE, agentDeviceId: shareDeviceId,
+  }]);
+  const reads = invoke.mock.calls.filter(([, , [request]]) => request.channel === 'maker:provider:list');
+  expect(reads).toHaveLength(compatible ? 1 : 0);
+  expect(invoke.mock.calls.every(([host]) => host === taskDeviceId)).toBe(true);
+});
+
+describe('shared catalog recovery notification', () => {
+  // Unit: a delayed notification for the same recovery must retain the routed
+  // catalog. A later publication independently refreshes that catalog.
+  it('does not reopen a routed model read from the task host recovery push', async () => {
+    const host = 'recovery-host';
+    const target = modelCatalogKey('share:routed', host)!;
+    const invoke = vi.fn(async (_host: string, _channel: string, [request]: Array<{ op: string; channel?: string }>) => {
+      if (request.op === CONTROLLED_MODEL_CATALOG_RETRY_SHARE) return { ok: true, receivedChangeSequence: 7 };
+      return request.channel === 'maker:provider:list' ? { providers: [] }
+        : { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] };
+    });
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const off = providers.subscribeDeviceProviders(target, () => {});
+    const countReads = () => invoke.mock.calls.filter(([, , [request]]) => request.channel === 'maker:provider:list').length;
+    try {
+      await retryProviderShareCatalog(target);
+      expect(countReads()).toBe(1);
+      refreshDiscoveredCatalogRoutes(host, invalidateControlledCatalogRoutes(host, true, 7));
+      await Promise.resolve();
+      expect(countReads()).toBe(1);
+      expect(providers.getCachedDeviceProviders(target)).not.toBeNull();
+
+      refreshDiscoveredCatalogRoutes(host, invalidateControlledCatalogRoutes(host, true, 8));
+      await vi.waitFor(() => expect(countReads()).toBe(2));
+    } finally {
+      off();
+    }
+  });
+
+  // Unit: hold the real store's recovery snapshot until the button has read
+  // the catalog, then check that only a later publication can refresh it again.
+  it('reads once across the retry response and a delayed membership snapshot', async () => {
+    const deviceId = 'share:recovering';
+    const share: ProviderShareReceived = {
+      shareId: 'recovering', memberId: 'member', providerId: 'anthropic', providerLabel: 'Anthropic',
+      hostDeviceId: 'host', deviceName: 'Host', status: 'active', hostOnline: true, hostCapable: true,
+      owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
+    };
+    const ownerStamp = { dataOwnerId: 'recipient', ownerGeneration: 1 };
+    setDataOwnerGeneration(ownerStamp.dataOwnerId, ownerStamp.ownerGeneration);
+    const snapshot = (sequence: number, received: ProviderShareReceived[]) => ({
+      ownerStamp, confirmedRegions: ['global'], received, receivedChangeSequence: sequence,
+      regionBudget: { global: { id: String(sequence), order: sequence, remainingMs: 60_000, generatedAt: Date.now() } },
+    });
+    const heldSnapshot = deferred();
+    let publication = snapshot(1, []);
+    let receivedChanged: (received: ProviderShareReceived[]) => void = () => {};
+    let snapshotReads = 0;
+    const command = vi.fn(async (request: ProviderShareCommand) => {
+      if (request.action === 'retry-model-catalog') {
+        publication = snapshot(2, [share]);
+        receivedChanged(publication.received);
+        return { ok: true, receivedChangeSequence: 2 };
+      }
+      if (request.action !== 'received-snapshot') throw new Error('Unexpected provider share command');
+      if (!request.favoriteRecovery) snapshotReads++;
+      const current = publication;
+      if (!request.favoriteRecovery && current.receivedChangeSequence === 2) await heldSnapshot.promise;
+      return current;
+    });
+    const invoke = vi.fn(async (_device: string, channel: string) => (
+      channel === 'maker:provider:list' ? { providers: [] }
+        : { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] }
+    ));
+    const countProviderReads = () => invoke.mock.calls.filter(([, channel]) => channel === 'maker:provider:list').length;
+    vi.stubGlobal('window', { electronAPI: {
+      providerShare: {
+        command,
+        onReceivedChanged: (handler: typeof receivedChanged) => { receivedChanged = handler; },
+      },
+      deviceLink: { invoke },
+    } });
+    const off = providers.subscribeDeviceProviders(deviceId, () => {});
+    try {
+      ensureProviderShareReceivedStarted();
+      await vi.waitFor(() => expect(command.mock.calls.some(([request]) =>
+        request.action === 'received-snapshot' && request.favoriteRecovery)).toBe(true));
+      await retryProviderShareCatalog(deviceId);
+      expect(countProviderReads()).toBe(1);
+
+      heldSnapshot.resolve();
+      await vi.waitFor(() => expect(command.mock.calls.filter(([request]) =>
+        request.action === 'received-snapshot' && request.favoriteRecovery)).toHaveLength(2));
+      expect(snapshotReads).toBe(2);
+      expect(countProviderReads()).toBe(1);
+
+      publication = snapshot(3, [share]);
+      receivedChanged(publication.received);
+      await vi.waitFor(() => expect(countProviderReads()).toBe(2));
+
+      publication = snapshot(4, []);
+      receivedChanged(publication.received);
+      await vi.waitFor(() => expect(providers.getCachedDeviceProviders(deviceId)).toBeNull());
+      expect(countProviderReads()).toBe(2);
+    } finally {
+      heldSnapshot.resolve();
+      off();
+    }
+  });
+});
 
 describe('remote catalog refresh scheduling', () => {
   // #10711 P2 / unit: both endpoints invalidate the same routed read while it is pending.

@@ -70,6 +70,8 @@ export interface HostConfig {
   source: HostSource;
   /** True only for a unique single-alias block in Cindy's managed SSH file. */
   managedByCindy: boolean;
+  /** Display-only: this alias is declared in both managed and external SSH files. */
+  managedAliasConflict?: boolean;
 }
 
 /** Local verification result; never inferred from server-provided error text. */

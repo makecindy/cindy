@@ -17,6 +17,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { deleteMessageFor } from '@/lib/makerTransport';
 import { emitRefresh as emitSessionsRefresh } from '@/lib/sessionsBus';
 import { toast } from '@/lib/toast';
+import { extractIpcError } from '@/utils/ipcError';
 
 const log = createLogger('useDeleteMessage');
 
@@ -47,6 +48,7 @@ export function useDeleteMessage({
       description: t('chat.messageActionBar.deleteConfirmDescription'),
       confirmText: t('chat.messageActionBar.deleteConfirm'),
       cancelText: t('chat.messageActionBar.deleteCancel'),
+      confirmVariant: 'destructive',
     });
     if (!ok) return;
 
@@ -73,7 +75,9 @@ export function useDeleteMessage({
         messageClientId,
         error: err instanceof Error ? err.message : String(err),
       });
-      toast.error(t('chat.messageActionBar.deleteFailed'));
+      toast.error(t(extractIpcError(err)?.code === 'SESSION_RUNNING'
+        ? 'ipcError.SESSION_RUNNING'
+        : 'chat.messageActionBar.deleteFailed'));
     }
   }, [blocked, confirm, messageClientId, sessionId, t]);
 }

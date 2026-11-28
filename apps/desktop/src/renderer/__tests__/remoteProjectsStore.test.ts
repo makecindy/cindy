@@ -116,6 +116,38 @@ describe('remoteProjectsStore', () => {
     expect(freshRead.mergeActivity(mk('same')).lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
   });
 
+  // Unit, #10710: replace one row to separate the visible and authoritative
+  // references of an unchanged row. A subsequent patch can reuse that projection
+  // without serializing it again, including when a hidden row shifts its index.
+  it('reuses a previously compared visible row without encoding it on the next patch', () => {
+    const hidden = mk('hidden', { source: 'cindy-make' });
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [hidden, mk('stable'), mk('changing')]);
+    const stableVisible = remoteProjectsStore.getVisibleMergedRemoteSessions().find(row => row.id === 'stable');
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [
+      hidden, mk('stable'), mk('changing', { title: 'From snapshot' }),
+    ]);
+    const stableMirror = remoteProjectsStore.getDeviceSessions('host').find(row => row.id === 'stable');
+    expect(stableVisible).toBeDefined();
+    expect(stableMirror).toBeDefined();
+    expect(stableMirror).not.toBe(stableVisible);
+
+    const stringify = vi.spyOn(JSON, 'stringify');
+    let encodedStableRow: boolean;
+    try {
+      remoteProjectsStore.applyPatch('host', 'changing', { extraDirs: ['/from-patch'] });
+      encodedStableRow = stringify.mock.calls.some(([value]) => value === stableVisible || value === stableMirror);
+    } finally {
+      stringify.mockRestore();
+    }
+
+    const visible = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    expect(visible.find(row => row.id === 'stable')).toBe(stableVisible);
+    expect(visible.find(row => row.id === 'changing')).toMatchObject({
+      title: 'From snapshot', extraDirs: ['/from-patch'],
+    });
+    expect(encodedStableRow).toBe(false);
+  });
+
   // Unit, #7469: structural sharing must compare nested payloads too, and must
   // not resurrect removed rows or hide connection changes behind a UI cache.
   it('updates nested visible data and retires rows on disconnect, deletion and clear', () => {
@@ -1357,5 +1389,27 @@ describe('remoteProjectsStore pending status (remote archive / unarchive)', () =
     remoteProjectsStore.clear();
     remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('b')]);
     expect(projected('b')?.status).toBe('active');
+  });
+
+  it('computes latest visible session activity per device and ignores deleted sessions', () => {
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [
+      { ...mk('a1'), userSendAt: null, updatedAt: '2026-11-25T10:00:00.000Z' },
+      { ...mk('a2'), updatedAt: '2026-11-26T08:00:00.000Z', userSendAt: '2026-11-26T09:30:00.000Z' },
+      { ...mk('a3'), userSendAt: '2026-11-26T12:00:00.000Z', updatedAt: '2026-11-26T12:00:00.000Z' },
+    ]);
+    remoteProjectsStore.applyPatch('dev-A', 'a3', { status: 'deleted' });
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [
+      { ...mk('b1'), userSendAt: null, updatedAt: '2026-11-24T05:00:00.000Z' },
+    ]);
+
+    expect(remoteProjectsStore.getDeviceLatestActivityAt()).toEqual({
+      'dev-A': Date.parse('2026-11-26T09:30:00.000Z'),
+      'dev-B': Date.parse('2026-11-24T05:00:00.000Z'),
+    });
+
+    remoteProjectsStore.removeDevice('dev-A');
+    expect(remoteProjectsStore.getDeviceLatestActivityAt()).toEqual({
+      'dev-B': Date.parse('2026-11-24T05:00:00.000Z'),
+    });
   });
 });

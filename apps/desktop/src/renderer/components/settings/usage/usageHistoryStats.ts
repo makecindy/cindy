@@ -115,7 +115,8 @@ export function filterUsageHistoryPayload(
   const rangeTodayKey = selectedDay ?? payload.todayKey;
   const modelByKey = new Map<string, UsageHistoryModel>();
   for (const row of payload.modelDaily) {
-    if (!isUsageDayInRange(row.day, payload.todayKey, range) || row.tokens <= 0) continue;
+    if (!isUsageDayInRange(row.day, payload.todayKey, range) ||
+        (row.tokens <= 0 && row.agentKind !== 'acp')) continue;
     const key = `${row.agentKind}\u0000${row.model}`;
     const existing = modelByKey.get(key);
     const componentTotal =
@@ -250,7 +251,7 @@ export function buildModelRows(payload: UsageHistoryPayload | null): ModelTokenR
   const merged = new Map<string, ModelTokenRow>();
   for (const model of payload.models) {
     const tokens = modelTokenTotal(model);
-    if (tokens <= 0) continue;
+    if (tokens <= 0 && model.agentKind !== 'acp') continue;
     const key = `${model.agentKind} ${model.model}`;
     const existing = merged.get(key);
     if (existing) {

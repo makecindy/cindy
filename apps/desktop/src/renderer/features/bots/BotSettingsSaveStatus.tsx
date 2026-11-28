@@ -1,7 +1,6 @@
 import { Check } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { useBotTranslation } from './botPronounContext';
-import { BOT_LEAD_PLUGIN_ENGINE_ERROR_KEY } from './botSettingsAutosave';
 import type { BotSettingsAutosaveController } from './useBotSettingsAutosave';
 
 /** Shared settings header feedback; only a confirmed receipt becomes saved. */
@@ -24,7 +23,7 @@ export function BotSettingsSaveStatus({ autosave, modelPage, sourceTooLong }: {
   if (autosave.status === 'error') return (
     <p className="flex items-center gap-2 text-11 text-[var(--text-danger)]" role="alert">
       {t(autosave.errorKey ?? 'bots.profileSaveFailed')}
-      {!sourceTooLong && autosave.errorKey !== BOT_LEAD_PLUGIN_ENGINE_ERROR_KEY && <button type="button" onClick={() => void autosave.retry()}
+      {!sourceTooLong && <button type="button" onClick={() => void autosave.retry()}
         className="shrink-0 font-medium text-[var(--text-primary)]">
         {t('bots.autosave.retry')}
       </button>}

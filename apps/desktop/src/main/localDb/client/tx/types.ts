@@ -149,6 +149,8 @@ export interface SessionTreeRehydrateArgs {
 }
 
 export interface ForkSessionArgs {
+  /** Reject edits to the ordered history selected before the native fork awaited. */
+  sourceMessagesDigest?: string;
   sourceSessionId: string;
   /** /clear 之前的行不属于当前可见/原生上下文，fork 时不得重新带回。 */
   sourceClearedAt?: number | null;
@@ -260,6 +262,7 @@ export interface OrcaRemoteWorkerProxySessionSeed {
   effort: string | null;
   permissionMode: string;
   fastMode: boolean | 'ultrafast';
+  providerId?: string | null;
   agentDeviceId?: string | null;
 }
 
@@ -381,6 +384,8 @@ export interface SessionsSetTerminalStatusArgs {
   sideChatCloseParentId?: string;
   /** Internal automatic housekeeping only; never accepted as renderer metadata. */
   idleArchiveCutoff?: number;
+  /** Internal automatic housekeeping only: null leaves archived_at unset; a finite unix-ms number restores a prior value. */
+  archivedAt?: number | null;
   unusedOnly?: boolean;
 }
 
@@ -515,6 +520,7 @@ export interface SessionsSetStatusResultItem {
   workspaceKind: string | null;
   remoteHostId: string | null;
   source: string | null;
+  archivedAt: number | null;
   status: 'active' | 'archived';
 }
 
@@ -683,8 +689,6 @@ export interface BotsUpdateProfileArgs {
   inactiveCindyIds?: string[];
   /** A saved model choice supersedes automation restores in the same commit. */
   clearScheduledModelBaseline?: boolean;
-  /** A selected plugin primary cannot be applied to an active local canonical Lead. */
-  rejectPluginPrimaryForLocalLead?: boolean;
   /** Explicit settings changes also update the permanent chat in this transaction. */
   canonicalPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
   displayName?: string;

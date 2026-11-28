@@ -20,11 +20,14 @@ import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ProfileEditDialog } from '@/components/settings/ProfileEditDialog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { cn } from '@/lib/utils';
+import { chatGroupHumanDisplayName } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupMemberView, BotGroupSummary, ChatGroupAction } from '../../../shared/botGroupChat';
 import { groupRepositoryLabel, parseGroupRepository } from '../../../shared/botGroupChat';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { GroupMaskAvatar, useOpenGroupMask } from './GroupMaskControls';
-import { useGroupMask } from './groupMaskPresentation';
+import { useGroupMaskControls } from './groupMaskPresentation';
 import { ChatBotAccessField } from './ChatBotAccessField';
 import { ChatGroupNotificationSettings } from './ChatGroupNotificationSettings';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
@@ -33,9 +36,9 @@ import { SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIc
 import { useBotProfiles } from './botStore';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
-import { chatErrorKey } from './ChatServerControls';
+import { chatErrorKey } from './chatError';
 import { refreshBotGroups } from './botGroupStore';
-import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupMembership, groupAssistantComputerOptions } from '@cindy/maker-shared/botGroupPresentation';
 import { BOT_GROUP_SETTINGS_PAGE_PARAM, BOT_GROUP_SETTINGS_PARAM, botGroupPathBasename } from './botGroupPresentation';
 
 const key = (name: string) => `bots.groupChat.server.settings.${name}`;
@@ -45,6 +48,8 @@ const REPLY_MODE_LABELS = { all: shared('replyModeAll'), mentioned: shared('repl
 const SPEAKING_MODE_LABELS = { auto: shared('speakingModeAuto'), sequential: shared('speakingModeSequential') } as const;
 const api = () => window.electronAPI.maker.chatServer;
 const COMPANION_PAGE = 'companion:';
+/** On/off group settings saved through the group update. */
+type GroupSwitch = 'allowMemberInvites' | 'allowMemberMentionAll' | 'assistantEnabled' | 'allowMentionAllBots';
 
 export type ChatGroupSettingsPage =
   | { kind: 'manage' | 'edit' | 'profile' }
@@ -73,11 +78,13 @@ export function chatGroupSettingsPageTitle(page: ChatGroupSettingsPage, t: TFunc
 /** Shared group identity and companion grants are server-authoritative. */
 export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const { t } = useTranslation();
+  const directory = useDeviceLinkDeviceList();
+  const computers = useMemo(() => groupAssistantComputerOptions(group.assistantComputers, directory, t('bots.cloud.unknownDevice')), [group.assistantComputers, directory, t]);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm } = useConfirmDialog();
   const profiles = useBotProfiles();
-  const mask = useGroupMask(group.id);
+  const mask = useGroupMaskControls(group.id);
   const openMask = useOpenGroupMask();
   // Teammates someone owns; the group's own Cindy is set by its switch in group management.
   const companions = group.members.filter(member => member.actorKind === 'bot' && member.assistant !== true);
@@ -119,6 +126,20 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   useEffect(() => { if (rules && group.revision! > rules.revision) setRules(current => current === rules ? null : current); }, [rules, group.revision]);
   const replyMode = rulesPending ? rules.replyMode : group.replyMode;
   const speakingMode = rulesPending ? rules.speakingMode : group.speakingMode;
+  // Group switches flip at once the same way: the chosen value shows until the snapshot carrying it arrives.
+  const [switches, setSwitches] = useState<(Partial<Record<GroupSwitch, boolean>> & { revision: number }) | null>(null);
+  const switchesPending = !!switches && group.revision! <= switches.revision;
+  useEffect(() => { if (switches && group.revision! > switches.revision) setSwitches(current => current === switches ? null : current); }, [switches, group.revision]);
+  const switchOn = (name: GroupSwitch) => (switchesPending ? switches[name] : undefined) ?? group[name] === true;
+  // A role change shows at once too, until the member list carries it or the change fails.
+  const [roles, setRoles] = useState<Readonly<Record<string, 'admin' | 'member'>>>({});
+  useEffect(() => {
+    setRoles(current => {
+      const kept = Object.entries(current).filter(([actorId, role]) => group.members.some(m => m.actorId === actorId && m.role !== role));
+      return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
+    });
+  }, [group.members]);
+  const shownGroup = useMemo(() => Object.keys(roles).length ? { ...group, members: group.members.map(m => m.actorId && roles[m.actorId] ? { ...m, role: roles[m.actorId] } : m) } : group, [group, roles]);
   const [nickname, setNickname] = useState(me?.nickname ?? '');
   const [editingProfile, setEditingProfile] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -171,6 +192,15 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       responseMode: next.replyMode, speakingMode: next.speakingMode, expectedRevision: group.revision });
     if (!ok && mounted.current) setRules(current => current === next ? null : current);
   }
+  async function saveSwitch(name: GroupSwitch, on: boolean) {
+    if (busyRef.current || group.revision === undefined) return;
+    const next = { ...(switchesPending ? switches : null), [name]: on, revision: group.revision };
+    setSwitches(next);
+    const field = name === 'assistantEnabled' ? { assistant: on } : { [name]: on };
+    const ok = await mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '',
+      expectedRevision: group.revision, ...field });
+    if (!ok && mounted.current) setSwitches(current => current === next ? null : current);
+  }
   const profileOpenChange = useCallback((open: boolean) => setEditingProfile(open), []);
   const avatarEditor = useMemo(() => ({
     title: t(key('groupAvatar')),
@@ -192,8 +222,10 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     try {
       const result = await window.electronAPI.maker.updateBotGroup({ groupId: group.id, ...input });
       if (!isDataOwnerGenerationCurrent(generation)) return;
-      if (!result.ok) setError(t('repository' in input ? key('githubRepoSaveFailed') : 'bots.groupChat.settings.projectDirSaveFailed'));
-      else {
+      if (!result.ok) {
+        const folderHint = result.errorCode === 'PROJECT_NOT_REGISTERED' ? 'projectDirNotRegistered' : 'projectDirSaveFailed';
+        setError(t('repository' in input ? key('githubRepoSaveFailed') : shared(folderHint)));
+      } else {
         if (result.folderRepository) setProjectNotice(t(key(result.folderRepository.filled ? 'folderRepoFilled' : 'folderRepoDiffers'), { repo: result.folderRepository.repo }));
         refreshBotGroups();
       }
@@ -254,7 +286,15 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   }
   const memberActions: MemberActions = {
     access: member => go(`${COMPANION_PAGE}${member.actorId}`),
-    role: member => void mutate({ type: 'member', actorId: member.actorId!, action: 'role', role: member.role === 'admin' ? 'member' : 'admin' }),
+    role: member => {
+      const actorId = member.actorId!, role = member.role === 'admin' ? 'member' : 'admin';
+      if (busyRef.current) return;
+      setRoles(current => ({ ...current, [actorId]: role }));
+      void mutate({ type: 'member', actorId, action: 'role', role }).then(ok => {
+        if (!ok && mounted.current) setRoles(current => current[actorId] !== role ? current
+          : Object.fromEntries(Object.entries(current).filter(([id]) => id !== actorId)));
+      });
+    },
     transfer: member => void confirmed({ type: 'transfer', actorId: member.actorId! }, t(key('transferTitle'), { name: member.name }), t(key('transferHint'))),
     remove: member => void removeMember(member),
   };
@@ -264,41 +304,38 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   if (page?.kind === 'manage') {
     // The group's own Cindy (servers with groupAssistant) answers messages that @ nobody when anyone may
     // reply (bot-group-chat.md「群里的 Cindy」); turned off, or on older servers, the rows read as before.
-    const assistantAnswers = group.supportsGroupAssistant === true && group.assistantEnabled === true;
+    const assistantAnswers = group.supportsGroupAssistant === true && switchOn('assistantEnabled');
     body = <>
       {group.archived && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
-      {group.supportsMemberInvites && <SettingsSection title={t(key('inviteEntry'))}>
+      {(group.supportsMemberInvites || group.supportsMemberMentionAll) && <SettingsSection title={t(key('memberPermissions'))}>
         <SettingsCard>
-          <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
-            trailing={<Switch aria-label={t(shared('allowMemberInvites'))} checked={group.allowMemberInvites === true}
-              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={allowMemberInvites => {
-                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMemberInvites });
-              }} />} />
+          {group.supportsMemberInvites && <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
+            trailing={<Switch aria-label={t(shared('allowMemberInvites'))} checked={switchOn('allowMemberInvites')}
+              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={on => void saveSwitch('allowMemberInvites', on)} />} />}
+          {group.supportsMemberMentionAll && <SettingsRow wrap title={t(shared('allowMemberMentionAll'))} hint={t(shared('allowMemberMentionAllHint'))}
+            trailing={<Switch aria-label={t(shared('allowMemberMentionAll'))} checked={switchOn('allowMemberMentionAll')}
+              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={on => void saveSwitch('allowMemberMentionAll', on)} />} />}
         </SettingsCard>
       </SettingsSection>}
       {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}
       <SettingsSection title={t(key('replies'))}>
         <SettingsCard>
           {group.supportsGroupAssistant && <SettingsRow wrap title={t(key('assistant'))} hint={t(key('assistantHint'))}
-            trailing={<Switch data-testid="bot-group-assistant" aria-label={t(key('assistant'))} checked={group.assistantEnabled === true}
-              disabled={busy || group.revision === undefined} onCheckedChange={assistant => {
-                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, assistant });
-              }} />} />}
+            trailing={<Switch data-testid="bot-group-assistant" aria-label={t(key('assistant'))} checked={switchOn('assistantEnabled')}
+              disabled={busy || group.revision === undefined} onCheckedChange={on => void saveSwitch('assistantEnabled', on)} />} />}
           <SettingsRow wrap title={t(shared('replyMode'))}
             hint={t(replyMode === 'mentioned' ? key('replyModeMentionedNote') : assistantAnswers ? key('replyModeAssistantNote') : shared('replyModeNote'))}
-            trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} size="compact" className="max-w-[220px]"
+            trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} size="compact"
               options={(['mentioned', 'all'] as const).map(value => ({ value,
                 label: t(value === 'all' && assistantAnswers ? key('replyModeAssistant') : REPLY_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ replyMode: value as typeof replyMode })} />} />
           {group.supportsMentionAudiences && owner && <SettingsRow wrap title={t(shared('allowMentionAllBots'))} hint={t(shared('allowMentionAllBotsHint'))}
-            trailing={<Switch aria-label={t(shared('allowMentionAllBots'))} checked={group.allowMentionAllBots === true}
-              disabled={busy || group.revision === undefined} onCheckedChange={allowMentionAllBots => {
-                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMentionAllBots });
-              }} />} />}
+            trailing={<Switch aria-label={t(shared('allowMentionAllBots'))} checked={switchOn('allowMentionAllBots')}
+              disabled={busy || group.revision === undefined} onCheckedChange={on => void saveSwitch('allowMentionAllBots', on)} />} />}
           {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
           {!group.singleSpeaker && <SettingsRow wrap title={t(shared('speakingMode'))}
             hint={t(shared(speakingMode === 'auto' ? 'speakingModeAutoNote' : 'speakingModeSequentialNote'))}
-            trailing={<Select label={t(shared('speakingMode'))} value={speakingMode} disabled={busy} size="compact" className="max-w-[220px]"
+            trailing={<Select label={t(shared('speakingMode'))} value={speakingMode} disabled={busy} size="compact"
               options={(['auto', 'sequential'] as const).map(value => ({ value, label: t(SPEAKING_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ speakingMode: value as typeof speakingMode })} />} />}
         </SettingsCard>
@@ -355,7 +392,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       </div>
       <form id="chat-group-profile" onSubmit={saveNickname}>
         <FormField label={t(key('nickname'))} hint={t(key('nicknameHint'))}>{props =>
-          <Input {...props} size="md" value={nickname} maxLength={40} placeholder={me.displayName} disabled={busy}
+          <Input {...props} size="md" value={nickname} maxLength={40} placeholder={chatGroupHumanDisplayName({ ...me, nickname: null, name: me.displayName ?? me.name })} disabled={busy}
             onChange={value => { nicknameDirty.current = true; setNickname(value); }} />}</FormField>
       </form>
     </>;
@@ -391,7 +428,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
         ]} />
       <div key={tab} id="chat-group-tabpanel" role="tabpanel" aria-labelledby={`chat-group-tab-${tab}`} className="flex animate-fade-in flex-col gap-6">
         {tab === 'members'
-          ? <ChatGroupMembersTab group={group} owner={owner} manager={manager} busy={busy} actions={memberActions} />
+          ? <ChatGroupMembersTab group={shownGroup} owner={owner} manager={manager} busy={busy} actions={memberActions} />
           : <>
             {dissolved && <SettingsNotice>{t('bots.groupChat.lifecycle.dissolved')}</SettingsNotice>}
             {group.archived && !dissolved && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
@@ -406,8 +443,14 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
                     : <SettingsRowIcon><Reply size={16} aria-hidden /></SettingsRowIcon>}
                   title={t('bots.groupChat.mask.title')} hint={t(key('maskHint'))} value={t(`bots.groupChat.mask.status.${mask.status}`)} chevron
                   onClick={() => { if (scroller.current) homeScroll.current = scroller.current.scrollTop; openMask(); }} />}
+                {computers && <SettingsRow wrap title={t(key('assistantComputer'))} trailing={
+                  <Select size="compact" width="sm" label={t(key('assistantComputer'))} placeholder={t(key('chooseComputer'))} value={group.assistantDeviceId ?? ''}
+                    truncateOptions
+                    disabled={busy || !!group.archived || !computers.length}
+                    options={computers.map(device => ({ value: device.id, label: device.name }))}
+                    onValueChange={deviceId => void mutate({ type: 'assistantDevice', deviceId })} />} />}
                 {group.supportsNotificationSettings && group.notificationMode && <ChatGroupNotificationSettings key={group.id}
-                  groupId={group.id} mode={group.notificationMode} disabled={busy || !!group.archived} />}
+                  groupId={group.id} mode={group.notificationMode} inherited={group.notificationModeInherited} disabled={busy || !!group.archived} />}
               </SettingsCard>
             </SettingsSection>}
             {!dissolved && !group.archived && ownBots.length > 0 && <SettingsSection title={t(key('myTeammates'))} caption={t(key('myTeammatesCaption'))}>
@@ -454,7 +497,10 @@ function Hero({ group, name, me, invite }: { group: BotGroupSummary; name: strin
   return <div className="flex items-center gap-3">
     <BotGroupSidebarAvatar members={group.members} compact />
     <div className="min-w-0 flex-1">
-      <p className="text-16 font-medium leading-[1.375] text-[var(--text-primary)] [overflow-wrap:anywhere]">{name}</p>
+      <p className="flex flex-wrap items-center gap-1.5 text-16 font-medium leading-[1.375] text-[var(--text-primary)] [overflow-wrap:anywhere]">
+        <span>{name}</span>
+        {group.external === true && <BotGroupExternalBadge />}
+      </p>
       <p className="mt-0.5 text-13 leading-[1.38] tabular-nums text-[var(--text-secondary)]">
         {t('bots.groupChat.memberCount', { count: group.members.length })}{role && ` · ${role}`}
       </p>

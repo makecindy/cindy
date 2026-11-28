@@ -45,6 +45,8 @@ import { prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceGitSafetySettings } from '@/hooks/useGitSafetySettings';
 import { readCachedSessionList } from '@/features/device-link/mirrorCacheClient';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { useSelectedMachinePlaceholder } from '@/features/device-link/useMachineSwitcher';
+import { MACHINE_ALL, setSelectedMachineIdTransient } from '@/features/device-link/selectedMachineStore';
 
 /** Real hook/store/refresh orchestration with independent controllable peer transports. */
 const peers = ['slow', 'healthy'].map((deviceId) => ({
@@ -131,6 +133,87 @@ afterEach(() => {
 });
 
 describe('multi-device recovery lifecycle', () => {
+  // #5860 / unit: real listing, device directory and sidebar projection through fake IPC.
+  // Recovery-only cases missed a selected peer whose successful sessions list was empty.
+  it.each([
+    { taskCount: 0, offlinePlaceholder: 'offline' },
+    { taskCount: 1, offlinePlaceholder: null },
+  ])('projects a selected peer with $taskCount tasks across presence changes', async ({ taskCount, offlinePlaceholder }) => {
+    const api = window.electronAPI.deviceLink;
+    let online = true;
+    const tasks = taskCount === 0 ? [] : [{
+      id: 'synthetic-task',
+      title: 'Synthetic task',
+      workingDir: null,
+      model: 'gpt-x',
+      status: 'active',
+      agentKind: 'codex',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }];
+    invoke.mockImplementation(async (peer, channel) => {
+      if (channel === 'maker:schedule:list-sidebar-index-runs') return { runs: [] };
+      return peer === 'slow' && channel === 'local-db:sessions:list' ? tasks : [];
+    });
+    const presence = new Set<Listener>();
+    vi.mocked(api.listDevices).mockImplementation(async () => ({
+      devices: peers.map((peer) => ({
+        ...peer,
+        online: peer.deviceId === 'slow' ? online : true,
+        platform: 'darwin',
+        appVersion: 'test',
+        lastSeenAt: null,
+        busy: false,
+        controlEnabled: true,
+      })),
+    }));
+    api.onPresenceChanged = (listener) => {
+      presence.add(listener);
+      return () => { presence.delete(listener); };
+    };
+
+    setSelectedMachineIdTransient(['slow']);
+    onTestFinished(() => setSelectedMachineIdTransient(MACHINE_ALL));
+    const { result } = renderHook(() => {
+      useDeviceLinkRemoteProjects();
+      return useSelectedMachinePlaceholder();
+    });
+    await settle();
+    const listRequests = () => invoke.mock.calls.filter(
+      ([peer, channel]) => peer === 'slow' && channel === 'local-db:sessions:list',
+    );
+    expect(listRequests()).toHaveLength(1);
+    expect(remoteProjectsStore.getDeviceList()).toContainEqual(expect.objectContaining({
+      deviceId: 'slow', sessionCount: taskCount, connected: true,
+    }));
+    expect(result.current).toBeNull();
+
+    const setPresence = (next: boolean) => act(() => {
+      online = next;
+      for (const listener of presence) {
+        listener({ deviceId: 'slow', deviceName: 'slow', online, remoteControlEnabled: true });
+      }
+    });
+    setPresence(false);
+    await settle();
+    expect(result.current).toBe(offlinePlaceholder);
+    expect(remoteProjectsStore.getDeviceSessions('slow').map((task) => task.id)).toEqual(
+      tasks.map((task) => task.id),
+    );
+    expect(listRequests()).toHaveLength(1);
+
+    const reopenedSidebar = renderHook(() => useSelectedMachinePlaceholder());
+    expect(reopenedSidebar.result.current).toBe(offlinePlaceholder);
+
+    setPresence(true);
+    await settle();
+    expect(listRequests()).toHaveLength(2);
+    expect(remoteProjectsStore.getDeviceList()).toContainEqual(expect.objectContaining({
+      deviceId: 'slow', sessionCount: taskCount, connected: true,
+    }));
+    expect(result.current).toBeNull();
+  });
+
   // Unit regression: Main fences all three source-change events, but the renderer
   // only refreshed providers on one of them, leaving failed in-flight reads stuck.
   // Exercise the real push listener and refresh coordinator; transport reads are mocked.
@@ -372,6 +455,278 @@ describe('multi-device recovery lifecycle', () => {
       });
     }
     expect(indexReads()).toHaveLength(1);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：useDeviceLinkRemoteProjects + remoteProjectsStore 跨 >=2 个 60s skip tick 对「现代端原位时间戳补丁 + 忽略同次 skippedRunId 兼容 changed」与「旧流有界对账」的真实 list-sidebar-index-runs 请求计数，以及掉帧 skipped 与失败恢复的兜底重拉。
+  // - 规则依据：docs/dev-rules/protocol-compatibility.md、docs/dev-rules/server-channel-review.md 与 docs/dev-rules/remote-and-mobile-adaptation.md。
+  // - 现有覆盖缺口：既有测试仅覆盖无时间戳旧 skipped 合并为 1 次重拉，未覆盖新主机完整 skipped 时间戳零索引重拉、+10s 兼容 changed 去重、掉帧恢复与失败恢复。
+  // - 最小失败输入：healthy 走 2 个 60s 新流 tick（fired→带时间戳 skipped→+10s changed(skippedRunId)），slow 走 2 个 60s 旧流对账 tick，随后验证掉帧与 failed→skipped(preRunCheckSucceeded:true)。
+  // - tier：unit（jsdom，假计时器）。
+  it('patches nextFireAt with zero index reads on modern peers across >=2 60s skip ticks while keeping bounded legacy reads, dropped-frame, and failure recovery', async () => {
+    setDataOwnerGeneration('test-owner', 1);
+    onTestFinished(() => setDataOwnerGeneration(null));
+    let healthyNextFireAt = 60_000;
+    let slowNextFireAt = 60_000;
+    let healthyFailed = false;
+    let pendingHealthyIndex: ReturnType<typeof deferred<unknown>> | undefined;
+    const sessionRow = (id: string) => ({
+      id,
+      title: `Task ${id}`,
+      workingDir: null,
+      model: 'gpt-x',
+      status: 'active',
+      agentKind: 'codex',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    invoke.mockImplementation(async (peer: string, channel: string) => {
+      if (channel === 'local-db:sessions:list') {
+        return peer === 'healthy'
+          ? [sessionRow('s-healthy'), sessionRow('s-other')]
+          : [sessionRow('s-slow')];
+      }
+      if (channel === 'maker:schedule:list-sidebar-index-runs') {
+        if (peer === 'healthy' && pendingHealthyIndex) return pendingHealthyIndex.promise;
+        const nextFireAt = peer === 'healthy' ? healthyNextFireAt : slowNextFireAt;
+        const runs: Array<Record<string, unknown>> = [
+          {
+            runId: 'r-seed',
+            scheduleId: 's1',
+            scheduleName: 'PR Watch',
+            scheduleStatus: 'active',
+            sessionId: peer === 'healthy' ? 's-healthy' : 's-slow',
+            status: 'success',
+            firedAt: 1_000,
+            finishedAt: 1_050,
+            readAt: 1_050,
+            nextFireAt,
+          },
+        ];
+        if (peer === 'healthy' && healthyFailed) {
+          runs.push({
+            runId: 'r-fail',
+            scheduleId: 's1',
+            scheduleName: 'PR Watch',
+            scheduleStatus: 'active',
+            sessionId: 's-healthy',
+            status: 'failed',
+            firedAt: 180_000,
+            finishedAt: 180_030,
+            errorMsg: 'check error',
+            nextFireAt,
+          });
+        }
+        return { runs };
+      }
+      return [];
+    });
+
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(60_000);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-slow')?.nextFireAt).toBe(60_000);
+
+    const indexReads = (peer: string) =>
+      invoke.mock.calls.filter(
+        ([p, ch]) => p === peer && ch === 'maker:schedule:list-sidebar-index-runs',
+      ).length;
+    invoke.mockClear();
+
+    // Run 2 × 60s steady-state skip ticks (120s total, keeping user presence active).
+    for (const [idx, firedAt] of [60_000, 120_000].entries()) {
+      const runId = `r-tick-${idx + 1}`;
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }));
+      healthyNextFireAt = firedAt + 60_000;
+      slowNextFireAt = firedAt + 60_000;
+
+      // Modern path on 'healthy': fired -> patchable skipped -> +10s compat changed(skippedRunId)
+      act(() => {
+        listeners.onRemotePush({
+          deviceId: 'healthy',
+          channel: 'maker:schedule:event',
+          payload: { type: 'fired', scheduleId: 's1', runId },
+        });
+        listeners.onRemotePush({
+          deviceId: 'healthy',
+          channel: 'maker:schedule:event',
+          payload: {
+            type: 'skipped',
+            scheduleId: 's1',
+            runId,
+            sessionId: '',
+            lastFiredAt: firedAt,
+            lastFinishedAt: firedAt + 20,
+            nextFireAt: healthyNextFireAt,
+            preRunCheckSucceeded: true,
+          },
+        });
+        // Legacy path on 'slow': fired + legacy skipped (without modern timing patch) + +10s changed
+        listeners.onRemotePush({
+          deviceId: 'slow',
+          channel: 'maker:schedule:event',
+          payload: { type: 'fired', scheduleId: 's1', runId },
+        });
+        listeners.onRemotePush({
+          deviceId: 'slow',
+          channel: 'maker:schedule:event',
+          payload: { type: 'skipped', scheduleId: 's1', runId, sessionId: '' },
+        });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      act(() => {
+        listeners.onRemotePush({
+          deviceId: 'healthy',
+          channel: 'maker:schedule:event',
+          payload: { type: 'changed', scheduleId: 's1', skippedRunId: runId },
+        });
+        listeners.onRemotePush({
+          deviceId: 'slow',
+          channel: 'maker:schedule:event',
+          payload: { type: 'changed', scheduleId: 's1' },
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50_000);
+      });
+    }
+
+    // Across 2 × 60s steady-state skip ticks:
+    // Modern peer ('healthy'): 0 schedule index reads, nextFireAt patched in-place to 180_000!
+    // Legacy peer ('slow'): bounded reconciliation reads index and updates nextFireAt to 180_000!
+    expect(indexReads('healthy')).toBe(0);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(180_000);
+    expect(indexReads('slow')).toBeGreaterThanOrEqual(2);
+    expect(indexReads('slow')).toBeLessThanOrEqual(4);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-slow')?.nextFireAt).toBe(180_000);
+
+    // Dropped skipped frame on 'healthy': fired(r-drop) arrives, skipped(r-drop) is lost,
+    // +10s compat changed(skippedRunId='r-drop') arrives -> not ignored, triggers 1 index read!
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }));
+    healthyNextFireAt = 240_000;
+    act(() =>
+      listeners.onRemotePush({
+        deviceId: 'healthy',
+        channel: 'maker:schedule:event',
+        payload: { type: 'fired', scheduleId: 's1', runId: 'r-drop' },
+      }),
+    );
+    act(() =>
+      listeners.onRemotePush({
+        deviceId: 'healthy',
+        channel: 'maker:schedule:event',
+        payload: { type: 'changed', scheduleId: 's1', skippedRunId: 'r-drop' },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(1);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(240_000);
+
+    // Failure -> preRunCheckSucceeded recovery on 'healthy': forces index refresh to clear failure state!
+    healthyFailed = true;
+    healthyNextFireAt = 300_000;
+    act(() =>
+      listeners.onRemotePush({
+        deviceId: 'healthy',
+        channel: 'maker:schedule:event',
+        payload: { type: 'failed', scheduleId: 's1', runId: 'r-fail', sessionId: '' },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.hasFailedRun).toBe(true);
+    const readsBeforeRecovery = indexReads('healthy');
+
+    healthyFailed = false;
+    healthyNextFireAt = 360_000;
+    act(() =>
+      listeners.onRemotePush({
+        deviceId: 'healthy',
+        channel: 'maker:schedule:event',
+        payload: {
+          type: 'skipped',
+          scheduleId: 's1',
+          runId: 'r-rec',
+          sessionId: '',
+          lastFiredAt: 300_000,
+          lastFinishedAt: 300_020,
+          nextFireAt: 360_000,
+          preRunCheckSucceeded: true,
+        },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(readsBeforeRecovery + 1);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.hasFailedRun).toBe(false);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(360_000);
+
+    // Let the fired-triggered read start, then deliver the terminal skip before
+    // that read returns its pre-skip timing. An unrelated new row must still land.
+    const beforeLateRead = indexReads('healthy');
+    const lateIndex = deferred<unknown>();
+    pendingHealthyIndex = lateIndex;
+    const pushHealthySchedule = (payload: object) =>
+      act(() => listeners.onRemotePush({ deviceId: 'healthy', channel: 'maker:schedule:event', payload }));
+    pushHealthySchedule({ type: 'fired', scheduleId: 's1', runId: 'r-late-index' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(beforeLateRead + 1);
+    pushHealthySchedule({
+      type: 'skipped', scheduleId: 's1', runId: 'r-late-index', sessionId: '',
+      lastFinishedAt: 372_000, nextFireAt: 420_000, preRunCheckSucceeded: true,
+    });
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(420_000);
+    pendingHealthyIndex = undefined;
+    lateIndex.resolve({ runs: [
+      {
+        runId: 'r-seed', scheduleId: 's1', scheduleName: 'PR Watch', scheduleStatus: 'active',
+        sessionId: 's-healthy', status: 'success', firedAt: 1_000,
+      },
+      {
+        runId: 'r-other', scheduleId: 's2', scheduleName: 'Another watch', scheduleStatus: 'active',
+        sessionId: 's-other', status: 'success', firedAt: 2_000, nextFireAt: 500_000,
+      },
+    ] });
+    await settle();
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(420_000);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-other')?.nextFireAt).toBe(500_000);
+    pushHealthySchedule({ type: 'changed', scheduleId: 's1', skippedRunId: 'r-late-index' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(beforeLateRead + 1);
+
+    // A newer run supersedes the pending skip overlay even before its own
+    // refresh starts. The response may already reflect that newer run.
+    const nextIndex = deferred<unknown>();
+    pendingHealthyIndex = nextIndex;
+    pushHealthySchedule({ type: 'changed', scheduleId: 's2' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(beforeLateRead + 2);
+    pushHealthySchedule({
+      type: 'skipped', scheduleId: 's1', runId: 'r-follow-up', sessionId: '',
+      lastFinishedAt: 421_000, nextFireAt: 480_000, preRunCheckSucceeded: true,
+    });
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(480_000);
+    pushHealthySchedule({ type: 'fired', scheduleId: 's1', runId: 'r-newer' });
+    pendingHealthyIndex = undefined;
+    nextIndex.resolve({ runs: [{
+      runId: 'r-newer', scheduleId: 's1', scheduleName: 'PR Watch', scheduleStatus: 'active',
+      sessionId: 's-healthy', status: 'running', firedAt: 480_000,
+    }] });
+    await settle();
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBeUndefined();
   });
 
   // Same incident: the 60 s safety-net reconcile also re-read every peer's whole run

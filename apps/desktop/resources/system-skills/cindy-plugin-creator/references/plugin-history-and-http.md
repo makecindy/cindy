@@ -32,6 +32,10 @@ user / assistant 消息，不能用它冒充工具过程订阅。历史补读、
 
 ## 外部事件只需叫醒任务：使用自动化 Webhook
 
+插件自己已经能观察到事件（长连接、系统监听、本地 CLI）时，更简单的做法是声明 `routineEvents` 并发布事件，
+由用户在自动化的「事件」触发里选择本插件，不需要公网地址、密钥或账号，见 [插件事件](plugin-routine-events.md)。
+下文是事件来自外部服务、需要公网接收地址的情况。
+
 声明 `"agent": { "hostTools": ["scheduler"] }`，使用同一组 `schedule_*` 工具。
 例如创建纯事件触发的自动化（以下 `selectedSessionId` 是已选中的本机任务）：
 

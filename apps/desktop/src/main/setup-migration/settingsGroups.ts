@@ -41,7 +41,7 @@ export interface SetupSettingsGroup {
 export const SETUP_SETTINGS_GROUPS: readonly SetupSettingsGroup[] = [
   { id: 'appearance', settings: appearancePortableSettings },
   { id: 'windowBehavior', settings: windowBehaviorPortableSettings },
-  { id: 'menubar', platforms: ['darwin'], settings: menubarPortableSettings },
+  { id: 'menubar', platforms: ['darwin', 'win32'], settings: menubarPortableSettings },
   { id: 'collaboration', settings: collaborationPortableSettings },
   { id: 'agentResource', settings: agentResourcePortableSettings },
   { id: 'gitSafety', settings: gitSafetyPortableSettings },
