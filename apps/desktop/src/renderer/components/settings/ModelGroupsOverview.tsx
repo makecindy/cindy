@@ -18,6 +18,7 @@ import { modelGroupWhyText, useModelGroupCandidateNames } from '@/features/model
 import { createLogger } from '@/lib/logger';
 import { cn } from '@/lib/utils';
 
+import { modelGroupHarnessLabel } from '../../../shared/modelGroupRouteNoteText';
 import type { ModelGroupDecision } from '../../../shared/modelGroupDecisions';
 import {
   modelGroupCandidateKey,
@@ -494,7 +495,7 @@ function RecentDecisions({ decisions, namesOf }: { decisions: readonly ModelGrou
           : t('modelGroups.overview.keptOriginal');
         const effort = item.effort ? t(`effortLevels.${item.effort}`, { defaultValue: item.effort }) : '';
         // 本机的照旧写记录时的来源名；别的电脑或分享来的连同位置一起写。
-        const detail = [item.agentDeviceId ? names?.sourceLabel : item.sourceName, effort].filter(Boolean).join(' · ');
+        const detail = [item.agentDeviceId ? names?.sourceLabel : item.sourceName, picked ? modelGroupHarnessLabel(picked.agentKind) : null, effort].filter(Boolean).join(' · ');
         return (
           <SettingsBlock
             key={`${item.at}:${item.groupType}:${item.groupId}`}
