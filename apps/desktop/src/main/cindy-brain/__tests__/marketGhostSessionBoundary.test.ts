@@ -323,7 +323,7 @@ describe('market Ghost session boundary', () => {
       'runtime.stop(instanceId)',
     );
     const stopAndWaitIndex = helperBody.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(instanceId);',
+      'await stopGhostNodeRuntimeForUpdate(previousGhost);',
     );
     const oauthLockIndex = helperBody.indexOf(
       'withCredentialMutation: sourceChanged ? undefined : run => withActiveOwnerGhostOauthMutationLock(',
@@ -394,7 +394,7 @@ describe('market Ghost session boundary', () => {
     expect(body.slice(commit, body.indexOf('},', commit))).toContain('expected.assertCurrent?.();');
 
     const waitIndex = body.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(',
+      'await stopGhostNodeRuntimeForUpdate(',
     );
     const oauthLockIndex = body.indexOf(
       ': run => withActiveOwnerGhostOauthMutationLock(installedGhostStoragePart(installed)',
@@ -406,8 +406,17 @@ describe('market Ghost session boundary', () => {
     expect(oauthLockIndex).toBeGreaterThan(updateIndex);
     expect(body).toContain('runtime.stop(installedGhostStoragePart(installed));');
     expect(body).toContain(
-      'await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));',
+      'await stopGhostNodeRuntimeForUpdate(installed);',
     );
+    // 竞态守卫：最终忙碌复核、runtime.stop 与 broker 停止之间不能有 await。
+    const finalBusyCheck = body.indexOf('expected.beforeRuntimeStopInLock?.();');
+    const runtimeStop = body.indexOf('runtime.stop(installedGhostStoragePart(installed));');
+    const nodeStop = body.indexOf('await stopGhostNodeRuntimeForUpdate(installed);');
+    const appStop = body.indexOf('await stopPluginAppInstance(installedGhostStoragePart(installed));');
+    expect(finalBusyCheck).toBeGreaterThan(-1);
+    expect(finalBusyCheck).toBeLessThan(runtimeStop);
+    expect(runtimeStop).toBeLessThan(nodeStop);
+    expect(nodeStop).toBeLessThan(appStop);
     expect(body).toContain('runtime.resetFuse(installedGhostStoragePart(result.ghost));');
     expect(body).toContain('...(!previousRelId ? { expectedInstalledInstanceId: installedGhostStoragePart(installed) } : {}),');
     const confirmNamespace = body.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost,');
@@ -416,7 +425,7 @@ describe('market Ghost session boundary', () => {
     expect(body).not.toContain(
       'pluginStoragePart(createPluginLogicalIdentity(expected.namespace ?? null, expected.ghostId))',
     );
-    const restoreIndex = body.indexOf('spawnIfResident(installed);');
+    const restoreIndex = body.lastIndexOf('spawnIfResident(installed);');
     expect(restoreIndex).toBeGreaterThan(updateIndex);
   });
 
@@ -432,7 +441,7 @@ describe('market Ghost session boundary', () => {
     const helperBody = source.slice(helperStart, helperEnd);
 
     const waitIndex = helperBody.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(instanceId);',
+      'await stopGhostNodeRuntimeForUpdate(previousGhost);',
     );
     const oauthLockIndex = helperBody.indexOf(
       'withCredentialMutation: sourceChanged ? undefined : run => withActiveOwnerGhostOauthMutationLock(',
@@ -458,6 +467,16 @@ describe('market Ghost session boundary', () => {
     expect(provenanceBody).toContain('installationForPlugin({');
     expect(provenanceBody).toContain('...deliveryNamespaceFields(previousGhost)');
     expect(helperBody.indexOf('= readLocalGhostUpdateSource(')).toBeLessThan(waitIndex);
+    // Both in-place update paths stop through one helper: a failed wait rethrows (no immediate
+    // second resident), and restores the old version only after the stuck processes really exit.
+    const stopHelperStart = source.indexOf('async function stopGhostNodeRuntimeForUpdate(');
+    const stopHelper = source.slice(stopHelperStart, source.indexOf('\n}\n', stopHelperStart));
+    expect(stopHelper.indexOf('await broker.stopAndWait(instanceId);')).toBeGreaterThan(-1);
+    expect(stopHelper.indexOf('broker.whenProcessesExited(instanceId,'))
+      .toBeGreaterThan(stopHelper.indexOf('} catch (error) {'));
+    expect(stopHelper.indexOf('spawnIfResident(current);'))
+      .toBeGreaterThan(stopHelper.indexOf('broker.whenProcessesExited(instanceId,'));
+    expect(stopHelper).toContain('throw error;');
     expect(helperBody).toContain("throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');");
   });
 

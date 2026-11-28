@@ -659,6 +659,49 @@ export function recordPluginHarnessActivity(key: string, accountDir?: string): v
   registry.recordActivity(key, accountDir);
 }
 
+/** 引擎任务会话中判断「回合是否在跑」所需的最小面(ACP 会话的 `isTurnRunning`)。 */
+export interface PluginEngineTurnProbe {
+  isTurnRunning?(): boolean;
+}
+
+/** 每个插件实例(`ghostId`)名下尚未关闭的引擎任务会话,仅存于宿主内存。 */
+const liveEngineSessions = new Map<string, Set<PluginEngineTurnProbe>>();
+
+/**
+ * 登记一个引擎任务会话,返回幂等的注销函数(会话 close 时调用)。后台自动更新据此判断
+ * 插件引擎上是否有回合正在运行,避免更新时停掉插件进程打断这些任务。
+ */
+export function trackPluginEngineSession(ghostId: string, session: PluginEngineTurnProbe): () => void {
+  const sessions = liveEngineSessions.get(ghostId) ?? new Set<PluginEngineTurnProbe>();
+  sessions.add(session);
+  liveEngineSessions.set(ghostId, sessions);
+  return () => {
+    const current = liveEngineSessions.get(ghostId);
+    if (!current) return;
+    current.delete(session);
+    if (current.size === 0) liveEngineSessions.delete(ghostId);
+  };
+}
+
+/**
+ * 该插件实例的引擎上是否有任务回合正在运行。只看回合:任务空闲时引擎进程会保留一段时间,
+ * 停掉它不丢工作(下一条消息会重新接上),不能因此无限期推迟插件更新。
+ */
+export function hasRunningPluginEngineTurn(ghostId: string): boolean {
+  for (const session of liveEngineSessions.get(ghostId) ?? []) {
+    try {
+      if (session.isTurnRunning?.() === true) return true;
+    } catch {
+      // 已失效的会话不算在跑。
+    }
+  }
+  return false;
+}
+
+export function resetPluginEngineSessionsForTests(): void {
+  liveEngineSessions.clear();
+}
+
 export function readPluginHarnessAccountStatus(key: string, accountDir?: string): Promise<GhostHarnessAccountStatus | null> {
   return registry.readAccountStatus(key, accountDir);
 }
