@@ -1,3 +1,4 @@
+import { PI_DECODED_BODY_LIMIT_400 } from './upstream-status.js';
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { completedPiResponsesMessage } from './responses-completion.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
@@ -4886,6 +4887,15 @@ export default async function cindyBridge(piApi: any) {
   const runtimeModelRouting = installRuntimeModelControl(pi);
   installTextOnlyTurnPolicy(pi, runtimeModelRouting.prepare);
   const runtimeRequestModel = runtimeModelRouting.requestModel;
+  // Pi's native retry policy treats the generic upstream wrapper as transient.
+  // Keep the real status and byte limit in the finalized failure for user retry.
+  pi.on('message_end', (event: any) => {
+    const message = event.message;
+    if (message?.role !== 'assistant' || message.stopReason !== 'error'
+      || typeof message.errorMessage !== 'string' || !${PI_DECODED_BODY_LIMIT_400}.test(message.errorMessage)) return;
+    return { message: { ...message, cindyCacheRecoveryHandled: true,
+      errorMessage: message.errorMessage.replace(/\bUpstream request failed:\s*/i, '') } };
+  });
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
   // Pi action APIs are unavailable while loading extensions. Reuse the launch

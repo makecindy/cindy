@@ -11,3 +11,7 @@ export function piUpstreamStatus(error: string | undefined): number | undefined 
   const status = Number(match[1]);
   return Number.isInteger(status) ? status : undefined;
 }
+
+// Pi renders provider errors using either the SDK status prefix or its own API error prefix.
+export const PI_DECODED_BODY_LIMIT_400 =
+  /^(?:400(?:[:\s]|$)|[\w -]+ API error \(400\):)[\s\S]*\bdecoded body exceeds [0-9]+ bytes\b/i;
