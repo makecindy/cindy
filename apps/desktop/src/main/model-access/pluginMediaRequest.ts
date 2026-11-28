@@ -42,6 +42,11 @@ interface VideoReference {
   expiresAt: number;
 }
 
+/** 走网关调用指南（JSON）的操作：图像生成、图像编辑、视频生成，其余按各自固定路径。 */
+function usesInvocationGuide(operation: GhostDirectMediaOperation): operation is 'image.generate' | 'image.edit' | 'video.generate' {
+  return operation === 'image.generate' || operation === 'image.edit' || operation === 'video.generate';
+}
+
 function failure(errorCode: string, message: string) {
   return { ok: false as const, errorCode, message };
 }
@@ -250,12 +255,16 @@ export function createPluginMediaRequester(deps: Dependencies) {
           }
         }
       } else {
-        if (operation === 'image.generate' || operation === 'video.generate') {
+        if (usesInvocationGuide(operation)) {
           const { guide } = await deps.getGuide(model);
           if (!context.isCurrent()) return denied();
           const media = guide.operations.find(item => item.capability === operation);
           if (!media || media.request.bodyEncoding === 'multipart') {
             return failure('UNAVAILABLE', '此模型没有可用的 Cindy AI JSON 媒体接口');
+          }
+          // 只有视频生成提供 jobRef 与 video.poll；异步的编辑接口会提交并计费，却没有可轮询的引用，提交前就拒绝。
+          if (operation === 'image.edit' && media.response.mode === 'async') {
+            return failure('UNAVAILABLE', '此模型的图像编辑接口为异步，Cindy AI 媒体直调暂不支持');
           }
           path = media.request.path;
           modelPath = media.request.bodyModelPath;
@@ -298,7 +307,7 @@ export function createPluginMediaRequester(deps: Dependencies) {
     if (url.origin !== base.origin) return denied();
     let billing: GatewayMediaBillingRecorder | undefined;
     try {
-      if (operation === 'image.generate' || operation === 'video.generate') {
+      if (usesInvocationGuide(operation)) {
         if (!context.isCurrent() || !deps.allowsModel(model, operation)) return denied();
         billing = await deps.prepareBilling({ model, sessionId: context.sessionId });
       }
