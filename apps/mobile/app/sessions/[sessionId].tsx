@@ -2393,6 +2393,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     runningModel?.deviceId === deviceId ? runningModel.route : undefined,
     pendingModel?.deviceId === deviceId ? pendingModel.route : undefined,
   );
+  const errorProviderName = (providerId?: string | null): string | undefined => {
+    if (!providerId || providerId === 'xd') return undefined;
+    const catalogDeviceId = runningModel?.deviceId ?? currentSession?.agentDeviceId ?? deviceId;
+    const catalog = catalogDeviceId === deviceId
+      ? composerDeviceProviders.ready ? composerDeviceProviders.providers : []
+      : remoteAgentCatalogs.find((item) => item.deviceId === catalogDeviceId)?.providers ?? [];
+    const provider = catalog.find((item) => item.id === providerId);
+    if (provider?.auth?.native === 'claude') return 'Anthropic';
+    if (provider?.auth?.native === 'codex') return 'OpenAI';
+    return provider?.name?.trim() || undefined;
+  };
   const collabWorkerDeviceId = collab.workerForm.form.executionDeviceId ?? deviceId;
   const collabDeviceProviders = useDeviceProviders(collabWorkerDeviceId || undefined, collab.workerForm.modelPicker.open);
   const collabModelPricing = useDeviceModelPricing(collabWorkerDeviceId || undefined);
@@ -11687,6 +11698,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                         {tailBannerState ? (
                           <SessionTailBanner
                             busy={tailBannerBusy || historyRecoveryBusy}
+                            providerId={currentSession?.providerId}
+                            providerName={errorProviderName(tailBannerState.kind === 'error-tail' ? tailBannerState.providerId ?? currentSession?.providerId : currentSession?.providerId)}
                             modelGroupSwitchOffer={
                               tailBannerState.kind === 'error-tail' && sessionModelGroupSwitchOffer
                                 ? {
@@ -11731,6 +11744,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                           }
                           onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                           sessionSource={currentSession?.source}
+                          providerId={currentSession?.providerId}
+                          providerName={errorProviderName(currentSession?.providerId)}
                           onClearError={clearQueueError}
                           onCancelUsageLimitWait={cancelUsageLimitWait}
                           onResume={resumeQueue}
