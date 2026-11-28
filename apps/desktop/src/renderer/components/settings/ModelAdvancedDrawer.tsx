@@ -886,6 +886,7 @@ export function ModelAdvancedDrawer({
                       hint={t('settings.providers.models.advanced.defaultEffortHint')}
                     >
                       <SegmentedControl
+                        data-settings-search-action="Choose the default reasoning effort for this model"
                         className="mt-1"
                         fullWidth
                         // Six translated labels exceed a details column. Keep every
