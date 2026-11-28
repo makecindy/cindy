@@ -131,6 +131,7 @@ export function useForkAtMessage({
       const capabilities = await getForkCapabilities(sessionId);
       if (!current()) return;
       let outcome: ForkOutcome | undefined;
+      let completedRequest: ForkRequest | undefined;
       const chooseTarget = async () => {
         let target: ForkTarget | undefined;
         const accepted = await confirm({
@@ -165,10 +166,8 @@ export function useForkAtMessage({
             if (!current()) return;
             if (receipt.state === 'complete' && receipt.session) {
               newSession = receipt.session; outcome = receipt.outcome;
-              try {
-                if (JSON.parse(localStorage.getItem(storageKey) ?? 'null')?.requestId === request.current?.requestId) localStorage.removeItem(storageKey);
-              } catch { /* A committed child stays successful even if local cleanup fails. */ }
-              request.current = undefined; break;
+              completedRequest = request.current;
+              break;
             }
             const choice = await confirmThree({ title: t('chat.forkRecovery.pendingTitle'),
               description: t('chat.forkRecovery.pendingDescription'),
@@ -230,6 +229,14 @@ export function useForkAtMessage({
       if (!current()) return;
       reportSessionNavigation?.(newSession.id, newSession.id);
       navigate(`/cc-agent/${newSession.id}`);
+      // Keep the receipt until navigation succeeds too. A failed remote-list
+      // refresh or draft save after commit must recover this child on retry.
+      if (completedRequest) {
+        try {
+          if (JSON.parse(localStorage.getItem(storageKey) ?? 'null')?.requestId === completedRequest.requestId) localStorage.removeItem(storageKey);
+        } catch { /* Local cleanup cannot turn a committed child into failure. */ }
+        if (request.current?.requestId === completedRequest.requestId) request.current = undefined;
+      }
       if (outcome) toast.success(t(outcome === 'native' ? 'chat.forkRecovery.nativeSuccess' : 'chat.forkRecovery.handoffSuccess'));
     } catch (err) {
       if (!current()) return;

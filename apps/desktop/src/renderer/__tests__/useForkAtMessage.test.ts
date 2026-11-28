@@ -131,6 +131,19 @@ describe('useForkAtMessage', () => {
     expect(navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/handoff-child');
   });
 
+  it('keeps the committed request when remote navigation preparation fails', async () => {
+    // The host already committed; a list-read failure is not a second create.
+    getForkCapabilities.mockResolvedValue({ forkRequestVersion: 1 });
+    getSessionDeviceId.mockReturnValue('task-computer');
+    requestFork.mockResolvedValue({ state: 'complete', session: { id: 'existing-child' }, outcome: 'native' });
+    refreshRemoteDeviceSessions.mockRejectedValueOnce(new Error('list response lost'));
+    const { result } = renderHook(() => useForkAtMessage({ sessionId: 'source', messageClientId: 'anchor' }));
+    await act(async () => { await expect(result.current()).rejects.toThrow('list response lost'); });
+    await act(async () => { await result.current(); });
+    expect(requestFork.mock.calls[1]![0].requestId).toBe(requestFork.mock.calls[0]![0].requestId);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/existing-child');
+  });
+
   it('ignores a reply after switching the source task', async () => {
     getForkCapabilities.mockResolvedValue({ forkRequestVersion: 1 });
     let finish!: (value: unknown) => void;
