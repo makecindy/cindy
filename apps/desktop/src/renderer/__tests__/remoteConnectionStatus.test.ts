@@ -165,7 +165,9 @@ describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
     // 探测被拒:判定保持清空,不回退成上一家的旧值。
     hook.rerender({ deviceId: 'peer-c' });
     await act(async () => {});
-    const rejectProbe: ((v: DeviceLinkProxyVerdict | null) => void) | null = resolveProbe;
+    // resolveProbe 在闭包里赋值;TS 对同作用域 let 的声明点窄化不会因闭包赋值解除,
+    // const 捕获会被窄化成 null —— 用 as 断言拿回完整函数类型。
+    const rejectProbe = resolveProbe as ((v: DeviceLinkProxyVerdict | null) => void) | null;
     await act(async () => { rejectProbe?.(Promise.reject(new Error('probe failed')) as never); });
     await act(async () => {});
     expect(hook.result.current).toBeNull();
