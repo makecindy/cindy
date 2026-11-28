@@ -362,8 +362,8 @@ function mount(component: any, props: any) {
 /** The layout key a sheet's measured views carry (`consentLayoutKey`) for this consent at the mocked window and text size. */
 const layoutKeyOf = (requestId: string) => `${requestId}|${bridge.width}x${bridge.height}@${bridge.fontScale}`;
 /**
- * Whether the consent sheet's Allow can be pressed now (maintainer review 06:44: Allow is its own control on both sheets,
- * drawn and unavailable until this consent is reviewed in the compact layout and on iOS).
+ * Whether the consent sheet's Allow can be pressed now (maintainer reviews 06:44, 08:37: Allow is its own control on both
+ * sheets, drawn and unavailable until this consent is reviewed).
  */
 function allowAvailable(): boolean {
   const allow = bridge.props.get("plugins.management.allow");
@@ -1227,12 +1227,11 @@ it("shows full consent facts in a separate sheet and rejects stale owner or requ
   expect(bridge.props.get("plugins.managementConfirmation").visible).toBe(true);
   // The custom market name is interpolated into the source line (pluginManagement.test.ts checks the text).
   for (const fact of ["Plugin · v2", "plugin-id", "plugins.notice.consentSource.customMarket", "Full local access risk", "Removed host access", "plugins.management.permissions.nodeRuntimeDetail", "plugins.management.oauthChanged"]) expect(container.textContent).toContain(fact);
-  // iOS reviews first (maintainer review 19:34), so only the inactive guard can stop the press below.
-  layOutSheet({ identity: 100, visible: 2000, content: 400 });
+  // Reviewed first (maintainer review 19:34), so only the inactive guard can stop the press below.
   reviewIOS();
   const allow = bridge.props.get("plugins.management.allow").onPress;
   act(() => allow());
-  expect(controller.answer, "control: active and laid out, Allow answers").toHaveBeenCalledWith(true);
+  expect(controller.answer, "control: active and reviewed, Allow answers").toHaveBeenCalledWith(true);
   controller.answer.mockClear();
   state.online = false;
   rerender({ ...props, active: false });
@@ -1734,7 +1733,7 @@ describe("pinned high-risk permission", () => {
     const title = (Array.isArray(pinned.children) ? pinned.children.flat() : [pinned.children]).filter(Boolean)[0];
     expect(title.props.style).toMatchObject({ fontSize: 15, fontWeight: "600" });
   });
-  // iOS / Android layout re-checks (3587f6ca, accessibility-large and English short screen): capped rows cut the end
+  // iOS layout re-checks (3587f6ca, accessibility-large and English short screen): capped rows cut the end
   // of every line, and an unbounded summary pushed the computer and source out of view. Every line is shown in full,
   // in a fixed class order, and scrolls inside a bound computed from the measured identity block, heading and buttons.
   const resident = { key: "node:resident", kind: "node", labelKey: "nodeResident", detailKey: "nodeResidentDetail" };
@@ -1744,8 +1743,8 @@ describe("pinned high-risk permission", () => {
   const geometry = (id: string, height: number) => act(() => {
     bridge.props.get(id).modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 390, height });
   });
-  /* 测试价值（维护者 16:48 复审；两档布局）
-   * - 生产入口与可观察结果：两端真实确认面板组件；观察渲染树里滚动容器的个数、摘要所在位置、分给摘要的高度。
+  /* 测试价值（维护者 16:48 复审；iOS 两档排版）
+   * - 生产入口与可观察结果：iOS 真实确认面板组件；观察渲染树里滚动容器的个数、摘要所在位置、分给摘要的高度。
    * - 依据：放得下「身份块 + 摘要标题 + 前两项」时摘要固定在按钮上方；放不下时只有一个滚动区（身份块 → 全部摘要 →
    *   完整说明），按钮固定在外；「继续滑动」提示浮在滚动区边缘，不占正文高度。
    * - 缺口：矮屏大字号时两条提示把摘要压到 0 高度，允许按钮仍可用。
@@ -1812,7 +1811,7 @@ describe("pinned high-risk permission", () => {
    * - 生产入口与可观察结果：两端真实确认面板组件；观察按钮（「查看来源和权限」/「允许」）、点下后滚动区内容的先后、
    *   回答是否发出。
    * - 依据：紧凑档的「允许」放在明确的查看步骤之后；查看后的列表从来源与本次高风险摘要开始，并回到顶部
-   *   （iOS 换一个视图 id，Android scrollTo 0）；常规档不变。读屏用户按按钮顺序即可完成，不靠滚动位置。
+   *   （iOS 换一个视图 id，Android scrollTo 0）。读屏用户按按钮顺序即可完成，不靠滚动位置。
    * - 最小失败输入：维护者的数字（可分配 100、身份块 384、标题 40、五项）下改前「允许」直接可点。tier: unit。
    */
   const customProps = (facts: any) => { const state = { outcome: "confirmation", online: true, busy: false, receipt: { consent: {
@@ -2100,6 +2099,26 @@ describe("pinned high-risk permission", () => {
     act(() => bridge.props.get("plugins.management.allow").onPress());
     expect(p.controller.answer).toHaveBeenCalledWith(true);
   });
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s: a second consent arriving in the same open sheet, with the same controller, needs its own review; the first consent's Allow callback answers nothing", (_platform, Sheet) => {
+      bridge.fontScale = 1;
+      const state = consentState(allFive);
+      const answer = vi.fn();
+      const p = { state, controller: { getState: () => state, answer } as any, active: true, deviceName: "Mac" };
+      const { container, rerender } = mount(Sheet, p);
+      act(() => bridge.props.get("plugins.management.review").onPress());
+      const lateAllow = bridge.props.get("plugins.management.allow").onPress;
+      // The next consent of the same operation, in the same sheet and the same controller.
+      state.receipt = { consent: { ...state.receipt.consent, requestId: "request-2" } };
+      rerender({ ...p });
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect({ review: shown("plugins.management.review"), allow: allowAvailable() }).toEqual({ review: true, allow: false });
+      act(() => lateAllow());
+      expect(answer, "the first consent's Allow, pressed after the switch").not.toHaveBeenCalled();
+      act(() => bridge.props.get("plugins.management.review").onPress());
+      act(() => bridge.props.get("plugins.management.allow").onPress());
+      expect(answer).toHaveBeenCalledTimes(1);
+    });
   it("iOS: a consent reviewed does not carry over to the next one; the reviewed sheet's late Allow cannot answer it", () => {
     bridge.fontScale = 1;
     const first = props(allFive);
@@ -2121,10 +2140,10 @@ describe("pinned high-risk permission", () => {
     expect(second.controller.answer).toHaveBeenCalledWith(true);
   });
   /* 测试价值（维护者 18:20：切到下一次确认时，固定高风险摘要仍停在上一条的滚动位置）
-   * - 生产入口与可观察结果：两端真实确认面板组件；Android 观察主列表与固定摘要的滚动区是否重建（新建的滚动区从顶部开始），
-   *   iOS 观察两个滚动区的视图标识。
-   * - 依据：requestId 切换时两端的主列表和固定摘要都从顶部开始；同一请求的普通重绘保留阅读位置。
-   * - 最小失败输入：第一份常规档之后直接切到第二份常规档；改前 Android 摘要不重建、iOS 两个标识不变。tier: unit。
+   * - 生产入口与可观察结果：两端真实确认面板组件；Android 观察主列表是否重建（新建的滚动区从顶部开始），iOS 观察主列表与
+   *   固定摘要两个滚动区的视图标识。
+   * - 依据：requestId 切换时滚动区从顶部开始；同一请求的普通重绘保留阅读位置。
+   * - 最小失败输入：第一份确认之后直接切到第二份；改前 iOS 两个标识不变。tier: unit。
    */
   it("Android: the next consent gets a new list; redrawing the same consent keeps it", () => {
     bridge.fontScale = 1;

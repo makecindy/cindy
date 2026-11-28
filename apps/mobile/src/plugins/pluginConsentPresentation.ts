@@ -12,7 +12,8 @@ type Consent = NonNullable<PluginManagementReceipt["consent"]>;
 type Translate = (key: string, args?: Record<string, unknown>) => string;
 
 /**
- * Permissions the phone pins above the confirm buttons, outside the scroll area.
+ * The high-risk permissions summarized in the confirmation sheet (iOS regular layout: pinned above the buttons; otherwise
+ * in the scroll area, after the identity block).
  *
  * Not a phone-side grading: these are the Host permission items the Host itself treats as high risk
  * (stable diff keys from ghostPermissionItems).
@@ -32,7 +33,7 @@ export function isPinnedHighRiskPermission(item: Pick<PluginPermissionItem, "key
 /**
  * How a confirmation sheet lays out the identity block at the top of the list (name, target computer, source,
  * repository, source notes) and the high-risk summary, from measured content heights and the available height only
- * (one rule for iOS and Android; maintainer reviews of d81200da and 256d5af5):
+ * (iOS only, layout only: no size lets Allow answer; maintainer reviews of d81200da and 256d5af5):
  * - Regular, when the identity block in full and the summary's heading with its first two items (all, if fewer) fit:
  *   the summary stays pinned above the buttons and gets what is left after the identity block, up to all its items;
  *   items beyond its height scroll inside it.

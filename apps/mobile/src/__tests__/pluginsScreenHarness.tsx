@@ -134,7 +134,6 @@ vi.mock("react-native", async () => {
   const React = await import("react");
   const view = ({ children, testID }: any) =>
     React.createElement("div", { "data-testid": testID }, children);
-
   return {
     AppState: { currentState: "active", addEventListener: (_event: string, listener: (state: string) => void) => {
       fixture.appStateListeners.add(listener); return { remove: () => fixture.appStateListeners.delete(listener) };

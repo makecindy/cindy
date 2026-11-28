@@ -54,7 +54,7 @@ export function PluginManagementConfirmation(
   // (landscape, tablets) they stay side by side, labels wrapping inside them, so the text keeps more room (K-3).
   const stacked = fontScale > 1.2 && windowWidth < CONSENT_SIDE_BY_SIDE_MIN_WIDTH;
   const summary = info?.highRisk ? (
-    <View testID="plugins.management.highRisk" style={[styles.highRisk, styles.highRiskInline]}>
+    <View testID="plugins.management.highRisk" style={styles.highRisk}>
       {/* The heading wraps rather than truncates. */}
       <Text testID="plugins.management.highRiskTitle" style={styles.highRiskTitle}>{info.highRisk.title}</Text>
       <View style={styles.highRiskLines}>
@@ -214,7 +214,6 @@ const makeStyles = (c: ThemeColors) =>
     highRisk: {
       gap: spacing.xs,
       paddingTop: spacing.md,
-      paddingBottom: spacing.md,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: c.border,
     },
@@ -239,8 +238,6 @@ const makeStyles = (c: ThemeColors) =>
     // The list takes all the room the buttons leave (flex, from their real heights: K-1); the fade floats over its lower
     // edge.
     listArea: { flexShrink: 1, flexGrow: 1 },
-    // The summary inside the scroll area, separated by the same hairline.
-    highRiskInline: { paddingBottom: 0 },
     // Reviewed: the plugin and its computer follow the summary, under the same hairline.
     reviewedIdentity: { paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
     unavailable: { opacity: 0.5 },
