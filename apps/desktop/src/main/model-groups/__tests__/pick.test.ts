@@ -170,6 +170,8 @@ describe('createModelGroupResolver', () => {
       scope: () => 'owner', now: () => NOW,
     });
     const request = { selection: { type: 'route', id: group.id } as const, dryRun };
+    // 历史任务恢复读取候选事实，不能仅因连接归并就把原有绑定视为失效。
+    expect((await resolver.candidateFacts(group))[0]).toMatchObject({ available: true });
     const withA = await resolver.resolve(request);
     expect(withA).toMatchObject({ outcome: 'routed', route: { providerId: 'openai', accountId: 'a' } });
     expect(withA.trace[0]).toMatchObject({ state: 'skipped', why: 'unavailable' });
@@ -495,6 +497,27 @@ describe('createModelGroupResolver with sources on other computers', () => {
     return { deps, resolver: createModelGroupResolver(deps) };
   };
   const selection = { type: 'route', id: 'r1' } as const;
+
+  // §3.1；目录透传 alias 时，若另一台电脑只开放旧连接，仍须按该位置的真实授权判断。
+  // unit，真实 resolver；最小输入：仅旧连接出现在远程可调用目录中。
+  it.each([true, false])('preserves the remotely granted saved alias (dryRun=%s)', async (dryRun) => {
+    const alias = { ...view('a', 'Old connection'), subscriptionPoolAlias: true as const,
+      subscriptionPoolTarget: 'pool', remoteInvocationEnabled: true };
+    const { resolver } = make(groups('order', [REMOTE]), {
+      remoteViews: async () => ({ views: [alias], stale: false }),
+    });
+    expect(await resolver.resolve({ selection, dryRun })).toMatchObject({
+      outcome: 'routed', route: REMOTE,
+    });
+    // 同账号控制端选执行电脑本机保存的路由：仍只读开放的入口，不借用未开放的池。
+    const { resolver: executor } = make(groups('order', [{ agentKind: 'codex', providerId: 'a', model: 'gpt' }]), {
+      views: async () => [alias, view('pool', 'Pool')],
+      remoteInvocable: (id) => id === alias.id,
+    });
+    expect(await executor.resolve({ selection, dryRun, remoteInvocableOnly: true })).toMatchObject({
+      outcome: 'routed', route: { providerId: 'a' },
+    });
+  });
 
   it('runs the task where the picked source is, judged by that computer\'s catalog rather than local installs', async () => {
     // 本机没装 Codex 也不影响另一台电脑上的来源；推理强度按那台的目录看支不支持。
