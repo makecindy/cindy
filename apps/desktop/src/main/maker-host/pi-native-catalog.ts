@@ -224,6 +224,8 @@ export function buildPiNativeProvidersFromConfigs(
         models: Array<{
           id: string;
           name?: string;
+          /** 用户显式命名过该行；缺省（预设名）允许活动目录覆盖。 */
+          nameExplicit?: boolean;
           contextWindow?: number;
           supportsImageInput?: boolean;
           reasoning?: boolean;
@@ -437,7 +439,11 @@ export function buildPiNativeProvidersFromConfigs(
         const resolvedProvider = runtimeModel ? runtimeProvider : catalogProvider;
         const m = resolved ? {
           ...configuredModel,
-          name: resolved.name,
+          // 用户显式命名过的模型不被活动目录改写：目录里的名字只补强未显式命名的行。
+          // 预设名不带 nameExplicit，仍走目录覆盖（#12928）。
+          name: configuredModel.nameExplicit === true || !resolved.name
+            ? configuredModel.name
+            : resolved.name,
           contextWindow: resolved.contextWindow,
           // A same-id built-in row is only a fallback. A user projection already
           // includes form edits and the higher-priority local catalog overrides.
