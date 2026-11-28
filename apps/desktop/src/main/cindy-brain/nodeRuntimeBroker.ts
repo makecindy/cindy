@@ -115,6 +115,7 @@ export interface NodeWorkerProcess {
   once(event: 'spawn', listener: () => void): this;
   once(event: 'error', listener: (error: Error) => void): this;
   once(event: 'exit', listener: (code: number | null, signal: string | null) => void): this;
+  off?(event: 'exit', listener: (code: number | null, signal: string | null) => void): this;
   kill(signal?: NodeJS.Signals): boolean;
   /**
    * 诊断-only 的 main 侧观测；不得用于放行业务请求。晚订阅只安全回放已
@@ -1423,6 +1424,7 @@ export class GhostNodeRuntimeBroker {
   /** 上层确认插件已在场(启用/更新换代/回滚完成)后解除 stop 留下的引擎启动闸。 */
   resumeHarnesses(ghostId: string): void {
     this.harnessSpawnBlocked.delete(ghostId);
+    this.cancelProcessDrainWaiters(ghostId);
   }
 
   /** 某插件当前在世的执行引擎进程数。 */
@@ -1618,6 +1620,7 @@ export class GhostNodeRuntimeBroker {
   /** 停用、更新或卸载一个插件时立即停止其名下**全部** Node 进程。 */
   stop(ghostId: string): void {
     this.stopGeneration.set(ghostId, (this.stopGeneration.get(ghostId) ?? 0) + 1);
+    this.cancelProcessDrainWaiters(ghostId);
     this.stoppedGhosts.add(ghostId);
     this.harnessSpawnBlocked.add(ghostId);
     this.deps.onStopped?.(ghostId);
@@ -1681,23 +1684,6 @@ export class GhostNodeRuntimeBroker {
     });
   }
 
-  /**
-   * stopAndWait 等不到退出而放弃更新后调用：此刻仍在世的进程全部真实退出时回调一次(已无
-   * 在世进程则在下一个微任务回调)，由上层恢复旧版本并解除引擎启动闸。期间若又开始新的停止
-   * (再次更新、停用、卸载)，由那次操作负责收尾，本次回调作废；broker 销毁后也不回调。
-   */
-  whenProcessesExited(ghostId: string, onExited: () => void): void {
-    const generation = this.stopGeneration.get(ghostId) ?? 0;
-    this.reconcileProcessExits(ghostId);
-    const exits = [...(this.liveProcesses.get(ghostId) ?? [])].map(
-      (process) => new Promise<void>((resolve) => process.once('exit', () => resolve())),
-    );
-    void Promise.all(exits).then(() => {
-      if (this.destroyed || (this.stopGeneration.get(ghostId) ?? 0) !== generation) return;
-      onExited();
-    });
-  }
-
   /** 原位更新时，进程异常或强杀后仍不退出都必须阻止目录替换。 */
   private waitForProcessExit(process: NodeWorkerProcess, ghostId: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -1731,8 +1717,74 @@ export class GhostNodeRuntimeBroker {
     });
   }
 
+  /**
+   * 注册一次性“当前停止代次下已滞留旧进程全部真实 exit”回调。
+   * 仅用于 stopAndWait 超时放弃更新后的安全恢复：
+   * - 按注册瞬间的 liveProcesses 快照等待，不受后续新起的按需 worker 拖延；
+   * - 若期间收到新的 stop() / resumeHarnesses() / destroyAll()，立即摘监听并作废；
+   * - 若调用时快照已空，立刻执行（并捕获回调异常，避免掩盖上游 stopAndWait 报错）。
+   */
+  whenProcessesExited(ghostId: string, onDrained: () => void): void {
+    if (this.destroyed) return;
+    const generation = this.stopGeneration.get(ghostId) ?? 0;
+    this.reconcileProcessExits(ghostId);
+    const pending = new Set(this.liveProcesses.get(ghostId) ?? []);
+    const invokeSafely = (): void => {
+      if (this.destroyed || (this.stopGeneration.get(ghostId) ?? 0) !== generation) return;
+      try {
+        onDrained();
+      } catch (error) {
+        this.deps.log?.warn('ghost process drain recovery callback failed', {
+          ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    if (pending.size === 0) {
+      invokeSafely();
+      return;
+    }
+    let cancelled = false;
+    const listeners = new Map<NodeWorkerProcess, () => void>();
+    const cleanup = (): void => {
+      cancelled = true;
+      for (const [proc, listener] of listeners) {
+        proc.off?.('exit', listener);
+      }
+      listeners.clear();
+      pending.clear();
+    };
+    const waiter = { cleanup };
+    const waiters = this.processDrainWaiters.get(ghostId) ?? new Set<{ cleanup: () => void }>();
+    waiters.add(waiter);
+    this.processDrainWaiters.set(ghostId, waiters);
+    for (const proc of pending) {
+      const onExit = (): void => {
+        if (cancelled) return;
+        listeners.delete(proc);
+        pending.delete(proc);
+        if (pending.size > 0) return;
+        const set = this.processDrainWaiters.get(ghostId);
+        set?.delete(waiter);
+        if (set && set.size === 0) this.processDrainWaiters.delete(ghostId);
+        invokeSafely();
+      };
+      listeners.set(proc, onExit);
+      proc.once('exit', onExit);
+    }
+  }
+
+  private cancelProcessDrainWaiters(ghostId: string): void {
+    const waiters = this.processDrainWaiters.get(ghostId);
+    if (!waiters) return;
+    this.processDrainWaiters.delete(ghostId);
+    for (const waiter of waiters) waiter.cleanup();
+  }
+
   /** 所有已创建的 OS 进程：只认真实 exit 移除，error 不算退出证明。 */
   private readonly liveProcesses = new Map<string, Set<NodeWorkerProcess>>();
+  /** stopAndWait 超时后等待旧进程快照退出的恢复句柄。 */
+  private readonly processDrainWaiters = new Map<string, Set<{ cleanup: () => void }>>();
 
   private trackLiveProcess(ghostId: string, process: NodeWorkerProcess): void {
     const processes = this.liveProcesses.get(ghostId) ?? new Set<NodeWorkerProcess>();
@@ -1860,6 +1912,9 @@ export class GhostNodeRuntimeBroker {
   /** Cindy 退出时收掉全部随包 Node 进程。 */
   destroyAll(): void {
     this.destroyed = true;
+    for (const ghostId of [...this.processDrainWaiters.keys()]) {
+      this.cancelProcessDrainWaiters(ghostId);
+    }
     for (const processes of [...this.harnessProcesses.values()]) {
       for (const harness of [...processes]) this.stopHarnessProcess(harness);
     }

@@ -457,6 +457,23 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     } finally { worker.kill(); }
   });
 
+  // #13744, unit: fake broker processes already expose off(), so exercise
+  // cancellation through the shared production adapter with a late native exit.
+  it('removes a cancelled exit listener while still reporting the process exit', () => {
+    const native = new FakeUtilityProcess();
+    const proc = adaptPluginNodeProcess(native, true);
+    const cancelled = vi.fn();
+    const remaining = vi.fn();
+    proc.once('exit', cancelled);
+    proc.once('exit', remaining);
+
+    proc.off?.('exit', cancelled);
+    native.emit('exit', 0);
+
+    expect(cancelled).not.toHaveBeenCalled();
+    expect(remaining).toHaveBeenCalledExactlyOnceWith(0, null);
+  });
+
   // #10189, unit: exercise the real adapter with OS outcomes injected. Native-event
   // tests did not cover lost exits, unknown identity or kill requests without exit.
   it.each(['EPERM', 'EACCES', 'unknown', 'alive'])('retains quota on %s until a real exit', code => {
@@ -3604,35 +3621,72 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
     } finally { broker.destroyAll(); }
   });
 
-  // Regression (2026-11-28): an automatic update whose stop wait (2.5s) expired just before a
-  // SIGKILLed engine exited left the start gate closed until the next successful update, so every
-  // task on that engine failed with "The plugin is stopping or updating" for ~20 minutes.
-  // whenProcessesExited lets the update caller restore the old version once the process is gone,
-  // and stays silent when a newer stop (retry, disable, uninstall) owns the plugin again.
-  it.each([
-    { newerStop: false, restored: true },
-    { newerStop: true, restored: false },
-  ])('reports stuck engine exits after a failed stop wait (newer stop: $newerStop)', async ({ newerStop, restored }) => {
+  // 测试价值
+  // - 生产入口与可观察结果：GhostNodeRuntimeBroker.stopAndWait 超时放弃后通过 whenProcessesExited
+  //   在全部旧引擎进程真实 exit 时解除 harnessSpawnBlocked；期间收到新的 stop()/destroyAll() 必须作废旧等待者。
+  // - Bug／规则依据：2026-11-28 实机故障（插件市场自动更新 stopAndWait 2.5s 超时后 harnessSpawnBlocked 永不解锁，
+  //   导致后续任务持续报 LAZY_CREATE_FAILED: The plugin is stopping or updating）。
+  // - 现有覆盖缺口：上述 stopAndWait 用例只在立即退出后手动调 resumeHarnesses，未覆盖超时后延迟 exit 的自动恢复与串代取消。
+  // - 最小失败输入：忽略 SIGTERM/SIGKILL 超过 PROCESS_STOP_WAIT_TIMEOUT_MS 的引擎进程；以及退出前再次 stop()/destroyAll()。
+  // - tier：unit（vi.useFakeTimers + 进程假体）。
+  it('recovers harnessSpawnBlocked via whenProcessesExited after stopAndWait timeout only when not superseded', async () => {
     vi.useFakeTimers();
     const ghost = harnessGhost();
-    const { broker } = setupHarness(ghost);
+    const spawned: Array<FakeHarnessProcess & { holdExit: boolean }> = [];
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => { throw new Error('worker must not start'); },
+      spawnChildProcess: () => {
+        const proc = Object.assign(new FakeHarnessProcess(), { holdExit: true });
+        proc.kill = () => {
+          proc.killed = true;
+          if (!proc.holdExit) queueMicrotask(() => proc.emit('exit', null, 'SIGKILL'));
+          return true;
+        };
+        spawned.push(proc);
+        queueMicrotask(() => proc.emit('spawn'));
+        return proc as unknown as NodeWorkerProcess;
+      },
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
     try {
-      const proc = await broker.spawnHarness('node-ghost', 'dsh') as unknown as FakeHarnessProcess;
-      // The engine takes the signals but only exits later.
-      vi.spyOn(proc, 'kill').mockImplementation(() => { proc.killed = true; return true; });
-      const stopping = expect(broker.stopAndWait('node-ghost')).rejects.toThrow('插件 Node 进程停止超时');
-      await vi.advanceTimersByTimeAsync(2_500);
-      await stopping;
+      await broker.spawnHarness('node-ghost', 'dsh');
+      const stopping = broker.stopAndWait('node-ghost');
+      const rejection = expect(stopping).rejects.toThrow('停止超时');
+      await vi.advanceTimersByTimeAsync(2_600);
+      await rejection;
 
-      const onExited = vi.fn(() => broker.resumeHarnesses('node-ghost'));
-      broker.whenProcessesExited('node-ghost', onExited);
-      if (newerStop) broker.stop('node-ghost');
-      proc.emit('exit', null, 'SIGKILL');
-      await vi.advanceTimersByTimeAsync(0);
+      // Old process is still alive: drain waiter must not fire yet, and spawn stays blocked.
+      const onDrained = vi.fn(() => broker.resumeHarnesses('node-ghost'));
+      broker.whenProcessesExited('node-ghost', onDrained);
+      expect(onDrained).not.toHaveBeenCalled();
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow('stopping or updating');
 
-      expect(onExited).toHaveBeenCalledTimes(restored ? 1 : 0);
-      if (restored) await expect(broker.spawnHarness('node-ghost', 'dsh')).resolves.toBeDefined();
-      else await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow('stopping or updating');
-    } finally { broker.destroyAll(); }
+      // Once the stubborn old process finally exits, recovery fires and lifts the gate.
+      spawned[0].emit('exit', null, 'SIGKILL');
+      expect(onDrained).toHaveBeenCalledTimes(1);
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).resolves.toBeDefined();
+
+      // If another stop (disable/uninstall/new update) happens before exit, prior waiter is cancelled.
+      const stopping2 = broker.stopAndWait('node-ghost');
+      const rejection2 = expect(stopping2).rejects.toThrow('停止超时');
+      await vi.advanceTimersByTimeAsync(2_600);
+      await rejection2;
+      const superseded = vi.fn(() => broker.resumeHarnesses('node-ghost'));
+      broker.whenProcessesExited('node-ghost', superseded);
+      broker.stop('node-ghost');
+      spawned[1].emit('exit', null, 'SIGKILL');
+      expect(superseded).not.toHaveBeenCalled();
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow('stopping or updating');
+
+      // Already-drained fast path runs immediately when no live processes remain.
+      const immediate = vi.fn(() => broker.resumeHarnesses('node-ghost'));
+      broker.whenProcessesExited('node-ghost', immediate);
+      expect(immediate).toHaveBeenCalledTimes(1);
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).resolves.toBeDefined();
+    } finally {
+      broker.destroyAll();
+      vi.useRealTimers();
+    }
   });
 });
