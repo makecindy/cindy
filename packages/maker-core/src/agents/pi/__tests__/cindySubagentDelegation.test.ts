@@ -447,4 +447,15 @@ describe('Pi subagent provider selection', () => {
     expect(f.tool.parameters.properties.provider.type).toBe('string');
     expect(f.tool.parameters.properties.tasks.items.properties.provider.type).toBe('string');
   });
+
+  it('registers the delegation decision rules on the tool the model actually sees', async () => {
+    // 规则只能从注册路径守：断言模型收到的 tool.description，而不是源码里出现了哪段字面量。
+    // 失效后果是模型退回「有工具就随手派」或「永不派」，所以必须落在真实 registerTool 上。
+    const f = await fixture();
+    expect(f.tool.description).toContain('bounded, self-contained, independent tasks');
+    expect(f.tool.description).toContain('task count alone is not a reason to delegate');
+    expect(f.tool.description).toContain('non-overlapping write scopes');
+    expect(f.tool.description).toContain('Return conclusions');
+    expect(f.tool.description).toContain('Children cannot spawn further subagents.');
+  });
 });
