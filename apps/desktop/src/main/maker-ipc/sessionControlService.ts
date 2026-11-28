@@ -9,6 +9,7 @@ import type {
   SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
 import { assertTaskActionCurrent, bindTaskActionInput, captureTaskActionGuard, captureTaskActionDeliveryGuard, combineInputGuards, hasTaskActionAuthorization } from './taskActionAuthorization.js';
+import type { SessionCompactReceipt } from './deferredSessionCompact.js';
 import { revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
@@ -70,6 +71,7 @@ export interface SessionRuntimeDetails extends SessionActivitySnapshot {
   effectiveProfile: SessionRuntimeProfile;
   pendingMutation: SessionRuntimePendingProjection | null;
   fallbackEnabled: boolean;
+  manualCompact?: SessionCompactReceipt;
 }
 
 export type SessionRuntimeResult =
@@ -116,6 +118,14 @@ export interface SessionControlServiceDeps {
     beforeMutation: () => Promise<void>;
     beforeDelivery?: () => Promise<void>;
   }): Promise<{ ok: true; result: unknown } | Failure<string>>;
+  deferSelfPiCompact?(params: {
+    targetSessionId: string;
+    instanceId: string;
+    signal?: AbortSignal;
+    instructions?: string;
+    beforeMutation: () => Promise<void>;
+    beforeDelivery: () => Promise<void>;
+  }): Promise<SessionCompactReceipt | null>;
   sessionExists(sessionId: string): Promise<boolean>;
   getLiveSession(sessionId: string): SessionControlLiveSession | null;
   getSessionActivitySnapshot(sessionId: string): Promise<SessionActivitySnapshot>;
@@ -188,6 +198,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       targetSessionId: string;
       action: 'pause' | 'resume' | 'retry' | 'compact';
       instructions?: string;
+      selfPiCaller?: { instanceId: string; signal?: AbortSignal };
     }): Promise<{ ok: true; result: unknown } | Failure<string>> {
       const plugin = deps.getPluginCaller?.();
       await assertTaskActionCurrent();
@@ -202,7 +213,15 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       await deps.assertExternalInputAllowed(params.targetSessionId);
       await beforeMutation();
       try {
-        return await deps.runSessionAction({ ...params, beforeMutation, beforeDelivery });
+        const { selfPiCaller, ...action } = params;
+        if (action.action === 'compact' && selfPiCaller && !plugin && deliveryGuard) {
+          const result = await deps.deferSelfPiCompact?.({
+            targetSessionId: action.targetSessionId, instructions: action.instructions,
+            ...selfPiCaller, beforeMutation, beforeDelivery,
+          });
+          if (result) return { ok: true, result };
+        }
+        return await deps.runSessionAction({ ...action, beforeMutation, beforeDelivery });
       } catch (error) {
         const code = error instanceof Error && error.name === 'NotSupportedError' && params.action === 'compact'
           ? 'UNSUPPORTED_CAPABILITY' : (error as { code?: unknown } | null)?.code;
