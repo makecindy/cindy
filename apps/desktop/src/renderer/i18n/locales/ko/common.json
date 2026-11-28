@@ -1980,7 +1980,7 @@
         "unlockButton": "잠금 해제",
         "unlockTip": "이 키를 ssh-agent에 로드하여 이후 SSH 연결마다 passphrase를 다시 묻지 않게 합니다.",
         "unlockTitle": "{{name}} 잠금 해제",
-        "unlockHint": "passphrase를 입력하면 이 키를 ssh-agent에 로드합니다. {{appName}}은(는) passphrase를 `ssh-add`에 전달한 뒤 즉시 폐기합니다.",
+        "unlockHint": "passphrase를 입력하면 이 키를 ssh-agent에 로드합니다. passphrase는 `ssh-add`에 전달한 뒤 즉시 폐기합니다.",
         "unlockSubmit": "잠금 해제",
         "generateTitle": "새 SSH 키 생성",
         "nameLabel": "이름(선택)",
