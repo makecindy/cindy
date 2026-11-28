@@ -163,6 +163,7 @@ export class SpeakerGate implements AudioGate {
   private inSpeech = false;
   private pendingStart = 0;
   private lastAcceptedEnd = -1;
+  private everRejected = false;
   // Most recent accepted speech, used as context until a window is rejected.
   private speechTail: Float32Array;
   private speechTailLength = 0;
@@ -245,6 +246,7 @@ export class SpeakerGate implements AudioGate {
     this.inSpeech = false;
     this.pendingStart = 0;
     this.lastAcceptedEnd = -1;
+    this.everRejected = false;
     this.speechTailLength = 0;
   }
 
@@ -310,12 +312,28 @@ export class SpeakerGate implements AudioGate {
     const computeMs = now() - startedAt;
     const score = embedding ? cosineSimilarity(embedding, this.enrolled) : -1;
     const continuing = this.lastAcceptedEnd >= 0 && start <= this.lastAcceptedEnd;
-    const accepted = score >= (continuing ? this.continueThreshold : this.threshold);
+    // A very short initial utterance ("好的", "发送") has no accepted speechTail
+    // yet and carries up to prerollSec of leading silence, which depresses CAM++
+    // similarity slightly and can even yield a null embedding when too few fbank
+    // frames exist. Before any rejection in this run, fail open on null
+    // embeddings (without polluting speechTail) and relax the first short window
+    // to continueThreshold; bystanders (score ~0) remain rejected.
+    const shortInitialWindow = context.length < this.minVerifySamples
+      && !this.everRejected
+      && this.speechTailLength === 0;
+    const shortUnusableFailOpen = !embedding && shortInitialWindow;
+    const effectiveThreshold = continuing || shortInitialWindow
+      ? Math.min(this.threshold, this.continueThreshold)
+      : this.threshold;
+    const accepted = shortUnusableFailOpen || score >= effectiveThreshold;
     if (accepted) {
-      this.lastAcceptedEnd = end;
-      this.appendSpeechTail(speech);
+      if (!shortUnusableFailOpen) {
+        this.lastAcceptedEnd = end;
+        this.appendSpeechTail(speech);
+      }
     } else {
       // A rejected speaker breaks continuity, including older accepted audio.
+      this.everRejected = true;
       this.lastAcceptedEnd = -1;
       this.speechTailLength = 0;
       this.muteHeld(start, end);

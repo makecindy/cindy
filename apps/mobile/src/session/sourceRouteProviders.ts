@@ -90,7 +90,7 @@ export function parseHostModelGroupsPayload(raw: unknown): HostModelGroupsPayloa
     : [];
 
   const expandedRoutes: HostExpandedRoute[] = Array.isArray(data.expandedRoutes)
-    ? data.expandedRoutes.slice(0, 128).flatMap((item): HostExpandedRoute[] => {
+    ? data.expandedRoutes.slice(0, 512).flatMap((item): HostExpandedRoute[] => {
         const entry = rec(item);
         const id = str(entry?.id, 128);
         const name = str(entry?.name, 80);
@@ -135,6 +135,17 @@ export interface MobileSourceRouteHit {
 export interface MobileSourceRouteProviders {
   providers: ProviderView[];
   hit(providerId: string | null | undefined, modelId: string): MobileSourceRouteHit | null;
+  isModelVisible(
+    providerId: string,
+    modelId: string,
+    agent: AgentKind,
+    checkMember: (member: {
+      agentDeviceId: string | null;
+      providerId: string;
+      model: CatalogModel;
+      agent: AgentKind;
+    }) => boolean,
+  ): boolean | null;
   shownAs(providerId: string | null | undefined, activeRouteId?: string | null, agentDeviceId?: string | null): string | null;
   shownModelId(providerId: string | null | undefined, modelId: string, activeRouteId?: string | null, agentDeviceId?: string | null): string | null;
   hidesRemote(agentDeviceId: string, providerId: string): boolean;
@@ -145,6 +156,8 @@ const agentOf = (kind: HostExpandedCandidate['agentKind']): AgentKind =>
   (kind === 'cc' ? 'claude-code' : kind);
 const memberKey = (agentDeviceId: string | null | undefined, providerId: string) =>
   `${agentDeviceId ?? ''}\u0000${providerId}`;
+const isProviderMemberUsable = (provider: ProviderView): boolean =>
+  provider.connected !== false && provider.suspended !== true && provider.removed !== true;
 
 export function withMobileSourceRouteProviders(
   providers: readonly ProviderView[],
@@ -157,6 +170,7 @@ export function withMobileSourceRouteProviders(
   const none: MobileSourceRouteProviders = {
     providers: [...providers],
     hit: () => null,
+    isModelVisible: () => null,
     shownAs: () => null,
     shownModelId: () => null,
     hidesRemote: () => false,
@@ -169,6 +183,7 @@ export function withMobileSourceRouteProviders(
   const byRoute = new Map<string, string>();
   const routeRepModel = new Map<string, string>();
   const candidateRepModel = new Map<string, { routeProviderId: string; modelId: string }>();
+  const routeMembers = new Map<string, { provider: ProviderView; agentDeviceId: string | undefined }[]>();
   const virtual: ProviderView[] = [];
   const usageMembers = new Map<string, { provider: ProviderView; agentDeviceId: string | null }>();
 
@@ -185,35 +200,51 @@ export function withMobileSourceRouteProviders(
     const models: Partial<Record<AgentKind, CatalogModel[]>> = {};
     for (const child of payload.expandedRoutes) {
       if (child.parent.id !== route.id || child.hidden) continue;
-      let representative: CatalogModel | null = null;
+      let picked: {
+        candidate: HostExpandedCandidate;
+        agent: AgentKind;
+        model: CatalogModel;
+        member: { provider: ProviderView; agentDeviceId: string | undefined };
+      } | null = null;
       for (const candidate of child.candidates) {
         if (candidate.off) continue;
         const agent = agentOf(candidate.agentKind);
-        const model = members
-          .find((member) => member.provider.id === candidate.providerId && (member.agentDeviceId ?? null) === (candidate.agentDeviceId ?? null))
-          ?.provider.models?.[agent]?.find((item) => item.id === candidate.model);
-        if (!model) continue;
-        (models[agent] ??= []).push({ ...model, name: child.name });
-        hits.set(`${id}\u0000${model.id}`, { route: child, candidate });
-        byRoute.set(child.id, id);
-        routeRepModel.set(child.id, model.id);
-        representative = model;
-        break;
+        const member = members.find(
+          (item) => item.provider.id === candidate.providerId && (item.agentDeviceId ?? null) === (candidate.agentDeviceId ?? null),
+        );
+        const model = member?.provider.models?.[agent]?.find((item) => item.id === candidate.model);
+        if (!member || !model) continue;
+        const usable = isProviderMemberUsable(member.provider);
+        if (usable && member.provider.hidden !== true) {
+          picked = { candidate, agent, model, member };
+          break;
+        }
+        if (!picked || (usable && !isProviderMemberUsable(picked.member.provider))) {
+          picked = { candidate, agent, model, member };
+        }
       }
-      if (representative) {
-        for (const candidate of child.candidates) {
-          if (candidate.off) continue;
-          const key = `${memberKey(candidate.agentDeviceId, candidate.providerId)}\u0000${candidate.model}`;
-          if (!candidateRepModel.has(key)) {
-            candidateRepModel.set(key, { routeProviderId: id, modelId: representative.id });
-          }
+      if (!picked) continue;
+      (models[picked.agent] ??= []).push({ ...picked.model, name: child.name });
+      hits.set(`${id}\u0000${picked.model.id}`, { route: child, candidate: picked.candidate });
+      byRoute.set(child.id, id);
+      routeRepModel.set(child.id, picked.model.id);
+      for (const candidate of child.candidates) {
+        if (candidate.off) continue;
+        const key = `${memberKey(candidate.agentDeviceId, candidate.providerId)}\u0000${candidate.model}`;
+        if (!candidateRepModel.has(key)) {
+          candidateRepModel.set(key, { routeProviderId: id, modelId: picked.model.id });
         }
       }
     }
     const agents = Object.keys(models) as AgentKind[];
     if (members.length === 0 || agents.length === 0) continue;
-    const base = members[0].provider;
-    const lead = members[0];
+    routeMembers.set(id, members);
+    const usableMembers = members.filter((member) => isProviderMemberUsable(member.provider));
+    const base = (usableMembers.find((member) => member.provider.hidden !== true)
+      ?? usableMembers[0]
+      ?? members.find((member) => member.provider.hidden !== true)
+      ?? members[0]).provider;
+    const lead = usableMembers[0] ?? members[0];
     if (lead) usageMembers.set(id, { provider: lead.provider, agentDeviceId: lead.agentDeviceId ?? null });
     virtual.push({
       ...base,
@@ -223,11 +254,25 @@ export function withMobileSourceRouteProviders(
       logoKind: base.logoKind ?? resolveProviderLogoKind(base.id, base.routing) ?? undefined,
       models: models as ProviderView['models'],
       routing: Object.assign({}, ...members.map((member) => member.provider.routing)) as ProviderView['routing'],
-      connected: true,
+      connected: usableMembers.length > 0,
+      hidden: undefined,
+      suspended: undefined,
+      removed: undefined,
       subscriptionAccountKeys: undefined,
       subscriptionPoolAlias: undefined,
+      subscriptionPoolTarget: undefined,
+      subscriptionAccountPool: undefined,
       subscriptionAccount: undefined,
       openAiAccount: undefined,
+      subscriptionReadUnavailable: undefined,
+      subscriptionReadUnreachable: undefined,
+      subscriptionModelsConfirmedAt: undefined,
+      subscriptionDisplayModels: undefined,
+      subscriptionFastPolicy: undefined,
+      modelDiscoveryFailure: undefined,
+      disableOverrideCount: undefined,
+      remoteInvocationEnabled: undefined,
+      remoteModelIds: undefined,
       ...({ group: undefined, runLocation: undefined } as object),
     });
     for (const member of members) {
@@ -248,6 +293,32 @@ export function withMobileSourceRouteProviders(
       ...providers.filter((provider) => !memberOf.has(memberKey(null, provider.id))),
     ],
     hit: (providerId, modelId) => (providerId ? hits.get(`${providerId}\u0000${modelId}`) ?? null : null),
+    isModelVisible: (providerId, modelId, agent, checkMember) => {
+      if (!isMobileSourceRouteProviderId(providerId)) return null;
+      const hit = hits.get(`${providerId}\u0000${modelId}`);
+      const members = routeMembers.get(providerId);
+      if (!hit || !members) return null;
+      let checked = false;
+      for (const candidate of hit.route.candidates) {
+        if (candidate.off) continue;
+        const candidateAgent = agentOf(candidate.agentKind);
+        if (candidateAgent !== agent) continue;
+        const member = members.find((item) =>
+          item.provider.id === candidate.providerId && (item.agentDeviceId ?? null) === (candidate.agentDeviceId ?? null));
+        const candidateModel = member?.provider.models?.[candidateAgent]?.find((item) => item.id === candidate.model);
+        if (!member || !candidateModel) continue;
+        checked = true;
+        if (checkMember({
+          agentDeviceId: candidate.agentDeviceId ?? null,
+          providerId: candidate.providerId,
+          model: candidateModel,
+          agent: candidateAgent,
+        })) {
+          return true;
+        }
+      }
+      return checked ? false : null;
+    },
     shownAs: (providerId, activeRouteId, agentDeviceId) =>
       (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(memberKey(agentDeviceId, providerId)) ?? null : null),
     shownModelId: (providerId, modelId, activeRouteId, agentDeviceId) => {

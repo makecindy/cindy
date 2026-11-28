@@ -80,7 +80,6 @@
       "dingtalk": "钉钉",
       "imessage": "iMessage"
     },
-    "modelMismatch": "本轮由 {{actual}} 作答，非所选之 {{selected}}（服务端暂降其级）",
     "copyStateCopying": "方录",
     "copyStateCopied": "已录",
     "copyStateFailed": "录之未成",
@@ -287,6 +286,7 @@
     "pendingDelivery": "待达",
     "pendingDeliveryHint": "此讯已存于机，正候电脑确认。",
     "waitingForComputer": "候机归来，即遣之",
+    "waitingForPrevious": "俟前讯",
     "waitingForNetwork": "待网络重通，即遣之",
     "queued": "方候",
     "retryImage": "重呈此图",
@@ -518,5 +518,103 @@
     "wrap": "折行",
     "lineNumbers": "行号",
     "rendered": "观文"
+  },
+  "modelMismatch": {
+    "notice": "模型供方改以 {{actual}} 应此轮（原择 {{selected}}）",
+    "noticeWithProvider": "{{provider}} 改以 {{actual}} 应此轮（原择 {{selected}}）",
+    "infoLink": "明其由",
+    "infoTitle": "何以应答模型有异",
+    "infoSummary": "Cindy 已依君所择 {{selected}} 遣此轮之请，然模型供方实以 {{actual}} 覆之。",
+    "infoSummaryWithProvider": "Cindy 已依君所择 {{selected}} 遣此轮之请，然 {{provider}} 实以 {{actual}} 覆之。",
+    "infoCausesTitle": "常见之由",
+    "infoCausePolicy": "模型触及安全或内容规约而自动回退（若干新模型遇拒答时，会改由旧版模型续答）。",
+    "infoCauseLoad": "模型供方逢高负载，暂将请求分流至备用模型。",
+    "infoCauseGateway": "第三方或自建模型网关将模型名转映至他模型。",
+    "infoActionsTitle": "处置之法",
+    "infoActionContinue": "毋须重设规制：此事仅涉此轮，后续之讯仍照请 {{selected}}。",
+    "infoActionRetry": "若此轮所覆未合意，可改易措辞再遣，或暂换他可用模型。",
+    "infoActionCheckProvider": "若累轮皆然，宜查模型供方之限额状态或网关转映规制。"
+  },
+  "errorExplain": {
+    "providerSafetyRefusal": {
+      "title": "此覆何以见阻",
+      "summary": "Cindy 已如实发君之请，然模型供方内置之安策阻此答。非 Cindy 所审，亦非本机外器所截。",
+      "summaryWithProvider": "Cindy 已如实发君之请，然 {{provider}} 内置之安策阻此答。非 Cindy 所审，亦非本机外器所截。",
+      "cause1": "所问之辞、附件或前文触及供方安全审查之规。",
+      "cause2": "模型方撰答之际，触输出安滤而中辍。",
+      "action1": "原辞再试多复见阻，宜先易辞或去触规之段再发。",
+      "action2": "若前文已触禁，可另起新事以续，或更用他型。"
+    },
+    "overload": {
+      "title": "何以示供方繁忙",
+      "summary": "模型供方今算力告急（如盛时拥塞或返 HTTP 529），暂难承此轮之请。与 Cindy 本体及君之网络无涉。",
+      "summaryWithProvider": "{{provider}} 今算力告急（如盛时拥塞或返 HTTP 529），暂难承此轮之请。与 Cindy 本体及君之网络无涉。",
+      "cause1": "盛时求者骤增，供方算力暂满。",
+      "cause2": "供方暂修或节流调度，目前无余力。",
+      "action1": "无须重启 Cindy 或更动网络，少顷点「重试」即可。",
+      "action2": "若欲立续，可暂更他型，或改取同组他源。"
+    },
+    "streamInterrupted": {
+      "title": "传覆何以中断",
+      "summary": "模型供方续传答文之际，连线忽绝。Cindy 未尝崩溃，已毕之步与前文皆存。",
+      "summaryWithProvider": "{{provider}} 续传答文之际，连线忽绝。Cindy 未尝崩溃，已毕之步与前文皆存。",
+      "cause1": "模型供方服务器撰答途中偶生异状或自绝其流。",
+      "cause2": "他家或自建转关传长文逾时而断。",
+      "action1": "径点「重试」，或发「续」字令模型接成其文。",
+      "action2": "若连轮皆断，可暂更他型，或察自建转关逾时之设。"
+    },
+    "upstreamStatus": {
+      "title": "何以返服务异常",
+      "summary": "Cindy 已达其请，然模型供方返 HTTP {{status}} 内误（无详文），乃外服之异，非 Cindy 之失。",
+      "summaryWithProvider": "Cindy 已达其请，然 {{provider}} 返 HTTP {{status}} 内误（无详文），乃外服之异，非 Cindy 之失。",
+      "cause1": "模型供方接口暂生内部故障。",
+      "cause2": "他家或自建转关转发失利，或截后自返 5xx 状码。",
+      "action1": "少顷点「重试」；若系暂震，常速复常。",
+      "action2": "若经他家或自建转关，宜察其状与日志，或先易他供方。"
+    },
+    "modelAccessDenied": {
+      "title": "何以无权用此型",
+      "summary": "模型供方拒今账号取用此型，Cindy 不能越供方之权限。",
+      "summaryWithProvider": "{{provider}} 拒今账号取用此型，Cindy 不能越 {{provider}} 之权限。",
+      "cause1": "今所订之等或 API 密钥尚未开通此型。",
+      "cause2": "组织主事限列可用之型，或所在地域暂不支持。",
+      "action1": "改择今账号已通之他型以续此事。",
+      "action2": "赴供方后台核对权限；若甫升方案，重连账号再试。"
+    },
+    "providerQuotaExceeded": {
+      "title": "何以示限额或余资不足",
+      "summary": "今所连外置模型供方账户余资或限额已罄，供方遂拒此请。与 Cindy 本身账户无涉。",
+      "summaryWithProvider": "君所连 {{provider}} 账户余资或限额已罄，{{provider}} 遂拒此请。与 Cindy 本身账户无涉。",
+      "cause1": "该供方账户预存余资用尽，或未系有效付费之法。",
+      "cause2": "此 API 密钥设消费上限，或组织限额已满。",
+      "action1": "赴对应供方计费处增资或提限后，再点「重试」。",
+      "action2": "亦可于选型处改择尚有余额之他供方以续。"
+    },
+    "usageLimit": {
+      "title": "何以届用量上限",
+      "summary": "今所连模型账号已触供方所定周期用量上限，暂难受新请。非 Cindy 所设之限。",
+      "summaryWithProvider": "今所连 {{provider}} 账号已触 {{provider}} 所定周期用量上限，暂难受新请。非 Cindy 所设之限。",
+      "cause1": "订阅账号于本期（如五时或一周）内用量已尽。",
+      "cause2": "同账号并行于多事或多器，共用同一周期限额。",
+      "action1": "俟周期复原后再试；若已启自动续行，限复即自续。",
+      "action2": "欲立续者，可暂易他型、他订账号或 API 供方。"
+    },
+    "encryptedContent": {
+      "title": "部分旧志何以难读",
+      "summary": "部分模型会密藏推演之态于旧志，唯原供方与原账号能解。易供方、换号或远端整文时，今供方或无由读旧密段。",
+      "summaryWithProvider": "部分模型会密藏推演之态于旧志，唯原供方与原账号能解。易供方、换号或远端整文时，{{provider}} 或无由读旧密段。",
+      "cause1": "中途改用他家供方或他号，新供方不能解前所加密之思。",
+      "cause2": "远端整文或跨端点转送时，密态与今目标不合。",
+      "action1": "归回原用之模型供方或账号，即可续此事。",
+      "action2": "或点「于新事中续」，Cindy 留可读之言而去难解密段，原事无损。"
+    },
+    "failedSamplingAttempt": {
+      "title": "何以犹见未竟之答",
+      "summary": "模型撰此答途中失利或见断，仅吐前半。Cindy 留已成之段以供参酌，免前思尽失。",
+      "cause1": "流传之际遇供方报误、网断或安策所截。",
+      "cause2": "此轮尚未收尾即触误或止。",
+      "action1": "视下方误报以明断因，定夺是否重试。",
+      "action2": "可径点重试或发新讯以续，已留之文仍可参照。"
+    }
   }
 }

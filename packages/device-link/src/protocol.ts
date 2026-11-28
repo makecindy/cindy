@@ -198,6 +198,9 @@ export const CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1 = 'maker-event-batch-v1'
 /** Accepts ordered current-text snapshots and history repair hints, including after backpressure. */
 export const CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1 = 'session-text-snapshot-v1';
 
+/** Accepts a structured NOT_FOUND for an exact message-ID history miss. */
+export const CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1 = 'exact-message-not-found-v1';
+
 /**
  * 控制端认识「待切到插件引擎」的意图(`agentSwitchIntent.targetAgentKind = 'acp'`，
  * docs/plans/acp-plugin-bridge.md)。被控端只把这种意图推给 / 读给声明了本能力的控制端；

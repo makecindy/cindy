@@ -103,11 +103,13 @@
     "missingRefinerTargetProvider": "O refinamento de voz está indisponível. Entre novamente em {{appName}} e tente de novo.",
     "emptyTranscript": "O reconhecimento de fala não retornou texto. Grave novamente.",
     "speakerFiltered": "Voz de outra pessoa ignorada",
+    "undoRefinement": "Restaurar original",
     "connectionInterrupted": "A conexão de voz foi interrompida. Verifique sua rede e tente novamente.",
     "recognitionStalled": "O reconhecimento de voz parou de retornar resultados. Tente novamente.",
     "transcriptKept": "{{message}} O texto reconhecido até agora foi mantido — você pode editá-lo diretamente.",
     "micPermission": "O acesso ao microfone está desativado. Permita que {{appName}} use o microfone nas configurações do sistema.",
-    "realtimeAudioUnavailable": "Esta versão não oferece suporte à entrada por voz em tempo real. Instale uma versão de teste que inclua o módulo nativo de gravação."
+    "realtimeAudioUnavailable": "Esta versão não oferece suporte à entrada por voz em tempo real. Instale uma versão de teste que inclua o módulo nativo de gravação.",
+    "retryRecognition": "Reconhecer novamente"
   },
   "incomingShare": {
     "title": "Enviar para Cindy",

@@ -52,6 +52,8 @@ import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow, installWindowZoomRestoration } from './appearance-settings-ipc.js';
 import { installWindowFullscreenStateBroadcast } from './mainWindowFullscreenStartup.js';
+import { installMacFullscreenDesyncRecovery } from './macFullscreenRecovery.js';
+import { readPluginUiRegions } from './mcp-apps/visibility.js';
 import { installWindowsTransparentTitleBar } from './windowsTransparentTitleBar.js';
 import { resolveAppThemeIsDark } from './resolved-app-theme.js';
 import { readWindowThemeSnapshot } from './window-theme-mode-store.js';
@@ -246,6 +248,15 @@ export function openSessionInNewWindow(
   installSelectionContextMenu(win);
   installWindowFullscreenStateBroadcast(win, {
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
+  });
+  installMacFullscreenDesyncRecovery(win, {
+    windowLabel: 'secondary',
+    trafficLightPosition: { x: 12, y: 16 },
+    minSize: { width: SECONDARY_WINDOW_MIN_WIDTH, height: SECONDARY_WINDOW_MIN_HEIGHT },
+    shouldShowWindowButtons: () => {
+      const regions = readPluginUiRegions(win);
+      return regions.workspace && regions.windowControls;
+    },
   });
   // E4D:副窗加入注册表,供 vibrancy 动态开关与灵动岛优先唤起已有副窗使用;关闭时移除。
   registerSecondaryAppWindow(win, {

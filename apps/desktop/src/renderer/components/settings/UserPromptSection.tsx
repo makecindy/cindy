@@ -210,7 +210,7 @@ export function UserPromptEditor({
             <VoiceInputButton {...voice.buttonProps} testId="user-prompt-voice" tipSide="top" />
           </div>
         </div>
-        <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} />
+        <FieldVoiceInputNotice {...voice.noticeProps} />
 
         {(unavailable || conflicted) && (
           <p role="status" className="text-13 text-[var(--settings-section-desc)]">

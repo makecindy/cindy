@@ -1,3 +1,4 @@
+import { remoteInputRefusal } from '@cindy/device-link';
 import {
   formatRemoteError as formatRemoteErrorShared,
   isDeviceUnresponsiveRemoteError,
@@ -181,6 +182,16 @@ export function humanizeRemoteError(error: unknown): string {
 }
 
 /**
+ * Refusals emitted before input acceptance. Keep transport failures and
+ * post-handler authorization failures in receipt reconciliation.
+ */
+export function describeOutboxEnqueueRefusal(error: unknown): string | undefined {
+  const reason = remoteInputRefusal(formatRemoteErrorShared(error));
+  if (reason === 'other') return humanizeRemoteError(error);
+  return reason ? i18n.t(`session.outbox.${reason}`) : undefined;
+}
+
+/**
  * 连接恢复中的错误不会转成用户手动处理的失败态。
  *
  * DEVICE_UNRESPONSIVE 在通用 retry helper 里故意归为 permanent（避免熔断 open
@@ -263,8 +274,8 @@ function localizedStableRemoteError(error: string): string | null {
 }
 
 function describeAgentBinaryNotReadyError(error: string): string | null {
-  return error.includes('[PRECONDITION_FAILED] binary_not_ready:')
-    ? i18n.t('deviceLink.agentAuth.proxyNotReady', { agent: 'Agent' })
+  return /^(?:\[IPC_ERROR\]\s*)?\[PRECONDITION_FAILED\]\s*binary_not_ready:/.test(error)
+    ? i18n.t('deviceLink.agentAuth.engineMissing')
     : null;
 }
 

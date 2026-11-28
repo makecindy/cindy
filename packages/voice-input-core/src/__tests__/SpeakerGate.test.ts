@@ -290,6 +290,70 @@ describe('SpeakerGate', () => {
     expect(joined(second).length).toBe(SPEAKER_GATE_SAMPLE_RATE);
     expect(joined(second).every((sample) => sample === 0)).toBe(true);
   });
+
+  // 测试价值：验证 SpeakerGate 对极短首句（无 embedding 或边界得分）宽容放行且不污染 speechTail，同时继续拦截旁观者与拒绝后的短句。
+  // 依据：语音输入优化 ⑦ 要求降低“只识别我的声音”在极短指令或前导静音占比偏高首窗上的误杀率，且不削弱旁观者拦截。
+  // 缺口：既有用例仅验证完整 1.6s 窗口与已有上下文后的短尾句，未覆盖短首句 null embedding 与边界分数放行边界。
+  // 最小输入：0.4s 首句（null embedding 或 0.35 边界分）vs 1.6s 旁观者（null embedding）与拒绝后的 0.4s 边界分短句。
+  // tier: unit，纯 FakeEngine 内存测试，耗时 <20ms。
+  it('fails open on a genuinely short first utterance when embedding is null without polluting speechTail', async () => {
+    const engine = new FakeEngine();
+    let callCount = 0;
+    engine.embed = async (samples) => {
+      callCount += 1;
+      engine.embedInputs.push(samples.slice());
+      if (callCount === 1) return null; // short first utterance cannot be embedded
+      return new Float32Array([0, 1]); // later bystander
+    };
+    const { gate, emitted, decisions } = startGate(engine);
+    // 0.4s short first utterance (< minVerifySec 1.0s), then silence, then 1.6s bystander.
+    const audio = makeAudio([[OWNER, 0.4], [0, 0.064]]);
+    pushAll(gate, audio);
+    await gate.finish();
+
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].accepted).toBe(true);
+    expect(countLevel(joined(emitted), 0, 0.4, OWNER)).toBe(Math.round(0.4 * SPEAKER_GATE_SAMPLE_RATE));
+
+    // A full-length (>=1.0s) window with null embedding is still rejected.
+    const rejectEngine = new FakeEngine();
+    rejectEngine.embed = async () => null;
+    const rejected = startGate(rejectEngine);
+    pushAll(rejected.gate, makeAudio([[BYSTANDER, 1.6]]));
+    await rejected.gate.finish();
+    expect(rejected.decisions[0].accepted).toBe(false);
+    expect(countLevel(joined(rejected.emitted), 0, 1.6, BYSTANDER)).toBe(0);
+  });
+
+  it('accepts a borderline-score short first utterance but still rejects bystanders and post-rejection short phrases', async () => {
+    // Cosine similarity 0.45 lies between continueThreshold (0.40) and threshold (0.50).
+    const borderline = new Float32Array([0.45, Math.sqrt(1 - 0.45 ** 2)]);
+    const engine = new FakeEngine();
+    engine.embed = async () => borderline;
+    const { gate, emitted, decisions } = startGate(engine);
+    pushAll(gate, makeAudio([[OWNER, 0.4]]));
+    await gate.finish();
+
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].accepted).toBe(true);
+    expect(countLevel(joined(emitted), 0, 0.4, OWNER)).toBe(Math.round(0.4 * SPEAKER_GATE_SAMPLE_RATE));
+
+    // Once any earlier speaker was rejected in the same run, a subsequent short
+    // borderline phrase must NOT get first-window leniency.
+    const afterRejectEngine = new FakeEngine();
+    let idx = 0;
+    afterRejectEngine.embed = async () => {
+      idx += 1;
+      return idx === 1 ? new Float32Array([0, 1]) : borderline;
+    };
+    const afterReject = startGate(afterRejectEngine);
+    pushAll(afterReject.gate, makeAudio([[BYSTANDER, 1.6], [0, 0.064], [BYSTANDER, 0.4]]));
+    await afterReject.gate.finish();
+
+    expect(afterReject.decisions[0].accepted).toBe(false);
+    expect(afterReject.decisions.at(-1)?.accepted).toBe(false);
+    expect(joined(afterReject.emitted).some((sample) => sample === BYSTANDER)).toBe(false);
+  });
 });
 
 class FakeEnrollmentEngine implements SpeakerEnrollmentEngine {

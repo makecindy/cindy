@@ -108,7 +108,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
     expect(onRetry).toHaveBeenCalledWith('retry-token');
   });
 
-  it('其它供应商使用通用摘要，不加余额按钮', () => {
+  it('可识别的外部供应商点名该供应商，不加 Cindy 余额按钮', () => {
     render(
       createElement(ErrorBanner, {
         error: QUOTA_ERROR,
@@ -120,7 +120,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
       }),
     );
 
-    expect(screen.getByText('providerError.QUOTA_EXCEEDED')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.providerQuotaExhaustedWithProvider')).toBeTruthy();
     expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
@@ -252,7 +252,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
       }),
     );
 
-    expect(screen.getByText('providerError.QUOTA_EXCEEDED')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.providerQuotaExhaustedWithProvider')).toBeTruthy();
     expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();

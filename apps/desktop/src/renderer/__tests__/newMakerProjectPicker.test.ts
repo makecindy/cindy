@@ -451,19 +451,16 @@ describe('Shared create project picker', () => {
     expect(pendingGoal).toBeGreaterThan(remoteClaim);
   });
 
-  it('merges branch and worktree into a single joined pill (Claude Code style)', () => {
-    // 2026-07-29 用户裁决:[⎇ 分支 │ ☑ worktree] 是一个 pill、两个点击区;
-    // 分支选择与 checkbox 独立;未勾时操作实际分支,悬停任一半区时分隔线隐去。
+  it('merges branch and worktree into a single calm capsule with progressive popover disclosure', () => {
+    // 2026-11-28 用户裁决:单胶囊 [⎇ 分支 · worktree ⌄],worktree Switch/同步状态/图解/AI整理收进弹层。
     expect(worktreeChipsSource).toContain('function BranchWorktreeChip');
     expect(worktreeChipsSource).toContain('data-testid="create-agent-branch-worktree"');
     expect(worktreeChipsSource).toContain(
       '!(disabled || branchDisabled || environmentDisabled || checkout.busy) &&',
     );
-    expect(worktreeChipsSource).toContain('aria-disabled={!branchInteractive}');
-    expect(worktreeChipsSource).toContain('tabIndex={branchInteractive ? 0 : -1}');
+    expect(worktreeChipsSource).toContain('aria-disabled={!canOpenPopover}');
+    expect(worktreeChipsSource).toContain('tabIndex={canOpenPopover ? 0 : -1}');
     expect(worktreeChipsSource).not.toMatch(/\n\s+disabled=\{!branchInteractive\}/);
-    // OFF actual branch vs ON source selection is exercised through the real
-    // component in BranchWorktreeChip.test.tsx, including stale-label refresh.
     expect(worktreeChipsSource).toContain(
       'effectiveWorktreeEnabled || branchListWanted ? baseRepo : null',
     );
@@ -471,7 +468,6 @@ describe('Shared create project picker', () => {
       'useBranches(effectiveWorktreeEnabled ? baseRepo : null',
     );
     expect(worktreeChipsSource).toContain('checked || branchSourceSelected');
-    expect(worktreeChipsSource).toContain('group-hover:opacity-0');
     expect(worktreeChipsSource).not.toContain('function BranchChip');
     expect(worktreeChipsSource).not.toContain('function WorktreeChip(');
   });
