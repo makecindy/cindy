@@ -232,8 +232,12 @@ export function SubscriptionAccountsSection({
   const pluginSignIn = usePluginEngineSignIn();
   const epoch = useRef(0);
   const retrying = useRef<true | string | undefined>(undefined);
-  const refresh = useCallback(async (retryStatus?: true | string, onError?: (key: string) => void) => {
-    if (retrying.current) return;
+  const refreshAfterRetry = useRef(false);
+  const refresh = useCallback(async function readAccounts(retryStatus?: true | string, onError?: (key: string) => void): Promise<void> {
+    if (retrying.current) {
+      if (!retryStatus) refreshAfterRetry.current = true;
+      return;
+    }
     retrying.current = retryStatus;
     const current = ++epoch.current;
     setRefreshing(true);
@@ -261,7 +265,12 @@ export function SubscriptionAccountsSection({
     } finally {
       if (current === epoch.current) {
         retrying.current = undefined;
-        setRefreshing(false);
+        if (refreshAfterRetry.current) {
+          refreshAfterRetry.current = false;
+          await readAccounts();
+        } else {
+          setRefreshing(false);
+        }
       }
     }
   }, [providerId, cache, plugin]);
@@ -286,6 +295,7 @@ export function SubscriptionAccountsSection({
     return () => {
       ++epoch.current;
       retrying.current = undefined;
+      refreshAfterRetry.current = false;
       unsubscribe();
       window.removeEventListener('focus', focus);
       window.clearInterval(timer);
