@@ -13283,6 +13283,7 @@
       "arrivalPermissions": "{{name}} ahora usa los permisos predeterminados de esta computadora.",
       "arrivalModel": "El modelo guardado de {{name}} no está disponible en esta computadora, así que usa el modelo predeterminado de esta computadora.",
       "arrivalModelSetup": "{{name}} llegó a esta computadora, pero aún no tiene un modelo utilizable. Conecta un proveedor de modelos o configura el modelo predeterminado de amigos en Proveedores → Enrutamiento inteligente.",
+      "modelSetupHint": "Este equipo no tiene un modelo disponible para amigos. Configura el modelo predeterminado en Proveedores → Enrutamiento inteligente. Cindy volverá a intentarlo automáticamente.",
       "arrivalPartialContent": "{{name}} ahora se ejecuta en esta computadora, pero algunos elementos sincronizados no se pudieron restaurar. Sus copias en la nube siguen intactas.",
       "missingProfileTitle": "¿Continuar con {{name}} usando el perfil predeterminado?",
       "missingProfileDescription": "La computadora principal original aún no subió la personalidad ni la descripción de {{name}}. Si esa computadora se reinstaló o no se puede recuperar, puedes continuar aquí con un perfil predeterminado y conservar las conversaciones y el contenido ya sincronizados.",
