@@ -806,7 +806,55 @@ it('backs off failed endpoint syncs instead of retrying on every task change', a
     await remote.sync([schedule('after-recovery')]);
     expect(listCalls()).toBe(4);
     expect(server.endpoints.has('after-recovery')).toBe(true);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(listCalls()).toBe(4);
+    // Recovery must cancel the old 4-minute timer: a fresh failure retries
+    // after the first backoff interval, not the previous timer's remainder.
+    server.unavailable = true;
+    await remote.refresh();
+    expect(listCalls()).toBe(5);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(listCalls()).toBe(6);
   } finally { remote.stop(); vi.clearAllTimers(); vi.useRealTimers(); await server.close(); }
+});
+
+// Regression value (server-channel-review: retry paths must not multiply): the existing
+// task-change test misses WebSocket pings. With a live socket and failed HTTP sync,
+// each ping used to issue another GET /endpoints. This unit test exercises the
+// production sync/ping path against the loopback fake server and counts requests.
+it('does not let GitHub health pings bypass failed endpoint sync backoff', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  const url = 'https://github.com/example/project/pull/12';
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {} });
+  const listCalls = () => server.requests.filter(route => route === 'GET /api/v1/endpoints').length;
+  const now = Date.now();
+  const clock = vi.spyOn(Date, 'now');
+  try {
+    const follow = { id: 'follow', name: 'Follow', status: 'active', recurring: true,
+      preRunHook: { command: `node gate ${url}` } } as Schedule;
+    await remote.sync([follow]);
+    await vi.waitFor(() => expect(remote.isConnected()).toBe(true));
+    await expect(remote.githubStatus()).resolves.toMatchObject({ login: 'example-user' });
+    const beforeFailure = listCalls();
+    server.unavailable = true;
+    await remote.refresh();
+    expect(listCalls()).toBe(beforeFailure + 1);
+    clock.mockReturnValue(now + 1_000_000);
+    const firstPong = new Promise<void>(resolve => server.sockets.at(-1)!.once('pong', () => resolve()));
+    server.sockets.at(-1)!.ping();
+    await firstPong;
+    await remote.sync([follow]); // waits for any health read queued by the ping
+    expect(listCalls()).toBe(beforeFailure + 1);
+    clock.mockReturnValue(now + 1_061_000);
+    const secondPong = new Promise<void>(resolve => server.sockets.at(-1)!.once('pong', () => resolve()));
+    server.sockets.at(-1)!.ping();
+    await secondPong;
+    await remote.sync([follow]);
+    expect(listCalls()).toBe(beforeFailure + 1);
+  } finally { clock.mockRestore(); remote.stop(); await server.close(); }
 });
 
 it('discards a GitHub reconciliation response after the account is paused', async () => {

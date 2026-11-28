@@ -518,7 +518,8 @@ export class ScheduleWebhookRemote {
   }
 
   private refreshGithubHealth(): void {
-    if (!this.running || !this.github.login || this.githubHealthQueued || Date.now() - this.githubCheckedAt < 60_000) return;
+    if (!this.running || !this.github.login || this.githubHealthQueued || this.backingOff()
+      || Date.now() - this.githubCheckedAt < 60_000) return;
     const generation = this.generation;
     this.githubHealthQueued = true;
     // Reuse server pings: one cached status read per minute, without re-registering
@@ -735,6 +736,12 @@ export class ScheduleWebhookRemote {
       if (generation !== this.generation) return;
       this.suspended = false;
       this.reconcileFailures = 0;
+      // A manual refresh may recover before the previous failure's timer fires.
+      // Keep a retry scheduled for a separate GitHub sync failure.
+      if (!this.githubError && this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = null;
+      }
       const latestKey = computeLocalSyncKey(this.githubPrs, this.githubAutomations, this.wanted);
       this.localSyncKey = this.loaded && !this.githubError && latestKey === snapshotSyncKey
         ? snapshotSyncKey
