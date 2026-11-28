@@ -60,10 +60,12 @@ describe('CindyVoiceRunContext', () => {
       .mockResolvedValueOnce(SESSION);
     const context = new CindyVoiceRunContext('zh-CN', 'qwen-plus');
 
-    await expect(context.createAsrConnection('qwen-asr-flash-realtime')).resolves.toEqual({
-      websocketUrl: SESSION.asr.websocketUrl,
-      authorizationToken: SESSION.ticket,
-    });
+    await expect(context.createAsrConnection('qwen-asr-flash-realtime')).resolves.toEqual(
+      expect.objectContaining({
+        websocketUrl: SESSION.asr.websocketUrl,
+        authorizationToken: SESSION.ticket,
+      }),
+    );
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(serverApiFetch).toHaveBeenCalledTimes(2);
     expect(serverApiFetch.mock.calls[0]).toEqual(serverApiFetch.mock.calls[1]);
@@ -95,10 +97,12 @@ describe('CindyVoiceRunContext', () => {
       .mockResolvedValueOnce({ ...SESSION, refiner: { enabled: false } });
     const context = new CindyVoiceRunContext('zh-CN', 'auto');
 
-    await expect(context.createAsrConnection('qwen-asr-flash-realtime')).resolves.toEqual({
-      websocketUrl: SESSION.asr.websocketUrl,
-      authorizationToken: SESSION.ticket,
-    });
+    await expect(context.createAsrConnection('qwen-asr-flash-realtime')).resolves.toEqual(
+      expect.objectContaining({
+        websocketUrl: SESSION.asr.websocketUrl,
+        authorizationToken: SESSION.ticket,
+      }),
+    );
     // The retry drops managed refinement so ASR still works...
     expect(serverApiFetch).toHaveBeenCalledTimes(2);
     const retryBody = (serverApiFetch.mock.calls[1][1] as { body: { refinerProvider?: string } }).body;
@@ -131,10 +135,12 @@ describe('CindyVoiceRunContext', () => {
     const context = new CindyVoiceRunContext('zh-CN', 'auto');
 
     await expect(context.createAsrConnection('bad-candidate')).rejects.toThrow('unsupported ASR provider');
-    await expect(context.createAsrConnection('qwen-asr-flash-realtime')).resolves.toEqual({
-      websocketUrl: SESSION.asr.websocketUrl,
-      authorizationToken: SESSION.ticket,
-    });
+    await expect(context.createAsrConnection('qwen-asr-flash-realtime')).resolves.toEqual(
+      expect.objectContaining({
+        websocketUrl: SESSION.asr.websocketUrl,
+        authorizationToken: SESSION.ticket,
+      }),
+    );
     const thirdBody = (serverApiFetch.mock.calls[2][1] as { body: { refinerProvider?: string } }).body;
     expect(thirdBody.refinerProvider).toBe('auto');
   });
@@ -153,11 +159,43 @@ describe('CindyVoiceRunContext', () => {
     const first = context.createAsrConnection('qwen-asr-flash-realtime');
     await Promise.resolve();
     const second = context.createAsrConnection('qwen-asr-flash-realtime');
-    await expect(second).resolves.toEqual({
-      websocketUrl: SESSION.asr.websocketUrl,
-      authorizationToken: SESSION.ticket,
-    });
+    await expect(second).resolves.toEqual(
+      expect.objectContaining({
+        websocketUrl: SESSION.asr.websocketUrl,
+        authorizationToken: SESSION.ticket,
+      }),
+    );
     resolveFirst(SESSION);
     await expect(first).rejects.toThrow('superseded by a newer provider attempt');
+  });
+
+  // 测试价值：验证服务端 maxSessionMs 与预留单步 Upgrade 响应头协商可动态更新会话上限与预算。
+  // 依据：长语音主动无感会话轮换与单步 WS Upgrade 预留能力要求响应头可覆盖 sessionId/maxSessionMs/maxRefineRequests。
+  // 缺口：既有用例未覆盖 maxSessionMs() 及 onUpgradeResponse 头解析与代次隔离。
+  // 最小输入：带 maxSessionMs 的会话响应与包含 X-Voice-* 响应头的 upgrade 回调。
+  // tier: unit，mock serverApiFetch，耗时 <10ms。
+  it('tracks server-reported maxSessionMs and applies single-step WS upgrade response headers', async () => {
+    serverApiFetch.mockReset();
+    serverApiFetch.mockResolvedValueOnce({
+      ...SESSION,
+      maxSessionMs: 120_000,
+    });
+    const context = new CindyVoiceRunContext('zh-CN', 'auto');
+    expect(context.maxSessionMs()).toBe(180_000);
+
+    const connection = await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.maxSessionMs()).toBe(120_000);
+    expect(connection.handshakeMode).toBe('ticket');
+
+    connection.onUpgradeResponse?.({
+      'x-voice-session-id': 'upgraded-session-9',
+      'x-voice-max-session-ms': '240000',
+      'x-voice-max-refine-requests': '10',
+    });
+    expect(context.maxSessionMs()).toBe(240_000);
+    expect(context.refineRequestBudget()).toEqual({
+      sessionKey: 'upgraded-session-9',
+      limit: 10,
+    });
   });
 });

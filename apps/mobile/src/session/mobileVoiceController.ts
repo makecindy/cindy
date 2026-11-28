@@ -1,7 +1,7 @@
 import {
   BufferedAsrProvider,
   DictationRefiner,
-  hasPcmSound,
+  RecordingSoundDetector,
   VoiceInputController,
   VoiceTimelineLogger,
   type AsrProvider,
@@ -20,7 +20,10 @@ import { i18n } from '@/i18n';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { redactMobileVoiceCredentialText } from '@/session/mobileVoiceCredentialRedaction';
 import { createMobileAsrProvider } from '@/session/mobileRealtimeAsrProvider';
-import { CINDY_MANAGED_REFINER_PROVIDER } from '@/session/mobileCindyVoiceSession';
+import {
+  CINDY_MANAGED_REFINER_PROVIDER,
+  type MobileCindyVoiceAsrConnection,
+} from '@/session/mobileCindyVoiceSession';
 import {
   appendVoiceTranscriptDraftWithRange,
   insertVoiceTranscriptDraftWithRange,
@@ -80,10 +83,7 @@ type MobileVoiceControllerOptions = {
   localVoiceInputHistory?: MobileVoiceInputHistorySource;
   asr?: AsrProvider;
   refiner?: MobileDictationRefiner | null;
-  connectionProvider?: (provider: string) => Promise<{
-    websocketUrl: string;
-    authorizationToken: string;
-  }>;
+  connectionProvider?: (provider: string) => Promise<MobileCindyVoiceAsrConnection>;
   refinerTargetProvider?: (provider: string, options?: { refreshAccessToken?: boolean }) => Promise<{
     url: string;
     authorization: string;
@@ -93,6 +93,8 @@ type MobileVoiceControllerOptions = {
    * refinement stops early enough to leave one for the final text.
    */
   refineRequestBudget?: () => RefineRequestBudget | undefined;
+  /** Maximum ASR session ceiling in ms for proactive seamless session rotation. */
+  maxSessionMs?: () => number | undefined;
   /** 托管润色 prompt cache 预热(voice-server refine-warmup);ASR 就绪后 fire-and-forget。 */
   warmRefiner?: (input: {
     system: string;
@@ -114,6 +116,7 @@ type MobileVoiceControllerOptions = {
     refinedText: string;
     start: number;
     end: number;
+    revertHistoryToRaw?: () => void;
   }) => void;
   onTimelineEvent?: (event: VoiceTimelineEvent) => void;
   /**
@@ -225,9 +228,10 @@ export function createMobileVoiceControllerSession(
   let listeningPendingCaptureLive = false;
   // Whether captured PCM ever contained sound this run. A silent recording with
   // no transcript ends at stop without waiting for the cloud handshake, final
-  // recognition or refinement. Deliberately conservative: any plausible sound
-  // (including background noise) keeps the normal path.
+  // recognition or refinement. Uses RecordingSoundDetector to adapt to steady
+  // ambient noise floors while remaining conservative for quiet speech.
   let soundDetected = false;
+  const soundDetector = new RecordingSoundDetector();
   let audioLevels = new MobileVoiceAudioLevels();
   let runStartedAt = Date.now();
   const runTag = (): string => shortRunId(controller.id);
@@ -248,6 +252,13 @@ export function createMobileVoiceControllerSession(
   let historyEntryPromise: Promise<string | null | void> | null = null;
   let pendingHistoryUpdateText: string | null = null;
   let submittedTextForLearning: string | null = null;
+  let pendingPreRefinedSubmission: {
+    draft: string;
+    rawTranscriptText: string;
+    refinedText: string;
+    start: number;
+    end: number;
+  } | null = null;
   const doneWaiters: Array<() => void> = [];
 
   const readCurrentDraft = (): string => {
@@ -415,6 +426,7 @@ export function createMobileVoiceControllerSession(
     // controller only acts on it when a refiner exists (refinement enabled).
     pauseRefinementEnabled: true,
     refineRequestBudget: options.refineRequestBudget,
+    sessionRotation: options.maxSessionMs ? { getMaxSessionMs: options.maxSessionMs } : undefined,
     retryEmptyTranscript: true,
     // A reconnect allocates another managed session and can hit the account
     // limit; report that instead of the generic "stopped receiving" failure.
@@ -445,6 +457,14 @@ export function createMobileVoiceControllerSession(
           return;
         }
         options.onStateChanged?.(nextState);
+        if (nextState === 'done' && pendingPreRefinedSubmission) {
+          const pending = pendingPreRefinedSubmission;
+          pendingPreRefinedSubmission = null;
+          options.onRefinementApplied?.({
+            ...pending,
+            revertHistoryToRaw: () => updateSubmittedHistory(pending.rawTranscriptText),
+          });
+        }
         if (nextState === 'done' || nextState === 'error') {
           doneWaiters.splice(0).forEach((resolve) => resolve());
         }
@@ -458,6 +478,19 @@ export function createMobileVoiceControllerSession(
           // A pause-time refinement may already be the submitted text; learning
           // still compares against the raw transcript it was based on.
           submittedTextForLearning = segment.basedOnText ?? text;
+          pendingPreRefinedSubmission = (
+            voiceInsertion
+            && segment.basedOnText
+            && segment.basedOnText.trim() !== text.trim()
+          )
+            ? {
+              draft: latestDraft,
+              rawTranscriptText: segment.basedOnText,
+              refinedText: text,
+              start: voiceInsertion.start,
+              end: voiceInsertion.end,
+            }
+            : null;
           recordSubmittedHistory(text);
         }
         return range;
@@ -467,16 +500,19 @@ export function createMobileVoiceControllerSession(
       // keep the current text until the validated result arrives via
       // applyRefinement instead of showing a half-finished hybrid.
       applyRefinement(range, refinedText) {
+        pendingPreRefinedSubmission = null;
         const applied = publishText(refinedText, range.segmentIds, 'immediate') !== undefined;
         if (applied) {
           updateSubmittedHistory(refinedText);
           if (voiceInsertion && submittedTextForLearning) {
+            const rawForUndo = submittedTextForLearning;
             options.onRefinementApplied?.({
               draft: latestDraft,
-              rawTranscriptText: submittedTextForLearning,
+              rawTranscriptText: rawForUndo,
               refinedText,
               start: voiceInsertion.start,
               end: voiceInsertion.end,
+              revertHistoryToRaw: () => updateSubmittedHistory(rawForUndo),
             });
           }
         }
@@ -507,9 +543,11 @@ export function createMobileVoiceControllerSession(
   return {
     async start() {
       submittedTextForLearning = null;
+      pendingPreRefinedSubmission = null;
       captureLive = false;
       listeningPendingCaptureLive = false;
       soundDetected = false;
+      soundDetector.reset();
       audioLevels = new MobileVoiceAudioLevels();
       audioStopping = null;
       captureStopRequestedAt = undefined;
@@ -550,7 +588,7 @@ export function createMobileVoiceControllerSession(
             // later flush post-stop speech/noise.
             if (captureTornDown() && !(runPhase === 'stopping' && chunk.drained)) return false;
             audioLevels.append(chunk.pcm16, chunk.trace.sampleRate ?? options.credential.asr.pcmSampleRate ?? 16_000);
-            if (!soundDetected && hasPcmSound(chunk.pcm16)) soundDetected = true;
+            if (!soundDetected && soundDetector.append(chunk.pcm16)) soundDetected = true;
             if (runPhase === 'running') markCaptureLive(chunk.trace, chunk.timestampSource);
             controller.appendAudio(chunk.pcm16, chunk.trace);
           },
@@ -639,7 +677,7 @@ export function createMobileVoiceControllerSession(
       // capture (never ASR), then drain before deciding this was a silent run.
       if (!stopAudio && !audioStopping) await audioOpening?.catch(() => undefined);
       await stopNativeCapture();
-      if (currentRunPhase() === 'stopping' && !soundDetected && !voiceInsertion) {
+      if (currentRunPhase() === 'stopping' && !soundDetected && !soundDetector.hasSound && !voiceInsertion) {
         logMobileVoice('info', 'silent recording ended without ASR finalization', {
           runId: runTag(),
           elapsedMs: Date.now() - runStartedAt,

@@ -2,6 +2,7 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { Editor } from '@tiptap/core';
 import { Schema } from '@tiptap/pm/model';
+import { history, undo as pmUndo } from '@tiptap/pm/history';
 import { EditorState, type Transaction } from '@tiptap/pm/state';
 import type { VoiceInputRendererEvent } from '@cindy/voice-input-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -268,4 +269,175 @@ describe('in-app dictionary learning after undo', () => {
       expect(mocks.advise).toHaveBeenCalledTimes(1);
     },
   );
+
+  // 测试价值：验证桌面应用内润色独立撤销（两级 Cmd/Ctrl+Z：润色后 -> ASR 原文 -> 听写前），且退回原文不产生脏词典学习、对原文的二次手修仍能正常学习。
+  // 依据：语音输入优化 ⑧ 要求应用内润色拆分为独立 ProseMirror 撤销步，同时覆盖停顿预润色（零闪烁确认）与受控文本框场景。
+  // 缺口：既有用例未挂载真实 ProseMirror history() 插件验证两级撤销及预润色首步回退原文契约。
+  // 最小输入：带真实 history() 的 ProseMirror 文档分别经历 stop 后润色与停顿预润色。
+  // tier: unit，jsdom + 假时钟，耗时 <30ms。
+  it('splits post-stop refinement into its own ProseMirror undo step without dirty dictionary learning', () => {
+    let onEvent!: (event: VoiceInputRendererEvent) => void;
+    vi.stubGlobal('electronAPI', {
+      voiceInput: {
+        onEvent: (listener: typeof onEvent) => {
+          onEvent = listener;
+          return vi.fn();
+        },
+        cancel: vi.fn().mockResolvedValue({ ok: true }),
+      },
+    });
+    const draftPlugin = createVoiceInputDraftPlugin();
+    let state = EditorState.create({
+      doc: schema.node('doc', null, [schema.node('paragraph')]),
+      plugins: [history(), draftPlugin],
+    });
+    const listeners = new Set<(payload: { transaction: Transaction }) => void>();
+    const dispatch = (transaction: Transaction) => {
+      state = state.apply(transaction);
+      listeners.forEach((listener) => listener({ transaction }));
+    };
+    const editor = {
+      get state() {
+        return state;
+      },
+      view: {
+        get state() {
+          return state;
+        },
+        dispatch,
+      },
+      isDestroyed: false,
+      commands: { focus: vi.fn() },
+      on: (_event: string, listener: (payload: { transaction: Transaction }) => void) =>
+        listeners.add(listener),
+      off: (_event: string, listener: (payload: { transaction: Transaction }) => void) =>
+        listeners.delete(listener),
+    } as unknown as Editor;
+
+    const hook = renderHook(() => useVoiceInput(editor, true));
+    const raw = '呃使用 cloud code';
+    const refined = '使用 Cloud Code。';
+    act(() => {
+      onEvent({
+        type: 'submitted',
+        runId: 'run-undo',
+        text: raw,
+        segment: { id: 'seg-1', source: 'mic', status: 'submitted', text: raw, updatedAt: Date.now() },
+      });
+    });
+    expect(state.doc.textContent).toBe(raw);
+
+    act(() => {
+      onEvent({
+        type: 'refined',
+        runId: 'run-undo',
+        text: refined,
+        segment: { id: 'seg-1', source: 'mic', status: 'refined', text: refined, updatedAt: Date.now() },
+        range: { id: 'range-1', segmentIds: ['seg-1'], startOffset: 0, endOffset: raw.length, userTouched: false },
+      });
+    });
+    expect(state.doc.textContent).toBe(refined);
+
+    // 1st Cmd/Ctrl+Z restores raw ASR text and must NOT schedule dirty dictionary learning.
+    act(() => {
+      expect(pmUndo(state, dispatch)).toBe(true);
+    });
+    expect(state.doc.textContent).toBe(raw);
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(mocks.advise).not.toHaveBeenCalled();
+
+    // 2nd Cmd/Ctrl+Z removes the entire dictation back to pre-dictation state.
+    act(() => {
+      expect(pmUndo(state, dispatch)).toBe(true);
+    });
+    expect(state.doc.textContent).toBe('');
+    hook.unmount();
+  });
+
+  it('supports two-step Cmd/Ctrl+Z on pre-refined pause confirmation via handleUndoKeyDown', () => {
+    let onEvent!: (event: VoiceInputRendererEvent) => void;
+    vi.stubGlobal('electronAPI', {
+      voiceInput: {
+        onEvent: (listener: typeof onEvent) => {
+          onEvent = listener;
+          return vi.fn();
+        },
+        cancel: vi.fn().mockResolvedValue({ ok: true }),
+      },
+    });
+    const draftPlugin = createVoiceInputDraftPlugin();
+    let state = EditorState.create({
+      doc: schema.node('doc', null, [schema.node('paragraph')]),
+      plugins: [history(), draftPlugin],
+    });
+    const listeners = new Set<(payload: { transaction: Transaction }) => void>();
+    const dispatch = (transaction: Transaction) => {
+      state = state.apply(transaction);
+      listeners.forEach((listener) => listener({ transaction }));
+    };
+    const editor = {
+      get state() {
+        return state;
+      },
+      view: {
+        get state() {
+          return state;
+        },
+        dispatch,
+      },
+      isDestroyed: false,
+      commands: { focus: vi.fn() },
+      on: (_event: string, listener: (payload: { transaction: Transaction }) => void) =>
+        listeners.add(listener),
+      off: (_event: string, listener: (payload: { transaction: Transaction }) => void) =>
+        listeners.delete(listener),
+    } as unknown as Editor;
+
+    const hook = renderHook(() => useVoiceInput(editor, true));
+    const raw = '呃使用 cloud code。';
+    const refined = '使用 Cloud Code。';
+    act(() => {
+      onEvent({
+        type: 'submitted',
+        runId: 'run-pre',
+        text: refined,
+        segment: {
+          id: 'seg-pre',
+          source: 'mic',
+          status: 'submitted',
+          text: refined,
+          basedOnText: raw,
+          updatedAt: Date.now(),
+        },
+      });
+    });
+    expect(state.doc.textContent).toBe(refined);
+    expect(hook.result.current.canUndoRefinement).toBe(true);
+
+    // 1st Cmd+Z intercepts and restores raw ASR text without dirty dictionary learning.
+    const preventDefault = vi.fn();
+    let handled = false;
+    act(() => {
+      handled = hook.result.current.handleUndoKeyDown({
+        key: 'z',
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        preventDefault,
+      });
+    });
+    expect(handled).toBe(true);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(state.doc.textContent).toBe(raw);
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(mocks.advise).not.toHaveBeenCalled();
+
+    // 2nd Cmd+Z removes the dictation cleanly.
+    act(() => {
+      expect(pmUndo(state, dispatch)).toBe(true);
+    });
+    expect(state.doc.textContent).toBe('');
+    hook.unmount();
+  });
 });

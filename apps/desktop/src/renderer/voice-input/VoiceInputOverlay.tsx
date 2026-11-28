@@ -45,9 +45,11 @@ import {
   type VoiceInputUsageOutcome,
 } from '@/hooks/useVoiceInputUsageStats';
 import {
+  createStartCueEchoTracker,
   createStartCueGate,
   playVoiceInputEndCue,
   playVoiceInputStartCue,
+  type StartCueEchoTracker,
   type StartCueGate,
 } from './startCue';
 import {
@@ -255,6 +257,7 @@ export function VoiceInputOverlay() {
   const startupTimelineRef = useRef<VoiceInputStartupTimeline | null>(null);
   const engineRef = useRef<WebMicAudioEngine | null>(null);
   const startCueGateRef = useRef<StartCueGate | null>(null);
+  const startCueEchoTrackerRef = useRef<StartCueEchoTracker>(createStartCueEchoTracker());
   const runIdRef = useRef<string | null>(null);
   const stateRef = useRef<VoiceInputState>('idle');
   const stopInFlightRef = useRef(false);
@@ -431,6 +434,7 @@ export function VoiceInputOverlay() {
   const stopEngine = useCallback(async () => {
     // The attempt is ending: nothing is left for the start cue to wait for.
     startCueGateRef.current?.abandon();
+    startCueEchoTrackerRef.current.reset();
     const engine = engineRef.current;
     engineRef.current = null;
     if (engine) await engine.stop();
@@ -849,6 +853,8 @@ export function VoiceInputOverlay() {
     // microphone is open so capture does not queue behind that (see createStartCueGate).
     const cueGate = createStartCueGate();
     startCueGateRef.current = cueGate;
+    const cueEchoTracker = createStartCueEchoTracker();
+    startCueEchoTrackerRef.current = cueEchoTracker;
 
     const capturePromise = startVoiceInputCaptureSession({
       label: 'global',
@@ -864,6 +870,7 @@ export function VoiceInputOverlay() {
       appendAudioChunk,
       onCaptureReady: () => cueGate.release(),
       onSoundDetected: () => { hasRecordingContentRef.current = true; },
+      isInStartCueEchoWindow: () => cueEchoTracker.isInEchoWindow(),
       onInterrupted: (message) => {
         if (isActiveStartAttempt(attemptId)) void failRecording(message);
       },
@@ -883,7 +890,10 @@ export function VoiceInputOverlay() {
       if (!play || !settings.playInteractionSound) return;
       if (!isActiveStartAttempt(attemptId) || stateRef.current !== 'listening') return;
       timeline.mark('start_cue_released');
-      return playVoiceInputStartCue();
+      cueEchoTracker.markCueStarted();
+      return playVoiceInputStartCue().finally(() => {
+        cueEchoTracker.markCueEnded();
+      });
     });
     // A capture that never becomes ready (denied, unavailable, cancelled) has no
     // cue to wait for; do not leave system mute waiting for the cap.

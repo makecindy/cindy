@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { hasPcmSound, StopSoundActivity } from '../pcmActivity';
+import {
+  AdaptiveVoicedDetector,
+  hasPcmSound,
+  RecordingSoundDetector,
+  StopSoundActivity,
+} from '../pcmActivity';
 
 const rate = 16000;
 const silence = (ms: number): Uint8Array => new Uint8Array(((ms * rate) / 1000) * 2);
@@ -114,5 +119,79 @@ describe('stop-time sound activity', () => {
     detector.reset();
     detector.append(silence(100));
     expect(detector.lastSoundEndMs).toBe(0);
+  });
+
+  // 测试价值：验证 StopSoundActivity、RecordingSoundDetector 与 AdaptiveVoicedDetector 在稳态底噪和提示音回声下自适应收敛，不误判静音也不漏判轻声说话。
+  // 依据：语音输入优化 ⑦ 要求底噪自适应阈值与开始提示音回声门控，解决嘈杂环境无法触发停顿润色/快速收尾以及提示音被误判为人声的问题。
+  // 缺口：既有用例仅验证安静环境下的固定阈值，未覆盖稳态底噪（咖啡馆/风扇）与提示音回声窗口。
+  // 最小输入：稳态底噪 PCM（peak 180 / RMS ~127）+ 真实语音（peak 2000）+ 短时提示音回声（200ms vs 360ms）。
+  // tier: unit，纯内存合成 PCM，耗时 <50ms。
+  it('adapts to steady ambient room noise so stop-time fast finish stops at speech end', () => {
+    const detector = new StopSoundActivity(rate);
+    // 600ms of steady cafe noise establishes the ambient floor before speech.
+    detector.append(tone(600, 180));
+    // 300ms of clear speech well above the ambient noise floor.
+    detector.append(tone(300, 2000));
+    // 2200ms of trailing steady cafe noise must NOT keep extending lastSoundEndMs.
+    detector.append(tone(2200, 180));
+
+    expect(detector.lastSoundEndMs).toBeGreaterThanOrEqual(890);
+    expect(detector.lastSoundEndMs).toBeLessThan(1200);
+  });
+});
+
+describe('RecordingSoundDetector', () => {
+  it('ignores steady background noise while detecting real speech above the floor', () => {
+    const detector = new RecordingSoundDetector();
+    for (let i = 0; i < 15; i += 1) {
+      expect(detector.append(tone(40, 180).buffer as ArrayBuffer)).toBe(false);
+    }
+    expect(detector.append(tone(40, 1800).buffer as ArrayBuffer)).toBe(true);
+    expect(detector.hasSound).toBe(true);
+  });
+
+  it('suppresses brief start-cue echo (<300ms) while accepting continuous speech (>=300ms) during the cue window', () => {
+    const detector = new RecordingSoundDetector();
+    // 200ms of speaker-to-mic start-cue bleed inside the echo window is ignored.
+    for (let i = 0; i < 5; i += 1) {
+      expect(detector.append(tone(40, 2500).buffer as ArrayBuffer, { startCueEchoWindow: true, durationMs: 40 })).toBe(false);
+    }
+    // Silence clears the echo burst streak; recording stays silent.
+    expect(detector.append(silence(80).buffer as ArrayBuffer, { startCueEchoWindow: false, durationMs: 80 })).toBe(false);
+    expect(detector.hasSound).toBe(false);
+
+    // Continuous user speech spanning >=300ms even while inside the echo window is accepted.
+    detector.reset();
+    let triggered = false;
+    for (let i = 0; i < 9; i += 1) {
+      if (detector.append(tone(40, 2500).buffer as ArrayBuffer, { startCueEchoWindow: true, durationMs: 40 })) {
+        triggered = true;
+      }
+    }
+    expect(triggered).toBe(true);
+  });
+});
+
+describe('AdaptiveVoicedDetector', () => {
+  it('raises threshold in steady noisy rooms so quiet pauses are still detected', () => {
+    const detector = new AdaptiveVoicedDetector();
+    // Feed 1.2s of steady ambient noise (RMS ~350, above the old fixed 300 floor).
+    let lastVoiced = true;
+    for (let i = 0; i < 30; i += 1) {
+      lastVoiced = detector.observe(tone(40, 500).buffer as ArrayBuffer, { durationMs: 40 }).voiced;
+    }
+    // Once calibrated to the steady room noise, noise alone is no longer classified as voiced.
+    expect(lastVoiced).toBe(false);
+    // Real speech well above the floor is immediately classified as voiced.
+    expect(detector.observe(tone(40, 2400).buffer as ArrayBuffer, { durationMs: 40 }).voiced).toBe(true);
+  });
+
+  it('lowers threshold in quiet rooms so soft speakers remain voiced', () => {
+    const detector = new AdaptiveVoicedDetector();
+    for (let i = 0; i < 15; i += 1) {
+      expect(detector.observe(silence(40).buffer as ArrayBuffer, { durationMs: 40 }).voiced).toBe(false);
+    }
+    // Soft speech (peak 280 -> RMS ~198, below the old fixed 300) is detected in a quiet room.
+    expect(detector.observe(tone(40, 280).buffer as ArrayBuffer, { durationMs: 40 }).voiced).toBe(true);
   });
 });

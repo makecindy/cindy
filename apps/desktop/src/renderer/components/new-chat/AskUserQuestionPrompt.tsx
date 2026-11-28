@@ -1000,6 +1000,10 @@ function AskUserQuestionForm({
               onCompositionStart={markStarted}
               onChange={(e) => { markStarted(); setAnswerText(e.target.value); }}
               onKeyDown={(e) => {
+                if (dictation.handleUndoKeyDown(e.nativeEvent)) {
+                  e.preventDefault();
+                  return;
+                }
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   if (isMultiSelect) handleNext();
@@ -1313,6 +1317,10 @@ function AskUserQuestionForm({
               onCompositionStart={markStarted}
               onChange={(e) => { markStarted(); setAnswerText(e.target.value); }}
               onKeyDown={(e) => {
+                if (dictation.handleUndoKeyDown(e.nativeEvent)) {
+                  e.preventDefault();
+                  return;
+                }
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   submitDirectAnswer();

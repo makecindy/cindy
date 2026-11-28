@@ -37,13 +37,19 @@ function setup(
   };
   const requests: Array<{
     text: string;
+    precedingRefinedText?: string;
     resolve: (result: RefinementResult) => void;
     reject: (error: Error) => void;
   }> = [];
   const refine = vi.fn(
-    (input: { text: string }) =>
+    (input: { text: string; precedingRefinedText?: string }) =>
       new Promise<RefinementResult>((resolve, reject) => {
-        requests.push({ text: input.text, resolve, reject });
+        requests.push({
+          text: input.text,
+          precedingRefinedText: input.precedingRefinedText,
+          resolve,
+          reject,
+        });
       }),
   );
   const drafts = vi.fn();
@@ -147,7 +153,7 @@ describe("pause refinement", () => {
     await h.controller.cancel();
   });
 
-  it("supports multiple pauses with at least a sentence added, without overlapping requests", async () => {
+  it("supports multiple pauses incrementally by freezing refined prefixes without overlapping requests", async () => {
     const h = setup();
     await h.controller.start();
     h.say("第一句。");
@@ -163,11 +169,19 @@ describe("pause refinement", () => {
     );
     await vi.advanceTimersByTimeAsync(1000);
     expect(h.refine).toHaveBeenCalledTimes(2);
-    await h.finish(1, "第一句话。第二句话。");
+    expect(h.requests[1].text).toBe("第二句。");
+    expect(h.requests[1].precedingRefinedText).toBe("第一句话。");
+    await h.finish(1, "第二句话。");
+    expect(h.drafts).toHaveBeenLastCalledWith(
+      "第一句话。第二句话。",
+      expect.objectContaining({ basedOnText: "第一句。第二句。" }),
+      "refinement",
+    );
     h.say("第一句。第二句。第三句。");
     await vi.advanceTimersByTimeAsync(2000);
     expect(h.refine).toHaveBeenCalledTimes(3);
-    expect(h.requests[2].text).toBe("第一句。第二句。第三句。");
+    expect(h.requests[2].text).toBe("第三句。");
+    expect(h.requests[2].precedingRefinedText).toBe("第一句话。 第二句话。");
     await h.controller.cancel();
   });
 
@@ -315,12 +329,15 @@ describe("pause refinement", () => {
     const stopping = h.controller.stop();
     await vi.advanceTimersByTimeAsync(500);
     await stopping;
+    // The frozen refined prefix stays visible on stop while retaining the complete raw ASR source.
     expect(h.submitted).toHaveBeenCalledWith(
-      "第一句。还有新的尾句",
-      expect.anything(),
+      "第一句话。还有新的尾句",
+      expect.objectContaining({ basedOnText: "第一句。还有新的尾句" }),
     );
-    expect(h.requests[1].text).toBe("第一句。还有新的尾句");
-    await h.finish(1, "第一句话。还有新的尾句。");
+    expect(h.requests[1].text).toBe("还有新的尾句");
+    expect(h.requests[1].precedingRefinedText).toBe("第一句话。");
+    await h.finish(1, "还有新的尾句。");
+    expect(h.applied).toHaveBeenCalledWith(expect.anything(), "第一句话。还有新的尾句。");
     expect(h.controller.currentState).toBe("done");
   });
 
@@ -360,10 +377,13 @@ describe("refine request limit", () => {
   async function speakThreeSentencesWithPauses(h: ReturnType<typeof setup>) {
     const sentences = ["第一句。", "第一句。第二句。", "第一句。第二句。第三句。"];
     for (const text of sentences) {
+      const before = h.requests.length;
       h.say(text);
       await vi.advanceTimersByTimeAsync(2000);
-      const last = h.requests.length - 1;
-      if (last >= 0 && h.requests[last].text === text) await h.finish(last, `${text}✓`);
+      if (h.requests.length > before) {
+        const last = h.requests.length - 1;
+        await h.finish(last, `${h.requests[last].text}✓`);
+      }
     }
   }
 
@@ -384,10 +404,10 @@ describe("refine request limit", () => {
     await h.controller.stop();
     expect(h.requests.map((r) => r.text)).toEqual([
       "第一句。",
-      "第一句。第二句。第三句。",
+      "第二句。第三句。",
     ]);
-    await h.finish(1, "完整结果。");
-    expect(h.applied).toHaveBeenCalledExactlyOnceWith(expect.anything(), "完整结果。");
+    await h.finish(1, "完整尾段。");
+    expect(h.applied).toHaveBeenCalledExactlyOnceWith(expect.anything(), "第一句。✓完整尾段。");
   });
 
   it("uses every allowance but one for pauses when the server reports more", async () => {
@@ -398,7 +418,7 @@ describe("refine request limit", () => {
     expect(pauseSkips(h.events)).toHaveLength(1);
     await h.controller.stop();
     expect(h.requests).toHaveLength(3);
-    expect(h.requests[2].text).toBe("第一句。第二句。第三句。");
+    expect(h.requests[2].text).toBe("第三句。");
   });
 
   it("reads the limit when a pause request is due, after the session reported it", async () => {
@@ -441,15 +461,16 @@ describe("refine request limit", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(h.requests.map((r) => r.text)).toEqual([
       "第一句。",
-      "第一句。第二句。第三句。",
+      "第二句。第三句。",
     ]);
-    await h.finish(1, "三句话。");
+    await h.finish(1, "二三句。");
     h.say("第一句。第二句。第三句。第四句。");
     await vi.advanceTimersByTimeAsync(2000);
     // The new session is now down to its reserved final request.
     expect(h.requests).toHaveLength(2);
     await h.controller.stop();
     expect(h.requests).toHaveLength(3);
+    expect(h.requests[2].text).toBe("第四句。");
   });
 
   it("keeps the stop-time speculative request within the budget", async () => {
@@ -496,5 +517,64 @@ describe("refine request limit", () => {
     expect(resolveManagedRefineRequestLimit(0)).toBe(2);
     expect(resolveManagedRefineRequestLimit(2.5)).toBe(2);
     expect(resolveManagedRefineRequestLimit("8")).toBe(2);
+  });
+
+  // 测试价值：验证多停顿增量前缀冻结、ASR 回溯撤回与超长尾段分片润色（受预算约束且透传完整原始 basedOnText）。
+  // 依据：语音输入优化 ⑤ 要求停顿润色按增量切片发送并附带 precedingRefinedText，避免长语音 O(N²) token 与输出截断，同时兼容 ASR 回改。
+  // 缺口：既有停顿润色用例未覆盖 ASR 回溯局部/全局回退与 >600 字超长尾段自动分片润色。
+  // 最小输入：2 段冻结文本发生 ASR 回溯 + 900 字多句未润色长尾段。
+  // tier: unit，假时钟纯内存执行，耗时 <30ms。
+  it("unwinds frozen refined prefix when ASR backtracks an earlier sentence", async () => {
+    const h = setup();
+    await h.controller.start();
+    h.say("今天去上海。");
+    await vi.advanceTimersByTimeAsync(2000);
+    await h.finish(0, "今天去上海。");
+
+    h.say("今天去上海。明天开会。");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.requests[1].text).toBe("明天开会。");
+    expect(h.requests[1].precedingRefinedText).toBe("今天去上海。");
+    await h.finish(1, "明天开会。");
+
+    // ASR backtracks the second sentence while keeping the first sentence intact:
+    // only the second anchor unwinds; the first remains frozen.
+    h.say("今天去上海。后天评审。");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.requests[2].text).toBe("后天评审。");
+    expect(h.requests[2].precedingRefinedText).toBe("今天去上海。");
+    await h.finish(2, "后天评审。");
+
+    await h.controller.stop();
+    expect(h.applied).toHaveBeenCalledWith(expect.anything(), "今天去上海。后天评审。");
+  });
+
+  it("chunks ultra-long unrefined tail at stop time while preserving full raw basedOnText", async () => {
+    const longRaw = Array.from(
+      { length: 32 },
+      (_, i) => `第${i + 1}条用于验证超长语音分段润色切分边界的完整测试句子。`,
+    ).join("");
+    const h = setup(true, { refineRequestBudget: budget(5) });
+    await h.controller.start();
+    h.say(longRaw);
+
+    await h.controller.stop();
+    // Chunk 1 starts cleanly bounded under 600 chars on a sentence boundary.
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0].text.length).toBeLessThanOrEqual(600);
+    expect(h.requests[0].text.endsWith("。")).toBe(true);
+    const refinedChunk1 = h.requests[0].text.replace(/测试/g, "校验");
+    await h.finish(0, refinedChunk1);
+
+    // Chunk 2 follows with precedingRefinedText context from chunk 1.
+    expect(h.requests).toHaveLength(2);
+    expect(h.requests[1].precedingRefinedText).toBeTruthy();
+    expect(h.requests[0].text + h.requests[1].text).toBe(longRaw);
+    const refinedChunk2 = h.requests[1].text.replace(/测试/g, "校验");
+    await h.finish(1, refinedChunk2);
+
+    expect(h.submitted).toHaveBeenCalledTimes(1);
+    expect(h.submitted.mock.calls[0][1].basedOnText ?? h.submitted.mock.calls[0][0]).toBe(longRaw);
+    expect(h.applied).toHaveBeenCalledWith(expect.anything(), refinedChunk1 + refinedChunk2);
   });
 });

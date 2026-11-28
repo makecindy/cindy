@@ -16,6 +16,7 @@ const log = createLogger('voice-input:cindy-voice-session');
 
 const VOICE_SESSION_REQUEST_TIMEOUT_MS = 10_000;
 const VOICE_REFINE_WARMUP_TIMEOUT_MS = 10_000;
+export const DEFAULT_CINDY_VOICE_MAX_SESSION_MS = 180_000;
 
 /**
  * Delegates refiner model choice and failover to voice-server: the session is
@@ -25,10 +26,32 @@ const VOICE_REFINE_WARMUP_TIMEOUT_MS = 10_000;
  */
 export const CINDY_MANAGED_REFINER_PROVIDER = 'auto';
 
+export type CindyVoiceAsrHandshakeMode = 'ticket' | 'direct-upgrade';
+
+/**
+ * Data-plane connection descriptor returned by CindyVoiceRunContext.
+ *
+ * Defaults to the live 2-step `ticket` handshake (`POST /api/voice/sessions` ->
+ * WS connect), while reserving optional headers, server-reported session limits,
+ * and `onUpgradeResponse` header parsing so a future voice-server single-step
+ * WS Upgrade endpoint can negotiate session metadata in one round trip with
+ * zero provider-layer rewrites.
+ */
+export type CindyVoiceAsrConnection = {
+  websocketUrl: string;
+  authorizationToken: string;
+  headers?: Record<string, string>;
+  maxSessionMs?: number;
+  handshakeMode?: CindyVoiceAsrHandshakeMode;
+  onUpgradeResponse?: (headers: Record<string, string | string[] | undefined>) => void;
+};
+
 export type CindyVoiceAsrSession = {
   sessionId: string;
   ticket: string;
   expiresAt: string;
+  /** Optional server-reported session ceiling in milliseconds (live default 180_000). */
+  maxSessionMs?: number;
   asr: {
     provider: string;
     websocketUrl: string;
@@ -43,6 +66,42 @@ export type CindyVoiceAsrSession = {
   /** `maxRefineRequests` is absent on servers from before pause-time refinement. */
   refiner: { enabled: boolean; provider?: string; maxRefineRequests?: number };
 };
+
+/** Derives a `wss://`/`ws://` origin hint from `voiceApiBaseUrl` for parallel proxy resolution. */
+export function getVoiceApiWebSocketOriginHint(): string | undefined {
+  const baseUrl = getClientEndpoint('voiceApiBaseUrl');
+  if (!baseUrl) return undefined;
+  try {
+    const parsed = new URL(baseUrl);
+    if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
+    else if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
+    else if (parsed.protocol !== 'wss:' && parsed.protocol !== 'ws:') return undefined;
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePositiveHeaderInteger(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): number | undefined {
+  const raw = headers[name] ?? headers[name.toLowerCase()];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== 'string') return undefined;
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function readHeaderString(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): string | undefined {
+  const raw = headers[name] ?? headers[name.toLowerCase()];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed || undefined;
+}
 
 /** Session-scoped bridge from Cindy identity to one-shot voice data-plane tickets. */
 export class CindyVoiceRunContext {
@@ -60,16 +119,14 @@ export class CindyVoiceRunContext {
    */
   private refinerUnavailableOnServer = false;
   private latestRefineRequestLimit = LEGACY_MANAGED_REFINE_REQUEST_LIMIT;
+  private latestMaxSessionMs = DEFAULT_CINDY_VOICE_MAX_SESSION_MS;
 
   constructor(
     private readonly sourceLanguage: string | undefined,
     private readonly refinerProvider: string | undefined,
   ) {}
 
-  async createAsrConnection(asrProvider: string): Promise<{
-    websocketUrl: string;
-    authorizationToken: string;
-  }> {
+  async createAsrConnection(asrProvider: string): Promise<CindyVoiceAsrConnection> {
     const requestGeneration = ++this.connectionGeneration;
     const allocationStartedAt = performance.now();
     let session: CindyVoiceAsrSession;
@@ -106,6 +163,9 @@ export class CindyVoiceRunContext {
     if (usedLegacyRefinerFallback) this.refinerUnavailableOnServer = true;
     this.latestSessionId = session.sessionId;
     this.latestRefineRequestLimit = resolveManagedRefineRequestLimit(session.refiner?.maxRefineRequests);
+    if (typeof session.maxSessionMs === 'number' && Number.isFinite(session.maxSessionMs) && session.maxSessionMs > 0) {
+      this.latestMaxSessionMs = Math.round(session.maxSessionMs);
+    }
     // Session allocation is the HTTP half of managed ASR startup; the socket
     // handshake that follows is timed separately by the provider. Splitting the
     // two is what makes a slow start attributable.
@@ -114,7 +174,31 @@ export class CindyVoiceRunContext {
       elapsedMs: Math.round(performance.now() - allocationStartedAt),
       legacyRefinerFallback: usedLegacyRefinerFallback,
     });
-    return { websocketUrl: session.asr.websocketUrl, authorizationToken: session.ticket };
+    return {
+      websocketUrl: session.asr.websocketUrl,
+      authorizationToken: session.ticket,
+      maxSessionMs: this.latestMaxSessionMs,
+      handshakeMode: 'ticket',
+      onUpgradeResponse: (headers) => {
+        if (requestGeneration !== this.connectionGeneration) return;
+        const headerSessionId = readHeaderString(headers, 'x-voice-session-id');
+        if (headerSessionId) this.latestSessionId = headerSessionId;
+        const headerMaxSessionMs = parsePositiveHeaderInteger(headers, 'x-voice-max-session-ms');
+        if (headerMaxSessionMs) this.latestMaxSessionMs = headerMaxSessionMs;
+        const headerMaxRefineRequests = parsePositiveHeaderInteger(headers, 'x-voice-max-refine-requests');
+        if (headerMaxRefineRequests) {
+          this.latestRefineRequestLimit = resolveManagedRefineRequestLimit(headerMaxRefineRequests);
+        }
+      },
+    };
+  }
+
+  /**
+   * Maximum ASR session duration reported by the voice service (default 180s).
+   * Used by VoiceInputController to schedule proactive seamless session rotation.
+   */
+  maxSessionMs(): number {
+    return this.latestMaxSessionMs;
   }
 
   /**

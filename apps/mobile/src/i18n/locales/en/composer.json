@@ -103,6 +103,7 @@
     "missingRefinerTargetProvider": "Voice refinement is unavailable. Sign in to {{appName}} again and retry.",
     "emptyTranscript": "Speech recognition returned no text. Record again.",
     "speakerFiltered": "Ignored someone else's voice",
+    "undoRefinement": "Restore original",
     "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
     "recognitionStalled": "Voice recognition stopped returning results. Try again.",
     "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",

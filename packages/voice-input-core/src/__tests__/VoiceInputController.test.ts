@@ -20,6 +20,7 @@ class FakeAsrProvider implements AsrProvider {
   public appended = 0;
   public flush: () => Promise<void> = async () => {};
   public recover?: () => Promise<void>;
+  public rotateSession?: () => Promise<void>;
 
   async start(): Promise<void> {
     this.callback({ type: 'connected', at: Date.now() });
@@ -1543,5 +1544,100 @@ describe('VoiceInputController', () => {
     expect(applied).toEqual([]);
     expect(controller.currentState).toBe('listening');
     expect(states.at(-1)).toBe('listening');
+  });
+
+  // 测试价值：验证长语音主动无感会话轮换在 180s 上限前自动触发（静默软轮换/硬兜底）、不消耗网络恢复预算、且软轮换瞬态失败不中断录音。
+  // 依据：语音输入优化 ⑤ 要求突破 voice-server 180s 会话硬上限，支持 3 分钟以上连续口述不中断且不耗尽 3 次断连恢复预算。
+  // 缺口：既有 VoiceInputController.test.ts 仅覆盖被动 disconnected 恢复，未覆盖主动 rotateSession 调度与预算隔离。
+  // 最小输入：maxSessionMs=10_000 的短周期模拟 4 次连续轮换 + 1 次软轮换失败不终止会话。
+  // tier: unit，假时钟纯内存执行，耗时 <50ms。
+  it('proactively rotates long sessions across multiple cycles without consuming network recovery budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const asr = new FakeAsrProvider();
+      let rotateCalls = 0;
+      let recoverCalls = 0;
+      asr.rotateSession = async () => {
+        rotateCalls += 1;
+      };
+      asr.recover = async () => {
+        recoverCalls += 1;
+      };
+      const timeline: VoiceTimelineEvent[] = [];
+      const controller = new VoiceInputController({
+        asr,
+        logger: new VoiceTimelineLogger((event) => timeline.push(event)),
+        sessionRotation: {
+          softRotateAfterMs: 30_000,
+          hardRotateAfterMs: 35_000,
+          pauseQuietMs: 1_000,
+        },
+        callbacks: {
+          onDraftChanged: () => {},
+          onSubmitted: acceptSubmission,
+        },
+      });
+
+      await controller.start();
+      // Simulate 4 full session lifetimes (> 3x MAX_NETWORK_RECOVERY_ATTEMPTS).
+      for (let cycle = 1; cycle <= 4; cycle += 1) {
+        await vi.advanceTimersByTimeAsync(32_000);
+        expect(rotateCalls).toBe(cycle);
+      }
+      expect(recoverCalls).toBe(0);
+      expect(controller.currentState).toBe('listening');
+      expect(timeline.filter((event) => event.type === 'asr_session_rotation_succeeded')).toHaveLength(4);
+
+      await controller.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps dictation alive and backs off when a soft proactive rotation fails transiently', async () => {
+    vi.useFakeTimers();
+    try {
+      const asr = new FakeAsrProvider();
+      let attempts = 0;
+      asr.rotateSession = async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('transient gateway timeout');
+      };
+      const errors: string[] = [];
+      const timeline: VoiceTimelineEvent[] = [];
+      const controller = new VoiceInputController({
+        asr,
+        logger: new VoiceTimelineLogger((event) => timeline.push(event)),
+        sessionRotation: {
+          softRotateAfterMs: 30_000,
+          hardRotateAfterMs: 38_000,
+          pauseQuietMs: 1_000,
+        },
+        callbacks: {
+          onDraftChanged: () => {},
+          onSubmitted: acceptSubmission,
+          onError: (message) => errors.push(message),
+        },
+      });
+
+      await controller.start();
+      await vi.advanceTimersByTimeAsync(32_000);
+      expect(attempts).toBe(1);
+      expect(controller.currentState).toBe('listening');
+      expect(errors).toEqual([]);
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: 'asr_session_rotation_failed',
+      }));
+
+      // After backoff (5s), the second attempt succeeds before the hard deadline.
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(attempts).toBe(2);
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: 'asr_session_rotation_succeeded',
+      }));
+      await controller.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

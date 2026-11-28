@@ -59,6 +59,8 @@ class FakeProvider implements AsrProvider {
 
   async flushAudio(): Promise<void> {}
 
+  rotateSession?: () => Promise<void>;
+
   private callback: (event: AsrEvent) => void = () => {};
 
   onEvent(callback: (event: AsrEvent) => void): void {
@@ -261,5 +263,22 @@ describe('mobileVoicePrewarm', () => {
     expect(claimed).toBeNull();
     expect(createCindyCredential).not.toHaveBeenCalled();
     expect(createProvider).not.toHaveBeenCalled();
+  });
+
+  // 测试价值：验证预热包装器 withPrewarmedStart 动态透传底层 provider.rotateSession，保证移动端预热连接在长语音期间同样支持主动无感会话轮换。
+  // 依据：语音输入优化 ⑤ 要求移动与桌面双端透传 rotateSession。
+  // 缺口：既有用例仅覆盖 recover 透传，未覆盖 rotateSession 透传。
+  // 最小输入：带/不带 rotateSession 的 FakeProvider。
+  // tier: unit，纯内存测试，耗时 <10ms。
+  it('forwards rotateSession dynamically through withPrewarmedStart when supported by the inner provider', async () => {
+    const provider = new FakeProvider();
+    const rotate = vi.fn(async () => undefined);
+    const wrapped = __testing.withPrewarmedStart(provider, Promise.resolve());
+
+    expect(wrapped.rotateSession).toBeUndefined();
+    provider.rotateSession = rotate;
+    expect(typeof wrapped.rotateSession).toBe('function');
+    await wrapped.rotateSession?.();
+    expect(rotate).toHaveBeenCalledTimes(1);
   });
 });

@@ -366,6 +366,12 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (isInputFocused() && latest.current.voice.handleUndoKeyDown(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       // Escape cancels active dictation even if focus moved to the toolbar,
       // yielding only to foreground overlays that do not contain this field.
       if (
@@ -485,6 +491,15 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
     const gesture = createComposerLongPressVoiceGesture({
       getState: () => latest.current.voice.getState(),
       prepare: () => latest.current.voice.prepare(),
+      onHoldWarmup: () => {
+        const bridge = getVoiceInputBridge();
+        if (!bridge?.prewarmOnPress) return;
+        const { language, refinementEnabled } = latest.current.settings;
+        void bridge.prewarmOnPress({ sourceLanguage: language, refinementEnabled }).catch(() => undefined);
+        return () => {
+          void bridge.discardPressPrewarm?.().catch(() => undefined);
+        };
+      },
       start: () => start(),
       stop: async () => {
         await stop();

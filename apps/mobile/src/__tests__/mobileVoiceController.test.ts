@@ -714,13 +714,13 @@ describe('mobileVoiceController', () => {
       { entryId: 'history:raw final', text: 'refined final' },
     ]);
     expect(appliedLearning).toEqual([
-      {
+      expect.objectContaining({
         draft: 'prefix\nrefined final',
         rawTranscriptText: 'raw final',
         refinedText: 'refined final',
         start: 7,
         end: 20,
-      },
+      }),
     ]);
   });
 

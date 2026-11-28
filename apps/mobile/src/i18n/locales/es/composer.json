@@ -103,6 +103,7 @@
     "missingRefinerTargetProvider": "El refinamiento de voz no está disponible. Vuelve a iniciar sesión en {{appName}} e inténtalo de nuevo.",
     "emptyTranscript": "El reconocimiento de voz no devolvió ningún texto. Vuelve a grabar.",
     "speakerFiltered": "Se ignoró la voz de otra persona",
+    "undoRefinement": "Restaurar original",
     "connectionInterrupted": "Se interrumpió la conexión de voz. Comprueba tu red y vuelve a intentarlo.",
     "recognitionStalled": "El reconocimiento de voz dejó de devolver resultados. Inténtalo de nuevo.",
     "transcriptKept": "{{message}} Se conservó el texto reconocido hasta ahora; puedes editarlo directamente.",

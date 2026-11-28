@@ -4,8 +4,10 @@ import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core'
 import type { VoiceInputRealtimeProtocolProfile } from '../../shared/voiceInputAsrProfiles.js';
 import { createLogger } from '../logger.js';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
+import type { CindyVoiceAsrConnection } from './CindyVoiceSessionClient.js';
 import { openAiLanguageCode } from './language.js';
 import { describeAsrHandshakeTraceId, describeAsrWebSocketTarget } from './voiceInputAsrConfig.js';
+import { isVoiceInputStartRateLimited } from './voiceInputStartError.js';
 import {
   VoiceInputSessionRecorder,
   isVoiceInputRecordingEnabled,
@@ -14,7 +16,9 @@ import {
 
 export type RealtimeAsrWebSocketProviderOptions = {
   accessTokenProvider: () => Promise<string | null>;
-  connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>;
+  connectionProvider?: () => Promise<CindyVoiceAsrConnection>;
+  /** Optional WS origin hint so system proxy resolution can overlap connectionProvider(). */
+  proxyHintUrl?: string;
   sourceLanguage?: string;
   model?: string;
   realtimeUrl?: string;
@@ -605,6 +609,14 @@ function buildFinishSessionMessage(protocolProfile: VoiceInputRealtimeProtocolPr
   };
 }
 
+function realtimeUrlOrigin(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
 function buildRealtimeEventId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
@@ -620,7 +632,8 @@ function buildRealtimeEventId(prefix: string): string {
  */
 export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private readonly accessTokenProvider: () => Promise<string | null>;
-  private readonly connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>;
+  private readonly connectionProvider?: () => Promise<CindyVoiceAsrConnection>;
+  private readonly proxyHintUrl?: string;
   private readonly sourceLanguage: string;
   private readonly model: string;
   private readonly realtimeUrl: string;
@@ -694,6 +707,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   constructor(options: RealtimeAsrWebSocketProviderOptions) {
     this.accessTokenProvider = options.accessTokenProvider;
     this.connectionProvider = options.connectionProvider;
+    this.proxyHintUrl = options.proxyHintUrl;
     this.onAuthorizationRejected = options.onAuthorizationRejected;
     this.sourceLanguage = options.sourceLanguage ?? 'auto';
     this.model = options.model ?? OPENAI_REALTIME_WHISPER_MODEL;
@@ -753,6 +767,10 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
 
   async start(options?: { recovering?: boolean }): Promise<void> {
     if (!options?.recovering) this.stopRequested = false;
+    const hintedOrigin = this.proxyHintUrl ? realtimeUrlOrigin(this.proxyHintUrl) : null;
+    const hintedAgentPromise = this.connectionProvider && this.proxyHintUrl
+      ? createOutboundHttpAgent(this.proxyHintUrl).catch(() => undefined)
+      : null;
     const dynamicConnection = this.connectionProvider
       ? await this.connectionProvider()
       : null;
@@ -791,13 +809,26 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       return;
     }
 
-    const wsAgent = await createOutboundHttpAgent(realtimeUrl);
+    const canReuseHint = hintedAgentPromise !== null
+      && hintedOrigin !== null
+      && realtimeUrlOrigin(realtimeUrl) === hintedOrigin;
+    const wsAgent = canReuseHint
+      ? await hintedAgentPromise
+      : await createOutboundHttpAgent(realtimeUrl);
     // 代理解析期间可能已停录:复查后再建连,不留没人回收的 socket。
     if (this.stopRequested) throw new Error('Realtime ASR connection stopped.');
     const socket = new WebSocket(realtimeUrl, {
-      headers: realtimeHeaders(accessToken, this.extraHeaders),
+      headers: realtimeHeaders(accessToken, {
+        ...this.extraHeaders,
+        ...dynamicConnection?.headers,
+      }),
       agent: wsAgent,
     });
+    if (dynamicConnection?.onUpgradeResponse) {
+      socket.once('upgrade', (response) => {
+        dynamicConnection.onUpgradeResponse?.(response.headers);
+      });
+    }
     this.socket = socket;
     this.attachSocketHandlers(socket);
 
@@ -1426,6 +1457,211 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       this.recoveryPromise = undefined;
     });
     return this.recoveryPromise;
+  }
+
+  async rotateSession(): Promise<void> {
+    if (this.stopRequested) return;
+    if (this.recoveryPromise) return this.recoveryPromise;
+    this.recoveryPromise = this.performRotateSession().finally(() => {
+      this.recoveryPromise = undefined;
+    });
+    return this.recoveryPromise;
+  }
+
+  private async performRotateSession(): Promise<void> {
+    if (this.inRecovery) return;
+    if (!this.connectionProvider) {
+      await this.performRecover();
+      return;
+    }
+    const startedAt = Date.now();
+    let standbySocket: WebSocket;
+    let standbyUrl: string;
+    try {
+      const standby = await this.openStandbySocket();
+      standbySocket = standby.socket;
+      standbyUrl = standby.url;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error ?? '');
+      if (isVoiceInputStartRateLimited(error) || /\b429\b|too many|rate.?limit|concurrency|concurrent/i.test(errorMessage)) {
+        log.info('rotateSession: standby hit concurrency rate limit, falling back to break-before-make');
+        await this.closeCurrentSocketAndWait(500);
+        await this.performRecover();
+        return;
+      }
+      throw error;
+    }
+
+    if (this.stopRequested) {
+      if (standbySocket.readyState === WebSocket.OPEN) standbySocket.close();
+      else if (standbySocket.readyState === WebSocket.CONNECTING) standbySocket.terminate();
+      return;
+    }
+
+    const oldSocket = this.socket;
+    for (const [itemId, partialText] of this.partialsByItem) {
+      if (partialText && !this.finalsByItem.has(itemId)) {
+        this.finalsByItem.set(itemId, partialText);
+      }
+    }
+    this.partialsByItem.clear();
+
+    const replay = [...this.unconfirmedAudio];
+    const replayMs = replay.reduce((sum, item) => sum + item.durationMs, 0);
+
+    this.activeRealtimeUrl = standbyUrl;
+    this.socket = standbySocket;
+    this.connected = true;
+    this.sessionReady = true;
+    this.bufferedMs = 0;
+    this.pendingCommitCount = 0;
+    this.intentionalClose = false;
+    this.audioClockAligned = false;
+    this.serverVadFinishRequested = false;
+    this.attachSocketHandlers(standbySocket);
+    this.startKeepAlive();
+    this.startHealthLog();
+
+    for (const chunk of replay) {
+      if (standbySocket.readyState !== WebSocket.OPEN) break;
+      this.sendWs(buildAppendAudioMessage(chunk.pcm.toString('base64'), this.protocolProfile));
+      this.bufferedMs += chunk.durationMs;
+      this.sentChunkCount += 1;
+      this.sentAudioMs += chunk.durationMs;
+    }
+
+    if (oldSocket && oldSocket !== standbySocket) {
+      if (oldSocket.readyState === WebSocket.OPEN) oldSocket.close();
+      else if (oldSocket.readyState === WebSocket.CONNECTING) oldSocket.terminate();
+    }
+
+    log.info('rotateSession: realtime ASR make-before-break cutover complete', {
+      preservedItems: this.itemOrder.length,
+      replayChunks: replay.length,
+      replayMs: Math.round(replayMs),
+      elapsedMs: Date.now() - startedAt,
+    });
+  }
+
+  private async openStandbySocket(): Promise<{ socket: WebSocket; url: string }> {
+    const hintedOrigin = this.proxyHintUrl ? realtimeUrlOrigin(this.proxyHintUrl) : null;
+    const hintedAgentPromise = this.connectionProvider && this.proxyHintUrl
+      ? createOutboundHttpAgent(this.proxyHintUrl).catch(() => undefined)
+      : null;
+    const dynamicConnection = await this.connectionProvider!();
+    if (this.stopRequested) throw new Error('Realtime ASR standby connection stopped.');
+    const canReuseHint = hintedAgentPromise !== null
+      && hintedOrigin !== null
+      && realtimeUrlOrigin(dynamicConnection.websocketUrl) === hintedOrigin;
+    const wsAgent = canReuseHint
+      ? await hintedAgentPromise
+      : await createOutboundHttpAgent(dynamicConnection.websocketUrl);
+    if (this.stopRequested) throw new Error('Realtime ASR standby connection stopped.');
+    const socket = new WebSocket(dynamicConnection.websocketUrl, {
+      headers: realtimeHeaders(dynamicConnection.authorizationToken, {
+        ...this.extraHeaders,
+        ...dynamicConnection.headers,
+      }),
+      agent: wsAgent,
+    });
+    if (dynamicConnection.onUpgradeResponse) {
+      socket.once('upgrade', (response) => {
+        dynamicConnection.onUpgradeResponse?.(response.headers);
+      });
+    }
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const cleanup = (): void => {
+        clearTimeout(connectTimer);
+        socket.off('open', onOpen);
+        socket.off('message', onMessage);
+        socket.off('error', onError);
+        socket.off('close', onClose);
+        socket.off('unexpected-response', onUnexpectedResponse);
+      };
+      const fail = (error: Error, terminateSocket: boolean): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (terminateSocket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+          if (socket.readyState === WebSocket.CONNECTING) socket.on('error', () => undefined);
+          socket.terminate();
+        }
+        reject(error);
+      };
+      const connectTimer = setTimeout(() => {
+        fail(new Error(`Realtime ASR standby connection timed out after ${this.connectTimeoutMs}ms`), true);
+      }, this.connectTimeoutMs);
+      const onOpen = (): void => {
+        if (settled) return;
+        if (this.stopRequested) {
+          fail(new Error('Realtime ASR standby connection opened after stop.'), true);
+          return;
+        }
+        socket.send(JSON.stringify(buildSessionUpdateMessage(
+          this.model,
+          this.sourceLanguage,
+          this.pcmSampleRate,
+          this.protocolProfile,
+        )));
+      };
+      const onMessage = (raw: WebSocket.RawData): void => {
+        if (settled) return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw.toString());
+        } catch {
+          return;
+        }
+        if (!isRecord(parsed) || typeof parsed.type !== 'string') return;
+        if (parsed.type === 'session.updated') {
+          settled = true;
+          cleanup();
+          resolve();
+        } else if (parsed.type === 'error') {
+          const message = realtimeErrorMessage(parsed, this.errorFallbackMessage, this.redactUpstreamErrors);
+          fail(new Error(message), true);
+        }
+      };
+      const onError = (error: Error): void => fail(error, false);
+      const onClose = (): void => fail(new Error('Realtime ASR standby connection closed before ready.'), false);
+      const onUnexpectedResponse = (_request: ClientRequest, response: IncomingMessage): void => {
+        response.resume();
+        const statusCode = response.statusCode ?? 'unknown';
+        fail(new Error(`Realtime ASR standby handshake failed: HTTP ${statusCode}`), true);
+      };
+      socket.once('open', onOpen);
+      socket.on('message', onMessage);
+      socket.once('error', onError);
+      socket.once('close', onClose);
+      socket.once('unexpected-response', onUnexpectedResponse);
+    });
+    return { socket, url: dynamicConnection.websocketUrl };
+  }
+
+  private async closeCurrentSocketAndWait(timeoutMs: number): Promise<void> {
+    const oldSocket = this.socket;
+    this.socket = undefined;
+    this.connected = false;
+    this.sessionReady = false;
+    this.stopKeepAlive();
+    if (!oldSocket || oldSocket.readyState === WebSocket.CLOSED) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        oldSocket.off('close', done);
+        resolve();
+      }, timeoutMs);
+      const done = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      oldSocket.once('close', done);
+      if (oldSocket.readyState === WebSocket.OPEN) oldSocket.close();
+      else {
+        oldSocket.on('error', () => undefined);
+        oldSocket.terminate();
+      }
+    });
   }
 
   private async performRecover(): Promise<void> {

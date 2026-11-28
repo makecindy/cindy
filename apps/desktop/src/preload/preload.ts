@@ -2059,6 +2059,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sourceLanguage?: string;
       refinementEnabled?: boolean;
     }): Promise<{ ok: true }> => ipcRenderer.invoke('voice-input:prewarm', payload),
+    prewarmOnPress: (payload?: {
+      sourceLanguage?: string;
+      refinementEnabled?: boolean;
+    }): Promise<{ ok: true }> => ipcRenderer.invoke('voice-input:press-prewarm', payload),
+    discardPressPrewarm: (): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('voice-input:discard-press-prewarm'),
     getBenchmarkFixtureAudio: (): Promise<
       { ok: true; path: string; wav: ArrayBuffer } | { ok: false }
     > => ipcRenderer.invoke('voice-input:benchmark-fixture-audio'),
