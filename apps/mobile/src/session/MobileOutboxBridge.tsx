@@ -509,7 +509,6 @@ export function MobileOutboxBridge() {
       });
     const off = subscribeNewSessionCreationTasks(run, "delivery");
     const offSessions = remoteSessionStore.subscribe(run);
-    const offCreationTasks = subscribeNewSessionCreationTasks(run);
     const timer = setInterval(run, 2_000);
     const appState = AppState.addEventListener("change", (state) => {
       if (state === "active") {
@@ -523,7 +522,6 @@ export function MobileOutboxBridge() {
       if (runnerRef.current === delivery) runnerRef.current = null;
       off();
       offSessions();
-      offCreationTasks();
       clearOutboxSessionHandoffs();
       clearInterval(timer);
       appState.remove();
