@@ -84,7 +84,7 @@ import { groupRepositoryKey, groupRepositoryLabel, parseGroupRepository, readGro
 
 interface Actor { id: string; kind: string; externalId: string; name: string; avatar?: string | null; avatarSource?: string | null; homeDeviceId?: string | null; disabled?: boolean }
 interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string; role: 'owner' | 'admin' | 'member' | 'guest';
-  displayName: string; avatar: string | null; groupAvatar?: string | null; defaultAvatarUrl?: string | null; nickname: string | null; ownerActorId: string; ownerName: string;
+  displayName?: string; avatar: string | null; groupAvatar?: string | null; defaultAvatarUrl?: string | null; nickname: string | null; ownerActorId: string; ownerName: string;
   orgName?: string | null; department?: string | null; departmentPath?: string | null; external?: boolean; showOrgName?: boolean;
   guestAccess: 'none' | 'chat' | 'tools'; accessRevision: number;
   /** The group's own Cindy (servers with `groupAssistant`), nobody's companion. */
@@ -180,8 +180,8 @@ interface Running {
    * exact input settles the execution. Explicit group stops cancel only that input.
    */
   inTask?: boolean;
-  /** The group's teammates, set when this reply may name another with @ (servers with groupTeammateMentions). */
-  mentionable?: BotGroupMentionMember[];
+  /** Resolve names against the joined roster before restricting wakeups to other bots. */
+  mentionable?: { members: BotGroupMentionMember[]; teammateIds: ReadonlySet<string> };
   /** A request to the group's Cindy (always `inTask`). */
   assistant?: true;
   releaseToolAuthority?: () => void;
@@ -3393,7 +3393,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           pending.payload = terminal.outcome === 'error' ? { detail: botGroupRuntimeFailureDetail(terminal.failureCode ?? 'RUNTIME_ERROR') }
             : { ...(isBotGroupNoReplyText(text) && !files.length ? {} : {
               ...(() => {
-                const named = run.mentionable?.length ? resolveBotGroupMentions(contentText, { members: run.mentionable, allLabels: [] }).botIds.filter(target => target !== run.execution.bot_id) : [];
+                const roster = run.mentionable;
+                const named = roster ? resolveBotGroupMentions(contentText, { members: roster.members, allLabels: [] })
+                  .botIds.filter(target => roster.teammateIds.has(target)) : [];
                 return named.length ? { mentions: named } : {};
               })(),
               content: [{ type: 'text', text: contentText.slice(0, 16000) || '已完成' }, ...files, botGroupProcessCard({ groupId: run.execution.conversation_id, executionId: run.execution.id, sessionId: run.sessionId, clientId: run.clientId, durationMs: run.durationMs, ...(selfDeviceId ? { deviceId: selfDeviceId } : {}) })] }),
@@ -3562,10 +3564,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   function mentionableTeammates(snapshot: Snapshot, speakerId: string) {
     if (!supportsTeammateMentions) return undefined;
-    const bots = snapshot.members.filter(member => member.kind === 'bot' && member.state === 'joined');
-    if (!bots.some(member => member.id !== speakerId)) return undefined;
-    return bots.map(member => ({ botId: member.id, name: memberName(member, snapshot.members),
-      displayName: member.displayName, nickname: member.nickname }));
+    const joined = snapshot.members.filter(member => member.state === 'joined');
+    const teammateIds = new Set(joined.filter(member => member.kind === 'bot' && member.id !== speakerId).map(member => member.id));
+    if (!teammateIds.size) return undefined;
+    const members = joined.map(member => ({ botId: member.id, name: memberName(member, snapshot.members),
+      displayName: member.displayName ?? (isAssistant(member) ? undefined : member.name), nickname: member.nickname }));
+    return { members, teammateIds };
   }
 
   /** Only inputs actually handed to this speaker can identify what their public reply answers. */
@@ -3594,11 +3598,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
 
   function replyMention(source: Message, run: Running) {
-    if (!run.mentionable || source.authorId === run.execution.bot_id) return undefined;
-    const sender = run.mentionable.find(member => member.botId === source.authorId);
+    const roster = run.mentionable;
+    if (!roster?.teammateIds.has(source.authorId)) return undefined;
+    const sender = roster.members.find(member => member.botId === source.authorId);
     if (!sender) return undefined;
     const mention = `@${sender.name}`;
-    const { botIds } = resolveBotGroupMentions(mention, { members: run.mentionable, allLabels: [] });
+    const { botIds } = resolveBotGroupMentions(mention, { members: roster.members, allLabels: [] });
     return botIds.length === 1 && botIds[0] === sender.botId ? mention : undefined;
   }
 
@@ -3667,8 +3672,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const words = bodyText(source).trim();
       let message = formatGroupRequest({ words, heading, background });
       run.mentionable = mentionableTeammates(s, execution.bot_id);
-      if (run.mentionable?.length) {
-        const peers = run.mentionable.filter(member => member.botId !== execution.bot_id);
+      if (run.mentionable) {
+        const { members, teammateIds } = run.mentionable;
+        const peers = members.filter(member => teammateIds.has(member.botId));
         const roster = untrustedJsonBlock({ replyToMention: replyMention(source, run),
           teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) });
         message = formatGroupRequest({ words, heading, background: [...background, GROUP_TEAMMATE_HANDOFF_GUIDANCE, roster] });
@@ -4171,7 +4177,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           : untrustedJsonBlock({ request: run.plan.request_text, steps: run.plan.steps, yourStep: execution.plan_step })] : []),
         ...(run.plan && !talk ? ['Earlier step artifacts come as attachments; copy needed files into your working directory before editing.'] : []),
         ...(!run.plan || talk ? ['If you have nothing useful to add, reply with exactly NO_REPLY.'] : []),
-        ...(run.mentionable?.length
+        ...(run.mentionable
           ? ['An @name in your final reply wakes that teammate; use currentRequest.replyToMention when present to return your result or blocker. Keep your reply concise.']
           : ['Keep your reply concise. Do not call another participant just to reply.']),
       ].filter(Boolean).join('\n');
