@@ -317,8 +317,8 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
-  /** Synchronous executor facts; no per-message catalog probes or database reads. */
-  readDispatchRoute?(session: MakerSendTransactionSession, scheduled: boolean): import('@cindy/maker-shared/message-source').MessageDispatchRoute;
+  /** Synchronous executor facts; returns a snapshot only on fallback mismatch. */
+  readDispatchRoute?(session: MakerSendTransactionSession, scheduled: boolean): import('@cindy/maker-shared/message-source').MessageDispatchRoute | undefined;
   onUserProviderDispatch?(sessionId: string): void;
   onManualPiDispatch?(sessionId: string): void;
   /** Read launcher preferences at dispatch time, not at module initialization. */
@@ -2227,15 +2227,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 try {
                   // The first attempt already persisted this input. Only the
                   // new runtime's dispatch preparation needs to run again.
-                  if (!recovery) await deps.createDbMessage(
+                  if (!recovery) {
+                    const dispatchRoute = deps.readDispatchRoute?.(
+                      sess,
+                      (persistUserMessage.origin ?? so.origin)?.kind === 'scheduler',
+                    );
+                    await deps.createDbMessage(
                     sessionId,
                     {
                       clientId: persistUserMessage.clientId,
                       role: 'user',
                       content: persistUserMessage.content,
                       agentMeta: {
-                        ...(deps.readDispatchRoute ? { dispatchRoute: deps.readDispatchRoute(sess,
-                          (persistUserMessage.origin ?? so.origin)?.kind === 'scheduler') } : {}),
+                        ...(dispatchRoute ? { dispatchRoute } : {}),
                         ...(persistUserMessage.botTaskCoordination ? { botTaskCoordinationInput: persistUserMessage.botTaskCoordination } : {}),
                         ...(persistUserMessage.sharedTaskAuthor ? { sharedTaskAuthor: persistUserMessage.sharedTaskAuthor } : {}),
                         // 来源标签数据(只用于归属展示,不是权限判据)。
@@ -2292,6 +2296,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         }
                       : undefined,
                   );
+                  }
                 } catch (err) {
                   persistUserMessage.onPersistFailed?.();
                   throw err;

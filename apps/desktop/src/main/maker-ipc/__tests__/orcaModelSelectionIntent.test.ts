@@ -309,7 +309,7 @@ describe('complete selection commit boundaries', () => {
     acceptSessionRuntimeMutation({ sessionId: id, source: 'agent', profile, deferred: false });
     const persist = vi.fn(async (_id: string, patch: object) => Object.assign(saved, patch));
     const setProvider = vi.fn();
-    const bindings = { getSessionRowSnapshotStrict: async () => ({ ...saved }), dbToMakerAgentKind: (kind: string) => kind,
+    const bindings = { getSessionRowSnapshotStrict: async () => ({ ...saved }), dbToMakerEngineKind: (kind: string) => kind,
       captureSessionRuntimeControlOwnerEpoch, sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot,
       remapSessionRuntimeProvider, persistSessionFields: persist, setSessionProvider: setProvider };
     try {

@@ -48,6 +48,7 @@ import { nextAskUserVoiceShortcutOrder, registerAskUserVoiceShortcutCard } from 
 import { CreateAgentSendIcon } from './SendButton';
 import { useAnswerComposerExpanded } from './useAnswerComposerExpanded';
 import { useAskUserDictation } from './useAskUserDictation';
+import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import { parseVoiceQuestionSelection, type VoiceQuestionBridge, type VoiceQuestionTarget } from './voiceQuestionSelection';
 
 const ASK_USER_ANSWER_MAX_HEIGHT_PX = 148;
@@ -798,7 +799,15 @@ function AskUserQuestionForm({
     </div>
   ) : null;
   // A companion call's question bridge shows this on the call bar instead.
-  const speakerFilteredNotice = !voiceBridge && dictation.speakerFiltered ? (
+  const speakerFilteredNotice = !voiceBridge && dictation.lastError && dictation.canRetryRecognition ? (
+    <VoiceInputStatusNotice
+      message={dictation.lastError}
+      actionLabel={t('voiceInputOverlay.retryRecognition')}
+      onAction={() => { dictationRef.current.retryRecognition(); }}
+      actionDisabled={dictation.isBusy || voiceSubmitting}
+      className="self-start"
+    />
+  ) : !voiceBridge && dictation.speakerFiltered ? (
     <p role="status" className="px-1 text-12 leading-5 text-[var(--text-secondary)]">
       {t('voiceInputOverlay.speakerFiltered')}
     </p>
@@ -1000,6 +1009,10 @@ function AskUserQuestionForm({
               onCompositionStart={markStarted}
               onChange={(e) => { markStarted(); setAnswerText(e.target.value); }}
               onKeyDown={(e) => {
+                if (dictation.handleUndoKeyDown(e.nativeEvent)) {
+                  e.preventDefault();
+                  return;
+                }
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   if (isMultiSelect) handleNext();
@@ -1313,6 +1326,10 @@ function AskUserQuestionForm({
               onCompositionStart={markStarted}
               onChange={(e) => { markStarted(); setAnswerText(e.target.value); }}
               onKeyDown={(e) => {
+                if (dictation.handleUndoKeyDown(e.nativeEvent)) {
+                  e.preventDefault();
+                  return;
+                }
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   submitDirectAnswer();

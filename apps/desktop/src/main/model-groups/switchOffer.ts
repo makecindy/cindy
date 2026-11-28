@@ -7,6 +7,8 @@
  */
 import {
   modelGroupAutoSwitchFor,
+  modelGroupCandidateAccountId,
+  modelGroupCandidateBaseKey,
   type ModelGroupResolveRequest,
   modelGroupCandidateKey,
   type ModelGroupAgentKind,
@@ -91,13 +93,20 @@ export async function computeModelGroupSwitchOffer(
   const currentLocation = recovery?.current.agentDeviceId !== undefined
     ? (recovery.current.agentDeviceId || undefined)
     : rowLocation;
-  const current = recovery?.current
+  const currentBase = recovery?.current
     ? { ...recovery.current, agentDeviceId: currentLocation }
     : { agentKind: row.agentKind, providerId: row.providerId, model: row.model, agentDeviceId: rowLocation };
+  const currentBaseKey = modelGroupCandidateKey(currentBase);
+  const storedBaseMatch = !!storedBinding && modelGroupCandidateBaseKey(storedBinding.pickedKey) === currentBaseKey;
+  const currentAccountId = storedBaseMatch ? modelGroupCandidateAccountId(storedBinding.pickedKey) : undefined;
+  const current = { ...currentBase, ...(currentAccountId ? { accountId: currentAccountId } : {}) };
   const currentKey = modelGroupCandidateKey(current);
 
   const bindingMatchesCurrent = !!storedBinding && (
-    currentKey === storedBinding.pickedKey || !!recovery?.visited.has(storedBinding.pickedKey)
+    currentKey === storedBinding.pickedKey
+    || storedBaseMatch
+    || !!recovery?.visited.has(storedBinding.pickedKey)
+    || !!recovery?.visited.has(modelGroupCandidateBaseKey(storedBinding.pickedKey))
   );
   const selection = bindingMatchesCurrent
     ? storedBinding.selection
@@ -126,7 +135,8 @@ export async function computeModelGroupSwitchOffer(
     candidates: route.candidates.map((candidate) => {
       const key = modelGroupCandidateKey(candidate);
       const sameLocation = (candidate.agentDeviceId || undefined) === currentLocation;
-      const failed = key === currentKey || (accountUnavailable && sameLocation && candidate.providerId === current.providerId);
+      const sameAccount = !currentAccountId || !candidate.accountId || candidate.accountId === currentAccountId;
+      const failed = key === currentKey || (accountUnavailable && sameLocation && candidate.providerId === current.providerId && sameAccount);
       if (failed) recovery?.recordUnavailable(candidate);
       const locationBlocked = (!!sshHostId || recovery?.scheduled === true) && !!candidate.agentDeviceId;
       return locationBlocked || failed || recovery?.visited.has(key)
@@ -205,6 +215,7 @@ export async function computeModelGroupSwitchOffer(
     providerId: candidate.providerId,
     model: candidate.model,
     ...(candidate.agentDeviceId ? { agentDeviceId: candidate.agentDeviceId } : {}),
+    ...(candidate.accountId ? { accountId: candidate.accountId } : {}),
     modelName: entry.modelName,
     sourceName: entry.sourceName,
     ...(recovery && facts[picked.index].effort ? { effort: facts[picked.index].effort } : {}),

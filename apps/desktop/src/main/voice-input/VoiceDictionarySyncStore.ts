@@ -48,6 +48,7 @@ import {
   type DictionaryIncarnation,
   type DictionaryRecord,
   type DictionarySuppression,
+  type DictionarySuppressionEvent,
   type MutationResult,
   type SyncAliasState,
   type VoiceDictionarySyncState,
@@ -572,6 +573,15 @@ function adoptDictionaryMaps(state: VoiceDictionarySyncState): VoiceDictionarySy
   const suppressed = createDictionaryMap<DictionarySuppression>();
   for (const [key, value] of Object.entries(state.suppressed)) suppressed[key] = { ...value };
   const adopted: VoiceDictionarySyncState = { version: state.version, records, suppressed };
+  if (state.suppressionEvents !== undefined) {
+    const suppressionEvents = createDictionaryMap<DictionarySuppressionEvent>();
+    for (const [key, event] of Object.entries(state.suppressionEvents)) {
+      suppressionEvents[key] = { ...event };
+    }
+    if (Object.keys(suppressionEvents).length > 0) {
+      adopted.suppressionEvents = suppressionEvents;
+    }
+  }
   if (state.mutationVector !== undefined) {
     adopted.mutationVector = createDictionaryMap<string>();
     for (const [nodeId, stamp] of Object.entries(state.mutationVector)) adopted.mutationVector[nodeId] = stamp;

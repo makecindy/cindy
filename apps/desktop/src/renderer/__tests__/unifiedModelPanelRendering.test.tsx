@@ -1103,6 +1103,29 @@ describe('统一模型选择器面板', () => {
     expect(within(await screen.findByTestId('unified-model-config-flyout')).getByText('Opus 5')).toBeTruthy();
   });
 
+  // Unit: the route uses this same panel but has no writable model preferences.
+  // A two-Harness model must submit the selected wire route from the flyout.
+  it('selects a Harness for a route without changing Session model preferences', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const select = vi.fn().mockResolvedValue(true);
+    const dismiss = vi.fn();
+    renderPanel({ configurationEnabled: 'harness', unifiedSelectionPolicy: 'official',
+      vendorKey: 'cc', modelId: 'gpt-5.5', currentProviderId: 'xd',
+      onUnifiedSelect: select, onDismiss: dismiss });
+    const flyout = await openRowFlyout('GPT-5.5');
+    const cc = flyout.querySelector('[data-engine-capsule="cc"]');
+    expect(cc?.getAttribute('aria-pressed')).toBe('true');
+    expect(flyout.querySelector('[role="slider"], [data-fast-toggle]')).toBeNull();
+    expect(within(flyout).queryByRole('button', { name: '存为收藏' })).toBeNull();
+    await act(async () => fireEvent.click(flyout.querySelector('[data-engine-capsule="codex"]')!));
+    expect(select).toHaveBeenCalledOnce();
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({
+      engine: 'codex', providerId: 'xd', modelId: 'gpt-5.5',
+    }));
+    expect(dismiss).toHaveBeenCalledOnce();
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+  });
+
   it('浮层里切引擎 → 写 override,行三元组与档位集合当场跟着变', async () => {
     renderPanel();
     const flyout = await openRowFlyout('GPT-5.5');

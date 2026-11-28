@@ -50,6 +50,7 @@ export function createPendingSessionRuntimeControlSettlement({
           effortExplicit: pending.profile.effort !== null,
           fastExplicit: true,
           routeExplicit: isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation),
+          ...(pending.routeChangeAttribution ? { routeChangeAttribution: pending.routeChangeAttribution } : {}),
         };
         let result = await applySessionRuntimeSelection(
           sessionId,

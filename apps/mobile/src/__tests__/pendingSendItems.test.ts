@@ -173,6 +173,17 @@ describe('reply before user echo', () => {
     expect(visible[1]).toBe(initial[1]);
   });
 
+  it('keeps a later attachment in place without a sending or upload spinner', () => {
+    const pending = build({ outbox: [
+      outboxItem('head', { historyConfirmation: 'unconfirmed' }),
+      outboxItem('next', { waitingForPrevious: true, attachmentCount: 1,
+        thumbnails: [{ key: 'photo', uri: null, ossRef: null, uploading: true }] }),
+    ] });
+    expect(pending.map((item) => item.clientId)).toEqual(['head', 'next']);
+    expect(pending[1]).toMatchObject({ phase: 'waiting', waitingFor: 'previous', thumbs: [{ uploading: false }] });
+    expect(pendingSendSpins(pending[1].phase)).toBe(false);
+  });
+
   it('invalidates the streaming prefix when a local user introduces a new turn boundary', () => {
     const old = [row('old-user', 'user', 0), { ...row('old-thinking', 'thinking', 1), content: { text: 'Old thought' } }];
     const previous = buildMobileStreamingRenderWindow({

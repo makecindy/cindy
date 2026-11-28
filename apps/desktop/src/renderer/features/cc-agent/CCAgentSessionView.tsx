@@ -2722,6 +2722,9 @@ function CCAgentSessionContent({
       : usageAccount.kind === 'task'
         ? (remoteDeviceId ?? null)
         : null;
+  // A third computer viewing a task with a borrowed engine cannot identify itself as its owner.
+  const borrowedPluginEngine = usageAccount.kind === 'device' && !remoteDeviceId;
+  const pluginUsageSessionId = usageAccount.kind === 'task' || borrowedPluginEngine ? sessionId : undefined;
   const usageCatalogue = taskAccountDeviceId
     ? (taskAccountDeviceId === pluginEngineAgentDeviceId && agentDevicePluginEngines !== undefined
       ? agentDevicePluginEngines
@@ -6383,7 +6386,10 @@ function CCAgentSessionContent({
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
       readOnly={readOnly || queueAbortPending}
       simplifiedBotConversation={Boolean(botChatIdentity)} localSend={isLocalUserSend(entry.clientId)} onEdit={beginQueueComposerEdit}
-      onSteer={steerUnsupported ? undefined : steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
+      onSteer={steerUnsupported ? undefined : steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem}
+      onRetryDelivery={(clientId) => { if (sessionId) void makerChatStore.retryRemotePendingMessage(sessionId, clientId); }}
+      onDiscardDelivery={(clientId, delivery) => { if (sessionId) makerChatStore.discardRemotePendingMessage(sessionId, clientId, delivery); }}
+    /> : null;
   };
   const showErrorTailBanner = !readOnly && !!errorTailMsg && !errorTailBannerHidden
     && !syntheticContinuationPending && !error && !credentialSwitchWait
@@ -6584,6 +6590,7 @@ function CCAgentSessionContent({
       agentKind={session?.agentKind}
       remoteHostId={session?.remoteHostId ?? null}
       ownerDeviceId={rightSidebarDeviceLinkDeviceId}
+      errorProviderDirectory={providers}
       sessionSource={session?.source}
       canConfigureAutoReview={Boolean(session) && !readOnly && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId}
       onDiagnoseError={canDiagnoseError ? handleDiagnoseError : undefined}
@@ -7544,11 +7551,11 @@ function CCAgentSessionContent({
                     )}
                     {pluginUsageKey && viewVisible && !session?.remoteHostId && !isSharedTaskPeer(remoteDeviceId ?? '')
                       && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
-                      <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey])}
+                      <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey, pluginUsageSessionId, borrowedPluginEngine])}
                         engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
                         modelId={pluginEngineSwitchIntent?.model ?? session?.model ?? null}
                         modelName={pluginEngineModelName(usageEngine, pluginEngineSwitchIntent?.model ?? session?.model ?? '') ?? null}
-                        running={agentStatus.isRunning} {...(sessionId ? { sessionId } : {})} />
+                        running={agentStatus.isRunning} hosted={borrowedPluginEngine} sessionId={pluginUsageSessionId ?? undefined} />
                     )}
                     {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (
                       <TodaySpendChip

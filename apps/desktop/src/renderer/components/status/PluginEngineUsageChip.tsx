@@ -90,6 +90,7 @@ export function PluginEngineUsageChip({
   deviceId,
   running,
   sessionId,
+  hosted = false,
   modelId,
   modelName,
 }: {
@@ -97,8 +98,9 @@ export function PluginEngineUsageChip({
   name?: string;
   deviceId: string | null;
   running: boolean;
-  /** A local task: an engine with several accounts shows this task's account. */
+  /** Original task id. A borrowed engine namespaces it by the calling computer. */
   sessionId?: string;
+  hosted?: boolean;
   /** Active (or next-message) model id, used to pick the matching quota window group. */
   modelId?: string | null;
   /** Display name of `modelId`, used when the plugin did not attach `models[]` to windows. */
@@ -124,7 +126,7 @@ export function PluginEngineUsageChip({
         return;
       }
       pending = true;
-      const read = readPluginEngineUsage(owner, deviceId, engineKey, sessionId);
+      const read = readPluginEngineUsage(owner, deviceId, engineKey, sessionId, hosted);
       const snapshot = await read.result;
       nextRead = read.freshUntil;
       pending = false;
@@ -154,7 +156,7 @@ export function PluginEngineUsageChip({
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [engineKey, deviceId, sessionId]);
+  }, [engineKey, deviceId, sessionId, hosted]);
 
   const wasRunning = useRef(running);
   useEffect(() => {

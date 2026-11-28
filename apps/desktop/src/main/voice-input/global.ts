@@ -67,6 +67,10 @@ import {
   assertHelperCommandSucceeded,
   waitForSpawnedProcess,
 } from './macHelperProcess.js';
+import {
+  executeWindowsGuardedPaste,
+  windowsTextInsertionClient,
+} from './windowsTextInsertion.js';
 
 const log = createLogger('voice-input-global');
 const DISABLE_GLOBAL_SHORTCUTS = process.env.XDT_DISABLE_GLOBAL_SHORTCUTS === '1';
@@ -232,6 +236,8 @@ type MacPasteTarget = {
   processName: string;
   bundleId: string;
   pid?: number;
+  /** Win32 HWND serialized as decimal string (Windows global overlay only). */
+  hwnd?: string;
 };
 
 // Surrounding text around the user's cursor in the originally-focused element.
@@ -500,6 +506,9 @@ export function prewarmGlobalVoiceInputOverlay(): void {
     overlayPrewarmSkippedUntilReady = false;
     const window = createOverlayWindow(Date.now());
     setOverlayIdlePresentationState(window);
+    if (process.platform === 'win32') {
+      windowsTextInsertionClient.prewarm();
+    }
     log.info('global overlay prewarmed', {
       shortcut: shortcutLabel,
       windowId: window.id,
@@ -540,6 +549,10 @@ export function getGlobalOverlayPasteContext(): MacPasteContext | null {
   return overlayPasteContext;
 }
 
+export function getGlobalOverlayPasteTarget(): MacPasteTarget | null {
+  return overlayPasteTarget;
+}
+
 /**
  * Same as getGlobalOverlayPasteContext, but waits up to `timeoutMs` for an
  * in-flight capture to finish first. Capture is fired off when the overlay
@@ -551,14 +564,29 @@ export function getGlobalOverlayPasteContext(): MacPasteContext | null {
 export async function awaitGlobalOverlayPasteContext(
   options?: { timeoutMs?: number },
 ): Promise<MacPasteContext | null> {
-  if (overlayPasteContext) return overlayPasteContext;
-  if (!overlayPasteTargetPromise) return null;
+  const snapshot = await awaitGlobalOverlayPasteSnapshot(options);
+  return snapshot.context;
+}
+
+/**
+ * Awaits the in-flight overlay target + AX context capture (bounded by
+ * `timeoutMs`) and returns both the foreground app target and AX surroundings.
+ */
+export async function awaitGlobalOverlayPasteSnapshot(
+  options?: { timeoutMs?: number },
+): Promise<{ context: MacPasteContext | null; target: MacPasteTarget | null }> {
+  if (overlayPasteContext && overlayPasteTarget) {
+    return { context: overlayPasteContext, target: overlayPasteTarget };
+  }
+  if (!overlayPasteTargetPromise) {
+    return { context: overlayPasteContext, target: overlayPasteTarget };
+  }
   const timeoutMs = options?.timeoutMs ?? 800;
   await Promise.race([
     overlayPasteTargetPromise.catch(() => null),
     new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
   ]);
-  return overlayPasteContext;
+  return { context: overlayPasteContext, target: overlayPasteTarget };
 }
 
 /**
@@ -1567,7 +1595,11 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
       log.debug(PASTE_DEBUG_TAG, 'restore target focus requested', {
         target: describePasteTarget(target),
       });
-      await focusMacPasteTarget(target);
+      if (process.platform === 'win32') {
+        await focusWindowsPasteTarget(target);
+      } else {
+        await focusMacPasteTarget(target);
+      }
       return { ok: true };
     } catch (error) {
       const presentation = getPasteErrorPresentation(error);
@@ -1594,6 +1626,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     registeredNativeShortcutKey = null;
     macModifierShortcutListener.stop();
     windowsFunctionKeyShortcutListener.stop();
+    windowsTextInsertionClient.shutdown();
     unregisterOverlayCancelShortcut();
     destroyOverlayWindow();
   });
@@ -1933,11 +1966,11 @@ function handleGlobalVoiceInputShortcut(phase?: Extract<GlobalVoiceInputShortcut
 
   if (sendShortcutToActiveInlineVoiceInput(phase)) return;
 
-  // Warm the provider auth path the moment the shortcut is detected. The
-  // overlay/renderer takes ~100ms to ask for `voice-input:start`; doing the
-  // disk read + token parse now overlaps that window so the WebSocket dial
-  // finds the token already hot in memory.
-  void prewarmVoiceInputProvider();
+  // Warm the provider auth & managed press-triggered ASR path the moment the
+  // shortcut is detected. The overlay/renderer takes ~100-250ms to claim the
+  // trigger and invoke `voice-input:start`; overlapping session allocation +
+  // WS dial with that window cuts TTFT without keeping any idle connection.
+  void prewarmVoiceInputProvider({ pressTriggered: true });
 
   const focusedWindow = BrowserWindow.getFocusedWindow();
   if (focusedWindow) {
@@ -2557,14 +2590,14 @@ function startLoadedOverlaySession(window: BrowserWindow, shortcutInvokedAt: num
     resolvePreferredFrame = resolve;
   });
   const wantsFocusedDisplay = shouldResolveFocusedDisplay();
-  const captureOverlayPromise = captureMacPasteTarget(
+  const captureOverlayPromise = captureOverlayPasteTarget(
     wantsFocusedDisplay
       ? {
         onFocusedWindowFrame: (frame, source) => {
           if (!frame || hasAuthoritativeFrame) return;
           bestFocusedWindowFrame = frame;
-          if (source !== 'ax') return;
-          // AX 是权威答案，到了就不再等，也不再被后续行覆盖。
+          if (source !== 'ax' && source !== 'win32') return;
+          // AX / Win32 GetWindowRect 是权威答案，到了就不再等，也不再被后续行覆盖。
           hasAuthoritativeFrame = true;
           resolvePreferredFrame();
         },
@@ -2727,11 +2760,11 @@ function getCursorDisplay(): Display {
  * 是否值得去问「前台窗口在哪块屏」。false 时既不采集 frame 也不推迟显示，直接用
  * 鼠标所在屏：
  * - 只有一块屏时答案唯一；
- * - 非 macOS 平台没有可用的低成本前台窗口查询（Electron 只能看自己的窗口），
- *   Windows 一律按鼠标所在屏判定。
+ * - macOS 走 native AX/CGWindowList，Windows 走常驻 Win32 GetWindowRect 换算 DIP；
+ *   Linux 退回鼠标所在屏。
  */
 function shouldResolveFocusedDisplay(): boolean {
-  if (process.platform !== 'darwin') return false;
+  if (process.platform !== 'darwin' && process.platform !== 'win32') return false;
   return screen.getAllDisplays().length > 1;
 }
 
@@ -2853,6 +2886,10 @@ async function pasteTextToFocusedTarget(text: string, rawTranscriptText?: string
   if (process.platform === 'darwin') {
     await pasteTextToMacTarget(text, pasteTarget);
     scheduleExternalDictionaryLearningWatch(text, rawTranscriptText, pasteTarget, overlayPasteContext, toastAnchor);
+    return;
+  }
+  if (process.platform === 'win32') {
+    await pasteTextToWindowsTarget(text, pasteTarget);
     return;
   }
 
@@ -3084,6 +3121,96 @@ type CapturedOverlayTarget = {
    */
   frame: Rectangle | null;
 };
+
+async function captureOverlayPasteTarget(
+  options?: { onFocusedWindowFrame?: (frame: Rectangle | null, source: string) => void },
+): Promise<CapturedOverlayTarget | null> {
+  if (process.platform === 'darwin') {
+    return captureMacPasteTarget(options);
+  }
+  if (process.platform === 'win32') {
+    return captureWindowsPasteTarget(options);
+  }
+  return null;
+}
+
+async function captureWindowsPasteTarget(
+  options?: { onFocusedWindowFrame?: (frame: Rectangle | null, source: string) => void },
+): Promise<CapturedOverlayTarget | null> {
+  const onFocusedWindowFrame = options?.onFocusedWindowFrame;
+  try {
+    const captured = await windowsTextInsertionClient.captureTarget({
+      withFocusedFrame: Boolean(onFocusedWindowFrame),
+      physicalToDip: (rect) => screen.screenToDipRect(null, rect),
+    });
+    if (!captured) return null;
+    if (onFocusedWindowFrame) {
+      onFocusedWindowFrame(captured.frame, 'win32');
+    }
+    log.debug(PASTE_DEBUG_TAG, 'capture target result (win32)', {
+      target: describePasteTarget(captured.target),
+      context: summarizePasteContext(captured.context),
+      hasFocusedWindowFrame: Boolean(captured.frame),
+    });
+    return {
+      target: captured.target,
+      context: captured.context,
+      frame: captured.frame,
+    };
+  } catch (error) {
+    log.debug(PASTE_DEBUG_TAG, 'windows capture target unavailable', {
+      error: getPasteErrorDetail(error),
+    });
+    return null;
+  }
+}
+
+async function pasteTextToWindowsTarget(text: string, pasteTarget: MacPasteTarget | null): Promise<void> {
+  const pasteStartedAt = Date.now();
+  const result = await executeWindowsGuardedPaste({
+    text,
+    target: pasteTarget,
+    client: windowsTextInsertionClient,
+    clipboard: {
+      writeText: (value) => clipboard.writeText(value, 'clipboard'),
+      readText: () => clipboard.readText('clipboard'),
+      clear: () => clipboard.clear('clipboard'),
+    },
+    captureSnapshot: captureClipboardSnapshot,
+    restoreSnapshotSync: restoreClipboardSnapshot,
+    scheduleSnapshotRestore: scheduleClipboardRestore,
+  });
+  if (!result.ok) {
+    throw new PasteCommandError(result.message, result.detail, result.code);
+  }
+  log.info('pasted global voice input text', {
+    chars: text.length,
+    platform: process.platform,
+    target: describePasteTarget(pasteTarget),
+    currentProcessName: result.currentProcessName,
+    commandIssued: true,
+    verified: Boolean(pasteTarget?.hwnd || pasteTarget?.pid),
+    elapsedMs: Date.now() - pasteStartedAt,
+  });
+}
+
+async function focusWindowsPasteTarget(pasteTarget: MacPasteTarget | null | undefined): Promise<void> {
+  if (!pasteTarget?.hwnd && !pasteTarget?.pid) {
+    throw new PasteCommandError(
+      'Could not identify the target app for voice input paste.',
+      'Missing Windows target HWND/PID.',
+      'unavailable',
+    );
+  }
+  const result = await windowsTextInsertionClient.restoreFocus(pasteTarget);
+  if (!result.ok) {
+    throw new PasteCommandError(
+      'Could not restore focus to the target app.',
+      result.reason || 'windows_restore_focus_failed',
+      'unavailable',
+    );
+  }
+}
 
 /**
  * `onFocusedWindowFrame` 会在 helper 吐出前台窗口 frame 行时立刻回调——远早于整个
@@ -4092,10 +4219,12 @@ function parseOptionalInteger(value: string | undefined): number | undefined {
 
 function describePasteTarget(target: MacPasteTarget | null | undefined): Record<string, string> | null {
   if (!target) return null;
-  return {
+  const summary: Record<string, string> = {
     processName: target.processName || '<empty>',
     bundleId: target.bundleId || '<empty>',
   };
+  if (target.hwnd) summary.hwnd = target.hwnd;
+  return summary;
 }
 
 // Mirrors the Swift helper's isTextRole allowlist. AXSecureTextField is

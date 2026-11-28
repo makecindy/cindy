@@ -437,7 +437,13 @@ import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from '
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
 import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
 import { handleGhostEngineSettingsRequest } from './runtime/ghostEngineSettingsEndpoint.js';
-import { configurePluginHarnessRegistry, getPluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import {
+  configurePluginHarnessRegistry,
+  getPluginHarnessRegistry,
+  hasRunningPluginEngineTurn,
+  PLUGIN_USAGE_WORKER_FAILURE,
+  reconcilePluginHarnesses,
+} from './pluginHarnesses.js';
 import { pluginEngineAccountRoot } from '../plugin-engine-accounts/paths.js';
 import { forgetPluginEngineAccountsOfPlugin } from '../plugin-engine-accounts/store.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
@@ -1029,6 +1035,16 @@ function captureGhostMutationOwner(): ActiveAppSession {
     throw new Error('账号切换中，已取消本次 Plugin 操作');
   }
   return getActiveAppSession();
+}
+
+function isSameGhostMutationOwner(expectedOwner: ActiveAppSession): boolean {
+  if (isAppSessionBoundaryPending()) return false;
+  const currentOwner = getActiveAppSession();
+  return (
+    currentOwner.mode === expectedOwner.mode &&
+    currentOwner.dataOwnerId === expectedOwner.dataOwnerId &&
+    currentOwner.generation === expectedOwner.generation
+  );
 }
 
 /**
@@ -1868,7 +1884,8 @@ function assertGhostRelocationDbReady(): void {
 
 function assertGhostRelocationIdle(part: string): void {
   if (hasPendingGhostCalls(part) || hasRunningGhostErrand(part) ||
-      hasRunningGhostCindyWork(part) || fsSlotSingleton?.hasInFlightRequests(part) ||
+      hasRunningGhostCindyWork(part) || hasRunningPluginEngineTurn(part) ||
+      fsSlotSingleton?.hasInFlightRequests(part) ||
       networkSlotSingleton?.hasInFlightRequests(part) || isGhostHandoffBusy(part)) {
     throw new Error('Ghost relocation is waiting for active work to finish');
   }
@@ -2238,7 +2255,7 @@ function getNamespaceMigrationHost(): NamespaceMigrationHost {
       readInstalledGhostManifestSnapshot,
       oauthLockExists: (ghostId) => fs.existsSync(ghostOauthMutationLockPath(ghostId)),
       hasPendingWork: (ghostId) => hasPendingGhostCalls(ghostId) || hasRunningGhostErrand(ghostId) ||
-        hasRunningGhostCindyWork(ghostId),
+        hasRunningGhostCindyWork(ghostId) || hasRunningPluginEngineTurn(ghostId),
       runtimeState: (instanceKey) => runtimeSingleton?.stateOf(instanceKey),
       nodeRuntimeRunning: (instanceKey) => nodeRuntimeBrokerSingleton?.stateOf(instanceKey) === 'running',
       stopRuntime: (instanceKey) => { getGhostRuntime().stop(instanceKey); },
@@ -2907,6 +2924,13 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
     nodeRuntimeBrokerSingleton = new GhostNodeRuntimeBroker({
       getGhost: findGhostForInstanceId,
       startBlockedReason: libraryRestartRequiredReason,
+      // 更新/卸载等因旧进程迟迟不退而失败：旧版本仍在原位，进程真正退出后回到它该在的状态。
+      onStopSettledLate: (instanceId) => {
+        const ghost = findGhostForInstanceId(instanceId);
+        if (!ghost) return;
+        log.info('plugin processes exited after a timed-out stop; restoring presence', { instanceId });
+        spawnIfResident(ghost);
+      },
       getCallSignal: (ghostId, callId) =>
         getGhostPipeDispatcher().getPendingCallSignal(ghostId, callId),
       getCallSessionId: (ghostId, callId) =>
@@ -7923,8 +7947,9 @@ async function withLibrariesHeld<T>(fromId: string, toId: string, run: () => Pro
   const slot = getGhostLibrarySlot();
   const ids = [fromId, toId];
   const ghostBefore = findGhostForInstanceId(toId);
+  const swapOwner = getActiveAppSession();
   const partition = ghostBefore
-    ? ownerScopedGhostPartitionForInstalledGhost(ghostBefore, getActiveAppSession())
+    ? ownerScopedGhostPartitionForInstalledGhost(ghostBefore, swapOwner)
     : null;
   return withPluginHeldForLibrarySwap({
     stopRuntime: async () => {
@@ -7934,7 +7959,8 @@ async function withLibrariesHeld<T>(fromId: string, toId: string, run: () => Pro
       };
       getGhostRuntime().stop(toId);
       await stopPluginAppInstance(toId);
-      await getGhostNodeRuntimeBroker().stopAndWait(toId);
+      if (ghostBefore) await stopGhostNodeRuntimeForUpdate(ghostBefore, swapOwner);
+      else await getGhostNodeRuntimeBroker().stopAndWait(toId);
       return running;
     },
     notifyPanels: (phase) => broadcastGhostWindowPush('ghosts:library-replaced', { id: toId, phase }),
@@ -8431,6 +8457,36 @@ function readLocalGhostUpdateSource(
 }
 
 /**
+ * 原位更新前停止旧插件的 Node 进程。等不到退出时更新放弃、旧版本原样留着；此时不能马上恢复
+ * (旧进程可能仍在，会出现两份后台进程)，但也不能让插件一直停着：等这些进程真正退出后，
+ * 若装着的仍是同一份旧版本，就走「该在场了」的统一入口恢复它，并解除任务引擎的启动闸。
+ */
+async function stopGhostNodeRuntimeForUpdate(
+  previousGhost: InstalledGhost,
+  expectedOwner = getActiveAppSession(),
+): Promise<void> {
+  const instanceId = installedGhostStoragePart(previousGhost);
+  const broker = getGhostNodeRuntimeBroker();
+  try {
+    await broker.stopAndWait(instanceId);
+  } catch (error) {
+    broker.whenProcessesExited(instanceId, () => {
+      if (!isSameGhostMutationOwner(expectedOwner)) return;
+      const current = findGhostForInstanceId(instanceId);
+      if (!current?.enabled ||
+          current.dir !== previousGhost.dir ||
+          current.manifest.version !== previousGhost.manifest.version ||
+          ghostInstallApprovalToken(current.approval) !== ghostInstallApprovalToken(previousGhost.approval)) {
+        return;
+      }
+      log.info('restoring plugin after its processes exited following a failed update stop', { ghostId: instanceId });
+      spawnIfResident(current);
+    });
+    throw error;
+  }
+}
+
+/**
  * 本地包原位更新的共享事务。调用方必须已经持有 owner lease 和对应 ghostId
  * 的安装锁；Renderer 导入与 Forge 显式安装共用，避免两条路径在运行时、OAuth、
  * 市场来源解绑和失败恢复上产生漂移。
@@ -8484,10 +8540,10 @@ async function updateLocalGhostPackageLocked(
     recheckOwner();
     if (isCurrent?.() === false) throwIpcError('PRECONDITION_FAILED', 'Plugin install authorization changed');
     runtime.stop(instanceId);
-    // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
-    // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
+    // 等待失败表示旧进程仍可能存活；此时不能立即恢复 resident，否则会产生
+    // 两份后台进程。待全部旧进程真实 exit 且本插件未再被停用/变更时自动解除启动闸。
     await stopPluginAppInstance(instanceId);
-    await getGhostNodeRuntimeBroker().stopAndWait(instanceId);
+    await stopGhostNodeRuntimeForUpdate(previousGhost);
     // 用户已明确选择了这份本地真实包：同 id 可以原位替换，市场来源不是永久所有权。
     // 替换前先切断旧市场更新路由；用户状态由安装事务隔离归档，落位失败再恢复。
     const detachMarketRecord = Boolean(marketRecord?.installed);
@@ -8584,9 +8640,9 @@ async function updateLocalGhostPackageLocked(
       recheckOwner();
       result = { ghost: await manager.confirmUpdatedInstanceNamespace(result.ghost) };
     }
+    spawnIfResident(result.ghost);
     await bindPluginUsage(result.ghost,
       !detachMarketRecord && previousGhost?.approval.state === 'approved' ? previousGhost.approval.revision : undefined);
-    spawnIfResident(result.ghost);
     return result.ghost;
   } finally {
     releaseBrowserUpdate?.();
@@ -8895,6 +8951,8 @@ export async function installOrUpdateMarketGhostPackage(
     /** 自定义 Git/本地市场在打包前读取的 Manifest，用于防止打包窗口内能力扩张。 */
     manifestCap?: GhostManifest;
     beforeCommitInLock?: () => void;
+    /** Automatic updates recheck activity immediately before stopping the runtime. */
+    beforeRuntimeStopInLock?: () => void;
     /** Caller owner/peer/cancellation guard, valid after the directory swap. */
     assertCurrent?: () => void;
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
@@ -8941,6 +8999,7 @@ async function installOrUpdateMarketGhostPackageLocked(
     reclaimLegacyBareInstance?: boolean;
     manifestCap?: GhostManifest;
     beforeCommitInLock?: () => void;
+    beforeRuntimeStopInLock?: () => void;
     assertCurrent?: () => void;
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
     onPackagePlacedInLock?: () => void;
@@ -9111,11 +9170,19 @@ async function installOrUpdateMarketGhostPackageLocked(
     expected.assertCurrent?.();
     const runtime = getGhostRuntime();
     releaseSync = pluginDeviceSync.beginMutation(installedGhostStoragePart(installed));
+    // No await between this last activity check and stopping the engine. A turn
+    // accepted while prepareUpdate waited must defer an automatic update.
+    expected.beforeRuntimeStopInLock?.();
     runtime.stop(installedGhostStoragePart(installed));
+    await stopGhostNodeRuntimeForUpdate(installed);
     // 无法确认旧进程已退出时保持停止态，不能启动第二份 resident。只有旧进程
     // 已确认退出、后续目录更新失败时，才恢复原版本。
-    await stopPluginAppInstance(installedGhostStoragePart(installed));
-    await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));
+    try {
+      await stopPluginAppInstance(installedGhostStoragePart(installed));
+    } catch (error) {
+      spawnIfResident(installed);
+      throw error;
+    }
     let result: Awaited<ReturnType<typeof manager.update>>;
     let packagePlaced = false;
     try {
@@ -9193,15 +9260,24 @@ async function installOrUpdateMarketGhostPackageLocked(
       throwInstallError(result.rejection);
     }
     runtime.resetFuse(installedGhostStoragePart(result.ghost));
-    await expected.afterCommitInLock?.(result.ghost, commitEvidence);
-    if (result.ghost.namespaceState === 'unconfirmed') {
-      recheckOwner();
-      result = { ghost: await manager.confirmUpdatedInstanceNamespace(result.ghost,
-        expected.sourceChanged && expected.pendingMarketRecord?.source === 'market' ? expected.pluginId : undefined) };
+    let resumedAfterCommit = false;
+    try {
+      await expected.afterCommitInLock?.(result.ghost, commitEvidence);
+      if (result.ghost.namespaceState === 'unconfirmed') {
+        recheckOwner();
+        result = { ghost: await manager.confirmUpdatedInstanceNamespace(result.ghost,
+          expected.sourceChanged && expected.pendingMarketRecord?.source === 'market' ? expected.pluginId : undefined) };
+      }
+      spawnIfResident(result.ghost);
+      resumedAfterCommit = true;
+      await bindPluginUsage(result.ghost);
+      return result.ghost;
+    } catch (error) {
+      if (!resumedAfterCommit && result.ghost.namespaceState !== 'unconfirmed' && isSameGhostMutationOwner(mutationOwner)) {
+        spawnIfResident(result.ghost);
+      }
+      throw error;
     }
-    spawnIfResident(result.ghost);
-    await bindPluginUsage(result.ghost);
-    return result.ghost;
   } finally {
     releaseBrowserUpdate?.();
     // The manager's package-change event precedes the provenance ledger commit.

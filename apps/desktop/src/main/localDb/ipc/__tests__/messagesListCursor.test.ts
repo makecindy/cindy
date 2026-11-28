@@ -100,6 +100,7 @@ vi.mock('../../client/current', () => ({
   getCurrentDbClientSnapshot: () => ({ client: { drizzle: h.db, query: h.query, tx: h.tx }, clientEpoch: 1 }),
 }));
 
+import { readLatestAgentSwitchAttribution } from '../../agentSwitchRows';
 import {
   findParkedEngineSession,
   findPendingAgentHandoff,
@@ -1455,6 +1456,72 @@ describe('findParkedEngineSession context rebuild boundary', () => {
 
     await expect(findParkedEngineSession('same-device', 'codex', 'device-a')).resolves.toMatchObject({
       sdkSessionId: 'parked-same-device',
+    });
+  });
+
+  // Value: readLatestAgentSwitchAttribution restores last_route_change after app restart from
+  // existing agent_switch boundary JSON (zero schema change), honoring /clear, rewind, and legacy rows.
+  // Gap: new read path; no existing tests exercised attribution deserialization or boundary filtering.
+  // Minimal input: attributed switch, rewound switch, cleared session, legacy switch, unsafe reason; tier: unit.
+  it('reads latest un-rewound post-clear agent_switch attribution and sanitizes reasons', async () => {
+    const sqlite = createDb();
+    const insertBoundary = sqlite.prepare(
+      `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES (?, ?, ?, 'agent_switch', ?, NULL, NULL, 'codex', ?, ?)
+    `,
+    );
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('attr-s1');
+    insertBoundary.run('b1', 'b1', 'attr-s1', JSON.stringify({
+      fromAgentKind: 'cc',
+      toAgentKind: 'codex',
+      fromModel: 'claude-opus-4-6',
+      toModel: 'gpt-5.6',
+      fromProviderId: 'anthropic',
+      toProviderId: 'openai',
+      fromAgentDeviceId: null,
+      toAgentDeviceId: 'mac-studio',
+      attribution: { at: '2026-11-28T10:00:00.000Z', by: 'model-group', reason: 'provider_safety_refusal' },
+    }), 1000, null);
+    // Rewound later switch must be ignored.
+    insertBoundary.run('b2', 'b2', 'attr-s1', JSON.stringify({
+      fromAgentKind: 'codex',
+      toAgentKind: 'pi',
+      fromModel: 'gpt-5.6',
+      toModel: 'pi-1',
+      attribution: { at: '2026-11-28T10:05:00.000Z', by: 'user', reason: 'explicit' },
+    }), 2000, 2500);
+
+    await expect(readLatestAgentSwitchAttribution('attr-s1')).resolves.toEqual({
+      at: '2026-11-28T10:00:00.000Z',
+      by: 'model-group',
+      reason: 'provider_safety_refusal',
+      from: { agentKind: 'claude-code', model: 'claude-opus-4-6', providerId: 'anthropic', agentDeviceId: null },
+      to: { agentKind: 'codex', model: 'gpt-5.6', providerId: 'openai', agentDeviceId: 'mac-studio' },
+    });
+
+    // After /clear past the boundary, attribution is null.
+    sqlite.prepare('UPDATE sessions SET cleared_at = ? WHERE id = ?').run(1500, 'attr-s1');
+    await expect(readLatestAgentSwitchAttribution('attr-s1')).resolves.toBeNull();
+
+    // Legacy boundary without attribution falls back honestly to by='unknown' and drops unsafe reasons.
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('legacy-attr');
+    insertBoundary.run('b3', 'b3', 'legacy-attr', JSON.stringify({
+      fromAgentKind: 'cc',
+      toAgentKind: 'codex',
+      fromModel: 'claude-sonnet',
+      toModel: 'gpt-5',
+      fromAgentDeviceId: 'dev-a',
+      attribution: { by: 'invalid-actor', reason: 'Bearer sk-secret /Users/a/b' },
+    }), 3000, null);
+    await expect(readLatestAgentSwitchAttribution('legacy-attr')).resolves.toEqual({
+      at: new Date(3000).toISOString(),
+      by: 'unknown',
+      reason: null,
+      from: { agentKind: 'claude-code', model: 'claude-sonnet', providerId: null, agentDeviceId: 'dev-a' },
+      to: { agentKind: 'codex', model: 'gpt-5', providerId: null, agentDeviceId: 'dev-a' },
     });
   });
 });

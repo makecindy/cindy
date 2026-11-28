@@ -31,7 +31,7 @@ const callbackChannels = {
 };
 const createCallbacks = createGhostProductionCallbacks<Record<keyof typeof callbackChannels, Handler>>({
   functions: [
-    'readLocalGhostUpdateSource', 'updateLocalGhostPackageLocked', 'rejectUnauthorizedTokenBroker',
+    'readLocalGhostUpdateSource', 'stopGhostNodeRuntimeForUpdate', 'updateLocalGhostPackageLocked', 'rejectUnauthorizedTokenBroker',
     'assertGhostRelocationIdle', 'findGhostForInstanceId',
   ],
   variables: ['updateLocalFile'],
@@ -281,11 +281,12 @@ function harness(
     hasPendingGhostCalls: () => false,
     hasRunningGhostErrand: () => false,
     hasRunningGhostCindyWork: () => false,
+    hasRunningPluginEngineTurn: () => false,
     fsSlotSingleton: { hasInFlightRequests: () => options.fsBusy === true },
     networkSlotSingleton: { hasInFlightRequests: () => options.networkBusy === true },
     isGhostHandoffBusy: () => false,
     stopPluginAppInstance: vi.fn(async () => {}),
-    getGhostNodeRuntimeBroker: () => ({ stopAndWait: vi.fn() }),
+    getGhostNodeRuntimeBroker: () => ({ stopAndWait: vi.fn(), whenProcessesExited: vi.fn() }),
     getGhostAgentSlot: () => ({ clearGhost: vi.fn() }),
     getGhostErrandSlot: () => ({ clearGhost: vi.fn() }),
     getGhostOauthAccountManager: () => ({ prepareAccountsForChangedClients: vi.fn() }),

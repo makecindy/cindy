@@ -359,6 +359,35 @@ describe('group list activity', () => {
       .rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：手机直连的群投影 chatGroupView；未绑定时旧卡片的 executor_unavailable
+  //   要变成「选择电脑」提示并带可选动作，已绑定时不误报。
+  // - Bug／规则依据：2026-11-28 群里只剩一句「请在群设置中选择执行电脑」，没有可点的入口；旧 Chat
+  //   Server 的卡片没有 reason。bot-group-chat.md 第 9 节：谁问就在谁的电脑上跑。
+  // - 现有覆盖缺口：上面的用例都以 reason 存在为前提，没测无 reason + 绑定状态的分类。
+  // - 最小失败输入：assistant 成员发的 executor_unavailable 卡片不带 reason、房间未绑定、
+  //   requesterId 是自己；修复前提示码为 GROUP_ASSISTANT_UNAVAILABLE 且无 canChooseAssistantDevice。
+  // - tier：unit（纯投影，无网络、无组件挂载）。
+  // - 实测耗时：本文件 vitest run 2.5s（152 条）。
+  it.each([
+    { bound: null, choice: true, code: 'GROUP_ASSISTANT_DEVICE_REQUIRED' },
+    { bound: 'mac', choice: false, code: 'GROUP_ASSISTANT_UNAVAILABLE' },
+  ] as const)('resolves a notice without reason from the room binding (bound=$bound)', ({ bound, choice, code }) => {
+    const source: ChatMessage = { ...message(40), authorId: id(11), content: [{ type: 'text', text: 'Weekly report' }] };
+    const notice: ChatMessage = { ...message(41), authorId: id(20), author: { kind: 'bot', name: 'Cindy' }, origin: 'bot',
+      content: [{ type: 'card', namespace: 'cindy.group-assistant', schemaRevision: 1, fallback: 'notice',
+        data: { type: 'executor_unavailable', requesterId: id(11), sourceMessageId: source.id } }] };
+    const value: ChatSnapshot = { ...snapshot(), room: { ...snapshot().room, assistant_device_id: bound },
+      assistantComputers: [{ id: 'mac', name: 'Mac' }], messages: [source, notice], members: [
+        { id: id(11), kind: 'human', name: 'Self', state: 'joined', ownerActorId: id(11), ownerName: 'Self', avatar: null, role: 'owner' },
+        { id: id(20), kind: 'bot', assistant: true, name: 'Cindy', state: 'joined', ownerActorId: '', ownerName: '', avatar: null, role: 'member' },
+      ] };
+    const view = chatGroupView({ snapshot: value, messages: value.messages, before: null }, id(11), [], 'group');
+    const shown = view.messages.find(m => m.id === id(41));
+    expect(shown).toMatchObject({ capabilityNoticeCode: code });
+    expect(shown?.canChooseAssistantDevice).toBe(choice ? true : undefined);
+  });
+
   it('places a newly created empty group and a group with a new topic ahead of an older main chat', () => {
     const old = chatRoomRow(room(1), { ...snapshot(), messages: [{ ...message(20), createdAt: '2026-10-10T12:00:00Z' }] });
     const fresh = chatRoomRow({ ...room(2), created_at: '2026-10-11T12:00:00Z' }, { ...snapshot(), messages: [] });

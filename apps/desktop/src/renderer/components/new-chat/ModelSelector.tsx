@@ -59,6 +59,13 @@ import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { MorphPopover } from '@/components/ui/morph-popover';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
 import {
   COMPOSER_MENU_ROW,
@@ -94,6 +101,7 @@ import {
   resolveModelSelectorTriggerRouting,
   useModelSelectorSmartRouting,
 } from './modelSelectorSmartRouting';
+import { refreshModelGroups } from '@/features/model-groups/modelGroupsClient';
 import { buildModelGroupPickerRows, matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import {
@@ -1018,6 +1026,8 @@ export interface ModelSelectorBaseProps {
   visualVariant?: 'default' | 'create-agent';
   /** 仅普通 composer 显式开启 chip → panel 容器形变；设置页/worker 等维持 Radix。 */
   useMorphPopover?: boolean;
+  /** Let the current task change effort from the visible model-pill tail. */
+  showEffortShortcut?: boolean;
   /**
    * 指针关闭后的回焦目标(composer 输入框)。选完模型 / 点空白后立刻送回输入框;
    * Esc 仍回 pill(§14.2)。设置页等非 composer 入口不传。
@@ -1030,8 +1040,8 @@ export interface ModelSelectorBaseProps {
    * 不传时沿用通用面板的 300px 上限，供 Settings 等紧凑场景按行数收窄。
    */
   maxVisibleModelRows?: number;
-  /** 关闭模型的 effort / Fast 编辑入口与行内状态摘要；只选择模型 id 的设置项使用。 */
-  configurationEnabled?: boolean;
+  /** false hides configuration; 'harness' lets the caller select a model with a Harness. */
+  configurationEnabled?: UnifiedModelPanelProps['configurationEnabled'];
   /** Restrict Fast to the Harnesses this entry can persist and dispatch; false disables it. */
   fastModeConfigurable?: boolean | readonly AgentKind[];
   /** 语义同 ModelSelectorContentProps.unifiedPanel（统一模型选择器面板，默认开启）。 */
@@ -1193,7 +1203,7 @@ export interface ModelSelectorContentBaseProps {
    */
   followSession?: { active: boolean; label: string; onFollow: () => void | boolean | Promise<void | boolean> };
   /** 是否显示模型的 effort / Fast 编辑入口。 */
-  configurationEnabled?: boolean;
+  configurationEnabled?: UnifiedModelPanelProps['configurationEnabled'];
   /** Restrict Fast to the Harnesses this entry can persist and dispatch; false disables it. */
   fastModeConfigurable?: boolean | readonly AgentKind[];
   /** A is the default for every entry. False is reserved for capabilities-only remote compatibility. */
@@ -1468,10 +1478,12 @@ function ModelSelectorContentView({
   agentSwitch,
   discoveringModels = false,
   interactionDisabled = false,
+  pickerOpen = true,
   gatewayPricing,
   referencePricing,
   modelAccessAccountTier,
 }: ModelSelectorContentProps & {
+  pickerOpen?: boolean;
   gatewayPricing: ModelPricingCatalog | null;
   referencePricing: ModelPricingCatalog | null;
   modelAccessAccountTier: ModelAccessAccountTier | null;
@@ -1675,13 +1687,40 @@ function ModelSelectorContentView({
   const listedProviders = deviceId
     ? remoteCatalogProviders
     : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
+  const rawHomeSourceRouteConfig = routingMode.homeSourceRouteConfig;
+  const [autoPrioritySnapshot, setAutoPrioritySnapshot] = useState(() => ({
+    open: pickerOpen, priorities: rawHomeSourceRouteConfig?.autoModelPriorities,
+  }));
+  // MorphPopover can stay mounted through a close/reopen. Freeze even an empty
+  // snapshot for the entire opening, and capture fresh priorities on the next one.
+  if (autoPrioritySnapshot.open !== pickerOpen) {
+    setAutoPrioritySnapshot({
+      open: pickerOpen,
+      priorities: pickerOpen ? rawHomeSourceRouteConfig?.autoModelPriorities : autoPrioritySnapshot.priorities,
+    });
+  }
+  const missingLocalAutoPriorities = pickerOpen && !homeDeviceId && !remoteAgent?.catalogHostDeviceId && !deviceIdProp
+    && !rawHomeSourceRouteConfig?.autoModelPriorities
+    && rawHomeSourceRouteConfig?.sourceRoutes?.some((route) => route.strategy === 'expiring' && !route.hidden);
+  useEffect(() => {
+    if (missingLocalAutoPriorities) void refreshModelGroups();
+  }, [missingLocalAutoPriorities]);
+  const frozenAutoPriorities = autoPrioritySnapshot.priorities;
+  const homeSourceRouteConfig = useMemo(() => {
+    if (!rawHomeSourceRouteConfig || frozenAutoPriorities === rawHomeSourceRouteConfig.autoModelPriorities) {
+      return rawHomeSourceRouteConfig;
+    }
+    return { ...rawHomeSourceRouteConfig, autoModelPriorities: frozenAutoPriorities };
+  }, [rawHomeSourceRouteConfig, frozenAutoPriorities]);
   const homeBaseProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
   useEffect(() => {
     readModelGroupDevices?.();
   }, [readModelGroupDevices]);
   const smartRouting = useModelSelectorSmartRouting({
     modelGroupsProp,
-    routingMode,
+    routingMode: homeSourceRouteConfig === rawHomeSourceRouteConfig
+      ? routingMode
+      : { ...routingMode, homeSourceRouteConfig },
     onUnifiedSelectProp,
     currentProviderIdProp,
     modelId,
@@ -1720,7 +1759,7 @@ function ModelSelectorContentView({
     [deviceId, mixedCatalog, subscriptionTaskId, remoteAgent, remoteBrowse],
   );
   // Old device-link hosts expose capabilities only. Never substitute local routes.
-  const unifiedPanel = useUnifiedPanel && !(deviceId && remoteProviders.unsupported);
+  const unifiedPanel = useUnifiedPanel && (configurationEnabled === 'harness' || !(deviceId && remoteProviders.unsupported));
   const providersLoading = deviceId ? remoteProviders.loading : !providersOverride && localProviders.loading;
   const remoteModelListStatus = resolveRemoteModelListStatus({
     deviceId,
@@ -2868,7 +2907,7 @@ function ModelSelectorContentView({
         !!selectedModel &&
         (selectedModel.efforts.length > 0 || fastEditable(providerId, selectedModel));
       const opensConfiguration =
-        !unifiedPanel && selectedRowClickOpensConfiguration && configurationEnabled && selectedModelHasConfiguration;
+        !unifiedPanel && selectedRowClickOpensConfiguration && configurationEnabled === true && selectedModelHasConfiguration;
       // A selected row can be the effective fallback for a stale explicit
       // provider.  Repair that route before opening its configuration, but do
       // not persist the row's derived/default effort just by opening the card.
@@ -3067,7 +3106,7 @@ function ModelSelectorContentView({
     !editingIsActive && !!modelMemory && !!currentAgentKind && !!editingProviderId;
   const canConfigure =
     !interactionDisabled &&
-    configurationEnabled &&
+    configurationEnabled === true &&
     !!editingModel &&
     (editingIsActive || inactiveProviderCanSelectEffort || inactiveProviderHasMemory);
   const editShowFast =
@@ -3425,8 +3464,8 @@ function ModelSelectorContentView({
     // 只选择模型 id 的入口没有 effort / Fast 语义；继续展示目录默认档会让用户
     // 误以为该值可在当前入口调整。选择事务仍由 handleRowSelect 独立解析 effort，
     // 此处只收窄可见摘要，不改变支持配置入口的行为。
-    const rowEffort = configurationEnabled ? rowEffortOf(providerId, model) : null;
-    const rowFastOn = configurationEnabled ? fastOnOf(providerId, model) : false;
+    const rowEffort = configurationEnabled === true ? rowEffortOf(providerId, model) : null;
+    const rowFastOn = configurationEnabled === true ? fastOnOf(providerId, model) : false;
     const rowPrice = pricePresentationOf(providerId, model.id);
     const rowPromotionLabel =
       rowPrice?.kind === 'free'
@@ -3852,7 +3891,10 @@ function ModelSelectorContentView({
     const withAgentDevice = remoteAgent ? { agentDevice: remoteBrowseDevice } : {};
     // 浏览的不是草稿当前落点的目录时,没有任何一行是「正在用的那一行」;归组的任务在组那一项里显示为正在用的。
     const panelSelection = browsingSelectionCatalog
-      ? { providerId: activeSourceId, modelId: shownModelId }
+      ? {
+          providerId: configurationEnabled === 'harness' ? (currentProviderId ?? null) : activeSourceId,
+          modelId: configurationEnabled === 'harness' ? modelId : shownModelId,
+        }
       : browsingBoundGroupEntry
         ? { providerId: boundEntry!.providerId, modelId }
         : { providerId: null, modelId: '' };
@@ -4156,7 +4198,8 @@ function ModelSelectorContentView({
             selectedFavoriteUid={browsingSelectionCatalog && !pluginModels?.active && !(effectiveModelGroupsActive && !activeSourceRoute && !modelGroups?.managedMeta) && !pluginEngines?.active
               ? selectedFavoriteUid : null}
             liveAgentKind={
-              unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
+              !browsingLiveCatalog || (unifiedSelectionPolicy === 'official' && configurationEnabled !== 'harness')
+                ? null : currentAgentKind
             }
             fastMode={unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? false : fastMode}
             selectedEffort={
@@ -4713,6 +4756,7 @@ export function ModelSelector({
   fieldPanelWidth = 'trigger',
   visualVariant = 'default',
   useMorphPopover = false,
+  showEffortShortcut = false,
   restoreFocusTarget,
   popoverSide = 'top',
   maxVisibleModelRows,
@@ -5102,10 +5146,12 @@ export function ModelSelector({
   const triggerProvider = actualRoute && routeProvider
     ? routeProvider
     : providers.find((provider) => provider.id === activeSourceId);
+  const triggerProviderModel = triggerProvider && currentAgentKind
+    ? getModel(triggerProvider, modelId, currentAgentKind)
+    : undefined;
   const activeThinkingToggle =
     currentAgentKind === 'pi' &&
-    !!triggerProvider &&
-    getModel(triggerProvider, modelId, currentAgentKind)?.thinkingToggle === true;
+    triggerProviderModel?.thinkingToggle === true;
   const showEffort =
     !fallbackOption?.active &&
     efforts.length > 0 &&
@@ -5131,10 +5177,7 @@ export function ModelSelector({
   const triggerActiveProvider = triggerProvider;
   // trigger 图标的统一规则:当前 (来源, 模型) 条目的 icon(AI Gateway / 目录设定)优先,
   // 缺省回落来源供应商标 —— 与列表行、手机版同一套口径(ModelIconMark)。
-  const triggerModelIcon =
-    triggerActiveProvider && currentAgentKind
-      ? getModel(triggerActiveProvider, modelId, currentAgentKind)?.icon
-      : undefined;
+  const triggerModelIcon = triggerProviderModel?.icon;
   const disconnectedProvider = currentProviderId
     ? providers.find((p) => p.id === currentProviderId)
     : undefined;
@@ -5175,6 +5218,7 @@ export function ModelSelector({
     t,
   });
   const {
+    effectiveTriggerModelGroup,
     activeSourceRouteName,
     activeManagedRouteName,
     activeRouteBadgeName,
@@ -5422,6 +5466,19 @@ export function ModelSelector({
   // 保留 useMorphPopover 作用域开关(仅 composer 工具条 opt-in;settings/CreateWorker 用 Radix 回退),
   // 但去掉 !isCreateAgentVariant —— 新建对话框工具条也走脱身上浮 morph,与会话内统一(2026-07-22)。
   const morphEnabled = useMorphPopover && !isFieldTrigger && !isSettingsTrigger;
+  const shortcutEfforts = triggerProviderModel?.efforts ?? [];
+  const splitEffortTrigger = showEffortShortcut && morphEnabled && configurationEnabled &&
+    showTriggerTailContent && !!effortLabel && shortcutEfforts.length > 1 &&
+    shortcutEfforts.some((level) => level === effort) && !!triggerProvider?.connected &&
+    !triggerEngine && !activePluginModel && !effectiveTriggerModelGroup && !modelGroups?.managedMeta &&
+    !noSource && !showSourceIssue && !remoteModelLoading && !remoteModelLoadFailed;
+  const effortMenuLabel = t('newChat.modelSelector.effortLabel');
+  const effortShortcutLabel = `${effortMenuLabel} · ${fullEffortLabel}`;
+  const triggerAriaLabel = splitEffortTrigger
+    ? t('newChat.modelSelector.trigger.aria', { model: displayIdentityLabel })
+    : ariaLabel;
+  const toolbarPillChrome =
+    'rounded-full border border-transparent bg-transparent hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]';
   const budgetGradientStyle: CSSProperties | undefined = isBudget
     ? {
         background: 'var(--model-budget-gradient)',
@@ -5477,21 +5534,21 @@ export function ModelSelector({
               dense ? 'h-9' : 'h-10',
               'hover:bg-[var(--surface-hover-soft)]',
             )
-          : cn(
-              'rounded-full',
+          : splitEffortTrigger
+            ? 'h-full shrink overflow-hidden rounded-full pl-2.5 pr-0.5 hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]'
+            : cn(
               // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
               // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
               'max-w-full shrink px-2.5',
               isSettingsTrigger ? 'min-h-[30px] items-baseline py-1 text-left leading-5' : 'h-[30px] overflow-hidden',
               // 模型名按内容取宽，由工具行的剩余空间决定截断位置。
               isSettingsTrigger ? 'min-w-0' : 'min-w-[72px]',
-              'border border-transparent bg-transparent',
-              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
+              toolbarPillChrome,
             ),
         // device-link 远程切换 in-flight:置灰 + 禁用点击(复用本文件 disabled 行的 opacity-50 习惯)。
         (switching || disabled) && 'pointer-events-none opacity-50',
       )}
-      aria-label={ariaLabel}
+      aria-label={triggerAriaLabel}
     >
       {selectionPreparation ? (
         <span className="flex shrink-0 items-center gap-1 text-12 text-[var(--model-trigger-meta)]" role="status">
@@ -5785,8 +5842,8 @@ export function ModelSelector({
           {/* 引擎小标 + 深度 = pill 的收尾身份组(新形态,见 engineMarkVendor)。
               旧形态没有 mark,深度前保留「·」分隔;有 mark 时图标本身就是分隔,再加点
               会读成「模型 · 引擎 · 深度」三段。 */}
-          {showTriggerTailContent && engineMarkNode}
-          {effortLabel && showTriggerTailContent && (
+          {showTriggerTailContent && !splitEffortTrigger && engineMarkNode}
+          {effortLabel && showTriggerTailContent && !splitEffortTrigger && (
             <>
               {/* 固定表单入口尾部没有引擎 mark 作视觉分隔时,
                   深度前补「·」—— 否则「名字 深度」贴着读会粘成一个词。 */}
@@ -5831,7 +5888,7 @@ export function ModelSelector({
               </span>
             </>
           )}
-          {triggerFastOn && showTriggerTailContent && (
+          {triggerFastOn && showTriggerTailContent && !splitEffortTrigger && (
             <SpeedIcon
               mode={triggerFastOn}
               size={isCreateAgentVariant ? 11 : dense ? 12 : 13}
@@ -5907,6 +5964,7 @@ export function ModelSelector({
         </div>
       )}
     <ModelSelectorContentView
+      pickerOpen={open || keepOpenForAgentSwitch}
       modelId={modelId}
       effort={effort}
       onModelChange={onModelChange}
@@ -5992,7 +6050,64 @@ export function ModelSelector({
         stickyWidth
         panelAriaLabel={ariaLabel}
         {...(restoreFocusTarget ? { restoreFocusTarget } : {})}
-        trigger={trigger}
+        trigger={splitEffortTrigger ? (
+          <span className={cn('inline-flex h-[30px] min-w-0 max-w-full items-center', toolbarPillChrome)}>
+            {trigger}
+            <DropdownMenu
+              modal={false}
+              onOpenChange={(next) => {
+                if (next && openRef.current) setOpenWithoutAutoRefresh(false);
+              }}
+            >
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  disabled={switching || disabled}
+                  aria-label={effortShortcutLabel}
+                  title={effortShortcutLabel}
+                  className={cn(
+                    'flex h-full shrink-0 items-center gap-1 rounded-full pr-2.5 pl-1',
+                    'text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)] disabled:opacity-50',
+                    dense ? 'text-12' : 'text-13',
+                  )}
+                >
+                  {engineMarkNode}
+                  {effortLabel}
+                  {triggerFastOn && (
+                    <SpeedIcon
+                      mode={triggerFastOn}
+                      size={dense ? 12 : 13}
+                      className="ml-0.5 shrink-0 text-[var(--composer-pill-icon)]"
+                    />
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              {/* Release the menu layer immediately so it can reopen while a save is pending. */}
+              <DropdownMenuContent
+                side={popoverSide}
+                align="end"
+                aria-label={effortMenuLabel}
+                className="data-[state=closed]:animate-none"
+              >
+                <DropdownMenuRadioGroup value={effort}>
+                  {shortcutEfforts.map((level) => (
+                    <DropdownMenuRadioItem
+                      key={level}
+                      value={level}
+                      onSelect={() => {
+                        // The displayed effort may still be the old value while a write is queued.
+                        void onEffortChange(level);
+                      }}
+                    >
+                      {labelOf(level)}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        ) : trigger}
       >
         <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentSwitch}>
           {content}
@@ -6002,24 +6117,47 @@ export function ModelSelector({
   }
 
   return (
-    <Popover open={open || keepOpenForAgentSwitch} onOpenChange={handleOpenChange}>
+    <ModelSelectorPopover
+      open={open || keepOpenForAgentSwitch}
+      onOpenChange={handleOpenChange}
+      side={popoverSide}
+      width={isFieldTrigger ? fieldPanelWidth : undefined}
+      trigger={trigger}
+    >
+      {content}
+    </ModelSelectorPopover>
+  );
+}
+
+/** Shared popover for the picker, including settings rows that already have a display label. */
+export function ModelSelectorPopover({ open, onOpenChange, side, width, trigger, children }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  side: ModelSelectorBaseProps['popoverSide'];
+  width?: ModelSelectorBaseProps['fieldPanelWidth'];
+  trigger: React.ReactElement;
+  children: React.ReactNode;
+}) {
+  const readable = width === 'readable';
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
-        side={popoverSide}
+        side={side}
         align="end"
         sideOffset={4}
-        collisionPadding={readableFieldPanel ? 12 : 8}
+        collisionPadding={readable ? 12 : 8}
         className={cn(
-          readableFieldPanel ? 'w-[max(var(--radix-popover-trigger-width),440px)] max-w-[calc(100vw-24px)]'
-            : fieldPanelFollowsTrigger ? 'w-[var(--radix-popover-trigger-width)]'
-            : isFieldTrigger ? 'w-auto min-w-[var(--radix-popover-trigger-width)]' : 'w-auto',
+          readable ? 'w-[max(var(--radix-popover-trigger-width),440px)] max-w-[calc(100vw-24px)]'
+            : width === 'trigger' ? 'w-[var(--radix-popover-trigger-width)]'
+            : width ? 'w-auto min-w-[var(--radix-popover-trigger-width)]' : 'w-auto',
           'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-xl p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',
         )}
       >
-        <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentSwitch}>
-          {content}
+        <ProviderShareQuotaViewingContext.Provider value={open}>
+          {children}
         </ProviderShareQuotaViewingContext.Provider>
       </PopoverContent>
     </Popover>

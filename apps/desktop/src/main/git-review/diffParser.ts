@@ -221,6 +221,7 @@ function makeFileId(source: FileDiff['source'], path: string, idPrefix?: string)
 }
 
 export function parseGitDiff(raw: string, opts: {
+  unifiedOnly?: boolean;
   source: FileDiff['source'];
   idPrefix?: string;
   pathHint?: string | null;
@@ -231,7 +232,7 @@ export function parseGitDiff(raw: string, opts: {
   isUntracked?: boolean;
   error?: string | null;
 }): FileDiff {
-  const patchStart = raw.indexOf('diff --git ');
+  const patchStart = opts.unifiedOnly ? -1 : raw.indexOf('diff --git ');
   const rawPart = patchStart >= 0 ? raw.slice(0, patchStart) : '';
   const patch = patchStart >= 0 ? raw.slice(patchStart).replace(/\0/g, '') : raw.replace(/\0/g, '');
   const rawMeta = parseRawMeta(rawPart);

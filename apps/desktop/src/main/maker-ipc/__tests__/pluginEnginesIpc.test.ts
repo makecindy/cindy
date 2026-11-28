@@ -24,6 +24,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
+import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
 import type { PluginHarness } from '../../cindy-brain/pluginHarnesses.js';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-engines-ipc-test-'));
@@ -405,8 +407,13 @@ describe('plugin engines with accounts', () => {
     deviceLink = true;
     await usage({}, KEY, { sessionId: 's1' });
     expect(readTaskUsage).toHaveBeenLastCalledWith(KEY, 's1', { fallbackToOriginal: true });
+    // Unit #13748: borrowing the engine uses the authenticated peer's hosted task, even
+    // when a task with the same original id exists here or a caller supplies a different peer.
+    await runDeviceLinkInvokeContext({ controllerDeviceId: 'desk', channel: PLUGIN_ENGINES_INVOKE.USAGE },
+      () => usage({}, KEY, { sessionId: 's1', hosted: true, controllerDeviceId: 'other' }));
+    expect(readTaskUsage).toHaveBeenLastCalledWith(KEY, hostSessionIdFor('desk', 's1'), { fallbackToOriginal: true });
     deviceLink = false;
     expect(await usage({}, KEY)).toBeNull();
-    expect(readTaskUsage).toHaveBeenCalledTimes(2);
+    expect(readTaskUsage).toHaveBeenCalledTimes(3);
   });
 });

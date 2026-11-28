@@ -228,11 +228,83 @@ describe('market Ghost session boundary', () => {
       { functions: ['assertGhostRelocationIdle'] },
     )({
       hasPendingGhostCalls: () => false, hasRunningGhostErrand: () => false, hasRunningGhostCindyWork: () => false,
+      hasRunningPluginEngineTurn: (part: string) => part === 'harness-busy',
       fsSlotSingleton: null, networkSlotSingleton: null,
       isGhostHandoffBusy: (part: string) => part === 'busy',
     });
     expect(() => assertGhostRelocationIdle('busy')).toThrow('Ghost relocation is waiting for active work to finish');
+    expect(() => assertGhostRelocationIdle('harness-busy')).toThrow('Ghost relocation is waiting for active work to finish');
     expect(() => assertGhostRelocationIdle('idle')).not.toThrow();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：stopGhostNodeRuntimeForUpdate 在 stopAndWait 超时放弃后，仅当旧进程排空且
+  //   owner、启用状态、安装目录/版本/批准指纹均未变化时调用 spawnIfResident 解除 harnessSpawnBlocked。
+  // - Bug／规则依据：2026-11-28 实机故障（stopAndWait 超时后插件引擎启动闸永久卡死）与 plugin-security-and-authoring.md。
+  // - 现有覆盖缺口：本文件既有边界用例仅校验正常落盘与回滚分支，未覆盖 stopAndWait 超时后的延迟恢复守门。
+  // - 最小失败输入：同 owner 未变时恢复；切换 owner / 停用插件 / 批准变化时拒绝恢复。
+  // - tier：unit（生产函数回调沙箱，零外部 I/O）。
+  it('restores via spawnIfResident after stop timeout only while owner, enabled state and approval stay unchanged', async () => {
+    const { createGhostProductionCallbacks } = await import('./ghostProductionCallbacksFixture.js');
+    const { ghostInstallApprovalToken } = await import('../../../shared/ghost.js');
+    const expectedOwner = { mode: 'cloud', dataOwnerId: 'u1', generation: 1 };
+    let currentOwner = { ...expectedOwner };
+    let boundaryPending = false;
+    const expectedGhost = {
+      dir: '/plugins/agy',
+      enabled: true,
+      manifest: { version: '1.2.0' },
+      approval: { state: 'approved', revision: 'r1', packageSha256: 'sha-old' },
+    };
+    let currentGhost: typeof expectedGhost | null = { ...expectedGhost };
+    const waiters: Array<() => void> = [];
+    const spawnIfResident = vi.fn();
+    const { stopGhostNodeRuntimeForUpdate } = createGhostProductionCallbacks<{
+      stopGhostNodeRuntimeForUpdate(ghost: unknown, owner: unknown): Promise<void>;
+    }>({ functions: ['isSameGhostMutationOwner', 'stopGhostNodeRuntimeForUpdate'] })({
+      isAppSessionBoundaryPending: () => boundaryPending,
+      getActiveAppSession: () => currentOwner,
+      getGhostNodeRuntimeBroker: () => ({
+        stopAndWait: vi.fn().mockRejectedValue(new Error('stop timed out')),
+        whenProcessesExited: (_id: string, cb: () => void) => { waiters.push(cb); },
+      }),
+      installedGhostStoragePart: () => '_root__agy',
+      findGhostForInstanceId: () => currentGhost,
+      log: { info: vi.fn() },
+      ghostInstallApprovalToken,
+      spawnIfResident,
+    });
+
+    // Unchanged owner & install -> resumes.
+    await expect(stopGhostNodeRuntimeForUpdate(expectedGhost, expectedOwner)).rejects.toThrow('stop timed out');
+    waiters.pop()!();
+    expect(spawnIfResident).toHaveBeenCalledTimes(1);
+
+    // Owner changed -> must not resume.
+    await expect(stopGhostNodeRuntimeForUpdate(expectedGhost, expectedOwner)).rejects.toThrow('stop timed out');
+    currentOwner = { mode: 'cloud', dataOwnerId: 'u2', generation: 2 };
+    waiters.pop()!();
+    expect(spawnIfResident).toHaveBeenCalledTimes(1);
+    currentOwner = { ...expectedOwner };
+
+    // Boundary pending -> must not resume.
+    await expect(stopGhostNodeRuntimeForUpdate(expectedGhost, expectedOwner)).rejects.toThrow('stop timed out');
+    boundaryPending = true;
+    waiters.pop()!();
+    expect(spawnIfResident).toHaveBeenCalledTimes(1);
+    boundaryPending = false;
+
+    // Plugin disabled -> must not resume.
+    currentGhost = { ...expectedGhost, enabled: false };
+    await expect(stopGhostNodeRuntimeForUpdate(expectedGhost, expectedOwner)).rejects.toThrow('stop timed out');
+    waiters.pop()!();
+    expect(spawnIfResident).toHaveBeenCalledTimes(1);
+
+    // Package approval changed -> must not resume.
+    currentGhost = { ...expectedGhost, approval: { state: 'approved', revision: 'r2', packageSha256: 'sha-new' } };
+    await expect(stopGhostNodeRuntimeForUpdate(expectedGhost, expectedOwner)).rejects.toThrow('stop timed out');
+    waiters.pop()!();
+    expect(spawnIfResident).toHaveBeenCalledTimes(1);
   });
 
   // Codex 4431230310: the idle check passes before awaits inside the move, so new
@@ -323,7 +395,7 @@ describe('market Ghost session boundary', () => {
       'runtime.stop(instanceId)',
     );
     const stopAndWaitIndex = helperBody.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(instanceId);',
+      'await stopGhostNodeRuntimeForUpdate(previousGhost);',
     );
     const oauthLockIndex = helperBody.indexOf(
       'withCredentialMutation: sourceChanged ? undefined : run => withActiveOwnerGhostOauthMutationLock(',
@@ -394,7 +466,7 @@ describe('market Ghost session boundary', () => {
     expect(body.slice(commit, body.indexOf('},', commit))).toContain('expected.assertCurrent?.();');
 
     const waitIndex = body.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(',
+      'await stopGhostNodeRuntimeForUpdate(',
     );
     const oauthLockIndex = body.indexOf(
       ': run => withActiveOwnerGhostOauthMutationLock(installedGhostStoragePart(installed)',
@@ -406,8 +478,17 @@ describe('market Ghost session boundary', () => {
     expect(oauthLockIndex).toBeGreaterThan(updateIndex);
     expect(body).toContain('runtime.stop(installedGhostStoragePart(installed));');
     expect(body).toContain(
-      'await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));',
+      'await stopGhostNodeRuntimeForUpdate(installed);',
     );
+    // 竞态守卫：最终忙碌复核、runtime.stop 与 broker 停止之间不能有 await。
+    const finalBusyCheck = body.indexOf('expected.beforeRuntimeStopInLock?.();');
+    const runtimeStop = body.indexOf('runtime.stop(installedGhostStoragePart(installed));');
+    const nodeStop = body.indexOf('await stopGhostNodeRuntimeForUpdate(installed);');
+    const appStop = body.indexOf('await stopPluginAppInstance(installedGhostStoragePart(installed));');
+    expect(finalBusyCheck).toBeGreaterThan(-1);
+    expect(finalBusyCheck).toBeLessThan(runtimeStop);
+    expect(runtimeStop).toBeLessThan(nodeStop);
+    expect(nodeStop).toBeLessThan(appStop);
     expect(body).toContain('runtime.resetFuse(installedGhostStoragePart(result.ghost));');
     expect(body).toContain('...(!previousRelId ? { expectedInstalledInstanceId: installedGhostStoragePart(installed) } : {}),');
     const confirmNamespace = body.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost,');
@@ -416,7 +497,7 @@ describe('market Ghost session boundary', () => {
     expect(body).not.toContain(
       'pluginStoragePart(createPluginLogicalIdentity(expected.namespace ?? null, expected.ghostId))',
     );
-    const restoreIndex = body.indexOf('spawnIfResident(installed);');
+    const restoreIndex = body.lastIndexOf('spawnIfResident(installed);');
     expect(restoreIndex).toBeGreaterThan(updateIndex);
   });
 
@@ -432,7 +513,7 @@ describe('market Ghost session boundary', () => {
     const helperBody = source.slice(helperStart, helperEnd);
 
     const waitIndex = helperBody.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(instanceId);',
+      'await stopGhostNodeRuntimeForUpdate(previousGhost);',
     );
     const oauthLockIndex = helperBody.indexOf(
       'withCredentialMutation: sourceChanged ? undefined : run => withActiveOwnerGhostOauthMutationLock(',
@@ -458,6 +539,16 @@ describe('market Ghost session boundary', () => {
     expect(provenanceBody).toContain('installationForPlugin({');
     expect(provenanceBody).toContain('...deliveryNamespaceFields(previousGhost)');
     expect(helperBody.indexOf('= readLocalGhostUpdateSource(')).toBeLessThan(waitIndex);
+    // Both in-place update paths stop through one helper: a failed wait rethrows (no immediate
+    // second resident), and restores the old version only after the stuck processes really exit.
+    const stopHelperStart = source.indexOf('async function stopGhostNodeRuntimeForUpdate(');
+    const stopHelper = source.slice(stopHelperStart, source.indexOf('\n}\n', stopHelperStart));
+    expect(stopHelper.indexOf('await broker.stopAndWait(instanceId);')).toBeGreaterThan(-1);
+    expect(stopHelper.indexOf('broker.whenProcessesExited(instanceId,'))
+      .toBeGreaterThan(stopHelper.indexOf('} catch (error) {'));
+    expect(stopHelper.indexOf('spawnIfResident(current);'))
+      .toBeGreaterThan(stopHelper.indexOf('broker.whenProcessesExited(instanceId,'));
+    expect(stopHelper).toContain('throw error;');
     expect(helperBody).toContain("throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');");
   });
 

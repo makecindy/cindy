@@ -851,7 +851,8 @@ export function SubscriptionAccountsSection({
                     </div>
                     {account.apiKey?.checks.flatMap(check => check.result ? [
                       <p key={check.agent} role="status" className="mt-1 text-12 text-[var(--text-secondary)]">
-                        {check.result.ok ? t('openAiAccountGroup.testPassed') : t(openAiGroupFailureKey(check.result.code))}
+                        {check.result.ok ? t('openAiAccountGroup.testPassed')
+                          : check.blocked && check.result.billingCode ? t('openAiAccountGroup.billingPaused') : t(openAiGroupFailureKey(check.result.code))}
                       </p>,
                     ] : [])}
                     {/* Usage sits under the account name (from the avatar edge when narrow, so the

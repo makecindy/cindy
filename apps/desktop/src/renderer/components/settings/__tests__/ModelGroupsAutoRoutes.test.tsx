@@ -20,21 +20,23 @@ const h = vi.hoisted(() => ({
   localPluginEngines: [] as unknown[],
   sharedPluginDevices: [] as Array<{ deviceId: string; name: string }>,
   remotePluginCatalogues: new Map<string, readonly unknown[] | null>(),
+  providers: [
+    { id: 'openai', name: 'OpenAI', connected: true, agents: [], routing: {}, models: {} },
+    { id: 'key-1', name: 'Fixture key', connected: true, agents: [], routing: {}, models: {} },
+  ] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (key: string, args?: { count?: number }) => (args?.count !== undefined ? `${key}:${args.count}` : key) }),
+  useTranslation: () => ({ t: (key: string, args?: { count?: number }) => (args?.count !== undefined ? `${key}:${args.count}` : key), i18n: { language: 'zh-CN' } }),
 }));
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: [
-    { id: 'openai', name: 'OpenAI', connected: true, agents: [], routing: {}, models: {} },
-    { id: 'key-1', name: 'Fixture key', connected: true, agents: [], routing: {}, models: {} },
-  ] }),
+  useProviders: () => ({ providers: h.providers }),
 }));
 vi.mock('@/hooks/usePluginEngines', () => ({
   usePluginEngines: () => h.localPluginEngines,
   useDevicesPluginEngines: () => ({ catalogues: h.remotePluginCatalogues, read: vi.fn() }),
+  useRemotePluginEngines: () => [],
 }));
 vi.mock('@/hooks/useControllableDevices', () => ({
   useSelectableDevices: () => ({ devices: [] }),
@@ -57,9 +59,11 @@ vi.mock('@/hooks/useDevicesProviders', () => ({
 }));
 vi.mock('@/features/provider-group/useLocalProviderGroups', () => ({ useLocalProviderGroups: () => h.groups }));
 vi.mock('@/features/provider-group/useProviderGroup', () => ({ useProviderGroup: () => ({ view: null, save: h.save }) }));
-vi.mock('@/components/new-chat/ModelSelector', () => ({ ProviderMark: () => null }));
+vi.mock('react-router-dom', () => ({ useInRouterContext: () => false }));
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }) }));
+vi.mock('@/components/new-chat/ModelSelector', () => ({ ProviderMark: () => null, ModelSelector: () => null }));
 
-import { ProviderAllocationRows, useSourceOptions, WholeProviderAddRow } from '../ModelGroupsAutoRoutes';
+import { ProviderAllocationRows, SourceRouteDetail, useSourceOptions, WholeProviderAddRow } from '../ModelGroupsAutoRoutes';
 
 afterEach(() => cleanup());
 
@@ -171,4 +175,154 @@ it('restores local allocation row when source route is hidden or member is turne
     sourceRoutes: [{ id: 'auto:openai', name: 'OpenAI', strategy: 'expiring', hidden: true, sources: [{ providerId: 'openai' }] }],
   } as never} />);
   expect(document.querySelector('[data-auto-route="computers:openai"]')).toBeTruthy();
+});
+
+// 2026-11-28 用户裁决：路由选项里不出现再次合并的嵌套自动来源（无两层自动）。
+// 本机多账号池直接拆平为 1、2、3、4 各自独立的开关行；「试一下」直接列出每个扁平账号与配额；
+// 手动「添加来源」下拉也直接列出拆平后的单个账号，不列出被包裹的整池。
+it('renders flattened local accounts as individual toggleable sources with flat preview and no nested auto rows', async () => {
+  const prevProviders = h.providers;
+  h.groups = {
+    openai: {
+      strategy: 'expiring',
+      autoSwitch: true,
+      members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'openai', weight: 1, limit: 4, paused: false }],
+    },
+  };
+  h.providers = [
+    {
+      id: 'openai', name: 'OpenAI', connected: true, subscriptionAccountPool: 'openai',
+      subscriptionAccountKeys: ['a', 'b'], agents: ['codex'], routing: { codex: {} },
+      models: { codex: [{ id: 'gpt-6.2', name: 'GPT-6.2' }] },
+    },
+    {
+      id: 'byok-1', name: 'OpenAI-Codex', connected: true, agents: ['codex'], routing: { codex: {} },
+      models: { codex: [{ id: 'gpt-6.2', name: 'GPT-6.2' }] },
+    },
+    // The old connection name is no longer an independent account or addable source.
+    { id: 'old-openai', name: 'Old OpenAI alias', connected: true, subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai',
+      subscriptionAccountPool: 'openai', agents: ['codex'], routing: {}, models: {} },
+  ];
+  const readPool = vi.fn(async () => ({
+    provider: 'openai',
+    providerId: 'openai',
+    strategy: 'expiring',
+    accounts: [
+      { id: 'default', identity: 'first@example.com', status: 'ready', running: 0, weight: 1, limit: 4, paused: false },
+      { id: 'second', identity: 'second@example.com', status: 'ready', running: 0, weight: 1, limit: 4, paused: false },
+    ],
+  }));
+  const resolveMock = vi.fn(async () => ({
+    outcome: 'routed',
+    groupName: 'OpenAI',
+    route: { agentKind: 'codex', providerId: 'openai', accountId: 'default', model: 'gpt-6.2' },
+    modelName: 'GPT-6.2',
+    sourceName: 'OpenAI · first@example.com',
+    why: 'expiring',
+    quota: { usedPercent: 18, resetAtMs: Date.now() + 7_200_000, windowMs: 18_000_000 },
+    trace: [
+      {
+        agentKind: 'codex', providerId: 'openai', accountId: 'default', model: 'gpt-6.2',
+        modelName: 'GPT-6.2', sourceName: 'OpenAI · first@example.com', state: 'picked', why: 'expiring',
+        quota: { usedPercent: 18, resetAtMs: Date.now() + 7_200_000, windowMs: 18_000_000 },
+      },
+      {
+        agentKind: 'codex', providerId: 'openai', accountId: 'second', model: 'gpt-6.2',
+        modelName: 'GPT-6.2', sourceName: 'OpenAI · second@example.com', state: 'standby', why: 'standby',
+        quota: { usedPercent: 55, resetAtMs: Date.now() + 14_400_000, windowMs: 18_000_000 },
+      },
+      {
+        agentKind: 'codex', providerId: 'byok-1', model: 'gpt-6.2',
+        modelName: 'GPT-6.2', sourceName: 'OpenAI-Codex', state: 'standby', why: 'standby',
+        quota: null,
+      },
+    ],
+  }));
+  const save = vi.fn(async (change: (latest: Record<string, unknown>) => Record<string, unknown>) => {
+    change({
+      routes: [],
+      sourceRoutes: [{
+        id: 'auto:openai', name: 'OpenAI', strategy: 'expiring', auto: true,
+        sources: [
+          { providerId: 'openai', accountId: 'default' },
+          { providerId: 'openai', accountId: 'second' },
+          { providerId: 'byok-1' },
+        ],
+      }],
+    });
+    return true;
+  });
+  Object.assign(window, {
+    electronAPI: {
+      subscriptionAccounts: { command: readPool, onChanged: () => () => undefined },
+      modelGroups: { resolve: resolveMock },
+    },
+  });
+  try {
+    const expandedRoute = {
+      id: 'src:openai-gpt',
+      name: 'GPT-6.2',
+      strategy: 'expiring' as const,
+      parent: { id: 'auto:openai', name: 'OpenAI' },
+      candidates: [
+        { agentKind: 'codex' as const, providerId: 'openai', accountId: 'default', model: 'gpt-6.2' },
+        { agentKind: 'codex' as const, providerId: 'openai', accountId: 'second', model: 'gpt-6.2' },
+        { agentKind: 'codex' as const, providerId: 'byok-1', model: 'gpt-6.2' },
+      ],
+    };
+    const onAdd = vi.fn();
+    function Harness() {
+      const options = useSourceOptions();
+      return (
+        <>
+          <SourceRouteDetail
+            route={{
+              id: 'auto:openai', name: 'OpenAI', strategy: 'expiring', auto: true,
+              sources: [
+                { providerId: 'openai', accountId: 'default' },
+                { providerId: 'openai', accountId: 'second' },
+                { providerId: 'byok-1' },
+              ],
+            }}
+            config={{ routes: [expandedRoute] } as never}
+            options={options}
+            save={save as never}
+            onBack={vi.fn()}
+          />
+          <WholeProviderAddRow options={options} taken={[]} onAdd={onAdd} />
+        </>
+      );
+    }
+    render(<Harness />);
+    await screen.findByText('OpenAI · first@example.com');
+    await screen.findByText('OpenAI · second@example.com');
+    // 无任何嵌套账号/电脑分配行（绝不出现两层自动）。
+    expect(document.querySelector('[data-auto-route^="accounts:"]')).toBeNull();
+    expect(document.querySelector('[data-auto-route^="computers:"]')).toBeNull();
+    expect(screen.queryByText(/modelGroups\.auto\.accounts/)).toBeNull();
+    // 三个扁平来源各自一行，依次编号 1、2、3。
+    const rows = [0, 1, 2].map((i) => document.querySelector(`[data-source-route-member="${i}"]`)?.textContent ?? '');
+    expect(rows[0]).toContain('OpenAI · first@example.com');
+    expect(rows[1]).toContain('OpenAI · second@example.com');
+    expect(rows[2]).toContain('OpenAI-Codex');
+
+    // 点击「试一下」：直接列出每个扁平账号与 BYOK，没有被包裹的 auto。
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'modelGroups.settings.try.run' }));
+    });
+    const preview = await screen.findByTestId('model-group-preview');
+    expect(preview.textContent).toContain('GPT-6.2 · OpenAI · first@example.com');
+    expect(preview.textContent).toContain('GPT-6.2 · OpenAI · second@example.com');
+    expect(preview.textContent).toContain('GPT-6.2 · OpenAI-Codex');
+
+    // 手动「添加来源」下拉只列单账号，不列整池。
+    fireEvent.click(screen.getByRole('combobox', { name: 'modelGroups.sources.addWhole' }));
+    expect(screen.queryByRole('option', { name: /Old OpenAI alias/ })).toBeNull();
+    expect(readPool).not.toHaveBeenCalledWith(expect.objectContaining({ providerId: 'old-openai' }));
+    fireEvent.click(screen.getByRole('option', { name: 'OpenAI · second@example.com' }));
+    expect(onAdd).toHaveBeenCalledWith({ providerId: 'openai', accountId: 'second' });
+  } finally {
+    h.providers = prevProviders;
+    h.groups = {};
+  }
 });

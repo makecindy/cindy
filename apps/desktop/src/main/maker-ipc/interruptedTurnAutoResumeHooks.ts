@@ -11,10 +11,12 @@ import {
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import {
-  BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, MODEL_GROUP_SAME_SOURCE_RETRIES, canResumeAfterRuntimeFallback, isBotCandidateUnavailable,
+  MODEL_GROUP_SAME_SOURCE_RETRIES, canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isStartupTakeoverReason,
   modelGroupFailureScope, modelGroupSwitchCause, type ModelGroupRecovery, type ModelGroupSwitchCause, type RuntimeFallbackResult,
 } from './botCandidateRecovery.js';
+import { isProviderSafetyRefusalError, PROVIDER_SAFETY_REFUSAL_REASON } from '@cindy/maker-shared/error-redaction';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
+import { sanitizeRouteChangeReason } from './sessionRuntimeControl.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
 
@@ -55,6 +57,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     requireRouteChange: boolean,
     isCurrent: () => boolean,
     groupRecovery?: ModelGroupRecovery,
+    fallbackReason?: string,
   ): Promise<RuntimeFallbackResult<RuntimeSession>>;
   pendingSessionRuntimeFallbackRebuilds: { delete(session: RuntimeSession): unknown };
   providerGroupHeldErrors: { stash(sessionId: string, holdId: number, detail: unknown): void };
@@ -137,7 +140,8 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       const groupSwitchesNow = groupScope === 'model' || groupScope === 'connection';
       const reportPreparation = signals.reason === 'orca-report-preparation';
       const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
-      const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
+      // A refused startup (a Bot's admission or a routed source that would not start) retries its original queue head.
+      const startupAdmission = isStartupTakeoverReason(signals.reason);
       const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals) || groupScope === 'transient';
       const erroredAt = Date.now();
       const ordinaryReconnect = groupScope === null && signals.reason === 'codex_reconnect_stalled';
@@ -227,6 +231,11 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
               // Report retries must enter the original queue checkpoint before any
               // allocation. Runtime fallback can eagerly bootstrap a different route.
               if (!mayContinue()) return;
+              const fallbackReason = isProviderSafetyRefusalError(signals.message ?? '', signals.reason)
+                ? PROVIDER_SAFETY_REFUSAL_REASON
+                : groupScope !== null
+                  ? modelGroupSwitchCause(signals, groupScope)
+                  : sanitizeRouteChangeReason(signals.reason) ?? undefined;
               const fallback: RuntimeFallbackResult<RuntimeSession> = reportPreparation || localPreparation
                 ? { session: null, outcome: 'unchanged' }
                 : await maybeApplySessionRuntimeFallback(
@@ -237,12 +246,13 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   settlePausedResumeIntoHistory
                     ? () => ownsAttempt() && !inputCoordinator.isExecutionPaused(sessionId)
                     : isCurrent,
-                  ...(modelGroupPolicy !== undefined ? [{
+                  modelGroupPolicy !== undefined ? {
                     retrySameSource: !groupSwitch,
                     accountUnavailable: groupScope === 'connection',
                     hasImages: item.files?.some(file => file.category === 'image') === true
                       || (Array.isArray((item as { images?: unknown[] }).images) && (item as { images?: unknown[] }).images!.length > 0),
-                  }] as const : []),
+                  } : undefined,
+                  fallbackReason,
                 );
               fallbackRebuildSession = fallback.session;
               if (!mayContinue()) return;

@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
-import { canConnectOutboxPeer, createOutboxSessionAccess } from '@/session/mobileOutboxSessionAdapter';
+import {
+  canConnectOutboxPeer,
+  clearOutboxSessionHandoffs,
+  createOutboxSessionAccess,
+  peekOutboxSessionClearBoundary,
+  seedOutboxSessionHandoff,
+  takeOutboxSessionHandoff,
+} from '@/session/mobileOutboxSessionAdapter';
+import type { RemoteSession } from '@/session/types';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 
 import {
@@ -212,5 +220,109 @@ describe('Cindy Make outbox bridge guards', () => {
     latest.current.link.status = 'online';
     record.suspended = true;
     expect(callbacks.canRun(record)).toBe(false);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：经 seedOutboxSessionHandoff + peekOutboxSessionClearBoundary +
+  //   createOutboxSessionAccess.readSessionOnce 验证新建交接复用权威会话行、省去重复 getSession 与
+  //   get-projection，且连接换代 / 超时 / 二次消费时安全回退远端读取。
+  // - Bug／规则依据：手机新建首条消息优化（避免新建完成后重复 local-db:sessions:get 与多余 get-projection）。
+  // - 现有覆盖缺口：原有用例仅覆盖同一次尝试内的 sessionReads 复用，未覆盖跨新建交接的消费与失效边界。
+  // - 最小失败输入：同一 connectionEpoch 下交接一条 clearedAt=null 的新会话；再测换代、超 TTL、已消费与带 clearedAt。
+  // - tier：unit（内存态，毫秒级）。
+  it('reuses a fresh creation handoff session once on the same connection epoch and falls back when stale', async () => {
+    clearOutboxSessionHandoffs();
+    try {
+      const record = {
+        accountId: 'acct-1',
+        deviceId: 'desktop',
+        state: 'queued',
+        uploads: [],
+        item: { sessionId: 'session', clientId: 'client', text: 'hello', slashCommandRanges: [], attachmentSlots: [] },
+      } as unknown as DurableOutboxRecord;
+      const handedOffSession = {
+        id: 'session',
+        title: '',
+        workingDir: '/repo',
+        agentKind: 'claude-code',
+        permissionMode: 'ask',
+        status: 'idle',
+        source: null,
+        clearedAt: null,
+        createdAt: '2026-11-28T00:00:00.000Z',
+        updatedAt: '2026-11-28T00:00:00.000Z',
+      } as unknown as RemoteSession;
+      let currentEpoch = 7;
+      const invoke = vi.fn(async (_device: string, _channel: string, _args: unknown[] | undefined, options: { preSend(): void }) => {
+        options.preSend();
+        return { ...handedOffSession, workingDir: '/repo-fresh' };
+      });
+      const owner = { current: true, records: [record] };
+      const callbacks = createOutboxSessionAccess({
+        getSessions: () => [],
+        getRecords: () => owner.records,
+        guard: () => { if (!owner.current) throw new Error('OUTBOX_OWNER_CHANGED'); },
+        isCurrent: () => owner.current,
+        isForeground: () => true,
+        canConnect: () => true,
+        isCreationHeld: () => false,
+        hasCreationTask: () => false,
+        needsReconciliation: () => true,
+        invoke,
+        readSession: r => callbacks.invokeOwned(r)(r.deviceId, 'local-db:sessions:get', [r.item.sessionId]),
+        takeSeededSession: r => takeOutboxSessionHandoff({
+          accountKey: 'acct-1',
+          deviceId: r.deviceId,
+          sessionId: r.item.sessionId,
+          clientId: r.item.clientId,
+          connectionEpoch: currentEpoch,
+        }, 1_000),
+      });
+
+      seedOutboxSessionHandoff({
+        accountKey: 'acct-1',
+        deviceId: 'desktop',
+        sessionId: 'session',
+        clientId: 'client',
+        connectionEpoch: 7,
+        session: handedOffSession,
+      }, 1_000);
+      expect(peekOutboxSessionClearBoundary({
+        accountKey: 'acct-1', deviceId: 'desktop', sessionId: 'session', clientId: 'client', connectionEpoch: 7,
+      }, 1_000)).toBeNull();
+
+      // Same connection epoch: consumes seeded session without RPC.
+      const row = await callbacks.readSessionOnce(record);
+      expect(row).toEqual(handedOffSession);
+      expect(invoke).not.toHaveBeenCalled();
+
+      // Already consumed once: a second handoff lookup misses.
+      expect(takeOutboxSessionHandoff({
+        accountKey: 'acct-1', deviceId: 'desktop', sessionId: 'session', clientId: 'client', connectionEpoch: 7,
+      }, 1_000)).toBeUndefined();
+
+      // Reconnect (epoch change), expiry, and non-null clearedAt must not leak stale state.
+      seedOutboxSessionHandoff({
+        accountKey: 'acct-1', deviceId: 'desktop', sessionId: 'session', clientId: 'client', connectionEpoch: 7,
+        session: handedOffSession,
+      }, 1_000);
+      currentEpoch = 8;
+      expect(peekOutboxSessionClearBoundary({
+        accountKey: 'acct-1', deviceId: 'desktop', sessionId: 'session', clientId: 'client', connectionEpoch: 8,
+      }, 1_000)).toBeUndefined();
+
+      seedOutboxSessionHandoff({
+        accountKey: 'acct-1', deviceId: 'desktop', sessionId: 'session', clientId: 'client', connectionEpoch: 8,
+        session: { ...handedOffSession, clearedAt: '2026-11-28T00:01:00.000Z' },
+      }, 1_000);
+      expect(peekOutboxSessionClearBoundary({
+        accountKey: 'acct-1', deviceId: 'desktop', sessionId: 'session', clientId: 'client', connectionEpoch: 8,
+      }, 1_000)).toBeUndefined();
+      expect(takeOutboxSessionHandoff({
+        accountKey: 'acct-1', deviceId: 'desktop', sessionId: 'session', clientId: 'client', connectionEpoch: 8,
+      }, 20_000)).toBeUndefined();
+    } finally {
+      clearOutboxSessionHandoffs();
+    }
   });
 });

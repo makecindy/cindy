@@ -6,6 +6,7 @@ import { ipcMain } from 'electron';
 import { supportsSubscriptionFastPolicy, type ProviderView } from '@cindy/model-providers';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
 import { openAiAccountGroupKind, type OpenAiGroupAccount, type OpenAiGroupAccountDetail, type OpenAiGroupApiAgent, type OpenAiGroupProbeResult } from '../../shared/openAiAccountGroup.js';
 
@@ -384,42 +385,65 @@ async function runProviderGroupCommand(
     }
     case 'account-merge': {
       const { targetProviderId } = command;
-      const accounts = accountDirectory(deps, targetProviderId, await readAccountDirectory(deps));
-      assertCurrent();
-      const target = accounts.find(account => account.id === targetProviderId);
-      const source = accounts.find(account => account.id === providerId);
-      const prior = deps.readGroup(targetProviderId);
-      if (providerId === 'openai' || !target?.connected || !source?.connected || source.included || source.kind === target.kind
-        || deps.readGroup(providerId)?.localAccountIds?.includes(targetProviderId)) {
-        throwIpcError('PRECONDITION_FAILED', 'Providers cannot be merged');
-      }
-      const memberCount = prior ? prior.members.length + (prior.localAccountIds?.length ?? 0)
-        + Number(!prior.members.some(member => member.kind === 'local')) : 1;
-      if (memberCount >= PROVIDER_GROUP_STORAGE_MEMBER_CAP) {
-        throwIpcError('PRECONDITION_FAILED', 'Account group is full');
-      }
+      const readMergePair = async () => {
+        const accounts = accountDirectory(deps, targetProviderId, await readAccountDirectory(deps));
+        assertCurrent();
+        const target = accounts.find(account => account.id === targetProviderId);
+        const source = accounts.find(account => account.id === providerId);
+        const prior = deps.readGroup(targetProviderId);
+        if (providerId === 'openai' || !target?.connected || !source?.connected || source.included || source.kind === target.kind
+          || deps.readGroup(providerId)?.localAccountIds?.includes(targetProviderId)) {
+          throwIpcError('PRECONDITION_FAILED', 'Providers cannot be merged');
+        }
+        const memberCount = prior ? prior.members.length + (prior.localAccountIds?.length ?? 0)
+          + Number(!prior.members.some(member => member.kind === 'local')) : 1;
+        if (memberCount >= PROVIDER_GROUP_STORAGE_MEMBER_CAP) {
+          throwIpcError('PRECONDITION_FAILED', 'Account group is full');
+        }
+        return { source, target, prior };
+      };
+      const { source, target, prior } = await readMergePair();
       if (!deps.probeAccount) throwIpcError('PRECONDITION_FAILED', 'Account unavailable for testing');
       const pair = JSON.stringify([deps.ownerKey(), ...[providerId, targetProviderId].sort()]);
       if (accountMergesInFlight.has(pair)) throwIpcError('PRECONDITION_FAILED', 'Provider merge already in progress');
       accountMergesInFlight.add(pair);
       try {
-        const test = await deps.probeAccount(source.kind === 'apiKey' ? providerId : targetProviderId);
-        assertCurrent();
-        if (!test.ok) return test;
+        const keyId = source.kind === 'apiKey' ? providerId : targetProviderId;
+        const revision = getProviderRouteCredentialRevision(keyId);
+        const assertMergeCurrent = () => {
+          assertCurrent();
+          if (isProviderRouteMutationInProgress(keyId) || getProviderRouteCredentialRevision(keyId) !== revision) {
+            throwIpcError('PRECONDITION_FAILED', 'The API key changed during provider management');
+          }
+        };
+        assertMergeCurrent();
+        const test = await deps.probeAccount(keyId);
+        assertMergeCurrent();
+        // A confirmed billing refusal persists in the account's health store. It
+        // prevents new assignments, but does not invalidate the membership itself.
+        if (!test.ok && !(test.code === 'QUOTA_EXCEEDED' && test.billingCode)) return test;
+        const latest = await readMergePair();
+        assertMergeCurrent();
+        if (latest.source.kind !== source.kind || latest.target.kind !== target.kind) {
+          throwIpcError('PRECONDITION_FAILED', 'Providers changed during account merge');
+        }
+        const merged = test.ok ? test : { ok: true, probe: test };
         if (deps.mergeLocalAccounts) {
-          await deps.mergeLocalAccounts(providerId, targetProviderId, assertCurrent);
+          await deps.mergeLocalAccounts(providerId, targetProviderId, assertMergeCurrent);
           assertCurrent();
           deps.changed(targetProviderId);
-          return test;
+          return merged;
         }
         const existing = prior ?? { strategy: DEFAULT_ROUTE_STRATEGY, autoSwitch: true, members: [{
           key: 'local', kind: 'local', agentDeviceId: null, providerId: targetProviderId,
           limit: PROVIDER_GROUP_DEFAULT_LIMIT, weight: PROVIDER_GROUP_DEFAULT_WEIGHT, paused: false,
         }] };
-        await deps.writeGroup(targetProviderId, { ...existing, localAccountIds: [...prior?.localAccountIds ?? [], providerId] }, prior);
+        assertMergeCurrent();
+        const written = await deps.writeGroup(targetProviderId, { ...existing, localAccountIds: [...prior?.localAccountIds ?? [], providerId] }, prior);
         assertCurrent();
+        if (!written) throwIpcError('PROVIDER_GROUP_CHANGED', 'The provider group changed while it was being edited');
         deps.changed(targetProviderId);
-        return test;
+        return merged;
       } finally {
         accountMergesInFlight.delete(pair);
       }

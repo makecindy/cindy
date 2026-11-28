@@ -457,7 +457,10 @@ describe('CreateWorkerPopover', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('focuses the first task, traps Tab, closes with Esc, and returns focus on reopen', async () => {
+  // 关闭按钮带 Tip(DESIGN.md §14.6)。Esc 按层级先收最上面的一层:键盘聚焦到关闭按钮时提示弹出,
+  // 第 1 次 Esc 只收起提示,第 2 次才关弹窗;提示没弹出时 1 次 Esc 就关。失效后果:键盘用户按 Esc
+  // 关不掉弹窗,或关闭后焦点丢失。
+  it('focuses the first task, traps Tab, closes with Esc (tooltip first), and returns focus on reopen', async () => {
     function Harness() {
       const [open, setOpen] = useState(false);
       return <><button onClick={() => setOpen(true)}>Add worker</button><CreateWorkerPopover open={open} onClose={() => setOpen(false)} onCreate={vi.fn()} /></>;
@@ -475,10 +478,21 @@ describe('CreateWorkerPopover', () => {
       expect(document.activeElement).toBe(submit);
       await user.tab();
       expect(document.activeElement).toBe(close);
+      expect(screen.getByRole('tooltip').textContent).toBe('orca.createWorker.closeAria');
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+      expect(screen.queryByRole('dialog')).not.toBeNull();
       await user.keyboard('{Escape}');
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
       await waitFor(() => expect(document.activeElement).toBe(opener));
     }
+    // 提示没弹出(焦点在首条任务)时,1 次 Esc 就关闭弹窗。
+    await user.click(opener);
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('orca.createWorker.initialTaskPlaceholder'));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
   it.each([
@@ -3099,7 +3113,7 @@ describe('local Worker project selection', () => {
     fireEvent.click(await screen.findByRole('option', {name: 'main'}));
     fireEvent.click(screen.getByRole('button', {name: 'Create'}));
     expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({worktree: {sourceBranch: 'main'}}));
-    expect(branchButton.textContent).toBe('main');
+    expect(screen.getByRole('button', {name: 'newChat.branchChip.label'}).textContent).toContain('main');
   });
   // #12391: Git can shorten a local origin/main to the same label as the remote.
   // Click each real picker group and verify it submits the corresponding ref.
@@ -3115,8 +3129,8 @@ describe('local Worker project selection', () => {
     expect(window.electronAPI.worktreeListBranches).not.toHaveBeenCalled();
     fireEvent.click(branchButton);
     const branchGroup = await screen.findByRole('group', {name: `newChat.branchSync.${group}Group`});
-    fireEvent.click(within(branchGroup).getByRole('option', {name: 'origin/main'}));
-    expect(branchButton.textContent).toBe('origin/main');
+    fireEvent.click(within(branchGroup).getByRole('option', {name: /origin\/main/}));
+    expect(screen.getByRole('button', {name: 'newChat.branchChip.label'}).textContent).toContain('origin/main');
     expect(screen.getByText('orca.workerProject.splitWarning origin/main')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', {name: 'Create'}));
     const sourceBranch = group === 'local' ? 'refs/heads/origin/main' : 'refs/remotes/origin/main';

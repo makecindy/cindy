@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
-import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useClaudeSubscriptionUsage } from '@/hooks/useClaudeSubscriptionUsage';
 import { useXaiSubscriptionUsage } from '@/hooks/useXaiSubscriptionUsage';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import { useAccountUsage } from '@/hooks/useAccountUsage';
+import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { PluginEngineUsageChip } from '@/components/status/PluginEngineUsageChip';
 import { resetPluginEnginesStoreForTests, usePluginEngines } from '@/hooks/usePluginEngines';
 
@@ -46,6 +47,51 @@ it('shares plugin account usage across task switches without leaking it to a new
   await act(async () => {});
   expect(otherAccount.queryByRole('button')).toBeNull();
   expect(invoke).toHaveBeenCalledTimes(2);
+});
+
+// Unit #13748: two tasks on one remote engine use distinct accounts inside the same
+// cache interval. Exercise both the status button and its open quota detail.
+it('reads each remote task account when viewing a host task or borrowing its engine', async () => {
+  setDataOwnerGeneration('remote-task-quota');
+  const invoke = vi.fn(async (_device: string, _channel: string, [, task]: [string, { sessionId: string; hosted?: boolean }?]) => ({
+    updatedAt: 1234, windows: [{ label: 'Quota', remainingPercent: task?.hosted ? 98 : task?.sessionId === 'second' ? 81 : task ? 73 : 66 }],
+  }));
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: { quotaCard: { remainingPercent: '{{percent}}% left' } } } } });
+  const mount = (sessionId: string, hosted = false) => render(<I18nextProvider i18n={i18n}>
+    <PluginEngineUsageChip engineKey="demo:acp" deviceId="desk" sessionId={sessionId} hosted={hosted} running={false} />
+  </I18nextProvider>);
+  const first = mount('first');
+  expect((await first.findByRole('button')).textContent).toContain('73%');
+  first.unmount();
+  const otherTask = mount('second');
+  expect((await otherTask.findByRole('button')).textContent).toContain('81%');
+  otherTask.unmount();
+  const second = mount('second', true);
+  const button = await second.findByRole('button');
+  expect(button.textContent).toContain('98%');
+  fireEvent.click(button);
+  expect((await second.findByRole('dialog')).textContent).toContain('98%');
+  expect(invoke.mock.calls.map(call => call[2])).toEqual([
+    ['demo:acp', { sessionId: 'first' }], ['demo:acp', { sessionId: 'second' }],
+    ['demo:acp', { sessionId: 'second', hosted: true }],
+  ]);
+});
+
+// Unit, #13748: two tasks on one remote engine have different bindings. An engine-only
+// request returns the paused original account, and an engine-only cache mixes their results.
+it('reads and caches each remote task quota on its host', async () => {
+  setDataOwnerGeneration('remote-task-quota');
+  const invoke = vi.fn(async (_device, _channel, [, task]) => ({
+    updatedAt: 1, windows: [{ label: 'Quota', remainingPercent: task?.sessionId === 'a' ? 98 : task?.sessionId === 'b' ? 37 : 66 }],
+  }));
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  const read = (id?: string) => readPluginEngineUsage(getDataOwnerGeneration(), 'host', 'demo:acp', id).result;
+  for (const [id, remainingPercent] of [['a', 98], ['b', 37], [undefined, 66], ['a', 98]] as const) {
+    expect(await read(id)).toMatchObject({ windows: [{ remainingPercent }] });
+  }
+  expect(invoke).toHaveBeenCalledTimes(3);
 });
 
 // Unit, #11563: a catalogue push can arrive while the visible chip awaits its first

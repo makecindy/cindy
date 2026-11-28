@@ -1,3 +1,4 @@
+import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,11 +18,15 @@ import {
  * 测试价值
  * - 生产入口与可观察结果：插件引擎账号池的公开入口——acquirePluginEngineAccount(新任务选哪个账号、
  *   绑定任务留在原账号、满载报错)、withPluginEngineAccounts(启动失败换下一个账号、把账号目录交给引擎)、
- *   preparePluginEngineAccountForSend(发送前换号)、runPluginEngineAccountCommand(添加账号与失败回滚)。
+ *   preparePluginEngineAccountForSend / canSwitchPluginEngineTaskAccount / readPluginEngineSessionAccount
+ *   (本机与同账号远程 Agent 发送前换号及撞额度立即换号)、runPluginEngineAccountCommand(添加账号与失败回滚)。
  * - Bug／规则依据：docs/product-rules/subscription-account-pools.md「插件引擎的账号」(与内置账号池同一套分配、
- *   并发上限、暂停、任务固定账号、启动失败与发送前换号)；plugin-harnesses.md「引擎账号」。
- * - 现有覆盖缺口：新模块；内置账号池的测试只覆盖 Claude / Codex。
+ *   并发上限、暂停、任务固定账号、启动失败、发送前换号及同账号远程 Agent 换号)；plugin-harnesses.md「引擎账号」。
+ * - 现有覆盖缺口：新模块；内置账号池的测试只覆盖 Claude / Codex，原测试未覆盖仅有 native 绑定／旧默认登录时的
+ *   canSwitchPluginEngineTaskAccount 以及同账号远程 Agent 的换号探测与边界拒绝。
  * - 最小失败输入：两个已登录账号的引擎连开两个任务；第一个账号启动时报额度用完；绑定账号额度用完后再发送；
+ *   仅绑定 native 会话或旧默认登录的冷却账号查 canSwitchPluginEngineTaskAccount；控制端无本地池时远程 Agent 任务
+ *   撞额度／暂停／移出／关闭远程调用／分享访客／旧端拒绝；
  *   空闲一分钟后绑定账号已退出登录再发送；重新登录只回「已登录」不回身份；插件登录失败的添加；
  *   各账号只列出自己的真实模型时用引擎默认模型（`default`）开任务；还没保存过账号设置时重启后重新登录原有登录；
  *   同一登录加了两次并暂停其中排前的那个。
@@ -81,12 +86,14 @@ vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
 const {
   acquirePluginEngineAccount,
   readPluginEnginePoolAccountUsages,
+  readPluginEngineTaskUsage,
+  readPluginEngineSessionAccount,
   runPluginEngineAccountCommand,
   resetPluginEngineAccountsRuntimeForTests,
 } = await import('../runtime.js');
 const { withPluginEngineAccounts } = await import('../agent.js');
-const { preparePluginEngineAccountForSend } = await import('../failover.js');
-const { updatePluginEnginePool, readPluginEngineBinding, readPluginEnginePool } = await import('../store.js');
+const { canSwitchPluginEngineTaskAccount, preparePluginEngineAccountForSend } = await import('../failover.js');
+const { updatePluginEnginePool, readPluginEngineBinding, readPluginEnginePool, writePluginEngineBindings } = await import('../store.js');
 
 const ENGINE = 'dsh-plugin:dsh';
 const PROVIDER = `acp-plugin:${ENGINE}`;
@@ -118,6 +125,26 @@ beforeEach(async () => {
 });
 
 describe('plugin engine account pool', () => {
+  // Unit #13748: the same original id can name a host task and a borrowed-engine task.
+  // The paused original login, both bindings and the unassigned fallback have observable quotas.
+  it('reads the bound plugin account quota for host and borrowed tasks', async () => {
+    h.harnesses[0]!.reportsUsage = true;
+    const hosted = hostSessionIdFor('desk', 'same-id');
+    await updatePluginEnginePool(ENGINE, pool => ({
+      ...pool, accounts: pool.accounts.map(account => account.id === 'default' ? { ...account, paused: true } : account),
+    }));
+    for (const [id, remainingPercent] of [['default', 66], [A, 73], [B, 98]] as const) {
+      h.usage.set(id, { updatedAt: 1234, windows: [{ label: 'Quota', remainingPercent }] });
+    }
+    await writePluginEngineBindings(ENGINE, ['task:same-id'], A, PROVIDER);
+    await writePluginEngineBindings(ENGINE, [`task:${hosted}`], B, PROVIDER);
+    const read = (id: string) => readPluginEngineTaskUsage(ENGINE, id, { fallbackToOriginal: true });
+    expect(await read('same-id')).toEqual(h.usage.get(A));
+    expect(await read(hosted)).toEqual(h.usage.get(B));
+    expect(await read(hostSessionIdFor('other', 'same-id'))).toEqual(h.usage.get('default'));
+    expect(await readPluginEngineTaskUsage(ENGINE, 'unassigned')).toBeNull();
+  });
+
   it('spreads new tasks over signed-in accounts, keeps a bound task on its account and stops at the limit', async () => {
     const first = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1']);
     const second = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t2']);
@@ -371,6 +398,146 @@ describe('plugin engine account pool', () => {
     expect(await readPluginEnginePoolAccountUsages(PROVIDER)).toBe('unsupported');
     h.harnesses = [{ ...h.harnesses[0], reportsUsage: true, availability: { state: 'unavailable' } }];
     expect(await readPluginEnginePoolAccountUsages(PROVIDER)).toEqual([]);
+  });
+
+  // 2026-11-28 regression: canSwitchPluginEngineTaskAccount previously only read `task:${id}` inside
+  // canSwitchPluginEngineAccount, missing native-only bindings and pre-pool default tasks.
+  it('detects immediate switch eligibility for native-only and pre-pool default plugin engine tasks', async () => {
+    await writePluginEngineBindings(ENGINE, ['native:native-only'], A, PROVIDER);
+    const leaseA = await acquirePluginEngineAccount(PROVIDER, 'gemini-4-neon', ['native:native-only'], { resuming: true });
+    leaseA!.observeFailure({ message: 'Individual quota reached', usageLimit: true, usageResetAt: Date.now() + 3_600_000 }, 'gemini-4-neon', 'run');
+    leaseA!.release();
+
+    const nativeOnlyRow = { status: 'active', providerId: PROVIDER, agentKind: 'acp', model: 'gemini-4-neon', sdkSessionId: 'native-only' };
+    expect(await canSwitchPluginEngineTaskAccount('task-without-task-key', async () => nativeOnlyRow)).toBe(true);
+
+    // Pre-pool task with no stored binding falls back to the engine's original login ('default').
+    resetPluginEngineAccountsRuntimeForTests();
+    h.status.set('default', { state: 'signed-in', identity: { email: 'orig@example.com' } });
+    await writePluginEngineBindings(ENGINE, ['native:pre-pool-temp'], 'default', PROVIDER);
+    const pinnedDefault = await acquirePluginEngineAccount(PROVIDER, 'gemini-4-neon', ['native:pre-pool-temp'], { resuming: true });
+    pinnedDefault!.observeFailure({ message: 'Individual quota reached', usageLimit: true, usageResetAt: Date.now() + 3_600_000 }, 'gemini-4-neon', 'run');
+    pinnedDefault!.release();
+    const prePoolRow = { status: 'active', providerId: PROVIDER, agentKind: 'acp', model: 'gemini-4-neon', sdkSessionId: 'unbound-pre-pool' };
+    expect(await canSwitchPluginEngineTaskAccount('pre-pool-task', async () => prePoolRow)).toBe(true);
+  });
+
+  // 2026-11-28 (subscription-account-pools.md): same-account remote Agent plugin engine tasks fail
+  // over via the executing computer's session-account probe, even when the controller has no local pool.
+  it('hands off same-account remote Agent plugin engine tasks when blocked, paused, or removed, and degrades safely', async () => {
+    await writePluginEngineBindings(ENGINE, ['native:remote-native-1'], A, PROVIDER);
+    const leaseA = await acquirePluginEngineAccount(PROVIDER, 'gemini-4-neon', ['native:remote-native-1'], { resuming: true });
+    leaseA!.observeFailure({ message: 'Individual quota reached', usageLimit: true, usageResetAt: Date.now() + 3_600_000 }, 'gemini-4-neon', 'run');
+    leaseA!.release();
+
+    let remoteOffered = true;
+    const executorHarnesses = [...h.harnesses];
+    const invokeRemote = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) => {
+      const query = args[0] as { providerId: string; nativeSessionId?: string; model?: string };
+      // Simulate the executing computer having the plugin pool while the controller does not.
+      const prev = h.harnesses;
+      h.harnesses = executorHarnesses;
+      try {
+        const result = await readPluginEngineSessionAccount(query.providerId, query, {
+          remote: true,
+          ownComputer: true,
+          isRemoteOffered: () => remoteOffered,
+        });
+        return { ok: true, result };
+      } finally {
+        h.harnesses = prev;
+      }
+    });
+
+    // Controller computer has NO local plugin engine installed.
+    h.harnesses = [];
+    const remoteRow = {
+      status: 'active',
+      providerId: PROVIDER,
+      agentKind: 'acp',
+      model: 'gemini-4-neon',
+      sdkSessionId: 'remote-native-1',
+      agentDeviceId: 'own-mac-mini',
+    };
+    const rebuild = vi.fn(async (_id: string, assertCurrent: () => void) => { assertCurrent(); });
+    const deps = { readSession: async () => remoteRow, isRunning: () => false, rebuild, invokeRemote };
+
+    // 1. Blocked on executor with B healthy -> immediate switch & pre-send rebuild; no identity leaked.
+    expect(await canSwitchPluginEngineTaskAccount('remote-t1', deps.readSession, invokeRemote)).toBe(true);
+    const firstReply = await invokeRemote.mock.results[0].value;
+    expect(JSON.stringify(firstReply.result)).not.toContain('example.com');
+    expect(await preparePluginEngineAccountForSend('remote-t1', deps)).toBe(true);
+    expect(rebuild).toHaveBeenCalledOnce();
+
+    // 2. Remote offering turned off on executor -> fails closed, does not touch context.
+    remoteOffered = false;
+    expect(await canSwitchPluginEngineTaskAccount('remote-t1', deps.readSession, invokeRemote)).toBe(false);
+    expect(await preparePluginEngineAccountForSend('remote-t1', deps)).toBe(false);
+    expect(rebuild).toHaveBeenCalledOnce();
+    remoteOffered = true;
+
+    // 3. Account A removed on executor with B paused -> no replacement, explicit failure without rebuild.
+    h.harnesses = executorHarnesses;
+    await updatePluginEnginePool(ENGINE, pool => ({
+      ...pool,
+      accounts: pool.accounts
+        .filter(account => account.id !== A)
+        .map(account => account.id === B ? { ...account, paused: true } : account),
+    }));
+    h.harnesses = [];
+    expect(await canSwitchPluginEngineTaskAccount('remote-t1', deps.readSession, invokeRemote)).toBe(false);
+    await expect(preparePluginEngineAccountForSend('remote-t1', deps)).rejects.toThrow('No subscription account is available');
+    expect(rebuild).toHaveBeenCalledOnce();
+
+    // 4. Unpause B -> removed A hands off cleanly to B.
+    h.harnesses = executorHarnesses;
+    await updatePluginEnginePool(ENGINE, pool => ({
+      ...pool,
+      accounts: pool.accounts.map(account => account.id === B ? { ...account, paused: false } : account),
+    }));
+    h.harnesses = [];
+    expect(await preparePluginEngineAccountForSend('remote-t1', deps)).toBe(true);
+    expect(rebuild).toHaveBeenCalledTimes(2);
+
+    // 5. Provider-share guest, SSH remote host, and older executor (ok: false) never trigger handoff.
+    const guestRow = { ...remoteRow, agentDeviceId: 'share:share-1' };
+    const sshRow = { ...remoteRow, agentDeviceId: null, remoteHostId: 'ssh-host' };
+    expect(await preparePluginEngineAccountForSend('guest-t', { ...deps, readSession: async () => guestRow })).toBe(false);
+    expect(await preparePluginEngineAccountForSend('ssh-t', { ...deps, readSession: async () => sshRow })).toBe(false);
+    const oldHostInvoke = vi.fn(async () => ({ ok: false }));
+    expect(await canSwitchPluginEngineTaskAccount('remote-t1', deps.readSession, oldHostInvoke)).toBe(false);
+    expect(await preparePluginEngineAccountForSend('remote-t1', { ...deps, invokeRemote: oldHostInvoke })).toBe(false);
+  });
+
+  // The remote probe and fresh start must choose from the same provider as the bound account.
+  // Moving A out while leaving B on the original route is the smallest false-positive case.
+  it('probes the bound account provider before a remote handoff', async () => {
+    await writePluginEngineBindings(ENGINE, ['task:remote-t1'], A, PROVIDER);
+    await updatePluginEnginePool(ENGINE, pool => ({
+      ...pool,
+      providers: { ab12cd34: { strategy: 'order' } },
+      placement: { [A]: 'ab12cd34' },
+      accounts: pool.accounts.map(account => account.id === A ? { ...account, paused: true } : account),
+    }));
+    const keys = { sessionId: 'remote-t1', model: 'gemini-4-neon' };
+    const options = { remote: true, ownComputer: true, isRemoteOffered: () => true };
+    const isolated = await readPluginEngineSessionAccount(PROVIDER, keys, options);
+    expect(isolated).toMatchObject({ state: 'bound', account: { paused: true, switchAvailable: false } });
+    await expect(acquirePluginEngineAccount(PROVIDER, keys.model, ['task:remote-t1'], { resuming: false }))
+      .rejects.toThrow('No subscription account is available');
+
+    // A sibling in the taken-out provider does not make that provider remotely offered.
+    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, placement: { [A]: 'ab12cd34', [B]: 'ab12cd34' } }));
+    expect(await readPluginEngineSessionAccount(PROVIDER, keys, options))
+      .toMatchObject({ state: 'bound', account: { paused: true, switchAvailable: false } });
+
+    // Moving A back to the remotely offered provider makes B selectable on both paths.
+    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, placement: {} }));
+    const available = await readPluginEngineSessionAccount(PROVIDER, keys, options);
+    expect(available).toMatchObject({ state: 'bound', account: { paused: true, switchAvailable: true } });
+    const lease = await acquirePluginEngineAccount(PROVIDER, keys.model, ['task:remote-t1'], { resuming: false });
+    expect(lease?.accountId).toBe(B);
+    lease?.release();
   });
 });
 

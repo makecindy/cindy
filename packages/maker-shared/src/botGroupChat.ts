@@ -137,6 +137,20 @@ export function groupAssistantNoticeCode(reason: 'unbound' | 'offline' | undefin
   return reason === 'offline' ? 'GROUP_ASSISTANT_DEVICE_OFFLINE' : 'GROUP_ASSISTANT_UNAVAILABLE';
 }
 
+/**
+ * Chat Servers that predate per-member binding send `executor_unavailable` without a `reason`.
+ * The room's own binding is then authoritative: with no computer bound, choosing one is the only
+ * way forward, so the notice must offer the computer choice instead of claiming none is online.
+ * `undefined` means the caller has no room state; keep the server's verdict then.
+ */
+export function groupAssistantNoticeReason(
+  notice: { reason?: 'unbound' | 'offline' },
+  assistantDeviceId: string | null | undefined,
+): 'unbound' | 'offline' | undefined {
+  if (notice.reason) return notice.reason;
+  return assistantDeviceId === null ? 'unbound' : undefined;
+}
+
 /** Public failure categories only; never transport raw Agent errors into a group. */
 export const BOT_GROUP_RUNTIME_FAILURE_CODES = [
   'IMAGE_INPUT_UNSUPPORTED', 'MODEL_UNAVAILABLE', 'AUTH_REQUIRED', 'RATE_LIMITED', 'UPSTREAM_OVERLOADED',

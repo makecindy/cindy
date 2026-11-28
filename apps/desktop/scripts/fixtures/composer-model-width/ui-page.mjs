@@ -25,7 +25,8 @@ export default {
   cases: {
     'switch-preparing': { about: 'The target is preparing while the actual task stays on Pi', viewport: { width: 420, height: 520 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra', switchPreparation: 'preparing' } },
     'switch-failed': { about: 'A fallback input retains its actual source and expandable failure beside a failed target', viewport: { width: 420, height: 520 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra', switchPreparation: 'failed' } },
-    'switch-plugin-source': { about: 'A historical plugin fallback has a localized engine name and one source id', viewport: { width: 420, height: 520 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra', switchPreparation: 'failed', dispatchPluginSource: true } },
+    'switch-plugin-source': { about: 'A historical plugin fallback shows a readable engine name without exposing raw acp-plugin ids', viewport: { width: 420, height: 520 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra', switchPreparation: 'failed', dispatchPluginSource: true } },
+    'switch-normal-hidden': { about: 'A normal message carrying a non-mismatch dispatchRoute renders no route header above the bubble', viewport: { width: 420, height: 520 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra', dispatchNormalRoute: true } },
     default: { about: 'Long English model fits without premature truncation', data: { showRuntimeControls: true, modelName: 'GPT-6 Astra Extended Context' } },
     chinese: { about: 'Chinese model name and a narrow composer', viewport: { width: 420, height: 400 }, data: { showRuntimeControls: true, modelName: '复杂任务长名称模型' } },
     'long-ultra': { about: 'A very long model name leaves room for icon-only controls', viewport: { width: 400, height: 400 }, data: { showRuntimeControls: true, modelName: 'Anthropic Claude Opus Extended Reasoning Context with Long Provider Model Name' } },
@@ -59,15 +60,23 @@ export default {
     await page.locator('[contenteditable="true"]').waitFor();
   },
   async check(page, ui) {
+    if (ui.data.dispatchNormalRoute) {
+      await page.getByText('Normal message without fallback', { exact: true }).waitFor();
+      const bodyText = await page.locator('[data-fixture-composer]').textContent();
+      assert.ok(!bodyText.includes('Fixture Engine'), `unexpected route label on normal message: ${bodyText}`);
+      assert.ok(!bodyText.includes('acp-plugin:'), `unexpected raw provider id on normal message: ${bodyText}`);
+      assert.ok(!bodyText.includes(await ui.t('newChat.pluginEngines.genericName')), `unexpected generic engine label on normal message: ${bodyText}`);
+      await ui.capture('normal-message');
+      return;
+    }
     if (ui.data.switchPreparation) {
       assert.ok(await page.locator('[data-session-model-slot] [role="status"]').textContent());
       if (ui.data.switchPreparation === 'failed') {
         if (ui.data.dispatchPluginSource) {
-          const label = page.getByText('acp-plugin:fixture:engine', { exact: false }).first();
+          const label = page.getByText('Fixture Engine · fixture-chat', { exact: false }).first();
           await label.waitFor();
           const text = await label.textContent();
-          assert.ok(text.includes(await ui.t('newChat.pluginEngines.genericName')));
-          assert.equal(text.split('acp-plugin:fixture:engine').length - 1, 1, 'each source appears once');
+          assert.ok(!text.includes('acp-plugin:'), `raw acp-plugin id leaked: ${text}`);
         } else await page.getByText(/Pi · xd · fixture-chat/).first().waitFor();
         await ui.capture('fallback-source');
         await page.locator('[data-fixture-composer] button[aria-expanded="false"]').first().click();
