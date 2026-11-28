@@ -65,6 +65,7 @@ function pageCleanup(page: string, recording: boolean, starting: boolean) {
     voiceCaretPlacementSeqRef: { current: 0 },
     setVoiceCaretPlacementPending: vi.fn(),
     discardPendingPrewarm,
+    dismissVoiceRefinementUndo: vi.fn(),
     setAudioModeAsync,
   };
   const compiled = ts.transpileModule(

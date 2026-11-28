@@ -36,6 +36,8 @@ describe('dictionaryFuzzyMatch', () => {
     );
 
     expect(matches).toBeUndefined();
+    // Historical compact groups conflated gua/gui/guo and hua/hui/huo.
+    expect(buildFuzzyUserDictionaryMatches('讨论国会安排', undefined, '桂花')).toBeUndefined();
   });
 
   it('still recalls 2-character Chinese terms on exact tone-insensitive pinyin match', () => {

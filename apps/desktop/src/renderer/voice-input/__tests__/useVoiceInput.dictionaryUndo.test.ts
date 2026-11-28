@@ -3,7 +3,7 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import type { Editor } from '@tiptap/core';
 import { Schema } from '@tiptap/pm/model';
 import { history, undo as pmUndo } from '@tiptap/pm/history';
-import { EditorState, type Transaction } from '@tiptap/pm/state';
+import { EditorState, TextSelection, type Transaction } from '@tiptap/pm/state';
 import type { VoiceInputRendererEvent } from '@cindy/voice-input-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -438,6 +438,50 @@ describe('in-app dictionary learning after undo', () => {
       expect(pmUndo(state, dispatch)).toBe(true);
     });
     expect(state.doc.textContent).toBe('');
+    hook.unmount();
+  });
+
+  it('restores selected editor text after undoing a pre-refined dictation twice', () => {
+    let onEvent!: (event: VoiceInputRendererEvent) => void;
+    vi.stubGlobal('electronAPI', { voiceInput: {
+      onEvent: (listener: typeof onEvent) => { onEvent = listener; return vi.fn(); },
+      cancel: vi.fn().mockResolvedValue({ ok: true }),
+    } });
+    const draftPlugin = createVoiceInputDraftPlugin();
+    let state = EditorState.create({
+      doc: schema.node('doc', null, [schema.node('paragraph', null, [schema.text('旧内容')])]),
+      plugins: [history(), draftPlugin],
+    });
+    state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, 1, 4)));
+    const listeners = new Set<(payload: { transaction: Transaction }) => void>();
+    const dispatch = (transaction: Transaction) => {
+      state = state.apply(transaction);
+      listeners.forEach((listener) => listener({ transaction }));
+    };
+    const editor = {
+      get state() { return state; },
+      view: { get state() { return state; }, dispatch },
+      isDestroyed: false,
+      commands: { focus: vi.fn() },
+      on: (_event: string, listener: (payload: { transaction: Transaction }) => void) => listeners.add(listener),
+      off: (_event: string, listener: (payload: { transaction: Transaction }) => void) => listeners.delete(listener),
+    } as unknown as Editor;
+    const hook = renderHook(() => useVoiceInput(editor, true));
+    act(() => onEvent({
+      type: 'submitted', runId: 'run-replace', text: '润色文本',
+      segment: {
+        id: 'seg-replace', source: 'mic', status: 'submitted', text: '润色文本',
+        basedOnText: '识别原文', updatedAt: Date.now(),
+      },
+    }));
+    expect(state.doc.textContent).toBe('润色文本');
+    act(() => expect(hook.result.current.handleUndoKeyDown({
+      key: 'z', metaKey: true, ctrlKey: false, shiftKey: false, altKey: false,
+      preventDefault: vi.fn(),
+    })).toBe(true));
+    expect(state.doc.textContent).toBe('识别原文');
+    act(() => expect(pmUndo(state, dispatch)).toBe(true));
+    expect(state.doc.textContent).toBe('旧内容');
     hook.unmount();
   });
 });

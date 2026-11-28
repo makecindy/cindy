@@ -1486,7 +1486,10 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       if (isVoiceInputStartRateLimited(error) || /\b429\b|too many|rate.?limit|concurrency|concurrent/i.test(errorMessage)) {
         log.info('rotateSession: standby hit concurrency rate limit, falling back to break-before-make');
         await this.closeCurrentSocketAndWait(500);
-        await this.performRecover();
+        await this.performRecover().catch((recoverError: unknown) => {
+          this.callback({ type: 'disconnected', at: Date.now() });
+          throw recoverError;
+        });
         return;
       }
       throw error;

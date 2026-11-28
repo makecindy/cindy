@@ -176,6 +176,7 @@ export class VoiceInputController {
   private startedAt = 0;
   private sessionStartedAt = 0;
   private sessionRotationInFlight = false;
+  private rotationTransportLost = false;
   private sessionRotationCount = 0;
   private nextRotationRetryAt = 0;
   private latestPartial = '';
@@ -262,6 +263,7 @@ export class VoiceInputController {
     this.startedAt = performance.now();
     this.sessionStartedAt = this.startedAt;
     this.sessionRotationInFlight = false;
+    this.rotationTransportLost = false;
     this.sessionRotationCount = 0;
     this.nextRotationRetryAt = 0;
     this.voicedDetector.reset();
@@ -671,7 +673,11 @@ export class VoiceInputController {
   // either succeed and continue, or fail in its own catch handler.
   private tryRecover(trigger: 'error' | 'disconnected'): boolean {
     if (typeof this.asr.recover !== 'function') return false;
-    if (this.networkRecoveryInFlight || this.sessionRotationInFlight) return true;
+    if (this.sessionRotationInFlight) {
+      this.rotationTransportLost = true;
+      return true;
+    }
+    if (this.networkRecoveryInFlight) return true;
     if (this.networkRecoveryAttempts >= ASR_NETWORK_RECOVERY_MAX_ATTEMPTS) return false;
     this.attemptNetworkRecovery(
       trigger,
@@ -996,8 +1002,9 @@ export class VoiceInputController {
     const maxAllowedChunks = budget
       ? Math.max(1, budget.limit - budget.started)
       : rawChunks.length;
-    const chunks = coalesceChunksToLimit(rawChunks, maxAllowedChunks);
-    if (chunks.length <= 1) {
+    const chunks = rawChunks.slice(0, maxAllowedChunks);
+    const unrefinedChunks = rawChunks.slice(maxAllowedChunks);
+    if (rawChunks.length <= 1) {
       const singleDelta = chunks[0] ?? input.deltaText;
       const precedingRefinedText = input.frozenPrefixRefined
         ? extractRecentRefinedContext(input.frozenPrefixRefined)
@@ -1066,6 +1073,9 @@ export class VoiceInputController {
           // Preserve unrefined tail words rather than discarding earlier refined chunks.
           accumulated = accumulated ? joinRefinedSegments(accumulated, chunk, chunk) : chunk;
         }
+      }
+      for (const chunk of unrefinedChunks) {
+        accumulated = accumulated ? joinRefinedSegments(accumulated, chunk, chunk) : chunk;
       }
       if (!anyAccepted && firstError) {
         request.settled = true;
@@ -1405,6 +1415,7 @@ export class VoiceInputController {
     if (typeof rotateSession !== 'function') return;
     const runId = this.runId;
     this.sessionRotationInFlight = true;
+    this.rotationTransportLost = false;
     const rotationCount = this.sessionRotationCount + 1;
     const startedAt = performance.now();
     this.logger.record({
@@ -1418,6 +1429,7 @@ export class VoiceInputController {
     void rotateSession.call(this.asr)
       .then(() => {
         if (runId !== this.runId) return;
+        this.rotationTransportLost = false;
         this.sessionRotationCount = rotationCount;
         this.sessionStartedAt = performance.now();
         this.nextRotationRetryAt = 0;
@@ -1449,6 +1461,12 @@ export class VoiceInputController {
       .finally(() => {
         if (runId !== this.runId) return;
         this.sessionRotationInFlight = false;
+        if (this.rotationTransportLost && this.state === 'listening') {
+          this.rotationTransportLost = false;
+          if (!this.tryRecover('disconnected')) {
+            this.fail('Voice input connection was interrupted. Please try again.', 'connection_interrupted');
+          }
+        }
       });
   }
 
@@ -1551,15 +1569,6 @@ function composeDeltaRefinementResult(
     sourceSegmentIds: segmentIds,
     basedOnText: fullRawText,
   };
-}
-
-function coalesceChunksToLimit(chunks: string[], maxChunks: number): string[] {
-  if (chunks.length <= maxChunks || maxChunks <= 0) return chunks;
-  if (maxChunks === 1) return [chunks.join(' ')];
-  return [
-    ...chunks.slice(0, maxChunks - 1),
-    chunks.slice(maxChunks - 1).join(' '),
-  ];
 }
 
 function normalizeSubmittedText(text: string): string {

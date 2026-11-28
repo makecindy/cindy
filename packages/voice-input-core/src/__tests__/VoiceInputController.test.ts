@@ -1640,4 +1640,30 @@ describe('VoiceInputController', () => {
       vi.useRealTimers();
     }
   });
+
+  it('recovers when the active connection is lost during a failed rotation', async () => {
+    vi.useFakeTimers();
+    try {
+      const asr = new FakeAsrProvider();
+      const recover = vi.fn(async () => {});
+      asr.recover = recover;
+      asr.rotateSession = async () => {
+        asr.emit({ type: 'disconnected', at: Date.now() });
+        throw new Error('replacement connection failed');
+      };
+      const controller = new VoiceInputController({
+        asr,
+        logger: new VoiceTimelineLogger(() => {}),
+        sessionRotation: { softRotateAfterMs: 1_000, hardRotateAfterMs: 2_000, pauseQuietMs: 0 },
+        callbacks: { onDraftChanged: () => {}, onSubmitted: acceptSubmission },
+      });
+      await controller.start();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect(controller.currentState).toBe('listening');
+      await controller.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

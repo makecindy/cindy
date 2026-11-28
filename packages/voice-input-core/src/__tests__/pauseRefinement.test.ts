@@ -577,4 +577,19 @@ describe("refine request limit", () => {
     expect(h.submitted.mock.calls[0][1].basedOnText ?? h.submitted.mock.calls[0][0]).toBe(longRaw);
     expect(h.applied).toHaveBeenCalledWith(expect.anything(), refinedChunk1 + refinedChunk2);
   });
+
+  it("keeps the unrefined tail when only one bounded request remains", async () => {
+    const raw = Array.from({ length: 40 }, (_, i) => `第${i}句超长口述需要保持未处理尾段原样。`).join("");
+    const h = setup(true, { refineRequestBudget: budget(1) });
+    await h.controller.start();
+    h.say(raw);
+    await h.controller.stop();
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0].text.length).toBeLessThanOrEqual(600);
+    const tail = raw.slice(h.requests[0].text.length);
+    await h.finish(0, h.requests[0].text.replace("超长", "长"));
+    expect(h.requests).toHaveLength(1);
+    expect(h.submitted.mock.calls[0][1].basedOnText ?? h.submitted.mock.calls[0][0]).toBe(raw);
+    expect(h.applied).toHaveBeenCalledWith(expect.anything(), h.requests[0].text.replace("超长", "长") + tail);
+  });
 });

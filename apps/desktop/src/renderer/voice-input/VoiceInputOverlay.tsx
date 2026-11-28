@@ -270,6 +270,7 @@ export function VoiceInputOverlay() {
   const historyEntryIdRef = useRef<string | null>(null);
   const sentAudioMsRef = useRef(0);
   const hasRecordingContentRef = useRef(false);
+  const hasCaptureSoundRef = useRef<(() => boolean) | null>(null);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
   const recordingIdRef = useRef<string | null>(null);
   const audioMutePromisesRef = useRef(new Map<string, Promise<void>>());
@@ -841,6 +842,7 @@ export function VoiceInputOverlay() {
     historyEntryIdRef.current = null;
     sentAudioMsRef.current = 0;
     hasRecordingContentRef.current = false;
+    hasCaptureSoundRef.current = null;
     terminalOutcomeRef.current = 'success';
     runIdRef.current = null;
     ownedRunIdRef.current = null;
@@ -870,6 +872,7 @@ export function VoiceInputOverlay() {
       appendAudioChunk,
       onCaptureReady: () => cueGate.release(),
       onSoundDetected: () => { hasRecordingContentRef.current = true; },
+      onSoundEvidenceAvailable: (hasSound) => { hasCaptureSoundRef.current = hasSound; },
       isInStartCueEchoWindow: () => cueEchoTracker.isInEchoWindow(),
       onInterrupted: (message) => {
         if (isActiveStartAttempt(attemptId)) void failRecording(message);
@@ -1266,6 +1269,7 @@ export function VoiceInputOverlay() {
     const settings = settingsRef.current;
     if (hasRecordingContentRef.current) setVoiceState('submitting');
     await drainAndStopEngine();
+    if (hasCaptureSoundRef.current?.()) hasRecordingContentRef.current = true;
     if (!isCurrentStop()) return;
     void restoreSystemAudioAndMaybePlayEndCue(settings.playInteractionSound);
     if (!hasRecordingContentRef.current && !draftTextRef.current.trim() && !finalTextRef.current.trim()) {

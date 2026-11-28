@@ -119,6 +119,7 @@ type PreRefinedUndoEntry = {
   end: number;
   rawText: string;
   refinedText: string;
+  beforeSpanText: string;
   historyEntryId: string | null;
 };
 
@@ -285,6 +286,7 @@ export function useVoiceInput(
   const stopCompletionWaitersRef = useRef<StopCompletionWaiter[]>([]);
   const sentAudioMsRef = useRef(0);
   const hasRecordingContentRef = useRef(false);
+  const hasCaptureSoundRef = useRef<(() => boolean) | null>(null);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
   const startAttemptIdRef = useRef(0);
   const startReadyRef = useRef<StartReadyState | null>(null);
@@ -807,16 +809,9 @@ export function useVoiceInput(
     pruneDictionaryLearningWatches(now);
     const activePreRefined = preRefinedUndoRef.current;
     if (activePreRefined) {
-      const mappedStart = transaction.mapping.map(activePreRefined.start, -1);
-      const mappedEnd = transaction.mapping.map(activePreRefined.end, -1);
-      const mapped = clampEditorTextRange({ from: mappedStart, to: mappedEnd }, transaction.doc);
-      const spanText = transaction.doc.textBetween(mapped.from, mapped.to, '\n', '\n');
-      if (spanText !== activePreRefined.refinedText) {
-        preRefinedUndoRef.current = null;
-        setCanUndoRefinement(false);
-      } else {
-        preRefinedUndoRef.current = { ...activePreRefined, start: mapped.from, end: mapped.to };
-      }
+      // A later edit becomes the top history step. Leave its normal undo alone.
+      preRefinedUndoRef.current = null;
+      setCanUndoRefinement(false);
     }
     const evidences = Array.from(dictionaryLearningWatchesRef.current.values())
       .flatMap((watch) => {
@@ -1015,6 +1010,7 @@ export function useVoiceInput(
     const range = insertionRangeRef.current
       ? clampEditorTextRange(insertionRangeRef.current, state.doc)
       : { from: state.selection.from, to: state.selection.to };
+    const beforeSpanText = state.doc.textBetween(range.from, range.to, '\n', '\n');
     insertionRangeRef.current = null;
     applyingVoiceTextRef.current = true;
     try {
@@ -1027,7 +1023,7 @@ export function useVoiceInput(
       // 词典学习 watch 整体错位(润色会因读到截断文本而被丢弃)。
       const inserted = resolveInsertedTextRange(transaction, range.from, text.length);
       dispatch(clearVoiceInputDraftInTransaction(transaction));
-      return inserted;
+      return { ...inserted, beforeSpanText };
     } finally {
       applyingVoiceTextRef.current = false;
     }
@@ -1148,6 +1144,7 @@ export function useVoiceInput(
         end: nextEnd,
         rawText: basedOnText,
         refinedText: event.text,
+        beforeSpanText: range.beforeSpanText ?? '',
         historyEntryId: range.historyEntryId,
       };
       setCanUndoRefinement(true);
@@ -1220,6 +1217,7 @@ export function useVoiceInput(
         return false;
       }
       const expectedAfterUndo = state.doc.textBetween(0, preRefined.start, '\n', '\n')
+        + preRefined.beforeSpanText
         + state.doc.textBetween(preRefined.end, state.doc.content.size, '\n', '\n');
       applyingVoiceTextRef.current = true;
       let nextStart = preRefined.start;
@@ -1242,7 +1240,7 @@ export function useVoiceInput(
           dispatch(closeHistory(current.view.state.tr));
           nextStart = inserted.start;
           nextEnd = inserted.end;
-        } else {
+        } else if (!didPop) {
           const replaceTr = closeHistory(
             current.view.state.tr.insertText(preRefined.rawText, preRefined.start, preRefined.end),
           );
@@ -1251,6 +1249,12 @@ export function useVoiceInput(
           dispatch(closeHistory(current.view.state.tr));
           nextStart = inserted.start;
           nextEnd = inserted.end;
+        } else {
+          // History changed unexpectedly. It already undid one step; never
+          // apply the stale dictation range to a different document.
+          preRefinedUndoRef.current = null;
+          setCanUndoRefinement(false);
+          return true;
         }
       } finally {
         applyingVoiceTextRef.current = false;
@@ -1424,6 +1428,7 @@ export function useVoiceInput(
                     end: range.end,
                     rawText: rawTranscriptText,
                     refinedText: event.text,
+                    beforeSpanText: range.beforeSpanText ?? '',
                     historyEntryId,
                   };
                 }
@@ -1754,6 +1759,7 @@ export function useVoiceInput(
     lastRefinementRef.current = null;
     lastSubmittedTextRef.current = '';
     hasRecordingContentRef.current = false;
+    hasCaptureSoundRef.current = null;
     sentAudioMsRef.current = 0;
     terminalOutcomeRef.current = 'success';
 
@@ -1789,6 +1795,7 @@ export function useVoiceInput(
       },
       onSamples: optionsRef.current?.onSamples,
       onSoundDetected: () => { hasRecordingContentRef.current = true; },
+      onSoundEvidenceAvailable: (hasSound) => { hasCaptureSoundRef.current = hasSound; },
       isInStartCueEchoWindow: () => cueEchoTracker.isInEchoWindow(),
       appendAudioChunk,
       onInterrupted: (message) => {
@@ -2172,6 +2179,7 @@ export function useVoiceInput(
     // Include the final worklet sub-chunk before deciding there was no sound.
     // A silent recording must not wait for a pending cloud start or final text.
     await drainAndStopEngine();
+    if (hasCaptureSoundRef.current?.()) hasRecordingContentRef.current = true;
     // An error during drain still belongs to this stop and must reject Send.
     // Only cancellation/replacement makes its continuation stale.
     if (startAttemptIdRef.current !== attemptId) return;

@@ -1416,6 +1416,14 @@ async function prewarmManagedVoiceInputOnPress(options?: {
     }, PRESS_PREWARM_TTL_MS),
   };
   provider.onEvent((event) => {
+    if (!entry.claimed && (event.type === 'error' || event.type === 'disconnected')) {
+      entry.failed = true;
+      entry.connectedEvent = null;
+      if (pendingPressPrewarm === entry) {
+        discardManagedVoiceInputPressPrewarm('connection_lost');
+      }
+      return;
+    }
     if (!entry.claimed && event.type === 'connected' && !entry.connectedEvent) {
       entry.connectedEvent = event;
     }

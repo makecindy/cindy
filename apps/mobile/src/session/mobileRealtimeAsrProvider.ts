@@ -599,7 +599,10 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
       if (this.stopped) return;
       if (isSessionConcurrencyLimitError(error)) {
         logMobileVoice('info', 'realtime asr rotation hit concurrency limit; falling back to break-before-make');
-        await this.performRecover();
+        await this.performRecover().catch((recoverError: unknown) => {
+          this.callback({ type: 'disconnected', at: Date.now() });
+          throw recoverError;
+        });
         return;
       }
       throw error;
@@ -693,6 +696,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
         if (settled) return;
         settled = true;
         cleanup();
+        if (socket.readyState !== CLOSED) socket.close();
         if (this.standbySocket === socket) this.standbySocket = null;
         reject(error);
       };
@@ -1433,7 +1437,10 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
       if (this.stopped) return;
       if (isSessionConcurrencyLimitError(error)) {
         logMobileVoice('info', 'volcengine sauc rotation hit concurrency limit; falling back to break-before-make');
-        await this.performRecover();
+        await this.performRecover().catch((recoverError: unknown) => {
+          this.callback({ type: 'disconnected', at: Date.now() });
+          throw recoverError;
+        });
         return;
       }
       throw error;
@@ -1529,6 +1536,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
         if (settled) return;
         settled = true;
         cleanup();
+        if (socket.readyState !== CLOSED) socket.close();
         if (this.standbySocket === socket) this.standbySocket = null;
         reject(error);
       };

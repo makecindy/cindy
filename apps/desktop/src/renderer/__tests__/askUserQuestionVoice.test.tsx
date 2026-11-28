@@ -27,6 +27,7 @@ vi.mock('../components/new-chat/useAskUserDictation', () => ({
       isBusy: state === 'listening',
       liveText: null,
       lastError: null,
+      handleUndoKeyDown: () => false,
       start: () => {
         start();
         setState('listening');

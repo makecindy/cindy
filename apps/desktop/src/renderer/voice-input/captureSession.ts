@@ -54,6 +54,7 @@ type VoiceInputCaptureSessionOptions = {
   isCurrentEngine?: (engine: WebMicAudioEngine) => boolean;
   /** Fires once after the first PCM frame has been retained locally. */
   onCaptureReady?: () => void;
+  onSoundEvidenceAvailable?: (hasSound: () => boolean) => void;
   /** Fires once when captured PCM contains sound, even before cloud startup. */
   onSoundDetected?: () => void;
   /** True while speaker-to-mic bleed from the start cue may reach the mic. */
@@ -88,6 +89,7 @@ export async function startVoiceInputCaptureSession(
   let captureReady = false;
   let soundDetected = false;
   const soundDetector = new RecordingSoundDetector();
+  options.onSoundEvidenceAvailable?.(() => soundDetector.hasSound);
   let engine: WebMicAudioEngine;
 
   const createEngine = (deviceId?: string): WebMicAudioEngine => {

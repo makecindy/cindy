@@ -2,7 +2,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import { once } from 'node:events';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { describe, expect, it, vi } from 'vitest';
-import { VoiceConversationInput, type ConversationInputEvent } from '@cindy/voice-input-core';
+import { VoiceConversationInput, type AsrEvent, type ConversationInputEvent } from '@cindy/voice-input-core';
 
 const diagnosticLog = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock('../../logger.js', () => ({ createLogger: () => diagnosticLog }));
