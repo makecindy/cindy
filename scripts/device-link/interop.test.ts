@@ -13,6 +13,7 @@ import { expect, it, vi } from "vitest";
 import { nodeRelayAuthCrypto } from "../../packages/device-link/src/nodeRelayCrypto";
 import { RelayFrameAuthenticator } from "../../packages/device-link/src/selfHostedRelayAuth";
 import { PLUGIN_SYNC_CHANNEL } from "../../packages/device-link/src/pluginSyncProtocol";
+import { SSH_ACCESS_ANNOUNCE_CHANNEL, SSH_ACCESS_CHANNEL, SSH_ACCESS_EXAMPLES, parseSshAccessStatus } from "../../packages/device-link/src/sshAccess";
 import { deflateRawBase64Sync, inflateRawBase64TextBounded } from "../../packages/device-link/src/nodeCompression";
 import {
   createClient,
@@ -151,6 +152,10 @@ it("interoperates with an explicitly provisioned isolated relay and automaticall
       const request = { version: 1, kind: "request", id: "12345678-1234-1234-1234-123456789abc", purpose: "Download source", ttlMs: 45_000 };
       host.client.sendPush(controller.client.getSelfDeviceId()!, "device-link:remote-control-consent", request);
       await vi.waitFor(() => expect(consentFrames).toContainEqual({ channel: "device-link:remote-control-consent", payload: request }));
+      // SSH access announcements are link-free too (device-link-ssh-access.md): delivered signed, without a control link.
+      const announce = { version: 1, enabled: true, revision: 42, authorized: false };
+      host.client.sendPush(controller.client.getSelfDeviceId()!, SSH_ACCESS_ANNOUNCE_CHANNEL, announce);
+      await vi.waitFor(() => expect(consentFrames).toContainEqual({ channel: SSH_ACCESS_ANNOUNCE_CHANNEL, payload: announce }));
       await expect(host.client.invoke(controller.client.getSelfDeviceId()!, { channel: "maker:machine:status", args: [] }))
         .rejects.toMatchObject({ code: "REMOTE_DISABLED" });
     } finally { stopConsent(); }
@@ -161,6 +166,9 @@ it("interoperates with an explicitly provisioned isolated relay and automaticall
       { timeout: 10_000 },
     );
     expect(controller.client.getSelfDeviceId()).not.toBe(hostId);
+    // The SSH access invoke and its reply cross the relay untouched (no relay change for the new channel).
+    const sshStatus = await controller.client.invoke(hostId, { channel: SSH_ACCESS_CHANNEL, args: [{ action: "status" }] });
+    expect(sshStatus.ok && parseSshAccessStatus(sshStatus.result)).toEqual(SSH_ACCESS_EXAMPLES.status.valid[0].expected);
     // 链路已建立：较大的事件批走压缩形状，中转原样转发，控制端交给业务前还原。
     const batch = { sessionId: "fixture-session", events: Array.from({ length: 8 }, (_, i) => ({
       sessionId: "fixture-session", event: { type: "text", data: { text: `弱网流式正文 ${i} ✓`, isFinal: false } },

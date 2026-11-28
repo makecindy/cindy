@@ -3636,7 +3636,8 @@
         "mobile/composer:voice.missingConnectionProvider",
         "mobile/composer:voice.missingRefinerTargetProvider",
         "mobile/composer:voice.sessionExpiredOrForbidden",
-        "mobile/composer:voice.sessionNotConnected"
+        "mobile/composer:voice.sessionNotConnected",
+        "desktop:settings.remoteControl.sshAccess."
       ],
       "alsoAllowed": {
         "zh-CN": [

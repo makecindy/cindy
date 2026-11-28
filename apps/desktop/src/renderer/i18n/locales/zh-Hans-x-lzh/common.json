@@ -1963,7 +1963,8 @@
         "title": "修 {{id}}",
         "submit": "存所改",
         "connectionFieldsReadOnly": "出自 SSH 设置之连接信息于此唯读；显示名称、自动连接与 Agent Proxy 仍可改。",
-        "authenticationFromSshConfig": "验证信息出自 SSH 设置。"
+        "authenticationFromSshConfig": "验证信息出自 SSH 设置。",
+        "deviceHostReadOnly": "连接信息由 Cindy 依君之设备自动维护，于此唯读；显示名称、自动连接与 Agent Proxy 仍可改。"
       },
       "keys": {
         "title": "配 SSH 密钥",
@@ -2179,7 +2180,10 @@
         "cancel": "留原密钥",
         "trust": "信新密钥并重连",
         "updateFailed": "无法更新主机信任之录。连接信息或已存密钥或已变，抑或记录卷不可写。请重连以更新指纹，并查卷之权柄"
-      }
+      },
+      "fromMyDevice": "出自吾之设备",
+      "fromMyDeviceKeyPinned": "出自吾之设备 · 主机指纹已核",
+      "deviceUnavailable": "暂不可用"
     },
     "appearance": {
       "chatLayout": {
@@ -7374,6 +7378,98 @@
             "ready": "绿实线：Agent-Net 脉通",
             "busy": "橙点：务行中 / 机方忙",
             "error": "朱点线：不应或已辍"
+          }
+        }
+      },
+      "sshAccess": {
+        "title": "许吾之他设备经 SSH 连此机",
+        "description": "君之他设备将自得权柄。撤某设备之访问权柄，其 SSH 亦随之收回。",
+        "defaultOn": "云机默认启之。",
+        "defaultOff": "默认不启。",
+        "descriptionWithDefault": "{{description}}{{defaultNote}}",
+        "aliasIntro": "于他设备之终端连之：<command>{{command}}</command>",
+        "recordUnreadable": "此机所存之 SSH 访问记录读之未成，Cindy 暂不作任何改动。",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "macOS 之「远程登录」未启，他设备暂不能连。请于「系统设置 → 通用 → 共享」中启「远程登录」。",
+          "SSHD_UNREACHABLE": "此机之 SSH 服务未行，他设备暂不能连。可于终端行下列命令以安装并启之：",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy 不能改写此机之 SSH 授权公钥文件。请察 ~/.ssh/authorized_keys 是否为链接、过大或已损。"
+        },
+        "otherDistributions": "他 Linux 发行版，请安装 openssh-server 并启 sshd 服务。",
+        "copyCommand": "录命令",
+        "openSharingSettings": "启共享之设",
+        "copied": "已录",
+        "copyFailed": "录之未成",
+        "listHeading": "可 SSH 之设备（{{count}}）",
+        "listEmpty": "尚无设备。君之他设备上线后，自现于此。",
+        "deviceMeta": "吾之设备 · 自动授权 · {{time}}",
+        "manualMeta": "手增之公钥 · {{fingerprint}}",
+        "todayAt": "今日 {{time}}",
+        "inactive": "未生效",
+        "unknownDevice": "未知设备",
+        "unnamedKey": "无名公钥",
+        "remove": "去之",
+        "removedKey": "已去公钥",
+        "removeKeyFailed": "去公钥未成",
+        "removeDeviceConfirm": {
+          "heading": "去 {{name}} 之 SSH 访问乎？",
+          "body": "此举将撤 {{name}} 对此机之访问权柄，远程控制亦随之收回，其 SSH 连接将断。日后可于其设备卡上复许「控此机」。",
+          "bodyKeepsSessions": "此举将撤 {{name}} 对此机之访问权柄，远程控制亦随之收回。其已启之 SSH 连接不自断，如需断之，可用「断尽 SSH 连接」。日后可于其设备卡上复许「控此机」。"
+        },
+        "deviceRemoved": "已撤 {{name}} 之访问权柄",
+        "deviceRemovedSessionsEnded": "已撤 {{name}} 之访问权柄，并断其 SSH 连接 {{count}} 个",
+        "deviceRemovedSessionsLeft": "已撤 {{name}} 之访问权柄，断其 SSH 连接 {{count}} 个。另有 {{unmapped}} 个连接无从确认所用之公钥，仍连未断，如需断之，可用「断尽 SSH 连接」。",
+        "deviceRemovedSessionsKept": "已撤 {{name}} 之访问权柄，其已启之 SSH 连接不自断",
+        "removeDeviceFailed": "去 {{name}} 之 SSH 访问，未竟",
+        "addKey": "增公钥",
+        "addKeyDialog": {
+          "heading": "增公钥",
+          "body": "贴一行 ssh-ed25519 公钥，如 ~/.ssh/id_ed25519.pub 之内容。仅支持不带选项之 ed25519 公钥。",
+          "keyField": "公钥",
+          "noteField": "附注（可省）",
+          "notePlaceholder": "如：办公室服务器",
+          "submit": "增公钥"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "此非有效之 ssh-ed25519 公钥。仅支持单行、不带选项之 ed25519 公钥。",
+          "ALREADY_EXISTS": "此公钥已可连此机。",
+          "PRECONDITION_FAILED": "暂不能增公钥，请稍后再试。",
+          "SSH_ACCESS_KEY_LIMIT": "所增公钥已达其限（{{max}} 把）。去其一，方可再增。",
+          "INTERNAL": "公钥增之未成。"
+        },
+        "addedKey": "已增公钥",
+        "endSessions": "断尽 SSH 连接",
+        "endSessionsConfirm": {
+          "heading": "断尽 SSH 连接乎？",
+          "body": "此举将断此机当前用户之一切 SSH 连接，连非经 Cindy 授权者亦在其内，方行之命令将中断。",
+          "action": "尽断之"
+        },
+        "sessionsEnded": "已断 {{count}} 个 SSH 连接",
+        "sessionsUnsupported": "此机暂不能断 SSH 连接",
+        "endSessionsFailed": "断 SSH 连接未成",
+        "toggleFailed": "改 SSH 访问之设未成",
+        "device": {
+          "rowName": "SSH",
+          "copy": "录终端命令",
+          "connect": "连",
+          "connected": "已连 {{name}}",
+          "restore": "增入 SSH 远方主机",
+          "restoreFailed": "增 {{name}} 入 SSH 远方主机未成",
+          "userDeleted": "君已自 SSH 远方主机中删之。",
+          "needsUpdate": "须更新 Cindy：此设备之 Cindy 尚不支持 SSH 访问。",
+          "controlOff": "君已阖「控之」，Cindy 不为其设 SSH。",
+          "refused": "此设备未纳此机之 SSH 公钥。",
+          "pending": "方设 SSH…",
+          "unavailable": {
+            "off": "暂不可用：彼已阖 SSH 访问。",
+            "blocked": {
+              "SSHD_UNREACHABLE": "暂不可用：彼之 SSH 服务未行。",
+              "REMOTE_LOGIN_OFF": "暂不可用：彼 Mac 之「远程登录」未启。",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "暂不可用：Cindy 不能改写彼之 SSH 授权公钥文件。",
+              "PLATFORM_UNSUPPORTED": "暂不可用：彼之系统不支持 SSH 访问。",
+              "UNKNOWN": "暂不可用：彼今不能受 SSH 连接。"
+            },
+            "revoked": "暂不可用：彼已撤此机之访问权柄。",
+            "removed": "暂不可用：此设备已不在君之名籍中。"
           }
         }
       }

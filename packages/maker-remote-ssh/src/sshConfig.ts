@@ -482,6 +482,7 @@ async function walkFile(
       || name === 'identitiesonly'
       || name === 'identityagent'
       || name === 'hostkeyalias'
+      || name === 'stricthostkeychecking'
       || name === 'proxyjump'
       || name === 'proxycommand'
       || name === 'certificatefile'
@@ -571,6 +572,17 @@ async function buildHosts(
     const managedAliasConflict = state.managedConfigOwned && managedComparable !== null
       && introducing.some((declaration) => pathsEqual(declaration.physicalPath, managedComparable))
       && introducing.some((declaration) => !pathsEqual(declaration.physicalPath, managedComparable));
+    // A pinned host key is read only from the host's own block in Cindy's file: a `Host *` or root value in the
+    // person's config never changes how Cindy trusts its hosts, and their own hosts keep TOFU by hostname:port.
+    const ownManagedBlock = (scope: Scope): boolean =>
+      managedOwnership && scope.kind === 'host' && scope.declaration === firstIntroducing;
+    const pinnedHostKeyAlias = firstMatchingDirective(state.directives, alias, 'hostkeyalias', ownManagedBlock);
+    const strictHostKeyChecking = firstMatchingDirective(
+      state.directives,
+      alias,
+      'stricthostkeychecking',
+      ownManagedBlock,
+    )?.toLowerCase() === 'yes';
 
     const identityFileDirectiveSeen = identityDirectives.length > 0;
     const identityFileNoneSeen = identityDirectives.some(
@@ -698,6 +710,8 @@ async function buildHosts(
       source: 'ssh-config' as const,
       managedByCindy: managedOwnership,
       ...(managedAliasConflict ? { managedAliasConflict: true } : {}),
+      ...(pinnedHostKeyAlias ? { hostKeyAlias: pinnedHostKeyAlias } : {}),
+      ...(strictHostKeyChecking ? { strictHostKeyChecking: true } : {}),
     });
   }
   return hosts;
@@ -1162,6 +1176,40 @@ export async function updateManagedHostFields(
   );
 }
 
+/**
+ * Move one managed Host block to a new alias in a single atomic write: the block keeps its place and every other
+ * directive, its `Host` line names `host.id`, and Cindy-owned connection fields are projected from `host`. Refuses
+ * when the old alias is missing or ambiguous, or any Host block in the managed file already names the new alias.
+ */
+export async function renameManagedHost(
+  fromAlias: string,
+  host: HostConfig,
+  managedConfigPath: string,
+  expectedToken: ManagedConfigWriteToken,
+): Promise<void> {
+  assertManagedWriteToken(expectedToken);
+  assertManagedAlias(host.id);
+  const existingBytes = await readRawConfigBytes(managedConfigPath);
+  assertManagedConfigUnchanged(existingBytes, expectedToken);
+  const existing = existingBytes.toString('utf8');
+  assertManagedConfigOwnership(existing);
+  if (!existing) throw new Error(`managed SSH host not found: ${fromAlias}`);
+  const parsed = SSHConfig.parse(existing) as SshConfigSection[];
+  const section = findSingleHostSection(parsed, fromAlias);
+  if (!section?.config) throw new Error(`managed SSH host not found or ambiguous: ${fromAlias}`);
+  if (findAnyHostSection(parsed, host.id)) throw new Error(`host already exists in managed SSH config: ${host.id}`);
+  section.value = host.id;
+  section.quoted = false;
+  projectManagedFields(section, host, existing.includes('\r\n') ? '\r\n' : '\n');
+  const next = (parsed as unknown as { toString(): string }).toString();
+  // Same syntax gate as an add: the exact bytes must read back with the new alias in place of the old one.
+  const reparsed = SSHConfig.parse(next) as SshConfigSection[];
+  if (!findSingleHostSection(reparsed, host.id) || findAnyHostSection(reparsed, fromAlias)) {
+    throw new Error(`managed SSH host rename did not round-trip: ${fromAlias}`);
+  }
+  await writeAtomicPreservingTarget(managedConfigPath, next, existing);
+}
+
 export async function removeManagedHost(
   alias: string,
   managedConfigPath: string,
@@ -1226,13 +1274,27 @@ export async function removeHost(alias: string, filePath: string): Promise<void>
 
 function projectManagedFields(section: SshConfigSection, host: HostConfig, eol: string): void {
   const hasIdentity = !!host.identityFile;
+  // A pinned host (one of the person's own Cindy devices) always spells out its port for the terminal alias.
+  const pinned = host.hostKeyAlias !== undefined;
   const desired: Array<[string, string | null]> = [
     ['HostName', host.hostname],
     ['User', host.user],
-    ['Port', host.port && host.port !== DEFAULT_PORT ? String(host.port) : null],
+    ['Port', host.port && (pinned || host.port !== DEFAULT_PORT) ? String(host.port) : null],
     ['IdentityFile', hasIdentity ? host.identityFile! : null],
     ['IdentitiesOnly', hasIdentity ? 'yes' : null],
   ];
+  // Host-key pinning is written only by callers that pin a key. Ordinary edits (which never carry
+  // hostKeyAlias) leave these directives exactly as they are.
+  if (pinned) {
+    assertManagedAlias(host.hostKeyAlias!);
+    desired.push(
+      ['HostKeyAlias', host.hostKeyAlias!],
+      ['UserKnownHostsFile', host.userKnownHostsFile ?? null],
+      ['StrictHostKeyChecking', host.strictHostKeyChecking ? 'yes' : null],
+      // With a strict alias the address is not a second identity: no IP lines are added to the known-hosts file.
+      ['CheckHostIP', host.strictHostKeyChecking ? 'no' : null],
+    );
+  }
   for (const [name, value] of desired) applyDirective(section, name, value, eol);
   // Always persist Cindy's auth choice. Without an agent marker, a managed
   // host with no local IdentityFile would silently become key auth if it

@@ -147,6 +147,27 @@ export class FileHostKeyStore implements HostKeyStore {
     await mySlot;
   }
 
+  /**
+   * Trust exactly `fingerprint` for `key`, replacing an earlier value. Only for keys Cindy learned from a verified
+   * source before connecting (one of the person's own devices reporting its host key over the signed device link),
+   * stored under a name no TOFU entry uses (a HostKeyAlias). Returns whether the file changed.
+   */
+  async pin(key: string, fingerprint: string): Promise<boolean> {
+    const slot = this.writeChain.catch(() => {}).then(async () => {
+      this.reload();
+      const map = await this.load();
+      if (map[key] === fingerprint) return false;
+      const next = { ...map, [key]: fingerprint };
+      await this.persist(next);
+      // Publish only after persistence succeeds, leaving the old value on failure.
+      this.cache = next;
+      this.loadPromise = null;
+      return true;
+    });
+    this.writeChain = slot.then(() => undefined, () => undefined);
+    return slot;
+  }
+
   /** Replace only the fingerprint the user reviewed; never reset trust to first-use. */
   async replace(key: string, expected: string, fingerprint: string, isCurrent: () => boolean): Promise<void> {
     const slot = this.writeChain.catch(() => {}).then(async () => {

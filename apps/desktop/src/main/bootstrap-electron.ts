@@ -7825,6 +7825,8 @@ const registerIpcHandlers = () => {
     'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
     'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
     'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
+    // SSH access (SshAccessSetting): Sharing → Remote Login.
+    'x-apple.systempreferences:com.apple.preferences.sharing?Services_RemoteLogin',
   ]);
 
   // Open external URL in system default browser, plus a small allowlist of

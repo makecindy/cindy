@@ -1963,7 +1963,8 @@
         "title": "修 {{id}}",
         "submit": "存所改",
         "connectionFieldsReadOnly": "出自 SSH 設定之連線資訊於此唯讀；顯示名稱、自動連線與 Agent Proxy 仍可改。",
-        "authenticationFromSshConfig": "驗證資訊出自 SSH 設定。"
+        "authenticationFromSshConfig": "驗證資訊出自 SSH 設定。",
+        "deviceHostReadOnly": "連線資訊由 Cindy 依君之裝置自動維護，於此唯讀；顯示名稱、自動連線與 Agent Proxy 仍可改。"
       },
       "keys": {
         "title": "配 SSH 金鑰",
@@ -2179,7 +2180,10 @@
         "cancel": "留原金鑰",
         "trust": "信新金鑰並重連",
         "updateFailed": "無法更新主機信任之錄。連線資訊或已存金鑰或已變，抑或記錄卷不可寫。請重連以更新指紋，並查卷之權柄"
-      }
+      },
+      "fromMyDevice": "出自吾之裝置",
+      "fromMyDeviceKeyPinned": "出自吾之裝置 · 主機指紋已核",
+      "deviceUnavailable": "暫不可用"
     },
     "appearance": {
       "chatLayout": {
@@ -7374,6 +7378,98 @@
             "ready": "綠實線：Agent-Net 脈通",
             "busy": "橙點：務行中 / 機方忙",
             "error": "朱點線：不應或已輟"
+          }
+        }
+      },
+      "sshAccess": {
+        "title": "許吾之他裝置經 SSH 連此機",
+        "description": "君之他裝置將自得權柄。撤某裝置之存取權柄，其 SSH 亦隨之收回。",
+        "defaultOn": "雲機預設啟之。",
+        "defaultOff": "預設不啟。",
+        "descriptionWithDefault": "{{description}}{{defaultNote}}",
+        "aliasIntro": "於他裝置之終端機連之：<command>{{command}}</command>",
+        "recordUnreadable": "此機所存之 SSH 存取紀錄讀之未成，Cindy 暫不作任何更動。",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "macOS 之「遠端登入」未啟，他裝置暫不能連。請於「系統設定 → 一般 → 共享」中啟「遠端登入」。",
+          "SSHD_UNREACHABLE": "此機之 SSH 服務未行，他裝置暫不能連。可於終端機行下列命令以安裝並啟之：",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy 不能改寫此機之 SSH 授權公鑰檔案。請察 ~/.ssh/authorized_keys 是否為連結、過大或已損。"
+        },
+        "otherDistributions": "他 Linux 發行版，請安裝 openssh-server 並啟 sshd 服務。",
+        "copyCommand": "錄命令",
+        "openSharingSettings": "啟共享之設",
+        "copied": "已錄",
+        "copyFailed": "錄之未成",
+        "listHeading": "可 SSH 之裝置（{{count}}）",
+        "listEmpty": "尚無裝置。君之他裝置上線後，自現於此。",
+        "deviceMeta": "吾之裝置 · 自動授權 · {{time}}",
+        "manualMeta": "手增之公鑰 · {{fingerprint}}",
+        "todayAt": "今日 {{time}}",
+        "inactive": "未生效",
+        "unknownDevice": "未知裝置",
+        "unnamedKey": "無名公鑰",
+        "remove": "去之",
+        "removedKey": "已去公鑰",
+        "removeKeyFailed": "去公鑰未成",
+        "removeDeviceConfirm": {
+          "heading": "去 {{name}} 之 SSH 存取乎？",
+          "body": "此舉將撤 {{name}} 對此機之存取權柄，遠端控制亦隨之收回，其 SSH 連線將斷。日後可於其裝置卡上復許「控此機」。",
+          "bodyKeepsSessions": "此舉將撤 {{name}} 對此機之存取權柄，遠端控制亦隨之收回。其已啟之 SSH 連線不自斷，如需斷之，可用「斷盡 SSH 連線」。日後可於其裝置卡上復許「控此機」。"
+        },
+        "deviceRemoved": "已撤 {{name}} 之存取權柄",
+        "deviceRemovedSessionsEnded": "已撤 {{name}} 之存取權柄，並斷其 SSH 連線 {{count}} 個",
+        "deviceRemovedSessionsLeft": "已撤 {{name}} 之存取權柄，斷其 SSH 連線 {{count}} 個。另有 {{unmapped}} 個連線無從確認所用之公鑰，仍連未斷，如需斷之，可用「斷盡 SSH 連線」。",
+        "deviceRemovedSessionsKept": "已撤 {{name}} 之存取權柄，其已啟之 SSH 連線不自斷",
+        "removeDeviceFailed": "去 {{name}} 之 SSH 存取，未竟",
+        "addKey": "增公鑰",
+        "addKeyDialog": {
+          "heading": "增公鑰",
+          "body": "貼一行 ssh-ed25519 公鑰，如 ~/.ssh/id_ed25519.pub 之內容。僅支援不帶選項之 ed25519 公鑰。",
+          "keyField": "公鑰",
+          "noteField": "附註（可省）",
+          "notePlaceholder": "如：辦公室伺服器",
+          "submit": "增公鑰"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "此非有效之 ssh-ed25519 公鑰。僅支援單行、不帶選項之 ed25519 公鑰。",
+          "ALREADY_EXISTS": "此公鑰已可連此機。",
+          "PRECONDITION_FAILED": "暫不能增公鑰，請稍後再試。",
+          "SSH_ACCESS_KEY_LIMIT": "所增公鑰已達其限（{{max}} 把）。去其一，方可再增。",
+          "INTERNAL": "公鑰增之未成。"
+        },
+        "addedKey": "已增公鑰",
+        "endSessions": "斷盡 SSH 連線",
+        "endSessionsConfirm": {
+          "heading": "斷盡 SSH 連線乎？",
+          "body": "此舉將斷此機當前使用者之一切 SSH 連線，連非經 Cindy 授權者亦在其內，方行之命令將中斷。",
+          "action": "盡斷之"
+        },
+        "sessionsEnded": "已斷 {{count}} 個 SSH 連線",
+        "sessionsUnsupported": "此機暫不能斷 SSH 連線",
+        "endSessionsFailed": "斷 SSH 連線未成",
+        "toggleFailed": "改 SSH 存取之設未成",
+        "device": {
+          "rowName": "SSH",
+          "copy": "錄終端機命令",
+          "connect": "連",
+          "connected": "已連 {{name}}",
+          "restore": "增入 SSH 遠方主機",
+          "restoreFailed": "增 {{name}} 入 SSH 遠方主機未成",
+          "userDeleted": "君已自 SSH 遠方主機中刪之。",
+          "needsUpdate": "須更新 Cindy：此裝置之 Cindy 尚不支援 SSH 存取。",
+          "controlOff": "君已闔「控之」，Cindy 不為其設 SSH。",
+          "refused": "此裝置未納此機之 SSH 公鑰。",
+          "pending": "方設 SSH…",
+          "unavailable": {
+            "off": "暫不可用：彼已闔 SSH 存取。",
+            "blocked": {
+              "SSHD_UNREACHABLE": "暫不可用：彼之 SSH 服務未行。",
+              "REMOTE_LOGIN_OFF": "暫不可用：彼 Mac 之「遠端登入」未啟。",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "暫不可用：Cindy 不能改寫彼之 SSH 授權公鑰檔案。",
+              "PLATFORM_UNSUPPORTED": "暫不可用：彼之系統不支援 SSH 存取。",
+              "UNKNOWN": "暫不可用：彼今不能受 SSH 連線。"
+            },
+            "revoked": "暫不可用：彼已撤此機之存取權柄。",
+            "removed": "暫不可用：此裝置已不在君之名籍中。"
           }
         }
       }

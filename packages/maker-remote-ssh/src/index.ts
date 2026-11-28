@@ -102,6 +102,9 @@ export {
 } from './hostKeys.js';
 export type { HostKeyStore, HostKeyDecision } from './hostKeys.js';
 
+export { generateOpenSshEd25519KeyPair } from './keyPair.js';
+export type { OpenSshKeyPair } from './keyPair.js';
+
 export {
   addManagedHost,
   addManagedHostWithInclude,
@@ -111,6 +114,7 @@ export {
   readSshConfig,
   readSshConfigDetailed,
   removeManagedHost,
+  renameManagedHost,
   updateManagedHostFields,
   upsertHost,
   updateHostFields,

@@ -1963,7 +1963,8 @@
         "title": "編輯 {{id}}",
         "submit": "儲存修改",
         "connectionFieldsReadOnly": "來自 SSH 設定的連線資訊在此為唯讀；顯示名稱、自動連線和 Agent Proxy 仍可修改。",
-        "authenticationFromSshConfig": "驗證資訊來自 SSH 設定。"
+        "authenticationFromSshConfig": "驗證資訊來自 SSH 設定。",
+        "deviceHostReadOnly": "連線資訊由 Cindy 依你的裝置自動維護，在此為唯讀；顯示名稱、自動連線和 Agent Proxy 仍可修改。"
       },
       "keys": {
         "title": "配置 SSH 金鑰",
@@ -2179,7 +2180,10 @@
         "cancel": "保留原金鑰",
         "trust": "信任新金鑰並重新連線",
         "updateFailed": "無法更新主機信任記錄。連線資訊或已存金鑰可能已變更，也可能無法寫入記錄檔。請重新連線以更新指紋，並檢查檔案權限"
-      }
+      },
+      "fromMyDevice": "來自我的裝置",
+      "fromMyDeviceKeyPinned": "來自我的裝置 · 主機指紋已核對",
+      "deviceUnavailable": "暫不可用"
     },
     "appearance": {
       "chatLayout": {
@@ -7374,6 +7378,98 @@
             "ready": "綠色實線：Agent-Net 連線已就緒",
             "busy": "橘點：任務執行中 / 機器忙碌",
             "error": "紅色點線：無回應或已暫停"
+          }
+        }
+      },
+      "sshAccess": {
+        "title": "允許我的其他裝置透過 SSH 連線這台電腦",
+        "description": "你的其他裝置會自動取得權限。撤銷某台裝置的存取權限時，它的 SSH 也會一併收回。",
+        "defaultOn": "雲端主機預設開啟。",
+        "defaultOff": "預設關閉。",
+        "descriptionWithDefault": "{{description}}{{defaultNote}}",
+        "aliasIntro": "在其他裝置的終端機中連線：<command>{{command}}</command>",
+        "recordUnreadable": "無法讀取這台電腦儲存的 SSH 存取紀錄，Cindy 暫時不會做任何變更。",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "macOS 的「遠端登入」尚未開啟，其他裝置暫時無法連線。請到「系統設定 → 一般 → 共享」開啟「遠端登入」。",
+          "SSHD_UNREACHABLE": "這台電腦上的 SSH 服務沒有執行，其他裝置暫時無法連線。可以在終端機中執行下面的命令來安裝並啟動它：",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy 無法改寫這台電腦的 SSH 授權公鑰檔案。請檢查 ~/.ssh/authorized_keys 是否為連結、檔案過大或內容損毀。"
+        },
+        "otherDistributions": "其他 Linux 發行版請安裝 openssh-server 並啟動 sshd 服務。",
+        "copyCommand": "複製命令",
+        "openSharingSettings": "開啟共享設定",
+        "copied": "已複製",
+        "copyFailed": "複製失敗",
+        "listHeading": "可以 SSH 的裝置（{{count}}）",
+        "listEmpty": "還沒有裝置。你的其他裝置上線後會自動出現在這裡。",
+        "deviceMeta": "我的裝置 · 自動授權 · {{time}}",
+        "manualMeta": "手動新增的公鑰 · {{fingerprint}}",
+        "todayAt": "今天 {{time}}",
+        "inactive": "未生效",
+        "unknownDevice": "未知裝置",
+        "unnamedKey": "未命名的公鑰",
+        "remove": "移除",
+        "removedKey": "已移除公鑰",
+        "removeKeyFailed": "未能移除公鑰",
+        "removeDeviceConfirm": {
+          "heading": "要移除 {{name}} 的 SSH 存取嗎？",
+          "body": "這會撤銷 {{name}} 對這台電腦的存取權限，遠端控制也會一併收回，它的 SSH 工作階段會被中斷。之後可以在它的裝置卡片上重新允許「控制本機」。",
+          "bodyKeepsSessions": "這會撤銷 {{name}} 對這台電腦的存取權限，遠端控制也會一併收回。它已開啟的 SSH 工作階段不會自動中斷，需要時可用「中斷全部 SSH 工作階段」中斷。之後可以在它的裝置卡片上重新允許「控制本機」。"
+        },
+        "deviceRemoved": "已撤銷 {{name}} 的存取權限",
+        "deviceRemovedSessionsEnded": "已撤銷 {{name}} 的存取權限，並中斷了它的 {{count}} 個 SSH 工作階段",
+        "deviceRemovedSessionsLeft": "已撤銷 {{name}} 的存取權限，中斷了它的 {{count}} 個 SSH 工作階段。另有 {{unmapped}} 個工作階段無法確認是用哪把公鑰登入的，仍在執行，需要時可用「中斷全部 SSH 工作階段」中斷。",
+        "deviceRemovedSessionsKept": "已撤銷 {{name}} 的存取權限，它已開啟的 SSH 工作階段不會自動中斷",
+        "removeDeviceFailed": "未能完成移除 {{name}} 的 SSH 存取",
+        "addKey": "新增公鑰",
+        "addKeyDialog": {
+          "heading": "新增公鑰",
+          "body": "貼上一行 ssh-ed25519 公鑰，例如 ~/.ssh/id_ed25519.pub 的內容。只支援不帶選項的 ed25519 公鑰。",
+          "keyField": "公鑰",
+          "noteField": "備註（選填）",
+          "notePlaceholder": "例如：辦公室伺服器",
+          "submit": "新增公鑰"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "這不是有效的 ssh-ed25519 公鑰。只支援單行、不帶選項的 ed25519 公鑰。",
+          "ALREADY_EXISTS": "這把公鑰已經可以連線這台電腦了。",
+          "PRECONDITION_FAILED": "暫時無法新增公鑰，請稍後再試。",
+          "SSH_ACCESS_KEY_LIMIT": "新增的公鑰已達上限（{{max}} 把）。移除一把後才能再新增。",
+          "INTERNAL": "未能新增公鑰。"
+        },
+        "addedKey": "已新增公鑰",
+        "endSessions": "中斷全部 SSH 工作階段",
+        "endSessionsConfirm": {
+          "heading": "要中斷全部 SSH 工作階段嗎？",
+          "body": "這會中斷這台電腦上目前使用者的全部 SSH 工作階段，包括不是透過 Cindy 授權的工作階段，正在執行的命令會被中斷。",
+          "action": "中斷全部工作階段"
+        },
+        "sessionsEnded": "已中斷 {{count}} 個 SSH 工作階段",
+        "sessionsUnsupported": "這台電腦暫不支援中斷 SSH 工作階段",
+        "endSessionsFailed": "未能中斷 SSH 工作階段",
+        "toggleFailed": "未能變更 SSH 存取設定",
+        "device": {
+          "rowName": "SSH",
+          "copy": "複製終端機命令",
+          "connect": "連線",
+          "connected": "已連線到 {{name}}",
+          "restore": "加入 SSH 遠端主機",
+          "restoreFailed": "未能將 {{name}} 加入 SSH 遠端主機",
+          "userDeleted": "你已將它從 SSH 遠端主機中刪除。",
+          "needsUpdate": "需要更新 Cindy：這台裝置上的 Cindy 還不支援 SSH 存取。",
+          "controlOff": "你關閉了「控制它」，Cindy 不會為它設定 SSH。",
+          "refused": "這台裝置沒有接受本機的 SSH 公鑰。",
+          "pending": "正在設定 SSH…",
+          "unavailable": {
+            "off": "暫不可用：對方關閉了 SSH 存取。",
+            "blocked": {
+              "SSHD_UNREACHABLE": "暫不可用：對方的 SSH 服務沒有執行。",
+              "REMOTE_LOGIN_OFF": "暫不可用：對方 Mac 的「遠端登入」尚未開啟。",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "暫不可用：Cindy 無法改寫對方的 SSH 授權公鑰檔案。",
+              "PLATFORM_UNSUPPORTED": "暫不可用：對方的系統不支援 SSH 存取。",
+              "UNKNOWN": "暫不可用：對方目前無法接受 SSH 連線。"
+            },
+            "revoked": "暫不可用：對方撤銷了本機的存取權限。",
+            "removed": "暫不可用：這台裝置已不在你的帳號中。"
           }
         }
       }

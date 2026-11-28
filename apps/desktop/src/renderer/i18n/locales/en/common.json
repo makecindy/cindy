@@ -1993,7 +1993,8 @@
         "title": "Edit {{id}}",
         "submit": "Save changes",
         "connectionFieldsReadOnly": "Connection details from SSH configuration are read-only here. Display name, auto-connect, and Agent Proxy remain editable.",
-        "authenticationFromSshConfig": "Authentication comes from SSH configuration."
+        "authenticationFromSshConfig": "Authentication comes from SSH configuration.",
+        "deviceHostReadOnly": "Cindy keeps the connection details in line with your device, so they’re read-only here. Display name, auto-connect, and Agent Proxy remain editable."
       },
       "keys": {
         "title": "Set up SSH key",
@@ -2209,7 +2210,10 @@
         "cancel": "Keep Existing Key",
         "trust": "Trust New Key and Reconnect",
         "updateFailed": "Could not update host trust. The connection details or saved key may have changed, or the trust file could not be written. Reconnect to refresh the fingerprints and check the file permissions."
-      }
+      },
+      "fromMyDevice": "From my devices",
+      "fromMyDeviceKeyPinned": "From my devices · Fingerprint verified",
+      "deviceUnavailable": "Unavailable"
     },
     "appearance": {
       "chatLayout": {
@@ -7417,6 +7421,98 @@
             "ready": "Solid green: Agent-Net link ready",
             "busy": "Orange dot: task running / machine busy",
             "error": "Red dotted: unresponsive or paused"
+          }
+        }
+      },
+      "sshAccess": {
+        "title": "Allow my other devices to connect to this computer over SSH",
+        "description": "Your other devices get access automatically. Revoking a device’s access also removes its SSH access.",
+        "defaultOn": "On by default on a cloud computer.",
+        "defaultOff": "Off by default.",
+        "descriptionWithDefault": "{{description}} {{defaultNote}}",
+        "aliasIntro": "From a terminal on your other devices: <command>{{command}}</command>",
+        "recordUnreadable": "Cindy can’t read the SSH access record on this computer, so it won’t change anything for now.",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "Remote Login is off in macOS, so your other devices can’t connect yet. Turn on Remote Login in System Settings → General → Sharing.",
+          "SSHD_UNREACHABLE": "The SSH server isn’t running on this computer, so your other devices can’t connect yet. To install and start it, run this command in a terminal:",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy can’t update this computer’s SSH authorized keys file. Check whether ~/.ssh/authorized_keys is a link, too large, or damaged."
+        },
+        "otherDistributions": "On other Linux distributions, install openssh-server and start the sshd service.",
+        "copyCommand": "Copy command",
+        "openSharingSettings": "Open Sharing settings",
+        "copied": "Copied",
+        "copyFailed": "Couldn’t copy",
+        "listHeading": "Devices that can use SSH ({{count}})",
+        "listEmpty": "No devices yet. Your other devices appear here once they come online.",
+        "deviceMeta": "My device · Allowed automatically · {{time}}",
+        "manualMeta": "Added public key · {{fingerprint}}",
+        "todayAt": "Today {{time}}",
+        "inactive": "Not in effect",
+        "unknownDevice": "Unknown device",
+        "unnamedKey": "Unnamed public key",
+        "remove": "Remove",
+        "removedKey": "Public key removed",
+        "removeKeyFailed": "Couldn’t remove the public key",
+        "removeDeviceConfirm": {
+          "heading": "Remove SSH access for {{name}}?",
+          "body": "This revokes {{name}}’s access to this computer. Remote control is revoked too, and its SSH sessions are ended. You can allow “Control this device” again on its device card later.",
+          "bodyKeepsSessions": "This revokes {{name}}’s access to this computer. Remote control is revoked too. SSH sessions it already has open stay open until you end them with “End all SSH sessions”. You can allow “Control this device” again on its device card later."
+        },
+        "deviceRemoved": "Revoked access for {{name}}",
+        "deviceRemovedSessionsEnded": "Revoked access for {{name}}. SSH sessions ended: {{count}}.",
+        "deviceRemovedSessionsLeft": "Revoked access for {{name}}. SSH sessions ended: {{count}}. Left running because their key couldn’t be identified: {{unmapped}}. To end those too, use “End all SSH sessions”.",
+        "deviceRemovedSessionsKept": "Revoked access for {{name}}. SSH sessions it already has open stay open.",
+        "removeDeviceFailed": "Couldn’t finish removing SSH access for {{name}}",
+        "addKey": "Add public key",
+        "addKeyDialog": {
+          "heading": "Add a public key",
+          "body": "Paste one ssh-ed25519 public key line, such as the contents of ~/.ssh/id_ed25519.pub. Only ed25519 keys without options are supported.",
+          "keyField": "Public key",
+          "noteField": "Note (optional)",
+          "notePlaceholder": "For example: office server",
+          "submit": "Add key"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "This isn’t a valid ssh-ed25519 public key. Paste a single ed25519 key line without options.",
+          "ALREADY_EXISTS": "This public key can already connect to this computer.",
+          "PRECONDITION_FAILED": "The public key can’t be added right now. Try again later.",
+          "SSH_ACCESS_KEY_LIMIT": "You’ve reached the limit of {{max}} added public keys. Remove one to add another.",
+          "INTERNAL": "The public key wasn’t added."
+        },
+        "addedKey": "Public key added",
+        "endSessions": "End all SSH sessions",
+        "endSessionsConfirm": {
+          "heading": "End all SSH sessions?",
+          "body": "This ends every SSH session of the current user on this computer, including sessions not allowed through Cindy. Running commands are interrupted.",
+          "action": "End all sessions"
+        },
+        "sessionsEnded": "SSH sessions ended: {{count}}",
+        "sessionsUnsupported": "This computer can’t end SSH sessions yet",
+        "endSessionsFailed": "Couldn’t end SSH sessions",
+        "toggleFailed": "Couldn’t change SSH access",
+        "device": {
+          "rowName": "SSH",
+          "copy": "Copy terminal command",
+          "connect": "Connect",
+          "connected": "Connected to {{name}}",
+          "restore": "Add to SSH remote hosts",
+          "restoreFailed": "Couldn’t add {{name}} to SSH remote hosts",
+          "userDeleted": "You deleted it from SSH remote hosts.",
+          "needsUpdate": "Needs a Cindy update: Cindy on this device doesn’t support SSH access yet.",
+          "controlOff": "“Control it” is off, so Cindy doesn’t set up SSH for it.",
+          "refused": "This device didn’t accept this computer’s SSH key.",
+          "pending": "Setting up SSH…",
+          "unavailable": {
+            "off": "Unavailable: SSH access is off on that device.",
+            "blocked": {
+              "SSHD_UNREACHABLE": "Unavailable: the SSH server on that device isn’t running.",
+              "REMOTE_LOGIN_OFF": "Unavailable: Remote Login is off on that Mac.",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "Unavailable: Cindy can’t update the SSH authorized keys file on that device.",
+              "PLATFORM_UNSUPPORTED": "Unavailable: that device’s system doesn’t support SSH access.",
+              "UNKNOWN": "Unavailable: that device can’t accept SSH connections right now."
+            },
+            "revoked": "Unavailable: that device revoked this computer’s access.",
+            "removed": "Unavailable: that device is no longer in your account."
           }
         }
       }

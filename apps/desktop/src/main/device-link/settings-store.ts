@@ -62,6 +62,11 @@ export interface DeviceLinkSettings {
   lastKnownDeviceNames: Record<string, string>;
   /** 逐设备的 Agent-Net 选路偏好覆盖（仅存非 auto 的手动选择；缺省或空时省略，保持旧文件形状不变）。 */
   peerPathPreferences?: Record<string, 'direct' | 'relay'>;
+  /**
+   * 「允许我的其他设备 SSH 到这台电脑」的本机选择（ssh-access/sshAccessTargetCore.ts）。只存用户明确的选择；缺省时
+   * 跟随默认（Cindy 云电脑开、其它电脑关），恢复默认即删除。登录时不写入。
+   */
+  sshAccessEnabled?: boolean;
 }
 export interface DeviceLinkSettingsStorePorts {
 getUserDataDir: () => string;
@@ -78,6 +83,7 @@ function inspectDeviceLinkSettings() {
   return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize, savedSource: 'unknown',
     validate: (raw) => validateOptionalSettingsFields(raw, {
       remoteDesktopEnabled: isSettingBoolean, remoteControlEnabled: isSettingBoolean, keepAwake: isSettingBoolean,
+      sshAccessEnabled: isSettingBoolean,
       revokedControllers: isSettingStringList, disabledControlDeviceIds: isSettingStringList,
       lastKnownDeviceNames: (value) => isSettingsObject(value) && Object.values(value).every((name) => typeof name === 'string'),
     }),
@@ -118,6 +124,7 @@ function normalize(raw: unknown): DeviceLinkSettings {
     disabledControlDeviceIds: normalizeStringList(r.disabledControlDeviceIds),
     lastKnownDeviceNames: normalizeDeviceNameMap(r.lastKnownDeviceNames),
     ...optional('peerPathPreferences', normalizePeerPathPreferences(r.peerPathPreferences)),
+    ...(typeof r.sshAccessEnabled === 'boolean' ? { sshAccessEnabled: r.sshAccessEnabled } : {}),
   };
 }
 

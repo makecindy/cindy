@@ -24,6 +24,8 @@ import {
   REMOTE_AGENT_CHANNEL,
   SETUP_SNAPSHOT_CHANNEL,
   SETUP_TRANSFER_CHANNEL,
+  SSH_ACCESS_CHANNEL,
+  sshAccessErrorCode,
   TASK_MIGRATION_CHANNEL,
   encodeSessionTagCatalog,
   decodeSessionTagCatalog,
@@ -170,7 +172,7 @@ import type {
   assertRemoteBotInvocationAllowed, projectRemoteSessionResult, projectRemoteBotPush,
   hasRemoteBotSessionLookup, setRemoteBotSessionLookup,
 } from './remoteBotSessionBoundary.js';
-import { getControllerPlatform } from './controllerPlatform';
+import { getControllerPlatform, isMobilePlatform } from './controllerPlatform';
 import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from './invoke-context';
 import {
   redactInputProjectionForSharedGuest,
@@ -527,6 +529,16 @@ export interface InboundDispatchPorts {
   projectInteractionDismissedForRemote: typeof projectInteractionDismissedForRemote;
   projectInteractionRequestForRemote: typeof projectInteractionRequestForRemote;
   remoteWorkingDirRejectionToIpcError: typeof remoteWorkingDirRejectionToIpcError;
+  /**
+   * The running SSH access target (ssh-access/sshAccessTargetCore.ts), read per request because it starts and stops
+   * with the signed-in account. Absent or null: `device-link:ssh-access:v1` answers [SSH_ACCESS_UNAVAILABLE].
+   */
+  sshAccessTarget?: () => SshAccessDispatchTarget | null;
+}
+
+/** What the dispatcher needs from the SSH access target: one admitted same-account desktop's request. */
+export interface SshAccessDispatchTarget {
+  handleRemote(controller: string, raw: unknown): Promise<unknown>;
 }
 
 /**
@@ -599,6 +611,7 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     projectInteractionDismissedForRemote,
     projectInteractionRequestForRemote,
     remoteWorkingDirRejectionToIpcError,
+    sshAccessTarget,
   } = ports;
 
 
@@ -5415,6 +5428,24 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       const message = error instanceof Error ? error.message : '';
       const code = /\bAGENT_NET_SWITCH_[A-Z_]+\b/.exec(message)?.[0] ?? 'AGENT_NET_SWITCH_UNAVAILABLE';
       return { ok: false, error: { code: 'IPC_ERROR', message: `[${code}] agent-net switch failed` } };
+    }
+  }
+  if (payload.channel === SSH_ACCESS_CHANNEL) {
+    // 只给同账号电脑(device-link-ssh-access.md)：共享任务访客与供应商分享受邀者是其他账号；手机不登记 SSH 公钥。
+    // 平台来自对端自报的 presence，只做这一层分流；远控开关与撤销名单已在上面拦过。
+    if (!isSameAccountController(src) || isMobilePlatform(getControllerPlatform(src))) return channelNotAllowed(payload.channel);
+    const target = sshAccessTarget?.() ?? null;
+    if (!target) return { ok: false, error: { code: 'IPC_ERROR', message: '[SSH_ACCESS_UNAVAILABLE] ssh access is not available on this computer' } };
+    try {
+      const result = await runDeviceLinkInvokeContext(
+        { controllerDeviceId: src, channel: payload.channel },
+        () => timing.measure('handler', () => target.handleRemote(src, payload.args?.[0])),
+      );
+      return { ok: true, result };
+    } catch (error) {
+      // Only the protocol's own codes cross the wire; anything else (an owner change, a held Host profile) is UNAVAILABLE.
+      const code = sshAccessErrorCode(error instanceof Error ? error.message : '') ?? 'SSH_ACCESS_UNAVAILABLE';
+      return { ok: false, error: { code: 'IPC_ERROR', message: `[${code}] ssh access request failed` } };
     }
   }
   if (payload.channel === PEER_APP_UPDATE_CHANNEL) {

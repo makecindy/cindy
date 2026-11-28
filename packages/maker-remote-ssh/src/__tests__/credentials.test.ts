@@ -13,6 +13,10 @@
  *   2. 其它 IO 错误仍保留原有 "failed to read identityFile" 包装。
  */
 
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { utils } from 'ssh2';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -20,6 +24,7 @@ import {
   resolveAuth,
   SSH_CONFIG_AUTH_UNSUPPORTED_CODE,
 } from '../credentials.js';
+import { generateOpenSshEd25519KeyPair } from '../keyPair.js';
 import {
   previewAgentEndpoint,
   resolveAgentEndpoint,
@@ -85,6 +90,43 @@ describe('resolveAuth key-mode identityFile handling', () => {
     await expect(resolveAuth(host)).rejects.toMatchObject({
       code: SSH_CONFIG_AUTH_UNSUPPORTED_CODE,
     });
+  });
+
+  // SSH access to the person's own devices (decision 7): the dedicated key Cindy generates is an unencrypted
+  // OpenSSH ed25519 key whose public half is the canonical one-line key the device enrolls; resolveAuth reads it
+  // as direct key auth and ssh2 parses it back to the same public key. Unit tier (scratch file).
+  // ssh2 drops a leading zero byte of about one ed25519 key in 256 (found 2026-11-28: 17 of 5000 generated keys
+  // were `AAAAC3NzaC1lZDI1NTE5AAAAH…=`, a 31-byte key), which the device's enrollment and OpenSSH reject.
+  it('generates again when ssh2 returns a shortened ed25519 key', async () => {
+    const shortened = { public: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAH5cDVzorRC1b4Aih8nOS1HCvhqkWzQ8jZa4X6nbuQpQ= c', private: 'short' };
+    const good = await generateOpenSshEd25519KeyPair('c');
+    const calls: string[] = [];
+    const pair = await generateOpenSshEd25519KeyPair('c', async (comment) => {
+      calls.push(comment);
+      return calls.length === 1 ? shortened : { public: `${good.publicKey} c`, private: good.privateKey };
+    });
+    expect(calls).toHaveLength(2);
+    expect(pair).toEqual(good);
+    await expect(generateOpenSshEd25519KeyPair('c', async () => shortened)).rejects.toThrow('canonical ssh-ed25519');
+  });
+
+  it('reads a generated dedicated ed25519 key as direct key auth', async () => {
+    const pair = await generateOpenSshEd25519KeyPair('cindy-device-key');
+    const header = '-----BEGIN OPENSSH ' + 'PRIVATE KEY-----\n';
+    expect(pair.privateKey.startsWith(header)).toBe(true);
+    expect(pair.publicKey).toMatch(/^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$/);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-dedicated-key-'));
+    try {
+      const identityFile = path.join(dir, 'id_ed25519');
+      await fs.writeFile(identityFile, pair.privateKey, { mode: 0o600 });
+      const auth = await resolveAuth(keyHost({ identityFile }));
+      const parsed = utils.parseKey(auth.privateKey!);
+      if (parsed instanceof Error) throw parsed;
+      expect(`${parsed.type} ${parsed.getPublicSSH().toString('base64')}`).toBe(pair.publicKey);
+      expect(parsed.isPrivateKey()).toBe(true);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

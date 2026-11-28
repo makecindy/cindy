@@ -6272,6 +6272,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<ReviewPushResult> => ipcRenderer.invoke('git-review:push', params),
   },
 
+  // 「允许我的其他设备 SSH 到这台电脑」(shared/sshAccess.ts):one request channel, validated and sender-checked in main.
+  sshAccess: {
+    read: () => ipcRenderer.invoke('ssh-access:request', { operation: 'read' }),
+    setEnabled: (enabled: boolean) => ipcRenderer.invoke('ssh-access:request', { operation: 'set-enabled', enabled }),
+    restoreDefault: () => ipcRenderer.invoke('ssh-access:request', { operation: 'set-enabled', enabled: null }),
+    addKey: (publicKey: string, label?: string) => ipcRenderer.invoke('ssh-access:request', label === undefined
+      ? { operation: 'add-key', publicKey } : { operation: 'add-key', publicKey, label }),
+    removeKey: (fingerprint: string) => ipcRenderer.invoke('ssh-access:request', { operation: 'remove-key', fingerprint }),
+    removeDevice: (deviceId: string) => ipcRenderer.invoke('ssh-access:request', { operation: 'remove-device', deviceId }),
+    endAllSessions: () => ipcRenderer.invoke('ssh-access:request', { operation: 'end-sessions' }),
+    onChanged: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('ssh-access:changed', listener);
+      return () => ipcRenderer.removeListener('ssh-access:changed', listener);
+    },
+  } satisfies import('../shared/sshAccess').SshAccessApi,
+
+  // The hosts this computer keeps for the person's other devices (SSH access controller, shared/sshAccess.ts).
+  sshDeviceHosts: {
+    read: () => ipcRenderer.invoke('ssh-device-hosts:request', { operation: 'read' }),
+    restore: (deviceId: string) => ipcRenderer.invoke('ssh-device-hosts:request', { operation: 'restore', deviceId }),
+    onChanged: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('ssh-device-hosts:changed', listener);
+      return () => ipcRenderer.removeListener('ssh-device-hosts:changed', listener);
+    },
+  } satisfies import('../shared/sshAccess').SshDeviceHostsApi,
+
   // Sidebar identity state is owner-scoped in main and every mutation/push is generation-fenced.
   taskManagement: {
     read: () => ipcRenderer.invoke('task-management:request', { operation: 'read' }),

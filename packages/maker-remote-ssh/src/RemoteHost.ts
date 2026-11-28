@@ -1221,12 +1221,15 @@ export class RemoteHost {
    * accept the handshake, false to reject it (ssh2 then emits an error which
    * onError maps to `hostKeyError`). Fails closed: a missing store or a read
    * error refuses the connect rather than trusting an unverified key.
+   * `strict` (StrictHostKeyChecking yes in Cindy's own block) refuses an
+   * unknown key on every path: the key must have been pinned beforehand.
    */
   private async verifyHostKey(
     hostKey: Buffer,
     storeKey: string,
     isCurrentAttempt: () => boolean,
     trust: { allowFirstTrust: boolean; trustedOnFirstUse: boolean },
+    strict = false,
   ): Promise<boolean> {
     // A cancelled client must not even touch the shared TOFU store. In
     // particular, updateConfig() may already have published a new endpoint
@@ -1267,7 +1270,7 @@ export class RemoteHost {
     const decision = decideHostKey(stored, presented);
     if (decision === 'match') return true;
     if (decision === 'trust-new') {
-      if (!trust.allowFirstTrust) {
+      if (!trust.allowFirstTrust || strict) {
         this.hostKeyUnverified = true;
         this.hostKeyError = unverifiedHostError().message;
         return false;
@@ -1392,7 +1395,11 @@ export class RemoteHost {
 
     // Unsupported configuration fails in resolveAuth above. Only a usable,
     // fully-resolved endpoint may participate in TOFU identity calculation.
-    const attemptHostKeyId = hostKeyId(attemptConfig.hostname, attemptConfig.port);
+    // A Cindy-managed HostKeyAlias names the pinned key instead of the address
+    // (the address of one of the person's own devices may change).
+    const attemptHostKeyId = attemptConfig.hostKeyAlias
+      ?? hostKeyId(attemptConfig.hostname, attemptConfig.port);
+    const strictHostKey = attemptConfig.strictHostKeyChecking === true;
     const client = new Client();
     this.client = client;
 
@@ -1409,7 +1416,7 @@ export class RemoteHost {
           verify(false);
           return;
         }
-        void this.verifyHostKey(hostKey, attemptHostKeyId, isCurrentAttempt, trust).then(
+        void this.verifyHostKey(hostKey, attemptHostKeyId, isCurrentAttempt, trust, strictHostKey).then(
           (valid) => verify(isCurrentAttempt() ? valid : false),
           () => verify(false),
         );

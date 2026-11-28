@@ -2031,7 +2031,8 @@
         "title": "Editar {{id}}",
         "submit": "Guardar alterações",
         "connectionFieldsReadOnly": "Os detalhes da ligação provenientes da configuração SSH são apenas de leitura aqui. O nome apresentado, a ligação automática e o proxy do Agent continuam editáveis.",
-        "authenticationFromSshConfig": "A autenticação provém da configuração SSH."
+        "authenticationFromSshConfig": "A autenticação provém da configuração SSH.",
+        "deviceHostReadOnly": "O Cindy mantém os detalhes da ligação de acordo com o seu dispositivo, por isso são apenas de leitura aqui. O nome apresentado, a ligação automática e o proxy do Agent continuam editáveis."
       },
       "keys": {
         "title": "Configurar chave SSH",
@@ -2247,7 +2248,10 @@
         "cancel": "Manter chave existente",
         "trust": "Confiar na nova chave e voltar a ligar",
         "updateFailed": "Não foi possível atualizar a confiança no anfitrião. Os dados de ligação ou a chave guardada podem ter mudado, ou não foi possível escrever no ficheiro de confiança. Volte a ligar para atualizar as impressões digitais e verifique as permissões do ficheiro."
-      }
+      },
+      "fromMyDevice": "Dos meus dispositivos",
+      "fromMyDeviceKeyPinned": "Dos meus dispositivos · Impressão digital do anfitrião verificada",
+      "deviceUnavailable": "Indisponível"
     },
     "appearance": {
       "chatLayout": {
@@ -7484,6 +7488,98 @@
             "ready": "Linha verde: ligação Agent-Net pronta",
             "busy": "Ponto laranja: tarefa em execução / ocupado",
             "error": "Pontilhado vermelho: sem resposta ou em pausa"
+          }
+        }
+      },
+      "sshAccess": {
+        "title": "Permitir que os meus outros dispositivos se liguem a este computador por SSH",
+        "description": "Os seus outros dispositivos obtêm acesso automaticamente. Revogar o acesso de um dispositivo retira também o respetivo acesso SSH.",
+        "defaultOn": "Ativado por predefinição num computador na nuvem.",
+        "defaultOff": "Desativado por predefinição.",
+        "descriptionWithDefault": "{{description}} {{defaultNote}}",
+        "aliasIntro": "Num terminal dos seus outros dispositivos: <command>{{command}}</command>",
+        "recordUnreadable": "O Cindy não consegue ler o registo de acesso SSH deste computador, por isso não vai alterar nada por agora.",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "O início de sessão remoto do macOS está desativado, por isso os seus outros dispositivos ainda não se conseguem ligar. Ative «Início de sessão remoto» em Definições do Sistema → Geral → Partilha.",
+          "SSHD_UNREACHABLE": "O servidor SSH não está em execução neste computador, por isso os seus outros dispositivos ainda não se conseguem ligar. Para o instalar e iniciar, execute este comando num terminal:",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "O Cindy não consegue alterar o ficheiro de chaves SSH autorizadas deste computador. Verifique se ~/.ssh/authorized_keys é uma ligação, se é demasiado grande ou se está danificado."
+        },
+        "otherDistributions": "Noutras distribuições Linux, instale o openssh-server e inicie o serviço sshd.",
+        "copyCommand": "Copiar comando",
+        "openSharingSettings": "Abrir definições de Partilha",
+        "copied": "Copiado",
+        "copyFailed": "Não foi possível copiar",
+        "listHeading": "Dispositivos que podem usar SSH ({{count}})",
+        "listEmpty": "Ainda não há dispositivos. Os seus outros dispositivos aparecem aqui quando ficarem online.",
+        "deviceMeta": "O meu dispositivo · Permitido automaticamente · {{time}}",
+        "manualMeta": "Chave pública adicionada · {{fingerprint}}",
+        "todayAt": "Hoje {{time}}",
+        "inactive": "Sem efeito",
+        "unknownDevice": "Dispositivo desconhecido",
+        "unnamedKey": "Chave pública sem nome",
+        "remove": "Remover",
+        "removedKey": "Chave pública removida",
+        "removeKeyFailed": "Não foi possível remover a chave pública",
+        "removeDeviceConfirm": {
+          "heading": "Remover o acesso SSH de {{name}}?",
+          "body": "Isto revoga o acesso de {{name}} a este computador. O controlo remoto também é revogado e as respetivas sessões SSH são terminadas. Mais tarde, pode voltar a permitir «Controlar este dispositivo» no cartão do dispositivo.",
+          "bodyKeepsSessions": "Isto revoga o acesso de {{name}} a este computador. O controlo remoto também é revogado. As sessões SSH que já tiver abertas continuam abertas até as terminar com «Terminar todas as sessões SSH». Mais tarde, pode voltar a permitir «Controlar este dispositivo» no cartão do dispositivo."
+        },
+        "deviceRemoved": "Acesso de {{name}} revogado",
+        "deviceRemovedSessionsEnded": "Acesso de {{name}} revogado. Sessões SSH terminadas: {{count}}.",
+        "deviceRemovedSessionsLeft": "Acesso de {{name}} revogado. Sessões SSH terminadas: {{count}}. Sessões que continuam abertas por não ser possível identificar a chave: {{unmapped}}. Para as terminar também, use «Terminar todas as sessões SSH».",
+        "deviceRemovedSessionsKept": "Acesso de {{name}} revogado. As sessões SSH que já tiver abertas continuam abertas.",
+        "removeDeviceFailed": "Não foi possível concluir a remoção do acesso SSH de {{name}}",
+        "addKey": "Adicionar chave pública",
+        "addKeyDialog": {
+          "heading": "Adicionar uma chave pública",
+          "body": "Cole uma linha de chave pública ssh-ed25519, por exemplo o conteúdo de ~/.ssh/id_ed25519.pub. Só são suportadas chaves ed25519 sem opções.",
+          "keyField": "Chave pública",
+          "noteField": "Nota (opcional)",
+          "notePlaceholder": "Por exemplo: servidor do escritório",
+          "submit": "Adicionar chave"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "Esta não é uma chave pública ssh-ed25519 válida. Cole uma única linha de chave ed25519 sem opções.",
+          "ALREADY_EXISTS": "Esta chave pública já se pode ligar a este computador.",
+          "PRECONDITION_FAILED": "Não é possível adicionar a chave pública agora. Tente mais tarde.",
+          "SSH_ACCESS_KEY_LIMIT": "Atingiu o limite de {{max}} chaves públicas adicionadas. Remova uma para adicionar outra.",
+          "INTERNAL": "A chave pública não foi adicionada."
+        },
+        "addedKey": "Chave pública adicionada",
+        "endSessions": "Terminar todas as sessões SSH",
+        "endSessionsConfirm": {
+          "heading": "Terminar todas as sessões SSH?",
+          "body": "Isto termina todas as sessões SSH do utilizador atual neste computador, incluindo as que não foram permitidas através do Cindy. Os comandos em execução são interrompidos.",
+          "action": "Terminar todas as sessões"
+        },
+        "sessionsEnded": "Sessões SSH terminadas: {{count}}",
+        "sessionsUnsupported": "Este computador ainda não consegue terminar sessões SSH",
+        "endSessionsFailed": "Não foi possível terminar as sessões SSH",
+        "toggleFailed": "Não foi possível alterar o acesso SSH",
+        "device": {
+          "rowName": "SSH",
+          "copy": "Copiar comando do terminal",
+          "connect": "Ligar",
+          "connected": "Ligado a {{name}}",
+          "restore": "Adicionar aos anfitriões remotos SSH",
+          "restoreFailed": "Não foi possível adicionar {{name}} aos anfitriões remotos SSH",
+          "userDeleted": "Eliminou-o dos anfitriões remotos SSH.",
+          "needsUpdate": "É necessário atualizar o Cindy: o Cindy neste dispositivo ainda não suporta o acesso SSH.",
+          "controlOff": "«Controlá-lo» está desativado, por isso o Cindy não configura o SSH para este dispositivo.",
+          "refused": "Este dispositivo não aceitou a chave SSH deste computador.",
+          "pending": "A configurar o SSH…",
+          "unavailable": {
+            "off": "Indisponível: o acesso SSH está desativado nesse dispositivo.",
+            "blocked": {
+              "SSHD_UNREACHABLE": "Indisponível: o servidor SSH desse dispositivo não está em execução.",
+              "REMOTE_LOGIN_OFF": "Indisponível: o «Início de sessão remoto» está desativado nesse Mac.",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "Indisponível: o Cindy não consegue alterar o ficheiro de chaves SSH autorizadas desse dispositivo.",
+              "PLATFORM_UNSUPPORTED": "Indisponível: o sistema desse dispositivo não suporta o acesso SSH.",
+              "UNKNOWN": "Indisponível: esse dispositivo não pode aceitar ligações SSH de momento."
+            },
+            "revoked": "Indisponível: esse dispositivo revogou o acesso deste computador.",
+            "removed": "Indisponível: esse dispositivo já não está na sua conta."
           }
         }
       }

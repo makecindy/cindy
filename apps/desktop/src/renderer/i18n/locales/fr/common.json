@@ -2031,7 +2031,8 @@
         "title": "Modifier {{id}}",
         "submit": "Enregistrer",
         "connectionFieldsReadOnly": "Les détails de connexion issus de la configuration SSH sont ici en lecture seule. Le nom d'affichage, la connexion automatique et Agent Proxy restent modifiables.",
-        "authenticationFromSshConfig": "L'authentification provient de la configuration SSH."
+        "authenticationFromSshConfig": "L'authentification provient de la configuration SSH.",
+        "deviceHostReadOnly": "Cindy maintient les détails de connexion selon votre appareil ; ils sont donc ici en lecture seule. Le nom d'affichage, la connexion automatique et Agent Proxy restent modifiables."
       },
       "keys": {
         "title": "Configurer une clé SSH",
@@ -2247,7 +2248,10 @@
         "cancel": "Conserver la clé existante",
         "trust": "Approuver la nouvelle clé et se reconnecter",
         "updateFailed": "Impossible de mettre à jour la confiance de l'hôte. Les détails de connexion ou la clé enregistrée ont peut-être changé, ou le fichier de confiance n'a pas pu être écrit. Reconnectez-vous pour actualiser les empreintes et vérifiez les autorisations du fichier."
-      }
+      },
+      "fromMyDevice": "De mes appareils",
+      "fromMyDeviceKeyPinned": "De mes appareils · Empreinte de l'hôte vérifiée",
+      "deviceUnavailable": "Indisponible"
     },
     "appearance": {
       "chatLayout": {
@@ -7484,6 +7488,98 @@
             "ready": "Ligne verte : lien Agent-Net prêt",
             "busy": "Point orange : tâche en cours d'exécution / occupé",
             "error": "Pointillés rouges : sans réponse ou en pause"
+          }
+        }
+      },
+      "sshAccess": {
+        "title": "Autoriser mes autres appareils à se connecter à cet ordinateur en SSH",
+        "description": "Vos autres appareils obtiennent l'accès automatiquement. Révoquer l'accès d'un appareil retire aussi son accès SSH.",
+        "defaultOn": "Activé par défaut sur un ordinateur cloud.",
+        "defaultOff": "Désactivé par défaut.",
+        "descriptionWithDefault": "{{description}} {{defaultNote}}",
+        "aliasIntro": "Depuis un terminal sur vos autres appareils : <command>{{command}}</command>",
+        "recordUnreadable": "Cindy ne peut pas lire le registre d'accès SSH de cet ordinateur et ne modifiera donc rien pour le moment.",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "La session à distance de macOS est désactivée : vos autres appareils ne peuvent pas encore se connecter. Activez « Session à distance » dans Réglages Système → Général → Partage.",
+          "SSHD_UNREACHABLE": "Le serveur SSH n'est pas en cours d'exécution sur cet ordinateur : vos autres appareils ne peuvent pas encore se connecter. Pour l'installer et le démarrer, exécutez cette commande dans un terminal :",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy ne peut pas modifier le fichier des clés SSH autorisées de cet ordinateur. Vérifiez si ~/.ssh/authorized_keys est un lien, s'il est trop volumineux ou endommagé."
+        },
+        "otherDistributions": "Sur les autres distributions Linux, installez openssh-server et démarrez le service sshd.",
+        "copyCommand": "Copier la commande",
+        "openSharingSettings": "Ouvrir les réglages Partage",
+        "copied": "Copié",
+        "copyFailed": "Copie impossible",
+        "listHeading": "Appareils pouvant utiliser SSH ({{count}})",
+        "listEmpty": "Aucun appareil pour l'instant. Vos autres appareils apparaissent ici dès qu'ils sont en ligne.",
+        "deviceMeta": "Mon appareil · Autorisé automatiquement · {{time}}",
+        "manualMeta": "Clé publique ajoutée · {{fingerprint}}",
+        "todayAt": "Aujourd'hui {{time}}",
+        "inactive": "Sans effet",
+        "unknownDevice": "Appareil inconnu",
+        "unnamedKey": "Clé publique sans nom",
+        "remove": "Retirer",
+        "removedKey": "Clé publique retirée",
+        "removeKeyFailed": "Impossible de retirer la clé publique",
+        "removeDeviceConfirm": {
+          "heading": "Retirer l'accès SSH de {{name}} ?",
+          "body": "Cela révoque l'accès de {{name}} à cet ordinateur. Le contrôle à distance est aussi révoqué et ses sessions SSH sont fermées. Vous pourrez réautoriser « Contrôler cet appareil » plus tard sur sa carte.",
+          "bodyKeepsSessions": "Cela révoque l'accès de {{name}} à cet ordinateur. Le contrôle à distance est aussi révoqué. Les sessions SSH qu'il a déjà ouvertes restent ouvertes jusqu'à ce que vous les fermiez avec « Fermer toutes les sessions SSH ». Vous pourrez réautoriser « Contrôler cet appareil » plus tard sur sa carte."
+        },
+        "deviceRemoved": "Accès de {{name}} révoqué",
+        "deviceRemovedSessionsEnded": "Accès de {{name}} révoqué. Sessions SSH fermées : {{count}}.",
+        "deviceRemovedSessionsLeft": "Accès de {{name}} révoqué. Sessions SSH fermées : {{count}}. Sessions laissées ouvertes faute de pouvoir identifier leur clé : {{unmapped}}. Pour les fermer aussi, utilisez « Fermer toutes les sessions SSH ».",
+        "deviceRemovedSessionsKept": "Accès de {{name}} révoqué. Les sessions SSH qu'il a déjà ouvertes restent ouvertes.",
+        "removeDeviceFailed": "Impossible de terminer le retrait de l'accès SSH de {{name}}",
+        "addKey": "Ajouter une clé publique",
+        "addKeyDialog": {
+          "heading": "Ajouter une clé publique",
+          "body": "Collez une ligne de clé publique ssh-ed25519, par exemple le contenu de ~/.ssh/id_ed25519.pub. Seules les clés ed25519 sans options sont prises en charge.",
+          "keyField": "Clé publique",
+          "noteField": "Note (facultatif)",
+          "notePlaceholder": "Par exemple : serveur du bureau",
+          "submit": "Ajouter la clé"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "Ce n'est pas une clé publique ssh-ed25519 valide. Collez une seule ligne de clé ed25519 sans options.",
+          "ALREADY_EXISTS": "Cette clé publique peut déjà se connecter à cet ordinateur.",
+          "PRECONDITION_FAILED": "Impossible d'ajouter la clé publique pour le moment. Réessayez plus tard.",
+          "SSH_ACCESS_KEY_LIMIT": "Vous avez atteint la limite de {{max}} clés publiques ajoutées. Retirez-en une pour en ajouter une autre.",
+          "INTERNAL": "La clé publique n'a pas été ajoutée."
+        },
+        "addedKey": "Clé publique ajoutée",
+        "endSessions": "Fermer toutes les sessions SSH",
+        "endSessionsConfirm": {
+          "heading": "Fermer toutes les sessions SSH ?",
+          "body": "Cela ferme toutes les sessions SSH de l'utilisateur actuel sur cet ordinateur, y compris celles qui n'ont pas été autorisées par Cindy. Les commandes en cours d'exécution sont interrompues.",
+          "action": "Fermer toutes les sessions"
+        },
+        "sessionsEnded": "Sessions SSH fermées : {{count}}",
+        "sessionsUnsupported": "Cet ordinateur ne peut pas encore fermer les sessions SSH",
+        "endSessionsFailed": "Impossible de fermer les sessions SSH",
+        "toggleFailed": "Impossible de modifier l'accès SSH",
+        "device": {
+          "rowName": "SSH",
+          "copy": "Copier la commande du terminal",
+          "connect": "Se connecter",
+          "connected": "Connecté à {{name}}",
+          "restore": "Ajouter aux hôtes distants SSH",
+          "restoreFailed": "Impossible d'ajouter {{name}} aux hôtes distants SSH",
+          "userDeleted": "Vous l'avez supprimé des hôtes distants SSH.",
+          "needsUpdate": "Mise à jour de Cindy requise : Cindy sur cet appareil ne prend pas encore en charge l'accès SSH.",
+          "controlOff": "« Le contrôler » est désactivé : Cindy ne configure donc pas SSH pour cet appareil.",
+          "refused": "Cet appareil n'a pas accepté la clé SSH de cet ordinateur.",
+          "pending": "Configuration de SSH…",
+          "unavailable": {
+            "off": "Indisponible : l'accès SSH est désactivé sur cet appareil.",
+            "blocked": {
+              "SSHD_UNREACHABLE": "Indisponible : le serveur SSH de cet appareil n'est pas en cours d'exécution.",
+              "REMOTE_LOGIN_OFF": "Indisponible : « Session à distance » est désactivée sur ce Mac.",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "Indisponible : Cindy ne peut pas modifier le fichier des clés SSH autorisées de cet appareil.",
+              "PLATFORM_UNSUPPORTED": "Indisponible : le système de cet appareil ne prend pas en charge l'accès SSH.",
+              "UNKNOWN": "Indisponible : cet appareil ne peut pas accepter de connexions SSH pour le moment."
+            },
+            "revoked": "Indisponible : cet appareil a révoqué l'accès de cet ordinateur.",
+            "removed": "Indisponible : cet appareil ne fait plus partie de votre compte."
           }
         }
       }

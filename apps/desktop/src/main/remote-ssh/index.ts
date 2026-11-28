@@ -31,6 +31,7 @@ import {
   defaultSshConfigPath,
   readSshConfigDetailed,
   removeManagedHost,
+  renameManagedHost,
   updateManagedHostFields,
   installRemoteAgent as installRemoteAgentPackage,
   PINNED_PI_VERSION,
@@ -101,6 +102,7 @@ import {
   readSshHostPrefs,
   patchSshHostPref,
   removeSshHostPref,
+  moveSshHostPref,
   setSshHostAutoConnect,
   type SshHostAgentProxyPref,
 } from './ssh-host-prefs-store.js';
@@ -137,6 +139,8 @@ import { getRemoteCodexLiveTurnChecker } from '../maker-host/remote-session-star
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { RemoteHostHydrationQueue } from './hydration-queue.js';
 import { watchNetworkChanges } from '../device-link/networkChanges.js';
+import { isDeviceHostKeyAlias } from '../ssh-access/deviceHostNames.js';
+import type { SshHostDeviceLabel } from '../../shared/sshAccess.js';
 
 export { redactSshSensitiveText };
 
@@ -671,7 +675,46 @@ function remoteConnectionFieldsChanged(left: HostConfig, right: HostConfig): boo
   return left.hostname !== right.hostname
     || left.port !== right.port
     || left.user !== right.user
+    || left.hostKeyAlias !== right.hostKeyAlias
+    || left.strictHostKeyChecking !== right.strictHostKeyChecking
     || effectiveAuthenticationFingerprint(left) !== effectiveAuthenticationFingerprint(right);
+}
+
+/** A host Cindy keeps for one of the person's own devices (ssh-access/sshAccessController.ts), of any owner. */
+function isDeviceHost(config: HostConfig): boolean {
+  return config.managedByCindy && isDeviceHostKeyAlias(config.hostKeyAlias);
+}
+
+/**
+ * Whether Cindy's host-key store holds a key under each device host's HostKeyAlias, as last read: when the SSH list is
+ * read and whenever a device host is pinned here. Snapshots, status pushes included, use it without reading the file.
+ */
+const pinnedDeviceHostKeys = new Map<string, boolean>();
+
+/**
+ * 「主机指纹已核对」: a host of the person's own devices whose own block requires a known key (StrictHostKeyChecking
+ * yes) and whose HostKeyAlias has a key in Cindy's host-key store, so Cindy's connections accept no other key.
+ */
+function deviceHostKeyPinned(config: HostConfig): boolean {
+  return isDeviceHost(config) && config.strictHostKeyChecking === true
+    && pinnedDeviceHostKeys.get(config.hostKeyAlias!) === true;
+}
+
+/** Reads the store again, from disk as a connection would, for the device hosts in the list. */
+async function refreshPinnedDeviceHostKeys(): Promise<void> {
+  const aliases = new Set(getPool().list().flatMap(({ config }) => (isDeviceHost(config) ? [config.hostKeyAlias!] : [])));
+  if (!aliases.size) return;
+  const store = getSharedHostKeyStore();
+  store.reload();
+  for (const alias of aliases) {
+    let pinned = false;
+    try {
+      pinned = (await store.get(alias)) !== null;
+    } catch {
+      // An unreadable store refuses every connection, so no key counts as pinned.
+    }
+    pinnedDeviceHostKeys.set(alias, pinned);
+  }
 }
 
 /** Compare only fields the Settings form can write before the disk re-read. */
@@ -869,6 +912,8 @@ type RendererHostConfig = Pick<HostConfig,
   identityFileConfigured: boolean;
   /** Display-only basename; the absolute local path remains main-only. */
   identityFileName?: string;
+  /** Cindy keeps this host for one of the person's own devices: its connection fields are not edited here. */
+  deviceHost?: true;
 };
 
 export type HostSnapshotWithPrefs = Omit<HostSnapshot, 'config' | 'lastError'> & {
@@ -879,6 +924,10 @@ export type HostSnapshotWithPrefs = Omit<HostSnapshot, 'config' | 'lastError'> &
   agentProxy: SshHostAgentProxyPref | null;
   /** 隧道实时状态 (仅内存); pref 关闭或无记录 → null。 */
   agentProxyTunnel: AgentProxyTunnelState | null;
+  /** The host belongs to one of the person's own devices (「来自我的设备」) and whether it can be used now. */
+  device?: SshHostDeviceLabel;
+  /** A device host whose key is pinned (「主机指纹已核对」); see deviceHostKeyPinned. */
+  hostKeyPinned?: true;
 };
 
 function portableBasename(value: string): string {
@@ -907,11 +956,13 @@ function toRendererHostConfig(config: HostConfig): RendererHostConfig {
     source: config.source,
     managedByCindy: config.managedByCindy,
     ...(config.managedAliasConflict ? { managedAliasConflict: true } : {}),
+    ...(isDeviceHost(config) ? { deviceHost: true as const } : {}),
   };
 }
 
 function withPrefs(snapshot: HostSnapshot): HostSnapshotWithPrefs {
   const id = snapshot.config.id;
+  const device = isDeviceHost(snapshot.config) ? deviceHostResolver?.(id) ?? null : null;
   return {
     ...snapshot,
     config: {
@@ -924,6 +975,8 @@ function withPrefs(snapshot: HostSnapshot): HostSnapshotWithPrefs {
     autoConnect: getSshHostAutoConnect(id),
     agentProxy: getSshHostAgentProxy(id),
     agentProxyTunnel: getAgentProxyTunnelState(id),
+    ...(device ? { device } : {}),
+    ...(deviceHostKeyPinned(snapshot.config) ? { hostKeyPinned: true as const } : {}),
   };
 }
 
@@ -1274,6 +1327,7 @@ export async function reloadRemoteSshConfig(): Promise<ReturnType<typeof current
   } catch (err) {
     log.warn('failed to reload SSH config', { error: String(err) });
   }
+  await refreshPinnedDeviceHostKeys();
   return currentRemoteSshListResult();
 }
 
@@ -1310,6 +1364,13 @@ export async function updateRemoteSshHost(rawHost: unknown, options: { patch?: b
       managedByCindy: existing.config.managedByCindy,
     };
     const connectionFieldsChanged = editableConnectionFieldsChanged(existing.config, cfg);
+    if (connectionFieldsChanged && isDeviceHost(existing.config)) {
+      // The controller keeps the address, user, port and key in line with the device itself.
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'Cindy keeps this host up to date from your own device; only its display name and proxy can be changed.',
+      );
+    }
     let managedWriteToken: ManagedConfigWriteToken | undefined;
     if (connectionFieldsChanged) {
       const latest = await readLatestSshConfigOrThrow();
@@ -1430,6 +1491,10 @@ export async function removeRemoteSshHost(args: unknown) {
         });
       }
     }
+    // A host of one of the person's own devices is never added back automatically once they deleted it.
+    for (const listener of hostRemovedListeners) {
+      try { listener(id); } catch { /* the controller logs its own failures */ }
+    }
     if (refreshError !== undefined) throwReloadRequired('主机删除', refreshError);
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send(REMOTE_SSH_PUSH.HOSTS_CHANGED, currentRemoteSshListResult());
@@ -1439,6 +1504,211 @@ export async function removeRemoteSshHost(args: unknown) {
       hostId: id,
     });
     return { ok: true as const };
+  });
+}
+
+// ─── Hosts for the person's own devices (SSH access controller, ssh-access/sshAccessController.ts) ─────────────
+//
+// Main-only: these never go through the renderer-facing normalizeAddInput. The device's host key, received over the
+// signed device link, is pinned under the host's HostKeyAlias before the alias is published, and the block says
+// StrictHostKeyChecking yes, so neither Cindy's connections nor the terminal ever trust an unpinned key.
+
+let deviceHostResolver: ((hostId: string) => SshHostDeviceLabel | null) | null = null;
+const hostRemovedListeners = new Set<(hostId: string) => void>();
+
+/** The SSH list's 「来自我的设备」 label source (the controller's record). */
+export function setRemoteSshDeviceHostResolver(resolver: ((hostId: string) => SshHostDeviceLabel | null) | null): void {
+  deviceHostResolver = resolver;
+}
+
+/** Called after the person removed a host from the SSH list (Settings or the Agent's SSH tools). */
+export function onRemoteSshHostRemoved(listener: (hostId: string) => void): () => void {
+  hostRemovedListeners.add(listener);
+  return () => { hostRemovedListeners.delete(listener); };
+}
+
+/** Labels changed: open SSH lists read the projected list again. Nothing is sent before anyone listed hosts. */
+export function broadcastRemoteSshHostsChanged(): void {
+  if (!initPromise) return;
+  const payload = currentRemoteSshListResult();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(REMOTE_SSH_PUSH.HOSTS_CHANGED, payload);
+  }
+}
+
+/** Every alias in the SSH host list, with the HostKeyAlias of hosts pinned in Cindy's own file (else null). */
+export async function listRemoteSshHostAliases(): Promise<Map<string, string | null>> {
+  await ensureHydrated();
+  return new Map(getPool().list().map(({ config }) => [
+    config.id,
+    config.managedByCindy ? config.hostKeyAlias ?? null : null,
+  ]));
+}
+
+export interface PinnedDeviceHostSpec {
+  alias: string;
+  displayName: string;
+  /** The display name Cindy set before; the host's name follows the device only while it still equals this. */
+  previousDisplayName: string | null;
+  hostname: string;
+  port: number;
+  user: string;
+  /** The dedicated private key under Cindy's data directory. */
+  identityFile: string;
+  hostKeyAlias: string;
+  userKnownHostsFile: string;
+  /** `SHA256:…` of the host key Cindy's ssh2 client negotiates first. */
+  hostKeyFingerprint: string;
+}
+
+/** `missing`: expected and absent (the person deleted it). `alias-taken`: the alias is another host's. */
+export type PinnedDeviceHostOutcome = 'created' | 'updated' | 'unchanged' | 'missing' | 'alias-taken';
+
+/**
+ * Adds or updates the host for one of the person's own devices in ~/.ssh/cindy.conf (one block serves Cindy's SSH
+ * list and the terminal alias) with its host key pinned. A host the person deleted is reported as `missing` and
+ * never written again here; an alias that belongs to any other host (theirs, or another device's) is never touched.
+ */
+export async function upsertPinnedDeviceHost(
+  spec: PinnedDeviceHostSpec,
+  options: { expectPresent: boolean },
+): Promise<PinnedDeviceHostOutcome> {
+  await ensureHydrated();
+  return remoteHostHydrationQueue.run(async () => {
+    const latest = await readLatestSshConfigOrThrow();
+    const existing = latest.hosts.find((host) => host.id === spec.alias);
+    if (!existing && options.expectPresent) return 'missing';
+    if (existing && (!existing.managedByCindy || existing.hostKeyAlias !== spec.hostKeyAlias)) return 'alias-taken';
+    const cfg: HostConfig = {
+      id: spec.alias,
+      hostname: spec.hostname,
+      port: spec.port,
+      user: spec.user,
+      authMethod: 'key',
+      identityFile: spec.identityFile,
+      hostKeyAlias: spec.hostKeyAlias,
+      userKnownHostsFile: spec.userKnownHostsFile,
+      strictHostKeyChecking: true,
+      source: 'ssh-config',
+      managedByCindy: true,
+    };
+    // Pinned before the alias is published or moved, so no connection ever meets an unpinned key.
+    await getSharedHostKeyStore().pin(spec.hostKeyAlias, spec.hostKeyFingerprint);
+    pinnedDeviceHostKeys.set(spec.hostKeyAlias, true);
+    let outcome: PinnedDeviceHostOutcome;
+    if (!existing) {
+      const receipt = await addManagedHostWithInclude(cfg, sshConfigPath, managedSshConfigPath);
+      try {
+        await hydrateRemoteHostsUnqueued(new Set(), true, new Set([cfg.id]));
+      } catch (error) {
+        if (error instanceof SshHostOwnershipConflictError) {
+          await receipt.rollback().catch(() => false);
+          return 'alias-taken';
+        }
+        // Written to disk; the next refresh of the list shows it.
+        log.warn('device SSH host added but the list refresh failed', { error: String(error) });
+      }
+      outcome = 'created';
+    } else if (existing.hostname !== cfg.hostname || existing.port !== cfg.port || existing.user !== cfg.user
+      || existing.authMethod !== 'key' || existing.identityFile !== cfg.identityFile || existing.strictHostKeyChecking !== true) {
+      await updateManagedHostFields(cfg, managedSshConfigPath, managedWriteTokenOrThrow(latest));
+      try {
+        // The device itself (same pinned host key) moved: reconnect to the new address on next use.
+        await invalidateHostRuntimeState(cfg.id);
+        await hydrateRemoteHostsUnqueued(new Set([cfg.id]));
+      } catch (error) {
+        log.warn('device SSH host updated but the list refresh failed', { error: String(error) });
+      }
+      outcome = 'updated';
+    } else {
+      outcome = 'unchanged';
+    }
+    const currentName = readSshHostPrefs()[cfg.id]?.displayName;
+    if (spec.displayName !== currentName && (currentName === undefined || currentName === spec.previousDisplayName)) {
+      try {
+        patchSshHostPref(cfg.id, { displayName: spec.displayName });
+      } catch (error) {
+        log.warn('device SSH host name was not saved', { error: String(error) });
+      }
+    }
+    if (outcome !== 'unchanged') {
+      log.info('audit: device ssh host written', {
+        operation: 'remote_ssh_device_host_upsert', hostId: cfg.id, outcome, hostname: cfg.hostname, user: cfg.user, port: cfg.port,
+      });
+    }
+    const host = getPool().get(cfg.id);
+    if (host) broadcastStatus(host.snapshot());
+    return outcome;
+  });
+}
+
+/** `in-use`: remote sessions still name the old alias, so it stays until they are gone (the next sync tries again). */
+export type PinnedDeviceHostRenameOutcome = 'renamed' | 'missing' | 'alias-taken' | 'in-use';
+
+/**
+ * Moves the host of one of the person's own devices to a new alias (the device was renamed in the device list).
+ * One atomic rewrite of its block in ~/.ssh/cindy.conf; the HostKeyAlias and its pin do not change, so the host key
+ * is never checked again. The host's prefs move with it and the old alias's runtime state is dropped. A host that is
+ * gone or no longer this device's is `missing`; an alias any other host uses is `alias-taken`; neither is written.
+ * Never reported to the removal listeners: a rename is not the person deleting the host.
+ */
+export async function renamePinnedDeviceHost(
+  fromAlias: string,
+  spec: PinnedDeviceHostSpec,
+): Promise<PinnedDeviceHostRenameOutcome> {
+  await ensureHydrated();
+  return remoteHostHydrationQueue.run(async () => {
+    const latest = await readLatestSshConfigOrThrow();
+    const existing = latest.hosts.find((host) => host.id === fromAlias);
+    if (!existing?.managedByCindy || existing.hostKeyAlias !== spec.hostKeyAlias) return 'missing';
+    if (latest.hosts.some((host) => host.id === spec.alias)) return 'alias-taken';
+    try {
+      await assertHostHasNoSessionReferences(fromAlias, '修改');
+    } catch (error) {
+      if ((error as { code?: string }).code === 'PRECONDITION_FAILED') return 'in-use';
+      throw error;
+    }
+    const cfg: HostConfig = {
+      id: spec.alias,
+      hostname: spec.hostname,
+      port: spec.port,
+      user: spec.user,
+      authMethod: 'key',
+      identityFile: spec.identityFile,
+      hostKeyAlias: spec.hostKeyAlias,
+      userKnownHostsFile: spec.userKnownHostsFile,
+      strictHostKeyChecking: true,
+      source: 'ssh-config',
+      managedByCindy: true,
+    };
+    await getSharedHostKeyStore().pin(spec.hostKeyAlias, spec.hostKeyFingerprint);
+    pinnedDeviceHostKeys.set(spec.hostKeyAlias, true);
+    await renameManagedHost(fromAlias, cfg, managedSshConfigPath, managedWriteTokenOrThrow(latest));
+    try {
+      moveSshHostPref(fromAlias, spec.alias);
+    } catch (error) {
+      log.warn('device SSH host prefs did not move with the alias', { error: String(error) });
+    }
+    try {
+      await invalidateHostRuntimeState(fromAlias);
+      await hydrateRemoteHostsUnqueued(new Set([fromAlias]));
+    } catch (error) {
+      log.warn('device SSH host renamed but the list refresh failed', { error: String(error) });
+    }
+    for (const cleanup of [() => clearAgentProxyTunnelState(fromAlias), () => removeRemoteMcpForwardPref(fromAlias)]) {
+      try {
+        await cleanup();
+      } catch (error) {
+        log.warn('failed to clean renamed SSH host local state', { hostId: fromAlias, error: String(error) });
+      }
+    }
+    log.info('audit: device ssh host renamed', {
+      operation: 'remote_ssh_device_host_rename', fromHostId: fromAlias, hostId: cfg.id,
+    });
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(REMOTE_SSH_PUSH.HOSTS_CHANGED, currentRemoteSshListResult());
+    }
+    return 'renamed';
   });
 }
 
@@ -1511,6 +1781,7 @@ export function registerRemoteSshIpc(): void {
   ipcMain.handle(REMOTE_SSH_INVOKE.LIST, async (event) => {
     assertTrustedAppRendererEvent(event);
     await ensureHydrated();
+    await refreshPinnedDeviceHostKeys();
     return currentRemoteSshListResult();
   });
 

@@ -38,6 +38,9 @@ import { Switch } from '@/components/ui/switch';
 import { MyDevicesPanel } from './MyDevicesPanel';
 import { RelayServicePanel, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
+import { SshAccessSetting } from './SshAccessSetting';
+import { useSshDeviceHosts } from './SshDeviceHostRow';
+import { selfDeviceName } from './deviceLabels';
 import { RemoteSection } from './RemoteSection';
 import { CollapsibleSubSection } from './CollapsibleSubSection';
 import { CloudComputerRow } from './CloudComputerRow';
@@ -142,6 +145,10 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
     () => new Map((s.devices ?? []).map((device) => [device.deviceId, device.name] as const)),
     [s.devices],
   );
+  // 「允许我的其他设备通过 SSH 连接这台电脑」在本机卡上提示其它设备通常使用的终端别名。
+  const selfDevice = s.devices?.find((device) => device.isSelf);
+  // 其它设备卡片上的 SSH 一行(本机作为控制端维护的主机),整页只读一份。
+  const sshHosts = useSshDeviceHosts(deviceLinkAvailable);
   const relay = useSelfHostedRelayState(deviceLinkAvailable);
   const location = useLocation();
   const [sshOpen, setSshOpen] = useState(
@@ -226,7 +233,16 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
                       <MyDevicesPanel
                         s={s}
                         variant="self"
-                        selfSettings={<div className="flex flex-col gap-2"><RemoteDesktopSetting /></div>}
+                        selfSettings={
+                          <div className="flex flex-col gap-2">
+                            <RemoteDesktopSetting />
+                            <SshAccessSetting
+                              selfName={selfDevice ? selfDeviceName(selfDevice) : undefined}
+                              selfDeviceId={selfDevice?.deviceId}
+                              deviceNames={deviceNames}
+                            />
+                          </div>
+                        }
                         focusDeviceId={deepLink.focusDeviceId}
                         focusRequestKey={deepLink.focusRequestKey}
                       />
@@ -235,6 +251,7 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
                           s={s}
                           variant="cloud"
                           cloud={cloud}
+                          sshHosts={sshHosts}
                           focusDeviceId={deepLink.focusDeviceId}
                           focusRequestKey={deepLink.focusRequestKey}
                         />
@@ -247,6 +264,7 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
                     s={s}
                     variant="others"
                     cloud={cloud}
+                    sshHosts={sshHosts}
                     focusDeviceId={deepLink.focusDeviceId}
                     focusRequestKey={deepLink.focusRequestKey}
                   />

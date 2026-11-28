@@ -27,6 +27,7 @@
 import { FILE_PEER_CHANNEL } from './filePeer.js';
 import { MACHINE_STATUS_CHANNEL } from './machineStatus.js';
 import { AGENT_NET_SWITCH_CHANNEL, AGENT_NET_SWITCH_TIMEOUT_MS } from './agentNetSwitch.js';
+import { SSH_ACCESS_CHANNEL } from './sshAccess.js';
 import { PEER_APP_UPDATE_CHANNEL, PEER_APP_UPDATE_TIMEOUT_MS } from './peerAppUpdate.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
@@ -464,6 +465,13 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 拦截执行，只给同账号电脑(共享任务访客与供应商分享受邀者再拒一次)。打开后必须在期限内经 Agent-Net
   // 收到同一发起端的确认，否则被控端自己退回。老版本无 handler → CHANNEL_NOT_ALLOWED,发起端显示需要更新。
   AGENT_NET_SWITCH_CHANNEL,
+  // 允许我的其他设备 SSH 到这台电脑(docs/dev-rules/protocol-compatibility/device-link-ssh-access.md，2026-11-26 用户确认):
+  // 同账号电脑读这台电脑的 SSH 状态与连接地址，登记 / 撤回它自己的 Cindy 专用 ed25519 公钥。准入论证同 desktop-cmd:run:
+  // 同账号 + 被控端打开「允许同账号设备控制本机」且未撤销时，控制端本就能在这台电脑上执行任意命令(包括自己往
+  // authorized_keys 写公钥)，SSH 不多给权限；被控端只改 Cindy 管理的那一段，本机 SSH 设置关着时拒绝登记。被控端 dispatch
+  // 拦截执行，只给同账号电脑：共享任务访客、供应商分享受邀者与手机返回 CHANNEL_NOT_ALLOWED。老版本无此 channel →
+  // CHANNEL_NOT_ALLOWED，控制端按对方版本记住「需要更新」，版本变化前不再重试。
+  SSH_ACCESS_CHANNEL,
   // 远程检查并触发同账号电脑的应用更新(2026-11-26 用户确认):只提供 status 只读检查与锁定
   // expectedVersion 的 install 触发，走对端既有的 updateService 内置更新链路；裸 update-* IPC
   // 仍然永不放行。被控端 dispatch 拦截执行，只给同账号电脑(共享任务访客与供应商分享受邀者再拒一次)。

@@ -34,6 +34,7 @@ import { mapMembershipToAuthUser, type User as AccountUser } from '../../desktop
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
+import { nodeSshAccessMachine } from './ssh-access.js';
 import { AGENT_NET_UDP_PORT_ENV, parseAgentNetUdpPort } from '../../desktop/src/main/device-link/agentNetStunDiscovery.js';
 import { createHostSessionHandoff } from './agent/session-handoff.js';
 import { createHostService } from './service.mjs';
@@ -228,7 +229,28 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 const command = process.argv[2];
-const usage = 'cindy-host [serve|login [--region=cn|global] [--org=<domain-or-id>] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off|rejoin]|stop]';
+const remoteUsage = 'remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off|rejoin|ssh-access [status|on|off|default]|ssh-key add <public-key-file> [label]|ssh-key remove <SHA256:fingerprint>]';
+const usage = `cindy-host [serve|login [--region=cn|global] [--org=<domain-or-id>] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|${remoteUsage}|stop]`;
+
+/**
+ * `cindy-host remote …` arguments → the control request. `ssh-key add` reads the public key file here (bounded, one line
+ * is validated again by the running Host); private keys are never read: only `.pub` text is accepted.
+ */
+async function parseRemoteCommand(command: string, rest: string[]): Promise<{ action: string; deviceId?: string; extra?: Record<string, string> }> {
+  const fail = () => { throw new Error(`Usage: cindy-host ${remoteUsage}`); };
+  if (['status', 'enable', 'disable', 'revoke', 'agent-net-on', 'agent-net-off', 'rejoin'].includes(command)) return { action: command, deviceId: rest[0] };
+  if (command === 'ssh-access') {
+    const sub = rest[0] ?? 'status';
+    return ['status', 'on', 'off', 'default'].includes(sub) ? { action: `ssh-access-${sub}` } : fail();
+  }
+  if (command === 'ssh-key' && rest[0] === 'add' && rest[1]) {
+    const text = await readFile(rest[1], 'utf8').catch(() => { throw new Error(`Cannot read ${rest[1]}`); });
+    if (text.length > 4096 || /PRIVATE KEY/.test(text)) throw new Error('Pass the public key (.pub) file, a single ssh-ed25519 line');
+    return { action: 'ssh-key-add', extra: { publicKey: text, ...(rest[2] ? { label: rest.slice(2).join(' ') } : {}) } };
+  }
+  if (command === 'ssh-key' && rest[0] === 'remove' && rest[1]) return { action: 'ssh-key-remove', extra: { fingerprint: rest[1] } };
+  return fail();
+}
 
 /** The status command's boundary category: the running Host's, else a lock-free read of the profile. */
 function readStatusSkillProjectionBoundary(processStatus: { running: boolean | null; runtime?: { skillProjectionBoundary?: string } }) {
@@ -315,10 +337,9 @@ if (command === '--help' || command === '-h') {
   }
  } else if (command === 'remote') {
   try {
-    const action = process.argv[3] ?? 'status';
-    if (!['status', 'enable', 'disable', 'revoke', 'agent-net-on', 'agent-net-off', 'rejoin'].includes(action))
-      throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off|rejoin]');
-    const result = await requestHostRemote(resolveHostDataDir(), action, process.argv[4]);
+    const command = process.argv[3] ?? 'status';
+    const { action, deviceId, extra } = await parseRemoteCommand(command, process.argv.slice(4));
+    const result = await requestHostRemote(resolveHostDataDir(), action, deviceId, extra);
     console.log(JSON.stringify(result, null, 2));
     // 「重新加入」 reports its outcome in the result (device-link.ts `rejoin`): say why it did not work, and fail the command.
     // `agent-net-on` rejoins first when this Host was removed: the same hint, but the switch is on either way.
@@ -1740,7 +1761,11 @@ const serverDeps = {
       // As the desktop's logout (authManager.ts): stop and tear down locally first, then sign out the stored
       // session; the server revoke is best effort (auth/logout.mjs), a failed revoke does not fail the logout.
       const { result, errors } = await runOwnerBoundary(ownerBoundary, {
-        beforeDispose: () => authRefreshFlight,
+        beforeDispose: async () => {
+          // Signing out: this profile's SSH keys leave the authorized keys file (ssh-access.ts); never fails the logout.
+          await deviceLink?.sshAccessSignedOut().catch(() => undefined);
+          return authRefreshFlight;
+        },
         dispose: disposeOwnerRuntime,
         afterDispose: async () => {
           const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
@@ -2301,7 +2326,7 @@ let startup: Promise<void> = Promise.resolve();
 
 const service = createHostService(serverDeps);
 const server = createHostServer({ ...serverDeps, service, platformClient: () => platformClient,
-  remoteControl: async (action: string, body: { deviceId?: string }) => {
+  remoteControl: async (action: string, body: { deviceId?: string; publicKey?: unknown; label?: unknown; fingerprint?: unknown }) => {
     if (!deviceLink) throw new Error('Sign in and start the Host runtime first');
     if (action === 'status') return deviceLink.state();
     if (action === 'enable' || action === 'disable') return deviceLink.setEnabled(action === 'enable');
@@ -2310,9 +2335,21 @@ const server = createHostServer({ ...serverDeps, service, platformClient: () => 
     if (action === 'agent-net-on' || action === 'agent-net-off') return deviceLink.setAgentNetEnabled(action === 'agent-net-on');
     // 「重新加入」 after this Host was removed from the account (device-link.ts `rejoin`).
     if (action === 'rejoin') return deviceLink.rejoin();
+    // 「允许我的其他设备 SSH 到这台电脑」 (ssh-access.ts): status, on, off, default, add or remove a manual key.
+    if (action.startsWith('ssh-access-') || action.startsWith('ssh-key-')) return deviceLink.sshAccess(action, body);
     throw new Error('Unknown remote control command');
   },
 });
+
+/** The account's device ids in the official Device Link device list; null when they cannot be read now. */
+async function readDeviceLinkDeviceIds(realm: 'cn' | 'global' = account.realm === 'cn' ? 'cn' : 'global'): Promise<string[] | null> {
+  const baseUrl = readAuthEndpoints(realm).deviceLinkApiBaseUrl;
+  if (!baseUrl || !account.authenticated) return null;
+  const listed = await serverApi<{ devices?: Array<{ deviceId?: unknown }> }>('/api/device-link/devices', {
+    baseUrl, timeoutMs: 10_000, cache: 'no-store', redactErrorDetails: true });
+  return Array.isArray(listed?.devices)
+    ? listed.devices.map(device => device?.deviceId).filter((id): id is string => typeof id === 'string') : null;
+}
 
 /**
  * Agent-Net for this Host (docs/agent-net-session-plan.md 阶段 5), wired like the Desktop: the account token only enrolls
@@ -2346,14 +2383,7 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
     coreModule: () => (core ??= readFile(layout.agentNetCore).then(bytes => WebAssembly.compile(bytes))
       .catch((error) => { core = null; throw error; })),
     // Devices removed from the account in Device Link are refused on Agent-Net until they sign in again (packages/agent-net/src/membership.ts).
-    deviceLinkDeviceIds: async () => {
-      const baseUrl = readAuthEndpoints(realm).deviceLinkApiBaseUrl;
-      if (!baseUrl || !account.authenticated) return null;
-      const listed = await serverApi<{ devices?: Array<{ deviceId?: unknown }> }>('/api/device-link/devices', {
-        baseUrl, timeoutMs: 10_000, cache: 'no-store', redactErrorDetails: true });
-      return Array.isArray(listed?.devices)
-        ? listed.devices.map(device => device?.deviceId).filter((id): id is string => typeof id === 'string') : null;
-    },
+    deviceLinkDeviceIds: () => readDeviceLinkDeviceIds(realm),
     // 名册缓存（公开证书）：官方 Agent-Net 服务出故障时重启也能起来，和 Desktop 一样（agentNetDirectoryCache.ts）。按服务与账号各一份。
     directoryCacheFile: () => {
       const subject = accountUser?.id;
@@ -2437,6 +2467,9 @@ function startDeviceLink(): void {
     refreshToken: async () => { await refreshAuthSession(); },
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     agentNet: hostAgentNetPorts(),
+    // SSH access (ssh-access.ts): the same device list as Agent-Net's membership, read on the same schedule.
+    deviceDirectory: () => readDeviceLinkDeviceIds(),
+    sshAccessMachine: nodeSshAccessMachine(),
     // 「重新加入」 (`cindy-host remote rejoin`): the same official Device Link service and account token as the device list.
     officialDeviceLinkFetch: (route, opts) => serverApi(route, { ...opts, baseUrl: endpoint, cache: 'no-store', redactErrorDetails: true }),
     invoke: service, subscribe: eventHub.subscribe,

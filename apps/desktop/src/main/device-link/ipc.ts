@@ -55,6 +55,7 @@ import {
 } from './directoryThrottle.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
+import { registerSshAccessIpc } from '../ssh-access/ipc.desktop.js';
 import { createIpcError, isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
 import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization.js';
 import { decodeRemoteHistory } from '../../shared/remoteHistoryCache';
@@ -1817,6 +1818,8 @@ export async function retryUnsubscribeAfterWindowGone(
 // ─── 注册(Electron adapter)──────────────────────────────────────────────────
 
 export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): void {
+  // 「允许我的其他设备 SSH 到这台电脑」的设置入口(ssh-access/ipc.desktop.ts)，与远程连接设置同一页。
+  registerSshAccessIpc();
   const diagnosticsLog = createLogger('device-link:ipc-diagnostics');
   const diagnostics = createDeviceLinkIpcDiagnostics((event, fields, level) =>
     level === 'debug' ? diagnosticsLog.debug(event, fields) : diagnosticsLog.info(event, fields),

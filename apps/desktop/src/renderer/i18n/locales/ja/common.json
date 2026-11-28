@@ -1963,7 +1963,8 @@
         "title": "{{id}} を編集",
         "submit": "変更を保存",
         "connectionFieldsReadOnly": "SSH 設定から読み込まれた接続情報はここでは読み取り専用です。表示名、自動接続、Agent Proxy は変更できます。",
-        "authenticationFromSshConfig": "認証情報は SSH 設定から読み込まれます。"
+        "authenticationFromSshConfig": "認証情報は SSH 設定から読み込まれます。",
+        "deviceHostReadOnly": "接続情報は Cindy がデバイスに合わせて自動で管理するため、ここでは読み取り専用です。表示名、自動接続、Agent Proxy は変更できます。"
       },
       "keys": {
         "title": "SSH 鍵を設定",
@@ -2179,7 +2180,10 @@
         "cancel": "元の鍵を保持",
         "trust": "新しい鍵を信頼して再接続",
         "updateFailed": "ホストの信頼記録を更新できませんでした。接続情報や保存済みの鍵が変更されたか、記録ファイルに書き込めない可能性があります。再接続してフィンガープリントを再取得し、ファイルの権限を確認してください。"
-      }
+      },
+      "fromMyDevice": "自分のデバイスから",
+      "fromMyDeviceKeyPinned": "自分のデバイスから · ホストのフィンガープリントを確認済み",
+      "deviceUnavailable": "利用不可"
     },
     "appearance": {
       "chatLayout": {
@@ -7374,6 +7378,98 @@
             "ready": "緑の実線：Agent-Net 接続済み",
             "busy": "オレンジ点：タスク実行中 / ビジー",
             "error": "赤い点線：無応答または一時停止"
+          }
+        }
+      },
+      "sshAccess": {
+        "title": "自分の他のデバイスから SSH でこのコンピューターに接続することを許可",
+        "description": "他のデバイスには自動でアクセス権が付与されます。デバイスのアクセス権を撤回すると、そのデバイスの SSH アクセスも撤回されます。",
+        "defaultOn": "クラウドマシンでは既定でオンです。",
+        "defaultOff": "既定ではオフです。",
+        "descriptionWithDefault": "{{description}}{{defaultNote}}",
+        "aliasIntro": "他のデバイスのターミナルから接続: <command>{{command}}</command>",
+        "recordUnreadable": "このコンピューターに保存された SSH アクセスの記録を読み取れないため、Cindy は当面何も変更しません。",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "macOS の「リモートログイン」がオフのため、他のデバイスからまだ接続できません。「システム設定 → 一般 → 共有」で「リモートログイン」をオンにしてください。",
+          "SSHD_UNREACHABLE": "このコンピューターで SSH サーバーが動いていないため、他のデバイスからまだ接続できません。ターミナルで次のコマンドを実行すると、インストールして起動できます:",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy はこのコンピューターの SSH 認証鍵ファイルを書き換えられません。~/.ssh/authorized_keys がリンクになっていないか、大きすぎないか、壊れていないか確認してください。"
+        },
+        "otherDistributions": "その他の Linux ディストリビューションでは、openssh-server をインストールして sshd サービスを起動してください。",
+        "copyCommand": "コマンドをコピー",
+        "openSharingSettings": "共有設定を開く",
+        "copied": "コピーしました",
+        "copyFailed": "コピーできませんでした",
+        "listHeading": "SSH で接続できるデバイス（{{count}}）",
+        "listEmpty": "まだデバイスはありません。他のデバイスがオンラインになると、ここに自動で表示されます。",
+        "deviceMeta": "自分のデバイス · 自動で許可 · {{time}}",
+        "manualMeta": "手動で追加した公開鍵 · {{fingerprint}}",
+        "todayAt": "今日 {{time}}",
+        "inactive": "未適用",
+        "unknownDevice": "不明なデバイス",
+        "unnamedKey": "名前のない公開鍵",
+        "remove": "削除",
+        "removedKey": "公開鍵を削除しました",
+        "removeKeyFailed": "公開鍵を削除できませんでした",
+        "removeDeviceConfirm": {
+          "heading": "{{name}} の SSH アクセスを削除しますか？",
+          "body": "{{name}} のこのコンピューターへのアクセス権を撤回します。リモート操作も撤回され、その SSH セッションは切断されます。あとでそのデバイスのカードで「本機を操作」を再び許可できます。",
+          "bodyKeepsSessions": "{{name}} のこのコンピューターへのアクセス権を撤回します。リモート操作も撤回されます。すでに開いている SSH セッションは自動では切断されないため、必要に応じて「すべての SSH セッションを切断」で切断してください。あとでそのデバイスのカードで「本機を操作」を再び許可できます。"
+        },
+        "deviceRemoved": "{{name}} のアクセス権を撤回しました",
+        "deviceRemovedSessionsEnded": "{{name}} のアクセス権を撤回し、その SSH セッションを {{count}} 件切断しました",
+        "deviceRemovedSessionsLeft": "{{name}} のアクセス権を撤回し、その SSH セッションを {{count}} 件切断しました。どの鍵でログインしたか確認できない {{unmapped}} 件のセッションは接続したままです。必要に応じて「すべての SSH セッションを切断」で切断してください。",
+        "deviceRemovedSessionsKept": "{{name}} のアクセス権を撤回しました。すでに開いている SSH セッションは自動では切断されません。",
+        "removeDeviceFailed": "{{name}} の SSH アクセスの削除を完了できませんでした",
+        "addKey": "公開鍵を追加",
+        "addKeyDialog": {
+          "heading": "公開鍵を追加",
+          "body": "ssh-ed25519 公開鍵を 1 行貼り付けてください（例: ~/.ssh/id_ed25519.pub の内容）。オプションのない ed25519 公開鍵のみ対応しています。",
+          "keyField": "公開鍵",
+          "noteField": "メモ（任意）",
+          "notePlaceholder": "例: オフィスのサーバー",
+          "submit": "公開鍵を追加"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "有効な ssh-ed25519 公開鍵ではありません。オプションのない 1 行の ed25519 公開鍵のみ対応しています。",
+          "ALREADY_EXISTS": "この公開鍵はすでにこのコンピューターに接続できます。",
+          "PRECONDITION_FAILED": "現在は公開鍵を追加できません。しばらくしてから再試行してください。",
+          "SSH_ACCESS_KEY_LIMIT": "追加できる公開鍵の上限（{{max}} 個）に達しています。1 つ削除すると、別の公開鍵を追加できます。",
+          "INTERNAL": "公開鍵を追加できませんでした。"
+        },
+        "addedKey": "公開鍵を追加しました",
+        "endSessions": "すべての SSH セッションを切断",
+        "endSessionsConfirm": {
+          "heading": "すべての SSH セッションを切断しますか？",
+          "body": "このコンピューター上の現在のユーザーのすべての SSH セッションを切断します。Cindy 経由で許可されていないセッションも含まれ、実行中のコマンドは中断されます。",
+          "action": "すべてのセッションを切断"
+        },
+        "sessionsEnded": "{{count}} 件の SSH セッションを切断しました",
+        "sessionsUnsupported": "このコンピューターではまだ SSH セッションを切断できません",
+        "endSessionsFailed": "SSH セッションを切断できませんでした",
+        "toggleFailed": "SSH アクセスの設定を変更できませんでした",
+        "device": {
+          "rowName": "SSH",
+          "copy": "ターミナルのコマンドをコピー",
+          "connect": "接続",
+          "connected": "{{name}} に接続しました",
+          "restore": "SSH リモートホストに追加",
+          "restoreFailed": "{{name}} を SSH リモートホストに追加できませんでした",
+          "userDeleted": "SSH リモートホストから削除済みです。",
+          "needsUpdate": "Cindy の更新が必要です: このデバイスの Cindy はまだ SSH アクセスに対応していません。",
+          "controlOff": "「操作する」がオフのため、Cindy はこのデバイスの SSH を設定しません。",
+          "refused": "このデバイスは本機の SSH 公開鍵を受け入れませんでした。",
+          "pending": "SSH を設定しています…",
+          "unavailable": {
+            "off": "利用できません: 相手側で SSH アクセスがオフになっています。",
+            "blocked": {
+              "SSHD_UNREACHABLE": "利用できません: 相手側の SSH サーバーが動いていません。",
+              "REMOTE_LOGIN_OFF": "利用できません: 相手側の Mac で「リモートログイン」がオフになっています。",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "利用できません: Cindy は相手側の SSH 認証鍵ファイルを書き換えられません。",
+              "PLATFORM_UNSUPPORTED": "利用できません: 相手側のシステムは SSH アクセスに対応していません。",
+              "UNKNOWN": "利用できません: 相手側は現在 SSH 接続を受け付けられません。"
+            },
+            "revoked": "利用できません: 相手側が本機のアクセス権を撤回しました。",
+            "removed": "利用できません: このデバイスはアカウントにもう登録されていません。"
           }
         }
       }

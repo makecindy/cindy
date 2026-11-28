@@ -13,6 +13,7 @@ import {
   readSshConfig,
   readSshConfigDetailed,
   removeManagedHost,
+  renameManagedHost,
   updateManagedHostFields,
 } from '../sshConfig.js';
 import type { HostConfig } from '../types.js';
@@ -1469,6 +1470,121 @@ describe('managed config writers', () => {
     await expect(removeManagedHost('lab', managedConfig, token))
       .rejects.toMatchObject({ code: 'SSH_CONFIG_CONCURRENT_MODIFICATION' });
     await expect(fs.readFile(managedConfig, 'utf8')).resolves.toBe(external);
+  });
+
+  /*
+   * Pinned hosts (SSH access to the person's own devices, decision 8, 2026-11-26). Entry points: the managed
+   * writers and readSshConfigDetailed, on real files in a scratch HOME. Observable: the terminal alias block holds
+   * HostKeyAlias / UserKnownHostsFile / StrictHostKeyChecking yes / IdentityFile + IdentitiesOnly, the person's own
+   * config bytes stay as they were apart from the one Include line, and only the host's own managed block makes
+   * Cindy's ssh2 path pin the key (a `Host *` or the person's own HostKeyAlias never does). Unit tier (scratch dir).
+   */
+  it('writes a pinned device alias and honours its pin only from the managed block', async () => {
+    const ownConfig = [
+      '# my config',
+      'Host mine',
+      '  HostName 192.0.2.5',
+      '  HostKeyAlias mine-alias',
+      '  StrictHostKeyChecking yes',
+      'Host *',
+      '  StrictHostKeyChecking yes',
+      '  ServerAliveInterval 30',
+      '',
+    ].join('\n');
+    await fs.writeFile(mainConfig, ownConfig);
+    const identityFile = path.join(scratchDir, 'Cindy Data', 'ssh-access', 'id_ed25519');
+    await addManagedHostWithInclude(host({
+      id: 'cindy-studio',
+      hostname: '203.0.113.7',
+      user: 'ubuntu',
+      authMethod: 'key',
+      identityFile,
+      hostKeyAlias: 'cindy-device-abc123',
+      userKnownHostsFile: '~/.ssh/cindy_known_hosts',
+      strictHostKeyChecking: true,
+    }), mainConfig, managedConfig);
+    await addManagedHostWithInclude(host({ id: 'plain' }), mainConfig, managedConfig);
+
+    const main = await fs.readFile(mainConfig, 'utf8');
+    expect(main.replace(/^# my config\nInclude [^\n]+\n/, '# my config\n')).toBe(ownConfig);
+    const managed = await fs.readFile(managedConfig, 'utf8');
+    const block = managed.slice(managed.indexOf('Host cindy-studio'), managed.indexOf('Host plain'));
+    expect(block.split('\n').map((line) => line.trim()).filter(Boolean)).toEqual([
+      'Host cindy-studio',
+      'HostName 203.0.113.7',
+      'User ubuntu',
+      'Port 22',
+      '# xdt-maker:auth=key',
+      // The serializer quotes the path (it has a space) and escapes backslashes on Windows.
+      `IdentityFile "${identityFile.replace(/\\/g, '\\\\')}"`,
+      'IdentitiesOnly yes',
+      'HostKeyAlias cindy-device-abc123',
+      'UserKnownHostsFile ~/.ssh/cindy_known_hosts',
+      'StrictHostKeyChecking yes',
+      'CheckHostIP no',
+    ]);
+
+    const hosts = await readSshConfig(mainConfig, { managedConfigPath: managedConfig });
+    expect(hosts.find((entry) => entry.id === 'cindy-studio')).toMatchObject({
+      managedByCindy: true, authMethod: 'key', identityFile, hostKeyAlias: 'cindy-device-abc123', strictHostKeyChecking: true,
+    });
+    for (const id of ['mine', 'plain']) {
+      const entry = hosts.find((candidate) => candidate.id === id)!;
+      expect(entry.hostKeyAlias).toBeUndefined();
+      expect(entry.strictHostKeyChecking).toBeUndefined();
+    }
+  });
+
+  it('keeps the pin through ordinary edits and moves it only with a pinned update', async () => {
+    await fs.writeFile(mainConfig, `Include ${managedConfig}\n`);
+    const pinned = host({
+      id: 'cindy-studio', hostname: '203.0.113.7', authMethod: 'key', identityFile: '/keys/id_ed25519',
+      hostKeyAlias: 'cindy-device-abc123', userKnownHostsFile: '~/.ssh/cindy_known_hosts', strictHostKeyChecking: true,
+    });
+    await addManagedHost(pinned, managedConfig);
+    // A Settings edit never carries the pin.
+    await updateManagedHostFields({ ...host({ id: 'cindy-studio', authMethod: 'key', identityFile: '/keys/id_ed25519' }), hostname: '198.51.100.2' },
+      managedConfig, await managedWriteToken());
+    let [entry] = await readSshConfig(mainConfig, { managedConfigPath: managedConfig });
+    expect(entry).toMatchObject({ hostname: '198.51.100.2', hostKeyAlias: 'cindy-device-abc123', strictHostKeyChecking: true });
+
+    await updateManagedHostFields({ ...pinned, hostname: '203.0.113.9', port: 2200 }, managedConfig, await managedWriteToken());
+    const raw = await fs.readFile(managedConfig, 'utf8');
+    expect(raw.match(/HostKeyAlias/g)).toHaveLength(1);
+    expect(raw.match(/StrictHostKeyChecking/g)).toHaveLength(1);
+    [entry] = await readSshConfig(mainConfig, { managedConfigPath: managedConfig });
+    expect(entry).toMatchObject({ hostname: '203.0.113.9', port: 2200, hostKeyAlias: 'cindy-device-abc123' });
+  });
+
+  // Unit tier. A device renamed in the device list moves its terminal alias (sshAccessController.ts); the block must
+  // keep its place, its pin and the person's other directives, and never take an alias another block names.
+  it('moves a pinned device block to a new alias in place and refuses an alias already in the file', async () => {
+    await fs.writeFile(mainConfig, `Include ${managedConfig}\n`);
+    const pinned = host({
+      id: 'cindy-studio', hostname: '203.0.113.7', authMethod: 'key', identityFile: '/keys/id_ed25519',
+      hostKeyAlias: 'cindy-device-abc123', userKnownHostsFile: '~/.ssh/cindy_known_hosts', strictHostKeyChecking: true,
+    });
+    await addManagedHost(host({ id: 'before' }), managedConfig);
+    await addManagedHost(pinned, managedConfig);
+    await addManagedHost(host({ id: 'after' }), managedConfig);
+    await fs.writeFile(managedConfig, (await fs.readFile(managedConfig, 'utf8'))
+      .replace('Host cindy-studio\n', 'Host cindy-studio\n  ServerAliveInterval 15\n'));
+
+    await renameManagedHost('cindy-studio', { ...pinned, id: 'cindy-office' }, managedConfig, await managedWriteToken());
+    const raw = await fs.readFile(managedConfig, 'utf8');
+    expect(raw).not.toContain('cindy-studio');
+    expect(raw.indexOf('Host before')).toBeLessThan(raw.indexOf('Host cindy-office'));
+    expect(raw.indexOf('Host cindy-office')).toBeLessThan(raw.indexOf('Host after'));
+    expect(raw).toContain('ServerAliveInterval 15');
+    const hosts = await readSshConfig(mainConfig, { managedConfigPath: managedConfig });
+    expect(hosts.map((entry) => entry.id)).toEqual(['before', 'cindy-office', 'after']);
+    expect(hosts[1]).toMatchObject({ hostname: '203.0.113.7', hostKeyAlias: 'cindy-device-abc123', strictHostKeyChecking: true });
+
+    await expect(renameManagedHost('cindy-office', { ...pinned, id: 'after' }, managedConfig, await managedWriteToken()))
+      .rejects.toThrow('host already exists');
+    await expect(renameManagedHost('cindy-gone', { ...pinned, id: 'cindy-new' }, managedConfig, await managedWriteToken()))
+      .rejects.toThrow('not found');
+    await expect(fs.readFile(managedConfig, 'utf8')).resolves.toBe(raw);
   });
 
   it('treats a missing managed write token as an internal package contract error', async () => {

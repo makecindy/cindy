@@ -150,6 +150,34 @@ async function handshakeClient(index = clients.length - 1) {
   await vi.waitFor(() => expect(clients[index]?.verifyPending).toBeTypeOf('function'));
   clients[index].verifyPending!();
 }
+// SSH access to the person's own devices (decision 8): a host whose managed block pins its key (HostKeyAlias +
+// StrictHostKeyChecking yes) looks the key up under the alias and never trusts an unknown key, not even on an
+// explicit connect. Unit tier, real pool and verifier with a fake ssh2 client.
+describe('pinned device hosts', () => {
+  const pinned = { ...config, id: 'cindy-studio', managedByCindy: true, hostKeyAlias: 'cindy-device-abc', strictHostKeyChecking: true };
+  it.each([null, 'SHA256:old'])('refuses an explicit connect without the pinned key (stored %s)', async (value) => {
+    const store = keyStore(value);
+    const pool = new ConnectionPool({ logger, hostKeys: store });
+    pool.add(pinned);
+    try {
+      await expect(pool.connect(pinned.id)).rejects.toMatchObject({
+        code: value === null ? 'SSH_HOST_UNVERIFIED' : 'SSH_HOST_KEY_MISMATCH',
+      });
+      expect(store.get).toHaveBeenCalledWith('cindy-device-abc');
+      expect(store.set).not.toHaveBeenCalled();
+    } finally { await pool.dispose(); }
+  });
+  it('connects when the alias holds the presented key', async () => {
+    const store = keyStore(matching);
+    const pool = new ConnectionPool({ logger, hostKeys: store });
+    pool.add(pinned);
+    try {
+      await expect(pool.connect(pinned.id)).resolves.toBeUndefined();
+      expect(store.get).toHaveBeenCalledWith('cindy-device-abc');
+    } finally { await pool.dispose(); }
+  });
+});
+
 describe('trusted-only SSH connections (#8403)', () => {
   it.each([null, matching, 'SHA256:old'])('enforces handshake trust without writing: %s', async value => {
     const store = keyStore(value);

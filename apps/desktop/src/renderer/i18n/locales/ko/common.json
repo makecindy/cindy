@@ -1963,7 +1963,8 @@
         "title": "{{id}} 편집",
         "submit": "변경 저장",
         "connectionFieldsReadOnly": "SSH 설정에서 가져온 연결 정보는 여기서 읽기 전용입니다. 표시 이름, 자동 연결, Agent Proxy는 수정할 수 있습니다.",
-        "authenticationFromSshConfig": "인증 정보는 SSH 설정에서 가져옵니다."
+        "authenticationFromSshConfig": "인증 정보는 SSH 설정에서 가져옵니다.",
+        "deviceHostReadOnly": "연결 정보는 Cindy가 기기에 맞춰 자동으로 관리하므로 여기서는 읽기 전용입니다. 표시 이름, 자동 연결, Agent Proxy는 수정할 수 있습니다."
       },
       "keys": {
         "title": "SSH 키 설정",
@@ -2179,7 +2180,10 @@
         "cancel": "기존 키 유지",
         "trust": "새 키 신뢰 및 다시 연결",
         "updateFailed": "호스트 신뢰 기록을 업데이트할 수 없습니다. 연결 정보나 저장된 키가 변경되었거나 기록 파일에 쓸 수 없을 수 있습니다. 다시 연결하여 지문을 새로 확인하고 파일 권한을 확인하세요."
-      }
+      },
+      "fromMyDevice": "내 기기에서",
+      "fromMyDeviceKeyPinned": "내 기기에서 · 호스트 지문 확인됨",
+      "deviceUnavailable": "사용 불가"
     },
     "appearance": {
       "chatLayout": {
@@ -7374,6 +7378,98 @@
             "ready": "초록 실선: Agent-Net 연결 준비됨",
             "busy": "주황 점: 작업 실행 중 / 기기 사용 중",
             "error": "빨간 점선: 응답 없음 또는 일시 중지"
+          }
+        }
+      },
+      "sshAccess": {
+        "title": "내 다른 기기에서 SSH로 이 컴퓨터에 연결하도록 허용",
+        "description": "다른 기기에는 자동으로 권한이 부여됩니다. 기기의 액세스 권한을 철회하면 그 기기의 SSH도 함께 회수됩니다.",
+        "defaultOn": "클라우드 컴퓨터에서는 기본적으로 켜져 있습니다.",
+        "defaultOff": "기본적으로 꺼져 있습니다.",
+        "descriptionWithDefault": "{{description}} {{defaultNote}}",
+        "aliasIntro": "다른 기기의 터미널에서 연결: <command>{{command}}</command>",
+        "recordUnreadable": "이 컴퓨터에 저장된 SSH 접근 기록을 읽을 수 없어 Cindy가 당분간 아무것도 변경하지 않습니다.",
+        "blocked": {
+          "REMOTE_LOGIN_OFF": "macOS의 ‘원격 로그인’이 꺼져 있어 다른 기기에서 아직 연결할 수 없습니다. ‘시스템 설정 → 일반 → 공유’에서 ‘원격 로그인’을 켜세요.",
+          "SSHD_UNREACHABLE": "이 컴퓨터에서 SSH 서버가 실행 중이 아니어서 다른 기기에서 아직 연결할 수 없습니다. 터미널에서 다음 명령을 실행하면 설치하고 시작할 수 있습니다:",
+          "AUTHORIZED_KEYS_UNSUPPORTED": "Cindy가 이 컴퓨터의 SSH 인증 키 파일을 수정할 수 없습니다. ~/.ssh/authorized_keys가 링크이거나 너무 크거나 손상되지 않았는지 확인하세요."
+        },
+        "otherDistributions": "다른 Linux 배포판에서는 openssh-server를 설치하고 sshd 서비스를 시작하세요.",
+        "copyCommand": "명령 복사",
+        "openSharingSettings": "공유 설정 열기",
+        "copied": "복사됨",
+        "copyFailed": "복사하지 못했습니다",
+        "listHeading": "SSH로 연결할 수 있는 기기({{count}})",
+        "listEmpty": "아직 기기가 없습니다. 다른 기기가 온라인이 되면 여기에 자동으로 표시됩니다.",
+        "deviceMeta": "내 기기 · 자동 허용 · {{time}}",
+        "manualMeta": "직접 추가한 공개 키 · {{fingerprint}}",
+        "todayAt": "오늘 {{time}}",
+        "inactive": "적용되지 않음",
+        "unknownDevice": "알 수 없는 기기",
+        "unnamedKey": "이름 없는 공개 키",
+        "remove": "제거",
+        "removedKey": "공개 키를 제거했습니다",
+        "removeKeyFailed": "공개 키를 제거하지 못했습니다",
+        "removeDeviceConfirm": {
+          "heading": "{{name}}의 SSH 접근을 제거할까요?",
+          "body": "{{name}}의 이 컴퓨터 액세스 권한이 철회됩니다. 원격 제어도 함께 회수되고 그 기기의 SSH 세션이 종료됩니다. 나중에 그 기기 카드에서 ‘본 기기 제어’를 다시 허용할 수 있습니다.",
+          "bodyKeepsSessions": "{{name}}의 이 컴퓨터 액세스 권한이 철회됩니다. 원격 제어도 함께 회수됩니다. 이미 열려 있는 SSH 세션은 자동으로 종료되지 않으니 필요하면 ‘모든 SSH 세션 종료’로 종료하세요. 나중에 그 기기 카드에서 ‘본 기기 제어’를 다시 허용할 수 있습니다."
+        },
+        "deviceRemoved": "{{name}}의 액세스 권한을 철회했습니다",
+        "deviceRemovedSessionsEnded": "{{name}}의 액세스 권한을 철회하고 그 기기의 SSH 세션 {{count}}개를 종료했습니다",
+        "deviceRemovedSessionsLeft": "{{name}}의 액세스 권한을 철회하고 그 기기의 SSH 세션 {{count}}개를 종료했습니다. 어떤 키로 로그인했는지 확인할 수 없는 세션 {{unmapped}}개는 아직 연결되어 있습니다. 필요하면 ‘모든 SSH 세션 종료’로 종료하세요.",
+        "deviceRemovedSessionsKept": "{{name}}의 액세스 권한을 철회했습니다. 이미 열려 있는 SSH 세션은 자동으로 종료되지 않습니다.",
+        "removeDeviceFailed": "{{name}}의 SSH 접근 제거를 완료하지 못했습니다",
+        "addKey": "공개 키 추가",
+        "addKeyDialog": {
+          "heading": "공개 키 추가",
+          "body": "ssh-ed25519 공개 키 한 줄을 붙여 넣으세요. 예: ~/.ssh/id_ed25519.pub의 내용. 옵션이 없는 ed25519 공개 키만 지원합니다.",
+          "keyField": "공개 키",
+          "noteField": "메모(선택)",
+          "notePlaceholder": "예: 사무실 서버",
+          "submit": "공개 키 추가"
+        },
+        "addKeyErrors": {
+          "INVALID_PARAMS": "올바른 ssh-ed25519 공개 키가 아닙니다. 옵션이 없는 한 줄짜리 ed25519 공개 키만 지원합니다.",
+          "ALREADY_EXISTS": "이 공개 키는 이미 이 컴퓨터에 연결할 수 있습니다.",
+          "PRECONDITION_FAILED": "지금은 공개 키를 추가할 수 없습니다. 잠시 후 다시 시도하세요.",
+          "SSH_ACCESS_KEY_LIMIT": "추가할 수 있는 공개 키 한도({{max}}개)에 도달했습니다. 하나를 제거하면 다른 공개 키를 추가할 수 있습니다.",
+          "INTERNAL": "공개 키를 추가하지 못했습니다."
+        },
+        "addedKey": "공개 키를 추가했습니다",
+        "endSessions": "모든 SSH 세션 종료",
+        "endSessionsConfirm": {
+          "heading": "모든 SSH 세션을 종료할까요?",
+          "body": "이 컴퓨터에서 현재 사용자의 모든 SSH 세션을 종료합니다. Cindy를 통해 허용되지 않은 세션도 포함되며 실행 중인 명령은 중단됩니다.",
+          "action": "모든 세션 종료"
+        },
+        "sessionsEnded": "SSH 세션 {{count}}개를 종료했습니다",
+        "sessionsUnsupported": "이 컴퓨터에서는 아직 SSH 세션을 종료할 수 없습니다",
+        "endSessionsFailed": "SSH 세션을 종료하지 못했습니다",
+        "toggleFailed": "SSH 접근 설정을 변경하지 못했습니다",
+        "device": {
+          "rowName": "SSH",
+          "copy": "터미널 명령 복사",
+          "connect": "연결",
+          "connected": "{{name}}에 연결했습니다",
+          "restore": "SSH 원격 호스트에 추가",
+          "restoreFailed": "SSH 원격 호스트에 {{name}}을(를) 추가하지 못했습니다",
+          "userDeleted": "SSH 원격 호스트에서 삭제했습니다.",
+          "needsUpdate": "Cindy 업데이트 필요: 이 기기의 Cindy는 아직 SSH 접근을 지원하지 않습니다.",
+          "controlOff": "‘제어하기’가 꺼져 있어 Cindy가 이 기기의 SSH를 설정하지 않습니다.",
+          "refused": "이 기기가 본 기기의 SSH 공개 키를 받아들이지 않았습니다.",
+          "pending": "SSH 설정 중…",
+          "unavailable": {
+            "off": "사용 불가: 상대 기기에서 SSH 접근이 꺼져 있습니다.",
+            "blocked": {
+              "SSHD_UNREACHABLE": "사용 불가: 상대 기기의 SSH 서버가 실행 중이 아닙니다.",
+              "REMOTE_LOGIN_OFF": "사용 불가: 상대 Mac에서 ‘원격 로그인’이 꺼져 있습니다.",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "사용 불가: Cindy가 상대 기기의 SSH 인증 키 파일을 수정할 수 없습니다.",
+              "PLATFORM_UNSUPPORTED": "사용 불가: 상대 기기의 시스템이 SSH 접근을 지원하지 않습니다.",
+              "UNKNOWN": "사용 불가: 상대 기기가 지금은 SSH 연결을 받을 수 없습니다."
+            },
+            "revoked": "사용 불가: 상대 기기가 본 기기의 액세스 권한을 철회했습니다.",
+            "removed": "사용 불가: 이 기기는 더 이상 내 계정에 없습니다."
           }
         }
       }

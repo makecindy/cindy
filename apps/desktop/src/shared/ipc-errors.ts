@@ -248,6 +248,8 @@ export type IpcErrorCode =
   | 'SSH_AGENT_NOT_INSTALLED'
   // remote-ssh：项目选择器远端目录列表
   | 'SSH_REMOTE_LS_FAILED'
+  // SSH 访问（这台电脑）：手动添加的公钥已达上限，添加公钥弹窗据此说明上限而不是「稍后重试」
+  | 'SSH_ACCESS_KEY_LIMIT'
   // remote-ssh:file-service(SSH 远程会话的文件浏览 daemon)不可用——
   // 连接失败 / 安装失败 / daemon 版本无法对齐 / RPC 通道断开
   | 'REMOTE_FS_UNAVAILABLE'
@@ -510,6 +512,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SSH_EXEC_FAILED',
   'SSH_AGENT_NOT_INSTALLED',
   'SSH_REMOTE_LS_FAILED',
+  'SSH_ACCESS_KEY_LIMIT',
   'REMOTE_FS_UNAVAILABLE',
   'HOOK_NOT_CONNECTED',
   'HOOK_PREFS_TIMEOUT',

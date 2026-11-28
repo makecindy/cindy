@@ -9,6 +9,7 @@ import type { InvokePayload } from './protocol.js';
 import { REMOTE_AGENT_CHANNEL, isRemoteAgentReadInvoke, remoteAgentInvokeHoldMs } from './remoteAgent.js';
 import { FILE_PEER_CHANNEL, FILE_PEER_STREAM_RPC_MAX_TIMEOUT_MS } from './filePeer.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
+import { SSH_ACCESS_CHANNEL } from './sshAccess.js';
 
 /** These reads may wait behind current-task work. Not a retry or authorization policy.
  * sessions:list also serves initial loading and recovery probes, so it stays foreground.
@@ -49,6 +50,8 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   'sidebar-settings:get-project-order',
   // 打字时的 Agent 预热是尽力而为的提示，排在用户正在等待的请求之后。
   'maker:session:prewarm',
+  // SSH access status reads and key enrolment run in the background after an announce; nobody waits on them.
+  SSH_ACCESS_CHANNEL,
 ]);
 
 export function isBackgroundInvoke(channel: string, args?: readonly unknown[]): boolean {

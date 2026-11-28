@@ -23,6 +23,7 @@ import {
 } from './index.js';
 import { getSshHostDisplayName } from './ssh-host-prefs-store.js';
 import { AUTHORIZE_SCRIPT, isLoopbackSshHostname, shellQuote } from './setupMigrationSshScript.js';
+import { isDeviceHostKeyAlias } from '../ssh-access/deviceHostNames.js';
 
 const log = createLogger('setup-migration-ssh');
 const AUTHORIZE_TIMEOUT_MS = 20_000;
@@ -35,6 +36,8 @@ export async function listSetupSshHosts(): Promise<SetupSnapshotSshHost[]> {
   for (const snapshot of pool.list()) {
     const config = snapshot.config;
     if (isLoopbackSshHostname(config.hostname)) continue;
+    // Hosts of the person's own devices are not copied: the new computer enrolls its own key and gets its own.
+    if (config.managedByCindy && isDeviceHostKeyAlias(config.hostKeyAlias)) continue;
     let hostKey: string | null = null;
     try {
       hostKey = await store.get(hostKeyId(config.hostname, config.port));

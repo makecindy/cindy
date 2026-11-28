@@ -13,6 +13,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
+import { SSH_ACCESS_CHANNEL } from '@cindy/device-link';
 import { DeviceLinkClient, DeviceLinkError, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
@@ -1405,6 +1406,112 @@ test('Host device-link refuses provider-share guests and the platform features i
   assert.deepEqual(reached, [], 'no refused channel may reach the Host service');
 });
 
+// Test value (engineering-conventions §3.2)
+// - Production entry: createHostDeviceLink with a fake machine (temporary home, sshd answering, fixed endpoint): a
+//   same-account desktop's device-link:ssh-access:v1 through the loopback relay, and the `cindy-host remote ssh-access` /
+//   `ssh-key` commands (deviceLink.sshAccess). Observable: replies, device-link-settings.json, ~/.ssh/authorized_keys.
+// - Rule: spec item 4 (only the person's choice is stored; "default" deletes it), the Host wires the same shared target
+//   (architecture-invariants §5), coexistence plan A (writes refused while a desktop holds the profile).
+// - Coverage gap: the target core tests run without the Host assembly; nothing checked the Host's dispatch port, its
+//   settings store binding or the hold.
+// - Minimal failing input: `ssh-access-default` leaving sshAccessEnabled in the file; an enrolment accepted while held.
+// - Tier: unit with loopback sockets in-process, as the tests above (no real ~/.ssh, no sshd, no network).
+test('Host SSH access: same-account enrolment, the remote commands and the profile hold', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-ssh-access-'));
+  const home = path.join(profile, 'home');
+  configureAppDataDir(profile);
+  configureHostOwner({ userDataDir: profile, ownerId: 'test-ssh-owner' });
+  const KEY_A = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJfYPtO9L0UmsOJcs+BJ3iMNHFGtQIONiQHLRdZfuvr7';
+  const KEY_B = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMaGP9ZBWsUOAER5H5Zf4eYmzMBURk1Zj2heBDSMKSOi';
+  const sockets = new Map();
+  const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  let host, desktop, held = null;
+  t.after(async () => {
+    desktop?.stop();
+    await host?.stop();
+    for (const socket of wss.clients) socket.terminate();
+    await new Promise(resolve => wss.close(resolve));
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+  wss.on('connection', (socket, request) => {
+    const id = /^Bearer synthetic-(host|desktop)$/.exec(request.headers.authorization ?? '')?.[1];
+    if (!id) { socket.close(1008); return; }
+    sockets.set(id, socket);
+    socket.on('message', raw => {
+      const frame = JSON.parse(raw.toString());
+      if (frame.kind === 'hello') {
+        socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+          serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: 'synthetic-same-user', capabilities: [] } }));
+        if (id === 'desktop') sockets.get('host')?.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'presence-changed',
+          payload: { deviceId: 'desktop', platform: 'darwin', online: true, remoteControlEnabled: true } }));
+      } else if (frame.kind === 'ping') socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'pong' }));
+      else if (frame.dst && sockets.get(frame.dst)?.readyState === WebSocket.OPEN) {
+        sockets.get(frame.dst).send(JSON.stringify({ ...frame, src: id }));
+      }
+    });
+  });
+  await once(wss, 'listening');
+  const url = `ws://127.0.0.1:${wss.address().port}`;
+  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false,
+    getWsUrl: () => url, getToken: async () => 'synthetic-host', canRegister: () => true,
+    invoke: async route => ({ status: 404, body: { message: `unexpected ${route}` } }),
+    subscribe: () => () => {},
+    createRuntimeSession: async () => { throw new Error('Not part of this test'); },
+    closeRuntimeSession: async () => { throw new Error('Not part of this test'); },
+    disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
+    profileHold: () => held,
+    deviceDirectory: async () => ['desktop', 'host'],
+    sshAccessMachine: {
+      platform: 'linux', homeDir: () => home, detectCloudGuest: async () => false, probeSshd: async () => true,
+      readEndpointFacts: async () => ({ user: 'tester', port: 22, lanAddresses: [{ kind: 'lan', host: '10.0.0.9' }], mdnsName: null, hostKeys: [KEY_B] }),
+      readPublicIpv4: async () => null,
+      terminator: { endsKeySessions: true, terminateFingerprints: async () => ({ supported: true, terminated: 0, unmapped: 0 }),
+        terminateAll: async () => ({ supported: true, terminated: 0, unmapped: 0 }) },
+    },
+  });
+  await host.setEnabled(true);
+  await waitFor(() => host.state().status === 'online');
+  desktop = new DeviceLinkClient({ getWsUrl: () => url, getToken: async () => 'synthetic-desktop',
+    getHello: () => ({ deviceName: 'desktop', platform: 'darwin', appVersion: 'test', remoteControlEnabled: false }),
+    createWebSocket: (address, headers) => new WebSocket(address, { headers }) });
+  desktop.start();
+  await waitFor(() => desktop.getStatus() === 'online');
+  await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test', capabilities: [] });
+  const ssh = request => desktop.invoke('host', { channel: SSH_ACCESS_CHANNEL, args: [request] });
+  const settingsFile = () => JSON.parse(fs.readFileSync(path.join(profile, 'device-link-settings.json'), 'utf8'));
+  const authorizedKeys = () => fs.readFileSync(path.join(home, '.ssh', 'authorized_keys'), 'utf8');
+
+  // Off by default on an ordinary machine: the desktop is told so and cannot enrol.
+  const { revision: _revision, ...off } = (await ssh({ action: 'status' })).result;
+  assert.deepEqual(off, { version: 1, enabled: false, blocked: null, authorized: false, endpoint: null });
+  const enroll = { action: 'enroll', requestId: 'host-test-0001', publicKey: KEY_A };
+  assert.match((await ssh(enroll)).error.message, /^\[SSH_ACCESS_DISABLED\]/);
+
+  assert.deepEqual((await host.sshAccess('ssh-access-on', {})).setting, true);
+  assert.equal(settingsFile().sshAccessEnabled, true);
+  const enrolled = await ssh(enroll);
+  assert.deepEqual({ ok: enrolled.ok, authorized: enrolled.result.authorized, endpoint: enrolled.result.endpoint },
+    { ok: true, authorized: true, endpoint: { user: 'tester', port: 22, addresses: [{ kind: 'lan', host: '10.0.0.9' }], hostKeys: [KEY_B] } });
+  assert.ok(authorizedKeys().includes(`${KEY_A} cindy-device:desktop\n`));
+  const added = await host.sshAccess('ssh-key-add', { publicKey: `${KEY_B} me@laptop\n`, label: 'work' });
+  assert.equal(added.state.manualKeys[0].label, 'work');
+  assert.match(authorizedKeys(), /cindy-manual:work/);
+  await assert.rejects(host.sshAccess('ssh-key-remove', { fingerprint: 'not-a-fingerprint' }), /SHA256 fingerprint/);
+
+  // A desktop holding the profile owns the files: the Host refuses changes but still answers status.
+  held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
+  assert.match((await ssh({ action: 'withdraw', requestId: 'host-test-0002' })).error.message, /^\[SSH_ACCESS_UNAVAILABLE\]/);
+  await assert.rejects(host.sshAccess('ssh-access-off', {}));
+  assert.equal((await ssh({ action: 'status' })).result.authorized, true);
+  held = null;
+
+  const restored = await host.sshAccess('ssh-access-default', {});
+  assert.deepEqual({ setting: restored.setting, customized: restored.customized, enabled: restored.enabled }, { setting: false, customized: false, enabled: false });
+  assert.equal('sshAccessEnabled' in settingsFile(), false);
+  assert.equal(authorizedKeys(), '');
+});
+
 /*
  * Test value (engineering-conventions §3.2)
  * - Production entry: createHostDeviceLink checks, before it creates the shared inbound dispatch, that
@@ -1429,7 +1536,7 @@ const PINNED_DISPATCH_PORTS = {
     'RECOVERY_CHECKPOINT_MARKER', 'sanitizeBotAuthorizationMetaForRemote', 'projectInteractionDismissedForRemote',
     'projectInteractionRequestForRemote', 'remoteWorkingDirRejectionToIpcError'],
   'service-gate': ['executeTaskTags', 'dispatchLocalInvoke'],
-  'refused-at-entry': ['requestPluginOauth'],
+  'refused-at-entry': ['requestPluginOauth', 'sshAccessTarget'],
   unbound: ['readUsageWidgetSnapshot', 'configureStandbyGuestCleanup', 'prepareShareAvailability',
     'readZhipuCodingPlanAccountUsage', 'isRemoteProviderInvocationAllowed',
     'readKimiCodingAccountUsage', 'readOpenCodeGoAccountUsage', 'requestFilePeer', 'stopFilePeers', 'requestTaskMigration',

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import { toast } from '@/lib/toast';
 import { RemoteSection } from '../RemoteSection';
 import { parseSelfHostedRelayCommand } from '../../../../shared/selfHostedRelay';
 
@@ -11,6 +12,7 @@ vi.mock('../SshKeySetupDialog', () => ({ SshKeySetupDialog: () => null }));
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 const legacyHost: RemoteHostSnapshot = {
@@ -147,4 +149,65 @@ it('keeps an existing Chinese alias editable through its display name', async ()
     screen.getByRole('button', { name: 'settings.remote.edit.submit' }).hasAttribute('disabled'),
   ).toBe(false);
   expect(alias.hasAttribute('aria-invalid')).toBe(false);
+});
+
+// SSH access to the person's own devices (decision 6): a host Cindy keeps for one of their devices says so
+// (「来自我的设备」), adds 「主机指纹已核对」 only where main reports its key pinned (not for every device host), shows
+// when it cannot be used, and its connection fields stay read-only in the edit form (main refuses such edits too).
+// An ordinary Cindy host is unchanged.
+it('labels a host of the person\'s own device, marks it unavailable and keeps its connection read-only', async () => {
+  const deviceHost: RemoteHostSnapshot = {
+    ...legacyHost,
+    config: { ...legacyHost.config, id: 'cindy-studio', hostname: '203.0.113.7', authMethod: 'key', identityFileConfigured: true, deviceHost: true },
+    device: { deviceId: 'studio', available: false },
+  };
+  const pinnedHost: RemoteHostSnapshot = {
+    ...deviceHost,
+    config: { ...deviceHost.config, id: 'cindy-cloud', hostname: '203.0.113.9' },
+    device: { deviceId: 'cloud', available: true },
+    hostKeyPinned: true,
+  };
+  vi.stubGlobal('electronAPI', {
+    remoteSsh: { list: async () => ({ hosts: [deviceHost, pinnedHost, legacyHost] }), onStatusChanged: () => () => {} },
+  });
+  render(<RemoteSection />);
+  await act(async () => {});
+  expect(screen.getAllByText('settings.remote.fromMyDevice')).toHaveLength(1);
+  expect(screen.getAllByText('settings.remote.fromMyDeviceKeyPinned')).toHaveLength(1);
+  expect(screen.getAllByText('settings.remote.deviceUnavailable')).toHaveLength(1);
+  fireEvent.click(screen.getAllByRole('button', { name: 'settings.remote.button.edit' })[0]!);
+  expect((screen.getByDisplayValue('203.0.113.7') as HTMLInputElement).disabled).toBe(true);
+  expect(screen.getByText('settings.remote.edit.deviceHostReadOnly')).toBeTruthy();
+  expect((screen.getByLabelText('settings.remote.add.displayName') as HTMLInputElement).disabled).toBe(false);
+});
+
+// The row of a device host offers its terminal command next to the alias, with the same compact button and feedback
+// as the device's card in 我的设备 (spec decision 6, approved mock). Entry: RemoteSection with the host list from the
+// bridge; observable: the copy button only on that row, the clipboard text and the toasts. Gap: the device card test
+// covers its own button only. Minimal failing input: one device host and one ordinary host. Unit tier (jsdom).
+it('copies a device host\'s terminal command from its row, with the device card\'s feedback', async () => {
+  const deviceHost: RemoteHostSnapshot = {
+    ...legacyHost,
+    config: { ...legacyHost.config, id: 'cindy-studio', displayName: 'Studio', hostname: '203.0.113.7', authMethod: 'key', identityFileConfigured: true, deviceHost: true },
+    device: { deviceId: 'studio', available: true },
+  };
+  const writeText = vi.fn(async (_text: string) => undefined);
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  const copied = vi.spyOn(toast, 'success');
+  const failed = vi.spyOn(toast, 'error');
+  vi.stubGlobal('electronAPI', {
+    remoteSsh: { list: async () => ({ hosts: [deviceHost, legacyHost] }), onStatusChanged: () => () => {} },
+  });
+  render(<RemoteSection />);
+  await act(async () => {});
+  const copy = screen.getAllByRole('button', { name: 'settings.remoteControl.sshAccess.device.copy' });
+  expect(copy).toHaveLength(1);
+  fireEvent.click(copy[0]!);
+  await act(async () => {});
+  expect(writeText).toHaveBeenCalledWith('ssh cindy-studio');
+  expect(copied).toHaveBeenCalledWith('settings.remoteControl.sshAccess.copied');
+  writeText.mockRejectedValueOnce(new Error('clipboard denied'));
+  fireEvent.click(copy[0]!);
+  await act(async () => {});
+  expect(failed).toHaveBeenCalledWith('settings.remoteControl.sshAccess.copyFailed');
 });
