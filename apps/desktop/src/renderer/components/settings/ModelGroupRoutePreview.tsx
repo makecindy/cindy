@@ -97,8 +97,12 @@ export function ModelGroupRoutePreview({ routes, nameCandidates, resetKey }: {
           )}
           {orderedTrace.map((entry) => {
             const Icon = entry.state === 'picked' ? Check : entry.state === 'standby' ? CornerDownRight : Minus;
-            // 同一个来源的几个模型共用一份额度：备用的那几行不再重复写「先留着」。
-            const sameQuota = entry.state === 'standby' && !!picked?.quota && !!entry.quota
+            // 同一个来源（同供应商、同位置、同账号槽位）的几个模型共用一份额度：备用的那几行不再重复写「先留着」。
+            const sameSource = !!picked
+              && entry.providerId === picked.providerId
+              && (entry.agentDeviceId ?? null) === (picked.agentDeviceId ?? null)
+              && (entry.accountId ?? null) === (picked.accountId ?? null);
+            const sameQuota = entry.state === 'standby' && sameSource && !!picked?.quota && !!entry.quota
               && picked.quota.resetAtMs === entry.quota.resetAtMs && picked.quota.usedPercent === entry.quota.usedPercent;
             // 名字与路由里那一行相同(含运行位置)；设置页还没读到那边的目录时用这次选路读到的。
             const names = namesOf(entry, entry);

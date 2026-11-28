@@ -5,12 +5,14 @@
 import { isSessionActivityRunning } from '@cindy/maker-shared/session-activity';
 import type { ProviderView } from '@cindy/model-providers';
 import type { ModelGroupAgentKind, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
+import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getPluginModelPickerAgents, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { getGoalController } from '../goal-host/index.js';
+import { t } from '../i18n.desktop.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
@@ -21,13 +23,20 @@ import { fiveHourTightFor } from '../provider-group/scheduler.js';
 import { readProviderGroup } from '../provider-group/store.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
 import { readDeviceProviderCatalog, readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
-import { readSubscriptionPoolScheduling } from '../subscription-accounts/runtime.js';
+import {
+  listSubscriptionPoolSources,
+  readSessionBoundSubscriptionAccount,
+  onSubscriptionAccountsChanged,
+  readSubscriptionPool,
+  readSubscriptionPoolScheduling,
+} from '../subscription-accounts/runtime.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import { createAutoUsageProfileStore, readLocalAutoUsageSamples } from './autoUsageProfile.js';
 import type { ModelGroupInnerQuota } from './pick.js';
-import { modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
+import { modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS, type ModelGroupLocalAccountFact } from './resolver.js';
 import { createModelGroupRuntime, type ModelGroupRunningSession } from './runtimeCore.js';
+import type { SourceCatalogAccount } from './sourceRoutes.js';
 
 /** 选路时让额度总览保持采集这么久；面板没开时它平时不采集。 */
 const QUOTA_LEASE_MS = 5 * 60_000;
@@ -62,16 +71,31 @@ async function quotaWindows(options?: { cached?: boolean; dryRun?: boolean }) {
   const byProvider = new Map<string, (ModelGroupTraceQuota & { scopedTo?: string | null })[]>();
   for (const source of build?.input.sources ?? []) {
     if (source.kind !== 'subscription' || (source.device && source.lastSeenAtMs != null)) continue;
-    const location = source.shared ? source.id : source.device?.id;
-    const mapped = source.windows.map((window) => ({
+    const windows = source.windows.map((window) => ({
       usedPercent: window.usedPercent,
       resetAtMs: window.resetsAtMs,
       windowMs: window.windowMinutes * 60_000,
       ...(window.kind === 'scoped' ? { scopedTo: window.label ?? null } : {}),
     }));
+    const location = source.shared ? source.id : source.device?.id;
+    if (!location && source.pooled) {
+      const prefix = `${source.providerId}:account:`;
+      const accountId = source.id === source.providerId
+        ? 'default'
+        : source.id.startsWith(prefix)
+          ? source.id.slice(prefix.length)
+          : null;
+      if (accountId) {
+        const accountKey = modelGroupQuotaKey(undefined, source.providerId, accountId);
+        if (windows.length > 0 || !byProvider.has(accountKey)) byProvider.set(accountKey, windows);
+      }
+      if (!byProvider.has(modelGroupQuotaKey(undefined, source.providerId))) {
+        byProvider.set(modelGroupQuotaKey(undefined, source.providerId), windows);
+      }
+      continue;
+    }
     const key = modelGroupQuotaKey(location, source.providerId);
-    // 防止同 key 下无窗口的空条目把前面已有读数的条目覆盖成空。
-    if (mapped.length > 0 || !byProvider.has(key)) byProvider.set(key, mapped);
+    if (windows.length > 0 || !byProvider.has(key)) byProvider.set(key, windows);
   }
   return byProvider;
 }
@@ -84,6 +108,67 @@ function runningSessions(): ModelGroupRunningSession[] {
   return activities
     .filter(activity => activity.currentTurnActive ?? isSessionActivityRunning(activity))
     .map(({ sessionId }) => ({ id: sessionId, ...routes?.get(sessionId) }));
+}
+
+function accountDisplayLabel(label: string, index: number): string {
+  return label || (t('providerGroup.member.accountFallback' as never, { index: index + 1 } as never) as string);
+}
+
+function readLocalAccounts(views: readonly ProviderView[]): ReadonlyMap<string, readonly SourceCatalogAccount[]> {
+  const map = new Map<string, readonly SourceCatalogAccount[]>();
+  for (const view of views) {
+    if (!view.connected || view.suspended || view.removed) continue;
+    if (!isSubscriptionProvider(view.id) && !view.subscriptionPool && !view.subscriptionAccountPool) continue;
+    const raw = listSubscriptionPoolSources(view.id);
+    if (!raw || raw.length === 0) continue;
+    map.set(view.id, raw.map((item, index) => ({
+      ...item,
+      label: accountDisplayLabel(item.label, index),
+    })));
+  }
+  return map;
+}
+
+async function warmLocalAccounts(views: readonly ProviderView[]): Promise<void> {
+  const coldIds = views
+    .filter((view) => view.connected && !view.suspended && !view.removed
+      && (isSubscriptionProvider(view.id) || !!view.subscriptionPool || !!view.subscriptionAccountPool))
+    .filter((view) => {
+      const list = listSubscriptionPoolSources(view.id);
+      if (!list || list.length < 2) return false;
+      return list.some((item) => !item.paused && !item.apiConnectionId && (!item.accountKey || !item.label));
+    })
+    .map((view) => view.id);
+  if (coldIds.length === 0) return;
+  await Promise.all(coldIds.map((providerId) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const warm = readSubscriptionPool(providerId).then(() => {
+      if (settled) desktopModelGroupRuntime.refreshLocalAccounts();
+    }, () => undefined);
+    return Promise.race([
+      warm,
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, 1_500); }),
+    ]).finally(() => {
+      settled = true;
+      clearTimeout(timer);
+    });
+  }));
+}
+
+function readLocalAccountFact(providerId: string, accountId: string, model: string): ModelGroupLocalAccountFact | null {
+  const list = listSubscriptionPoolSources(providerId);
+  if (!list) return null;
+  const index = list.findIndex((item) => item.id === accountId);
+  if (index < 0) return null;
+  const item = list[index];
+  const modelOk = !item.supportedModelIds || item.supportedModelIds.has(model.replace(/^chatgpt\//, ''));
+  return {
+    available: item.usable && modelOk,
+    label: accountDisplayLabel(item.label, index),
+    running: item.running,
+    payAsYouGo: Boolean(item.apiConnectionId),
+  };
 }
 
 function innerQuota(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null> {
@@ -140,6 +225,9 @@ function ensurePluginEnginesSubscription(): void {
   pluginEnginesIpc.onPluginEnginesChanged?.(() => {
     desktopModelGroupRuntime.refreshLocalPluginEngines();
   });
+  onSubscriptionAccountsChanged(() => {
+    desktopModelGroupRuntime.refreshLocalAccounts();
+  });
 }
 
 export const desktopModelGroupRuntime = createModelGroupRuntime({
@@ -148,6 +236,10 @@ export const desktopModelGroupRuntime = createModelGroupRuntime({
     ensurePluginEnginesSubscription();
     return getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
   },
+  localAccounts: (views) => readLocalAccounts(views),
+  warmLocalAccounts: (views) => warmLocalAccounts(views),
+  localAccount: (providerId, accountId, model) => readLocalAccountFact(providerId, accountId, model),
+  taskAccount: (sessionId, providerId) => readSessionBoundSubscriptionAccount(sessionId, providerId),
   pluginEngines: () => pluginEnginesIpc.listPluginEngineViews(),
   localAgents: () => getPluginModelPickerAgents(),
   harnessInstalled: (agent, agentDeviceId) => isPluginRouteHarnessInstalled(agent, agentDeviceId, async (deviceId, name) => {

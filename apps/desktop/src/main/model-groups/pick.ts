@@ -362,6 +362,7 @@ export function pickModelGroupCandidate(
     const base = {
       agentKind: row.candidate.agentKind, providerId: row.candidate.providerId, model: row.candidate.model,
       ...(row.candidate.agentDeviceId ? { agentDeviceId: row.candidate.agentDeviceId } : {}),
+      ...(row.candidate.accountId ? { accountId: row.candidate.accountId } : {}),
       modelName: fact?.modelName || row.candidate.model, sourceName: fact?.sourceName || row.candidate.providerId,
       quota: row.quota,
     };

@@ -10,7 +10,10 @@ import { getDbClient } from '../localDb/client/current.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { messages } from '../localDb/schema.js';
 import { getSessionRowSnapshot, getSessionRowSnapshotStrict } from '../localDb/sessionDispatchSnapshot.js';
+import { markProviderGroupReleased } from '../provider-group/bindings.desktop.js';
+import { readProviderGroup } from '../provider-group/store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { bindSessionSubscriptionAccount } from '../subscription-accounts/runtime.js';
 import { desktopModelGroupRuntime, warmDesktopAutoUsageProfile } from './desktopResolver.js';
 import { createModelGroupHandlers, type ModelGroupHandlersPorts } from './handlersCore.js';
 import type { ModelGroupRouteNotePorts } from './routeNote.js';
@@ -52,6 +55,14 @@ export const desktopModelGroupHandlers = createModelGroupHandlers({
   readSessionTarget: (sessionId) => getSessionRowSnapshot(sessionId),
   readPendingSessionTarget: (sessionId) => pendingSelectionPorts.readPendingSessionTarget?.(sessionId) ?? null,
   markPendingModelGroupPick: (sessionId, pickedKey) => pendingSelectionPorts.markPendingModelGroupPick?.(sessionId, pickedKey),
+  pinLocalSource: async (sessionId, { providerId, accountId }) => {
+    if (accountId) {
+      await bindSessionSubscriptionAccount(sessionId, providerId, accountId).catch(() => undefined);
+    }
+    if (readProviderGroup(providerId)) {
+      await markProviderGroupReleased(sessionId, { providerId }).catch(() => undefined);
+    }
+  },
   routeNotePorts,
 });
 

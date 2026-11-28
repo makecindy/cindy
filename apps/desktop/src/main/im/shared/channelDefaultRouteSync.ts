@@ -92,6 +92,7 @@ export interface SessionRouteRow {
   /** 任务当前的工作目录; 只有仍在路由键绑定的项目里时才跟随那个项目的设置。 */
   workingDir?: string | null;
   imBotContextId: string | null;
+  imUserId?: string | null;
 }
 
 async function readSessionRouteRow(sessionId: string): Promise<SessionRouteRow | null> {
@@ -112,6 +113,7 @@ async function readSessionRouteRow(sessionId: string): Promise<SessionRouteRow |
       feishuOpenId: sessions.feishuOpenId,
       workingDir: sessions.workingDir,
       imBotContextId: sessions.imBotContextId,
+      imUserId: sessions.imUserId,
     })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
@@ -196,12 +198,14 @@ export function createImChannelDefaultRouteSync(deps: {
   routeOverrideFor?: (botContextId: string, userId: string) => ImLaneRouteOverride | null;
   /** 路由键绑定项目的设置(ImSessionNamespace.laneProjectDefaultsFor); 缺省 = 只看渠道设置。 */
   laneProjectDefaultsFor?: (botContextId: string, userId: string, workingDir: string) => ImLaneProjectDefaults | null;
+  /** 任务落在平台默认项目里时这个项目的设置(个人各平台的「项目」); 缺省 = 不看平台默认项目。 */
+  channelProjectDefaultsFor?: (workingDir: string) => ImLaneProjectDefaults | null;
 }): ImChannelDefaultRouteSync {
   const { source, config } = deps;
-  // 只有飞书行带得出路由键; 其他渠道没有实现这两个钩子。
+  // 复用建任务时保存的渠道路由键；飞书保留自己的历史列。
   const laneOf = (row: SessionRouteRow): { botContextId: string; userId: string } | null => {
-    const botContextId = source === 'feishu' ? row.feishuBotAppId : null;
-    const userId = source === 'feishu' ? row.feishuOpenId ?? null : null;
+    const botContextId = source === 'feishu' ? row.feishuBotAppId : row.imBotContextId;
+    const userId = source === 'feishu' ? row.feishuOpenId : row.imUserId;
     return botContextId && userId ? { botContextId, userId } : null;
   };
   // 这条任务此刻跟随什么: 路由键固定的路由 > 任务所在的绑定项目 > 渠道「新对话配置」。
@@ -209,13 +213,17 @@ export function createImChannelDefaultRouteSync(deps: {
     | { kind: 'channel'; override: ImLaneRouteOverride | null }
     | { kind: 'project'; project: ImLaneProjectDefaults } => {
     const lane = laneOf(row);
-    if (!lane) return { kind: 'channel', override: null };
-    const override = deps.routeOverrideFor?.(lane.botContextId, lane.userId) ?? null;
-    if (override) return { kind: 'channel', override };
-    const project = row.workingDir
-      ? deps.laneProjectDefaultsFor?.(lane.botContextId, lane.userId, row.workingDir) ?? null
-      : null;
-    return project ? { kind: 'project', project } : { kind: 'channel', override: null };
+    if (lane) {
+      const override = deps.routeOverrideFor?.(lane.botContextId, lane.userId) ?? null;
+      if (override) return { kind: 'channel', override };
+      const project = row.workingDir
+        ? deps.laneProjectDefaultsFor?.(lane.botContextId, lane.userId, row.workingDir) ?? null
+        : null;
+      if (project) return { kind: 'project', project };
+    }
+    // 路由键自己没指定时, 落在平台默认项目里的任务跟随这个项目。
+    const channelProject = row.workingDir ? deps.channelProjectDefaultsFor?.(row.workingDir) ?? null : null;
+    return channelProject ? { kind: 'project', project: channelProject } : { kind: 'channel', override: null };
   };
   return createDefaultRouteFollower({
     label: source,

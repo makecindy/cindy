@@ -540,6 +540,10 @@ export function getGlobalOverlayPasteContext(): MacPasteContext | null {
   return overlayPasteContext;
 }
 
+export function getGlobalOverlayPasteTarget(): MacPasteTarget | null {
+  return overlayPasteTarget;
+}
+
 /**
  * Same as getGlobalOverlayPasteContext, but waits up to `timeoutMs` for an
  * in-flight capture to finish first. Capture is fired off when the overlay
@@ -551,14 +555,29 @@ export function getGlobalOverlayPasteContext(): MacPasteContext | null {
 export async function awaitGlobalOverlayPasteContext(
   options?: { timeoutMs?: number },
 ): Promise<MacPasteContext | null> {
-  if (overlayPasteContext) return overlayPasteContext;
-  if (!overlayPasteTargetPromise) return null;
+  const snapshot = await awaitGlobalOverlayPasteSnapshot(options);
+  return snapshot.context;
+}
+
+/**
+ * Awaits the in-flight overlay target + AX context capture (bounded by
+ * `timeoutMs`) and returns both the foreground app target and AX surroundings.
+ */
+export async function awaitGlobalOverlayPasteSnapshot(
+  options?: { timeoutMs?: number },
+): Promise<{ context: MacPasteContext | null; target: MacPasteTarget | null }> {
+  if (overlayPasteContext && overlayPasteTarget) {
+    return { context: overlayPasteContext, target: overlayPasteTarget };
+  }
+  if (!overlayPasteTargetPromise) {
+    return { context: overlayPasteContext, target: overlayPasteTarget };
+  }
   const timeoutMs = options?.timeoutMs ?? 800;
   await Promise.race([
     overlayPasteTargetPromise.catch(() => null),
     new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
   ]);
-  return overlayPasteContext;
+  return { context: overlayPasteContext, target: overlayPasteTarget };
 }
 
 /**

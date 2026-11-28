@@ -15,8 +15,9 @@ import { getSessionProvider, hasSessionProvider } from '../maker-host/session-pr
 import { recordModelGroupDecision } from './decisionLog.js';
 import { autoUsageSourceKey, type AutoUsageProfileSnapshot } from './autoUsageProfile.js';
 import type { ModelGroupInnerQuota } from './pick.js';
-import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
+import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS, type ModelGroupResolverDeps } from './resolver.js';
 import { readModelGroupBindingForDispatch, readModelGroupSessionBinding } from './sessionBindings.js';
+import type { SourceCatalogAccount } from './sourceRoutes.js';
 import { createSshModelGroupSupport } from './sshFilter.js';
 import { readModelGroupsConfigForSelected, setModelGroupSourceCatalog } from './store.js';
 import {
@@ -46,6 +47,11 @@ export interface ModelGroupRunningSession {
 export interface ModelGroupRuntimePorts {
   scope(): string;
   localViews(): Promise<ProviderView[]>;
+  localAccounts?(views: readonly ProviderView[]): ReadonlyMap<string, readonly SourceCatalogAccount[]>;
+  warmLocalAccounts?(views: readonly ProviderView[]): Promise<void>;
+  localAccount?: ModelGroupResolverDeps['localAccount'];
+  /** 任务在本机账号池里实际绑定的账号(订阅账号池的任务绑定)。 */
+  taskAccount?(sessionId: string, providerId: string): string | undefined;
   pluginEngines?(): readonly PluginEngineView[];
   localAgents(): readonly string[];
   harnessInstalled(agent: string, agentDeviceId?: string): Promise<boolean>;
@@ -88,8 +94,10 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     const scope = ports.scope();
     if (lastLocal?.scope !== scope) return;
     const { views, pluginEngines } = lastLocal;
+    const localAccounts = ports.localAccounts ? ports.localAccounts(views) : undefined;
     setModelGroupSourceCatalog({
       views,
+      ...(localAccounts && localAccounts.size > 0 ? { localAccounts } : {}),
       pluginEngines,
       agents: ports.localAgents(),
       ...(remoteCatalogs?.scope === scope ? {
@@ -107,6 +115,13 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     const scope = ports.scope();
     if (lastLocal?.scope === scope && ports.pluginEngines) {
       lastLocal = { ...lastLocal, pluginEngines: ports.pluginEngines() };
+      publishCatalog();
+    }
+  }
+
+  function refreshLocalAccounts(): void {
+    const scope = ports.scope();
+    if (lastLocal?.scope === scope) {
       publishCatalog();
     }
   }
@@ -181,8 +196,13 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
 
   async function readLocalViews(): Promise<ProviderView[]> {
     const views = await ports.localViews();
-    lastLocal = { scope: ports.scope(), views, pluginEngines: ports.pluginEngines ? ports.pluginEngines() : [] };
+    const scope = ports.scope();
+    lastLocal = { scope, views, pluginEngines: ports.pluginEngines ? ports.pluginEngines() : [] };
     publishCatalog();
+    if (ports.warmLocalAccounts) {
+      await ports.warmLocalAccounts(views).catch(() => undefined);
+      if (lastLocal?.scope === scope) publishCatalog();
+    }
     void readRemoteCatalogs();
     return views;
   }
@@ -216,6 +236,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     agents: () => ports.localAgents(),
     harnessInstalled: (agent, agentDeviceId) => ports.harnessInstalled(agent, agentDeviceId),
     quotaWindows: (options) => ports.quotaWindows(options),
+    localAccount: ports.localAccount ? (providerId, accountId, model) => ports.localAccount!(providerId, accountId, model) : undefined,
     innerQuota: ports.innerQuota ? (source) => ports.innerQuota!(source) : undefined,
     usageProfile: ports.usageProfile ? (options) => ports.usageProfile!(options) : undefined,
     runningSourceCounts: () => {
@@ -264,6 +285,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     return evaluateModelGroupBeforeSend(
       {
         readBinding: readModelGroupBindingForDispatch,
+        ...(ports.taskAccount ? { readTaskAccount: ports.taskAccount } : {}),
         config: readModelGroupsConfigForSelected,
         candidateFacts: (route, context, options) => resolver.candidateFacts(route, context, options),
         now,
@@ -323,6 +345,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     localProviderView,
     autoModelPriorities,
     refreshLocalPluginEngines,
+    refreshLocalAccounts,
     refreshAutoModelGroupRoutes,
     readModelGroupRecoveryOffer,
     evaluateTurnRouting,
