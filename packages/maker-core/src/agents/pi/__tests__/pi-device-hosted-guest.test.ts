@@ -449,7 +449,7 @@ describe('Pi device-hosted guest sessions', () => {
       ]);
       expect(repeatedArgValues(args, '--skill')).toEqual(expect.arrayContaining([
         realpathSync(path.join(cwd, '.pi', 'skills', 'demo')),
-        path.join(configHome, 'cindy-managed-skills'),
+        path.join(root, 'managed', 'learn', 'SKILL.md'),
       ]));
       expect(existsSync(path.join(extensionsDir, CINDY_GUEST_CONTEXT_EXTENSION_FILENAME))).toBe(false);
       expect(readFileSync(path.join(configHome, 'AGENTS.md'), 'utf8')).toBe('HOST GLOBAL RULES');
