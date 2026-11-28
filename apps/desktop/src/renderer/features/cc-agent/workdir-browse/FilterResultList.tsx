@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { FILTER_RESULT_LIMIT } from './lib/filterFiles';
+import { basename, fileDirectoryLabel } from './lib/fileMeta';
 
 export interface FilterResultListProps {
   files: readonly string[];
@@ -68,9 +69,8 @@ export function FilterResultList({
     <div className="rsb-fbody-tree-scroll min-h-0 flex-1">
       <div className="flex h-full w-full flex-col gap-px overflow-y-auto py-2">
         {files.map((relPath) => {
-          const slash = relPath.lastIndexOf('/');
-          const basename = slash < 0 ? relPath : relPath.slice(slash + 1);
-          const dirname = slash < 0 ? '' : relPath.slice(0, slash);
+          const name = basename(relPath);
+          const directory = fileDirectoryLabel(relPath);
           const selected = relPath === selectedPath;
           return (
             <button
@@ -85,12 +85,10 @@ export function FilterResultList({
                   : 'text-foreground hover:bg-sidebar-item-hover',
               )}
             >
-              <FileTypeIcon name={basename} size={14} className="shrink-0 text-sidebar-muted" />
+              <FileTypeIcon name={name} size={14} className="shrink-0 text-sidebar-muted" />
               <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                <span className="truncate">{basename}</span>
-                {dirname && (
-                  <span className="truncate text-10 text-sidebar-muted">{dirname}</span>
-                )}
+                <span className="truncate">{name}</span>
+                <span className="break-all text-12 text-sidebar-muted">{directory}</span>
               </span>
             </button>
           );
