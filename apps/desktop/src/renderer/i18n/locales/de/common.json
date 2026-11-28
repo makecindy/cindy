@@ -18822,6 +18822,7 @@
       "subtitlePaused": "Pausiert",
       "subtitleWaitingForResources": "Wartet auf einen freien Platz ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "Wartet, bis die Sitzung inaktiv ist",
+      "subtitleDeferredForSession": "{{reason}} · {{count}}× aufgeschoben",
       "subtitleManual": "Manuell",
       "subtitleOnce": "Einmalig",
       "tagOnce": "Einmalig",
@@ -18840,6 +18841,7 @@
     },
     "detail": {
       "manualTrigger": "Manueller Auslöser",
+      "deferredBanner": "{{reason}} · seit {{since}} {{count}}× aufgeschoben",
       "recentRuns": "LETZTE AUSFÜHRUNGEN · {{count}}",
       "noRunsHeading": "Noch keine Ausführungen",
       "noRunsHint": "Klicke auf „Jetzt ausführen“ oder warte auf den nächsten geplanten Zeitpunkt.",
@@ -19608,6 +19610,12 @@
       "cleanMergedConfirmAction": "Löschen",
       "cleanMergedDone": "{{count}} abgeschlossene PR-Automatisierungen gelöscht",
       "checkFailed": "PR-Status kann derzeit nicht geprüft werden"
+    },
+    "deferral": {
+      "busy": "Warte auf freie Zielaufgabe",
+      "usage": "Warte auf Zurücksetzung des Nutzungslimits",
+      "permission": "Warte auf Berechtigungsstatus",
+      "other": "Ausführung aufgeschoben"
     }
   },
   "issueTracker": {

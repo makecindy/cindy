@@ -18747,6 +18747,7 @@
       "subtitlePaused": "已暂停",
       "subtitleWaitingForResources": "等待执行资源（当前 {{inFlight}}/{{max}}）",
       "subtitleQueuedForSession": "排队等待任务空闲",
+      "subtitleDeferredForSession": "{{reason}}，已顺延 {{count}} 次",
       "subtitleManual": "手动",
       "subtitleOnce": "单次",
       "tagOnce": "单次",
@@ -18765,6 +18766,7 @@
     },
     "detail": {
       "manualTrigger": "手动触发",
+      "deferredBanner": "{{reason}}；自 {{since}} 起已顺延 {{count}} 次",
       "recentRuns": "最近运行 · {{count}}",
       "noRunsHeading": "暂无运行记录",
       "noRunsHint": "点击「立即运行」，或等待下次定时触发。",
@@ -19533,6 +19535,12 @@
       "cleanMergedConfirmAction": "删除",
       "cleanMergedDone": "已删除 {{count}} 条已结束的 PR 自动化",
       "checkFailed": "暂时无法检查 PR 状态"
+    },
+    "deferral": {
+      "busy": "正等待目标任务空闲",
+      "usage": "正等待额度恢复",
+      "permission": "正等待权限状态可用",
+      "other": "已顺延执行"
     }
   },
   "issueTracker": {

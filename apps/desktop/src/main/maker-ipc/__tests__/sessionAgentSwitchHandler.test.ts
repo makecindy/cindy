@@ -179,6 +179,32 @@ it.each([
   expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
 });
 
+// PR #13634 review, unit: a Smart Routing account source can move a task to another account of the
+// same provider with engine, model and computer unchanged. The old same-engine no-op kept the native
+// session owned by the old account. Exercise the real transaction: it must close that session, never
+// reuse a parked one, and bind the new account after the route commits but before the fresh start.
+it('rebuilds a same-engine route when Smart Routing moves the task to another local account', async () => {
+  let row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', agentDeviceId: null });
+  const order: string[] = [];
+  const { deps, calls } = makeDeps({
+    getSessionRow: vi.fn(async () => ({ ...row })),
+    findParkedEngineSession: vi.fn(async () => ({ sdkSessionId: 'old-account-history', watermarkCreatedAt: 1, watermarkRowid: 1 })),
+    applyAgentSwitchToDb: vi.fn(async (_id, patch) => { order.push('db'); row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+    bootstrapSwitchedSession: vi.fn(async () => { order.push('bootstrap'); }),
+  });
+  const commit = vi.fn(async () => { order.push('bind-account'); });
+  const result = await performSessionAgentSwitch(deps, {
+    ...validParams, model: 'gpt-5.5', providerId: 'openai', applyNow: true, configStaged: true, preserveModelGroupBinding: true,
+    localSubscriptionAccount: { changes: true, commit },
+  });
+  expect(result).toMatchObject({ switched: true, engineReady: true });
+  expect(calls[0]).toBe('close');
+  expect(deps.findParkedEngineSession).not.toHaveBeenCalled();
+  expect(row).toMatchObject({ providerId: 'openai', model: 'gpt-5.5', sdkSessionId: null });
+  expect(order).toEqual(['db', 'bind-account', 'bootstrap']);
+  expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
+});
+
 it('rejects an unavailable same-device connection before closing or changing the source', async () => {
   const { deps } = makeDeps({
     getSessionRow: vi.fn(async () => makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' })),

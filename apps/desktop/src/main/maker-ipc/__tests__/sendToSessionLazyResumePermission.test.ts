@@ -1205,3 +1205,58 @@ describe('unbound Codex pre-send history wiring', () => {
     expect(failover).not.toHaveBeenCalled();
   });
 });
+
+// 依据：send_to_session create 分支在省略 working_dir 时此前缺省落到 bypassPermissions，
+// 使 ask / auto / plan 会话借创建独立子任务（或解耦任务）静默提权；
+// 既有测试只覆及插件显式传 inheritSourcePermissionMode:true 与跨电脑创建；
+// 最小失败输入：dispatcher 权限为 ask/auto/plan 且未传 workingDir / inheritSourcePermissionMode。tier: guard。
+describe('sendToSessionInternal create non-escalating permission inheritance', () => {
+  it.each(['ask', 'auto', 'plan', 'bypassPermissions'] as const)(
+    'inherits dispatcher permissionMode=%s without silently escalating to bypassPermissions',
+    async (sourceMode) => {
+      const openSessionCalls: Array<Record<string, unknown>> = [];
+      const dbChain = {
+        from: () => dbChain,
+        where: () => dbChain,
+        limit: async () => [{ id: 'source', title: 'Source', permissionMode: sourceMode, effort: 'medium', fastMode: false, providerId: 'anthropic' }],
+      };
+      const h = botTaskDispatchHarness({}, {}, {
+        getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+        openSession: async (input: { body: Record<string, unknown> }, run: (row: Record<string, unknown>, assertCurrent: () => void) => Promise<unknown>) => {
+          openSessionCalls.push(input.body);
+          const row = { id: 'created-task', ...input.body };
+          const value = await run(row, () => {});
+          return { row, value };
+        },
+        broadcastSessionCreated: () => {},
+        readClaudeApiKey: () => 'fixture-key',
+        getProviderRoutingContext: async () => ({
+          availability: { 'claude-code': [{ id: 'anthropic', name: 'Anthropic', models: ['claude-opus-fixture'] }], codex: [], pi: [] },
+          resolveDefaultProviderIdForModel: () => 'anthropic',
+        }),
+        maker: {
+          getSession: () => undefined,
+          getSessionMeta: async () => ({
+            id: 'source',
+            agentKind: 'claude-code',
+            workDir: '/tmp/fixture/source',
+            projectDir: null,
+            workspaceKind: 'dialogue',
+            model: 'claude-opus-fixture',
+            remoteHostId: null,
+          }),
+          getCapabilities: () => ({ availableModels: [{ id: 'claude-opus-fixture' }] }),
+        },
+      });
+      const res = await h.sendToSessionInternal({
+        dispatcherSessionId: 'source',
+        message: 'Follow PR #122 in an independent task',
+        title: '#122 Fix deadlock',
+      });
+      expect(res).toMatchObject({ ok: true, wakeKind: 'created' });
+      expect(openSessionCalls).toHaveLength(1);
+      expect(openSessionCalls[0]?.permissionMode).toBe(sourceMode);
+      expect(h.bootstrapped[0]?.permissionMode).toBe(sourceMode);
+    },
+  );
+});
