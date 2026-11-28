@@ -3,7 +3,7 @@ import { LIBRARY_READ_ROOT } from '@cindy/maker-core';
 import { libraryExtraDirSlot } from '../../maker-ipc/extraDirsValidator.js';
 import { createPersonalizationRefresh } from '../refreshOnSend.js';
 
-function fixture(kind: 'pi' | 'claude-code' | 'codex' = 'pi', proxy = false) {
+function fixture(kind: 'pi' | 'claude-code' | 'codex' | 'acp' = 'pi', proxy = false) {
   const original = {
     agentKind: kind, sdkSessionId: 'native-history', remoteHostId: null, agentDeviceId: null,
     hostStartupPreferences: { userPrompt: 'old', makerMemoryEnabled: true },
@@ -86,6 +86,15 @@ describe('personal instructions at the next user send', () => {
     expect(deps.rebuild).toHaveBeenCalledWith(expect.objectContaining({
       opts: expect.objectContaining({ extraDirs: ['/readonly', '/library'], [LIBRARY_READ_ROOT]: '/library' }),
     }));
+  });
+
+  // Upstream #13564 adds ACP instructions at session start. The existing refresh
+  // cases only cover built-in engines. A live ACP session with a changed prompt
+  // must still supply its current handle to the send transaction (unit).
+  it('keeps a live ACP session usable after the personal instructions change', async () => {
+    const { original, deps, send } = fixture('acp');
+    expect(await send()).toBe(original);
+    expect(deps.rebuild).not.toHaveBeenCalled();
   });
 
   it('keeps the original handle when native Codex cannot replace the instructions reliably', async () => {

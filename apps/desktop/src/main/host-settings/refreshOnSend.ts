@@ -44,6 +44,9 @@ export function createPersonalizationRefresh<Owner extends object, Live extends 
       if (previous && !live) throw new Error('Retry the user message to resume the original Agent history.');
       return live;
     }
+    // ACP negotiates personal instructions when opening its session. Keep the
+    // existing handle usable until a normal lifecycle event opens it again.
+    if (live?.agentKind === 'acp') return live;
     if (!previous && (!live?.hostStartupPreferences || live.remoteHostId || live.agentDeviceId ||
         live.getStatus() !== 'active')) return live;
 
