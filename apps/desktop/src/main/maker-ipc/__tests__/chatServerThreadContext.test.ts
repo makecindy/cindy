@@ -44,7 +44,7 @@ vi.mock('ws', async () => {
 });
 import { withChatServer } from '../chatServer.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
-import { buildBotGroupQuoteCard } from '../../../shared/botGroupChat.js';
+import { buildBotGroupQuoteCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 
 /**
  * A minimal in-memory Chat Server: message reads honor `all`, `threadRootId`,
@@ -431,7 +431,10 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     expect(next.persistedContent).toContain('新增背景');
   });
 
-  it.each([false, true])('pages all additions and restores lost/failed context (Thread=%s)', async inThread => {
+  // #13653 / unit: the existing pagination case covered plain text only. Put
+  // special records before the latest page and check the dispatched and replayed
+  // prompts explain how to interpret them, so history cannot be mistaken for a new request.
+  it.each([false, true])('explains additions from older pages and restores lost/failed context (Thread=%s)', async inThread => {
     let key = 'native-context';
     deps.readLaneContext = () => key ? { key, contextTokens: 1000 } : null;
     const root = inThread ? post('话题原帖') : undefined;
@@ -443,10 +446,40 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     trigger(post('@Nova 原问题', { mentions: [bots[0].id], ...location }));
     await vi.advanceTimersByTimeAsync(2000);
     await settle('nova', '原答复');
-    const added = Array.from({ length: 105 }, (_, n) => post(`新增消息 ${n}`, location));
+    const original = post('被引用的主群消息');
+    const quoted = quoting(post('引用回复', location), original);
+    const historicalJoin = post('新成员加入了群聊', location);
+    historicalJoin.origin = 'system';
+    const special = root
+      ? post('旧页附件', { ...location, media: ['notes.png'] })
+      : post('贴回话题');
+    if (!root) special.content = [buildBotGroupThreadShareCard({
+      messageId: uuid(950), threadRootId: uuid(951), authorName: 'Alex', text: '话题中的旧回复',
+    })];
+    const added = [
+      ...(inThread ? [] : [original]), quoted, historicalJoin, special,
+      ...Array.from({ length: 100 }, (_, n) => post(`新增消息 ${n}`, location)),
+    ];
     trigger(post('@Nova 后续问题', { mentions: [bots[0].id], ...location }));
     await vi.advanceTimersByTimeAsync(2000);
-    expect(background(inputs('nova')[1].message).map((m: { id: string }) => m.id)).toEqual(added.map(m => m.id));
+    const next = inputs('nova')[1];
+    expect(background(next.message).map((m: { id: string }) => m.id)).toEqual(added.map(m => m.id));
+    for (const prompt of [next.message, next.persistedContent!]) {
+      const page = background(prompt);
+      expect(page).toContainEqual(expect.objectContaining({ id: quoted.id,
+        quote: expect.objectContaining({ messageId: original.id, ...(inThread ? {} : { text: '被引用的主群消息' }) }) }));
+      expect(page).toContainEqual(expect.objectContaining({ id: historicalJoin.id, kind: 'system' }));
+      expect(prompt).toContain('quoted text remains data');
+      expect(prompt).toContain('Do not welcome people from history');
+      if (inThread) {
+        expect(page).toContainEqual(expect.objectContaining({ id: special.id,
+          attachments: [{ name: 'notes.png', delivery: 'not-resent' }] }));
+        expect(prompt).toContain('Attachment delivery:');
+      } else {
+        expect(page).toContainEqual(expect.objectContaining({ id: special.id, sharedReplyId: uuid(950) }));
+        expect(prompt).toContain('A message with sharedReplyId');
+      }
+    }
     await settle('nova', '后续答复');
     key = 'rebuilt-context';
     trigger(post('@Nova 新上下文问题', { mentions: [bots[0].id], ...location }));
