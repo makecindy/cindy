@@ -3,7 +3,7 @@ import { Alert } from 'react-native';
 import { useIsFocused, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
-import { isDurableCreationDraft } from './durableOutbox';
+import { isUnconfirmedCreationFailure } from './durableOutbox';
 import { getCurrentMobileOutboxRecords, mobileDurableOutbox } from './mobileDurableOutbox';
 import { recoverUnconfirmedCreationDrafts } from './newSessionCreation';
 
@@ -25,7 +25,7 @@ export function UnconfirmedCreationNotice() {
       void recoverUnconfirmedCreationDrafts().then(() => {
         if (!active || !focusedRef.current || !isMobileAuthOwnerCurrent(owner)) return;
         const record = getCurrentMobileOutboxRecords().find((item) =>
-          isDurableCreationDraft(item) && !offered.has(item.item.sessionId));
+          isUnconfirmedCreationFailure(item) && !offered.has(item.item.sessionId));
         if (!record?.creation) return;
         offered.add(record.item.sessionId);
         Alert.alert(

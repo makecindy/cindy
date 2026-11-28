@@ -104,6 +104,13 @@ export function isDurableCreationDraft(record: DurableOutboxRecord): boolean {
     && !record.cancelRequested && !isDurableOutboxSettled(record);
 }
 
+/** Host never confirmed this create. A user-cancelled draft stays recoverable without the failure prompt. */
+export function isUnconfirmedCreationFailure(record: DurableOutboxRecord): boolean {
+  return isDurableCreationDraft(record)
+    && record.creation?.editReady === true
+    && record.creation.cancelled !== true;
+}
+
 /**
  * 已移交被控端的记录:持久投递已收下(或已落定)。会话 FIFO 只派发第一条未移交的记录,
  * 移交后的记录只做对账,不再挡后面的消息。
