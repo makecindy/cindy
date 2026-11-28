@@ -99,12 +99,13 @@ beforeEach(() => {
 });
 
 // Unit / A04：补齐完整群正文的链接覆盖；HTTP(S) 可打开，本机及任务链接保持不可操作。
+// 裸链接显示两端共用的短标签（externalLinkLabel），点开仍是完整地址；作者写的文字不变。
 it('opens HTTP(S) links in rich group bodies while local and task links stay inert', async () => {
   await act(async () => root.render(createElement(BotGroupMarkdownText, {
     richContent: true,
     content: '[网页](https://example.com/a) http://example.com/b [文件](/private/report.md) [任务](cindy://session/private)',
   })));
-  for (const label of ['网页', 'http://example.com/b']) {
+  for (const label of ['网页', 'example.com/b']) {
     const span = [...node.querySelectorAll('span')].filter(el => el.textContent === label).at(-1)!;
     await act(async () => span.click());
     expect(styleOf(label).textDecorationLine).toBe('underline');
@@ -116,6 +117,19 @@ it('opens HTTP(S) links in rich group bodies while local and task links stay ine
     expect(styleOf(label).textDecorationLine).toBeUndefined();
   }
   expect(actions.open).toHaveBeenCalledTimes(2);
+});
+
+// Unit：裸 GitHub 链接显示与桌面胶囊同一短写法，并带会话链接 chip 的底色；点开仍是完整地址。
+it('shows bare GitHub links as chip-filled short references in rich group bodies', async () => {
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    richContent: true,
+    content: '看 https://github.com/makecindy/cindy/pull/13638 和 https://example.com/a',
+  })));
+  expect(styleOf('makecindy/cindy#13638')).toMatchObject({ textDecorationLine: 'underline', backgroundColor: palettes.light.surfaceChip });
+  expect(styleOf('example.com/a').backgroundColor).toBeUndefined();
+  const span = [...node.querySelectorAll('span')].filter(el => el.textContent === 'makecindy/cindy#13638').at(-1)!;
+  await act(async () => span.click());
+  expect(actions.open.mock.calls.map(call => call[0])).toEqual(['https://github.com/makecindy/cindy/pull/13638']);
 });
 
 // Unit / A04：复制不含围栏、图表传递原文、公式挂载现有 WebView；原生宿主用 fake 替代。
@@ -141,10 +155,13 @@ it('keeps group image selection free of link, code-copy and diagram actions', as
   const openDiagram = vi.fn();
   await act(async () => root.render(createElement(BotGroupMarkdownText, {
     richContent: true, interactive: false, onOpenDiagram: openDiagram,
-    content: '[网页](https://example.com)\n\n```js\nconst a = 1;\n```\n\n```mermaid\ngraph LR\nA --> B\n```',
+    content: '[网页](https://example.com) https://github.com/makecindy/cindy/pull/13638\n\n```js\nconst a = 1;\n```\n\n```mermaid\ngraph LR\nA --> B\n```',
   })));
   await act(async () => [...node.querySelectorAll('span')].filter(el => el.textContent === '网页').at(-1)!.click());
+  await act(async () => [...node.querySelectorAll('span')].filter(el => el.textContent === 'makecindy/cindy#13638').at(-1)!.click());
   expect(actions.open).not.toHaveBeenCalled();
+  expect(styleOf('makecindy/cindy#13638').backgroundColor).toBe(palettes.light.surfaceChip);
+  expect(styleOf('makecindy/cindy#13638').textDecorationLine).toBeUndefined();
   expect(node.querySelector('[data-testid="message.markdownCodeCopyButton"]')).toBeNull();
   expect(node.querySelector('[data-testid="botGroup.openDiagram"]')).toBeNull();
   expect(styleOf('const').color).toBe(palettes.light.syntaxKeyword);
@@ -192,6 +209,22 @@ it('expands a short table to the measured message width without changing code bl
   const widths = [...row.children].map(cell => JSON.parse(cell.getAttribute('data-style')!).width);
   expect(widths.reduce((a, b) => a + b, 0)).toBe(280);
   expect(styleOf('a | b').fontFamily).toBe('Menlo');
+});
+
+// Full group table: two long URL tokens would overflow the viewport if width
+// were measured from the source instead of the rendered GitHub references.
+it('fits a group table to the visible link labels, including in image selection', async () => {
+  const repo = 'https://github.com/a/b';
+  const url = `${repo}/blob/main/${'folder/'.repeat(12)}`;
+  const content = `| PR | 文件 |\n| --- | --- |\n| ${repo}/pull/42 | ${url}a.md |`;
+  const props = { content, richContent: true };
+  for (const interactive of [true, false]) {
+    await act(async () => root.render(createElement(BotGroupMarkdownText, { ...props, interactive })));
+    const table = node.querySelector('section')!.firstElementChild!;
+    const cells = [...table.lastElementChild!.children];
+    expect(cells.map(cell => cell.textContent)).toEqual(['a/b#42', 'a/b/a.md']);
+    expect(cells.reduce((sum, cell) => sum + JSON.parse(cell.getAttribute('data-style')!).width, 0)).toBe(280);
+  }
 });
 afterEach(() => {
   act(() => root.unmount());

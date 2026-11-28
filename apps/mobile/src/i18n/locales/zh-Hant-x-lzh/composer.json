@@ -107,7 +107,8 @@
     "recognitionStalled": "語音識別未續返結果，請再試。",
     "transcriptKept": "{{message}}（所識之文字已存，可逕修之）",
     "micPermission": "麥克風權限未開，請於系統設定中允許 {{appName}} 使用麥克風。",
-    "realtimeAudioUnavailable": "此安裝包不支援即時聲之輸入，請安裝含原生錄音模組之測試版。"
+    "realtimeAudioUnavailable": "此安裝包不支援即時聲之輸入，請安裝含原生錄音模組之測試版。",
+    "retryRecognition": "重辨"
   },
   "incomingShare": {
     "title": "遣至 Cindy",

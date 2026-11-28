@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
+import { createIpcError, missingBotModelError } from '../../../shared/ipc-errors.js';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import type { CompanionCloudActionResult } from '../../../shared/companionCloud.js';
 import { createCompanionHomeRegistry } from '../homes.js';
@@ -423,6 +424,28 @@ describe('take over', () => {
       prefRevision = 2;
       expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
       expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ identitySource: 'ok' }), expect.anything());
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  // #13642, unit: only the model-specific refusal during automatic recovery should explain
+  // the shadow; retry with a working route must restore the original conversation.
+  it('identifies a missing model on automatic take-over and clears it after recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup({ home: 'desk' });
+      vi.mocked(t.local.host.ensureCanonicalSession)
+        .mockRejectedValueOnce(createIpcError('PRECONDITION_FAILED', 'other'))
+        .mockRejectedValueOnce(missingBotModelError())
+        .mockRejectedValueOnce(missingBotModelError());
+      for (const [attempt, needsSetup] of [false, true, true, false].entries()) {
+        if (attempt) await vi.advanceTimersByTimeAsync(60_000);
+        await t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(t.runtime.needsModelSetup('bot_mia')).toBe(needsSetup);
+        expect(t.state.isDemoted('bot_mia')).toBe(attempt < 3);
+      }
+      expect(t.log.warn.mock.calls.filter(([message]) => message === 'Companion take-over waiting for a local model')).toHaveLength(1);
+      expect(t.state.bot('bot_mia')?.roomId).toBe(ROOM);
     } finally { runtime?.dispose(); vi.useRealTimers(); }
   });
 

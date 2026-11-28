@@ -31,6 +31,20 @@ describe('parseModelsSyncPayload', () => {
     },
   );
 
+  it.each(['available', 'requires_payment'] as const)(
+    'accepts standalone realtime from the opted-in v5 catalog (%s)',
+    (availability) => {
+      const model = {
+        id: 'gpt-realtime-mini', name: 'GPT Realtime Mini', mode: 'realtime',
+        currency: 'USD', agents: [], availability,
+        inputCostPerAudioToken: 0.00001, outputCostPerAudioToken: 0.00002,
+        modalities: { input: ['text', 'audio'], output: ['text', 'audio'] },
+      };
+      expect(parseModelsSyncPayload({ schemaVersion: 5, accountTier: 'paid', models: [model] }))
+        .toEqual({ ok: true, accountTier: 'paid', models: [model] });
+    },
+  );
+
   it('accepts quote removal or an unsupported quote as a successful replacement', () => {
     const model = {
       id: 'example-video', name: 'Example Video', mode: 'video_generation',
@@ -259,7 +273,7 @@ describe('waitForModelsSyncRefresh', () => {
         baseUrl: 'https://model-access.example.com',
         timeoutMs: 20_000,
         cache: 'no-store',
-        headers: { 'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing,evaluation,rerank' },
+        headers: { 'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing,evaluation,realtime,rerank' },
       },
     });
     expect(Number.isFinite(XD_MODELS_SYNC_TIMEOUT_MS)).toBe(true);

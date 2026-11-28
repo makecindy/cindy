@@ -380,8 +380,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
         </div>
         {isEditing && (
           <FieldVoiceInputNotice
-            error={voice.lastError}
-            speakerFiltered={voice.speakerFiltered}
+            {...voice.noticeProps}
             className="mt-2"
           />
         )}

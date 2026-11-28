@@ -68,6 +68,7 @@ export * from './workActivityProjection.js';
 export * from './worktreePaths.js';
 export * from './sessionPrRefs.js';
 export * from './githubRead.js';
+export * from './externalLink.js';
 export * from './taskTags';
 
 export * from './workingStatus.js';
