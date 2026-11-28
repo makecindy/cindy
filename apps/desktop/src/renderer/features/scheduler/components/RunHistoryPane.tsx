@@ -37,6 +37,7 @@ import { cronToConfig, formatIntervalDuration, summarizeConfig } from '../lib/cr
 import { describeDestination, humanizeAgentKind } from '../lib/formatters';
 import { useProjectLabel } from '../hooks/useProjectLabel';
 import { groupRunsForHistory } from '../lib/runHistoryGrouping';
+import { deferralReasonKey } from '../lib/deferralReason';
 
 import { RunHistoryCard } from './RunHistoryCard';
 import { WebhookTriggerPanel } from './WebhookTriggerPanel';
@@ -297,12 +298,13 @@ export function RunHistoryPane({
               className="truncate text-xs text-[var(--text-secondary)]"
               title={
                 deferral.lastReason
-                  ? `${new Date(deferral.firstAt).toLocaleString(appI18n.language)} · ${deferral.lastReason}`
+                  ? `${new Date(deferral.firstAt).toLocaleString(appI18n.language)} · ${t(`scheduler.deferral.${deferralReasonKey(deferral.lastReason)}`)}`
                   : new Date(deferral.firstAt).toLocaleString(appI18n.language)
               }
             >
               {t('scheduler.detail.deferredBanner', {
                 count: deferral.count,
+                reason: t(`scheduler.deferral.${deferralReasonKey(deferral.lastReason)}`),
                 since: new Date(deferral.firstAt).toLocaleTimeString(appI18n.language, {
                   hour: '2-digit',
                   minute: '2-digit',

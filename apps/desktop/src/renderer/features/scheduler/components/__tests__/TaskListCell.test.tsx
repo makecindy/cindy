@@ -9,7 +9,8 @@ import { TaskListCell } from '../TaskListCell';
 
 // t 直接回传 key,断言用 i18n key 即可。
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (k: string) => k }),
+  useTranslation: () => ({ t: (k: string, options?: { reason?: string }) =>
+    k === 'scheduler.cell.subtitleDeferredForSession' ? `${k}:${options?.reason}` : k }),
 }));
 
 const schedule: Schedule = {
@@ -122,7 +123,37 @@ describe('TaskListCell 并发等待提示', () => {
       }),
     );
 
-    expect(screen.getByText('scheduler.cell.subtitleDeferredForSession')).toBeTruthy();
+    expect(screen.getByText('scheduler.cell.subtitleDeferredForSession:scheduler.deferral.busy')).toBeTruthy();
+
+    rerender(
+      createElement(TaskListCell, {
+        schedule,
+        selected: false,
+        onSelect: vi.fn(),
+        deferredForSession: { count: 3, firstAt: Date.now() - 600_000, lastReason: 'usage-limit-wait' },
+      }),
+    );
+    expect(screen.getByText('scheduler.cell.subtitleDeferredForSession:scheduler.deferral.usage')).toBeTruthy();
+
+    rerender(
+      createElement(TaskListCell, {
+        schedule,
+        selected: false,
+        onSelect: vi.fn(),
+        deferredForSession: { count: 3, firstAt: Date.now() - 600_000, lastReason: 'routine-permission-unavailable' },
+      }),
+    );
+    expect(screen.getByText('scheduler.cell.subtitleDeferredForSession:scheduler.deferral.permission')).toBeTruthy();
+
+    rerender(
+      createElement(TaskListCell, {
+        schedule,
+        selected: false,
+        onSelect: vi.fn(),
+        deferredForSession: { count: 3, firstAt: Date.now() - 600_000, lastReason: 'routine-dispatch-invalidated' },
+      }),
+    );
+    expect(screen.getByText('scheduler.cell.subtitleDeferredForSession:scheduler.deferral.other')).toBeTruthy();
 
     rerender(
       createElement(TaskListCell, {
@@ -133,6 +164,6 @@ describe('TaskListCell 并发等待提示', () => {
       }),
     );
     expect(screen.getByText('scheduler.cell.subtitlePaused')).toBeTruthy();
-    expect(screen.queryByText('scheduler.cell.subtitleDeferredForSession')).toBeNull();
+    expect(screen.queryByText(/scheduler.cell.subtitleDeferredForSession/)).toBeNull();
   });
 });

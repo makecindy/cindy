@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 import { formatLastRun, formatNextRun } from '../lib/formatters';
+import { deferralReasonKey } from '../lib/deferralReason';
 import { Badge } from '@/components/ui/badge';
 
 interface Props {
@@ -168,6 +169,7 @@ export function TaskListCell({
   } else if (s.status === 'active' && deferredForSession && deferredForSession.count > 0) {
     subtitle = t('scheduler.cell.subtitleDeferredForSession', {
       count: deferredForSession.count,
+      reason: t(`scheduler.deferral.${deferralReasonKey(deferredForSession.lastReason)}`),
     });
   } else if (s.status === 'paused') {
     subtitle = t('scheduler.cell.subtitlePaused');

@@ -18684,7 +18684,7 @@
       "subtitlePaused": "En pausa",
       "subtitleWaitingForResources": "Esperando un espacio disponible ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "En cola hasta que la sesión esté inactiva",
-      "subtitleDeferredForSession": "Aplazado mientras la tarea está ocupada ({{count}})",
+      "subtitleDeferredForSession": "{{reason}} · aplazado {{count}} veces",
       "subtitleManual": "Manual",
       "subtitleOnce": "Una vez",
       "tagOnce": "Una vez",
@@ -18703,7 +18703,7 @@
     },
     "detail": {
       "manualTrigger": "Activación manual",
-      "deferredBanner": "Tarea de destino ocupada: aplazado {{count}} veces desde {{since}}",
+      "deferredBanner": "{{reason}} · aplazado {{count}} veces desde {{since}}",
       "recentRuns": "EJECUCIONES RECIENTES · {{count}}",
       "noRunsHeading": "Aún no hay ejecuciones",
       "noRunsHint": "Selecciona Ejecutar ahora o espera a la próxima ejecución programada.",
@@ -19472,6 +19472,12 @@
       "cleanMergedConfirmAction": "Eliminar",
       "cleanMergedDone": "Se eliminaron {{count}} automatizaciones de PR finalizadas",
       "checkFailed": "No se pudo comprobar el estado de las PR en este momento"
+    },
+    "deferral": {
+      "busy": "Esperando a que la tarea de destino quede libre",
+      "usage": "Esperando que se restablezca el límite de uso",
+      "permission": "Esperando el estado de permisos",
+      "other": "Ejecución aplazada"
     }
   },
   "issueTracker": {

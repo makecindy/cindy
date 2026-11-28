@@ -75,7 +75,7 @@ export interface SchedulerWaitingSchedule {
   waitingSince: number;
 }
 
-/** 因目标会话忙碌或活跃礼让被连续顺延、尚未真正执行的任务。 */
+/** 连续顺延、尚未真正执行的任务（原因见 lastReason）。 */
 export interface SchedulerDeferredSchedule {
   scheduleId: string;
   scheduleName: string;

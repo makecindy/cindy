@@ -18506,7 +18506,7 @@
       "subtitlePaused": "Paused",
       "subtitleWaitingForResources": "Waiting for a slot ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "Queued until the session is idle",
-      "subtitleDeferredForSession": "Deferred while task is busy ({{count}})",
+      "subtitleDeferredForSession": "{{reason}} · deferred {{count}} time(s)",
       "subtitleManual": "Manual",
       "subtitleOnce": "Once",
       "tagOnce": "Once",
@@ -18525,7 +18525,7 @@
     },
     "detail": {
       "manualTrigger": "Manual trigger",
-      "deferredBanner": "Target task busy — deferred {{count}} time(s) since {{since}}",
+      "deferredBanner": "{{reason}} · deferred {{count}} time(s) since {{since}}",
       "recentRuns": "RECENT RUNS · {{count}}",
       "noRunsHeading": "No runs yet",
       "noRunsHint": "Click “Run now” or wait for the next scheduled run.",
@@ -19294,6 +19294,12 @@
       "cleanMergedConfirmAction": "Delete",
       "cleanMergedDone": "Deleted {{count}} completed PR automations",
       "checkFailed": "Unable to check PR status right now"
+    },
+    "deferral": {
+      "busy": "Waiting for target task to be idle",
+      "usage": "Waiting for usage limit to reset",
+      "permission": "Waiting for permission status",
+      "other": "Execution deferred"
     }
   },
   "issueTracker": {

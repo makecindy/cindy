@@ -18431,7 +18431,7 @@
       "subtitlePaused": "일시 중지됨",
       "subtitleWaitingForResources": "실행 슬롯 대기 중 ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "세션이 유휴 상태가 될 때까지 대기 중",
-      "subtitleDeferredForSession": "대상 작업 실행 중으로 연기됨({{count}}회)",
+      "subtitleDeferredForSession": "{{reason}} · {{count}}회 연기",
       "subtitleManual": "수동",
       "subtitleOnce": "1회",
       "tagOnce": "1회",
@@ -18450,7 +18450,7 @@
     },
     "detail": {
       "manualTrigger": "수동 트리거",
-      "deferredBanner": "대상 작업이 바빠 {{since}}부터 {{count}}회 연기되었습니다",
+      "deferredBanner": "{{reason}} · {{since}}부터 {{count}}회 연기",
       "recentRuns": "최근 실행 · {{count}}",
       "noRunsHeading": "실행 기록이 아직 없습니다",
       "noRunsHint": "지금 실행을 트리거하거나 다음 예약 실행을 기다려 주세요.",
@@ -19219,6 +19219,12 @@
       "cleanMergedConfirmAction": "삭제",
       "cleanMergedDone": "완료된 PR 자동화 {{count}}개를 삭제했습니다",
       "checkFailed": "지금은 PR 상태를 확인할 수 없습니다"
+    },
+    "deferral": {
+      "busy": "대상 작업이 비기를 기다리는 중",
+      "usage": "사용 한도 복구 대기 중",
+      "permission": "권한 상태 확인 대기 중",
+      "other": "실행 연기됨"
     }
   },
   "issueTracker": {
