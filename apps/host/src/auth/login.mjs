@@ -29,7 +29,7 @@ function pkce() {
   return { verifier, challenge: crypto.createHash('sha256').update(verifier).digest('base64url') };
 }
 
-function pickMethod(providers, requested) {
+async function pickMethod(providers, requested, choosePersonalMethod) {
   const social = providers.social ?? [];
   const supported = social.map((provider) => ({ type: 'social', providerOrConnectionId: provider }));
   if (requested) {
@@ -46,6 +46,12 @@ function pickMethod(providers, requested) {
     throw new Error(
       'no browser login is available for this account; email/phone sign-in is not implemented for cindy-host yet',
     );
+  }
+  if (choosePersonalMethod) {
+    const chosen = await choosePersonalMethod(social);
+    const match = supported.find((method) => method.providerOrConnectionId === chosen);
+    if (match) return match;
+    throw new Error(`unsupported login method "${chosen}"; available: ${social.join(', ')}`);
   }
   throw new Error(`choose a login method with --method=: ${social.join(', ')}`);
 }
@@ -105,6 +111,7 @@ function listenOnLoopback(server) {
  *   hostedCallbackUrl?: string,
  *   openBrowser: (url: string) => Promise<void>,
  *   method?: string,
+ *   choosePersonalMethod?: (methods: string[]) => Promise<string>,
  *   organization?: string,
  *   organizationDiscovery?: import('@cindy/auth-client').SsoOrgDiscovery,
  *   onAuthorizeUrl?: (url: string) => void,
@@ -127,7 +134,7 @@ export async function runHostLogin(deps) {
   } else {
     method = deps.organization
       ? await enterpriseLoginMethod(deps.client, deps.organization, deps.method, deps.organizationDiscovery)
-      : pickMethod(await deps.client.getProviders(), deps.method);
+      : await pickMethod(await deps.client.getProviders(), deps.method, deps.choosePersonalMethod);
     const {verifier,challenge}=pkce();
     const authorization=deps.hostedCallbackUrl
       ? await authorizeViaHostedCallback({...deps,method,challenge})
