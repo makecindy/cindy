@@ -12274,6 +12274,7 @@
         "projectDirClear": "清",
         "projectDirNote": "可擇本機既有之專案。未擇，則先取倉庫所繫，次取行事同伴之專案。Git 分工另闢 worktree。",
         "autoContinueSaveFailed": "分工交接未能存，請再試",
+        "projectDirNotRegistered": "請先於 Cindy 立此目錄為專案，再擇之。",
         "projectDirSaveFailed": "案之卷匣未能存，確其尚存後再試",
         "allowMemberInvites": "許諸成員邀友",
         "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
