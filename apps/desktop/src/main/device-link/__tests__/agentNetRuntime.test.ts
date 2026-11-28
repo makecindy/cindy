@@ -466,6 +466,41 @@ it.each(['legacy', 'encrypted', 'both'] as const)('keeps membership authoritativ
   expect(agentNetDeviceAccepted('kept')).toBe(failure !== 'encrypted');
 });
 
+// Unit: readCurrentDeviceDirectory must reject a successful result while an account boundary is pending.
+// Device-removal protocol: the owner/network change cases above settle in a new scope, but not this intermediate state.
+it('rejects an in-flight official device list while an account boundary is pending', async () => {
+  state.official = true;
+  state.owner = 'pending-directory-boundary';
+  state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => [] };
+  let finish!: (value: { devices: [] }) => void;
+  const reading = readCurrentDeviceDirectory(() => new Promise(resolve => { finish = resolve; }), () => {});
+  state.pending = true;
+  const rejected = expect(reading).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+  finish({ devices: [] });
+  await rejected;
+  state.pending = false;
+  // The old empty list must not reject peers once the boundary finishes.
+  expect(agentNetDeviceAccepted('kept')).toBe(true);
+});
+
+// Unit: the device-removal protocol keeps the newest successful membership decision.
+// Gap above: same-scope reads start one millisecond apart and finish in reverse order.
+it('keeps the newer membership decision when an older official directory read finishes last', async () => {
+  vi.useFakeTimers();
+  state.official = true;
+  state.owner = 'reverse-directory-completion';
+  state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => [] };
+  const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: null, appVersion: null, lastSeenAt: null,
+    online: true, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
+  let finish!: (value: { devices: ReturnType<typeof row>[] }) => void;
+  const older = readCurrentDeviceDirectory(() => new Promise(resolve => { finish = resolve; }), () => {});
+  vi.setSystemTime(Date.now() + 1);
+  await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a')] }), () => {});
+  finish({ devices: [row('device-a'), row('removed')] });
+  await older;
+  expect(agentNetDeviceAccepted('removed')).toBe(false);
+});
+
 // 2026-11-17 审查：Agent-Net 送不到的手机经 Device Link 补发推送（notifyFallback.ts）；只看 presence 时，此刻在后台（离线）的手机
 // 重连后不在名单里，一份也收不到。名单也取自账号的 Device Link 设备列表。
 it('knows the account phones from the Device Link list, offline ones too, for the push fallback', async () => {
