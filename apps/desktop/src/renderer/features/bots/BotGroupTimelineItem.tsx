@@ -42,6 +42,7 @@ import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/li
 import { ChatReadReceipt } from './ChatMessageReaders';
 import { cn } from '@/lib/utils';
 import type {
+  BotGroupAttachment,
   BotGroupMention,
   BotGroupMemberView,
   BotGroupPlanStepView,
@@ -351,6 +352,8 @@ export interface BotGroupTimelineItemProps {
   showActions?: boolean;
   /** Server group id: reactions and the toolbar's reaction picker. */
   reactionGroupId?: string;
+  /** Server conversation id for attachment retry (covers both groups and direct chats). */
+  attachmentGroupId?: string;
   /** The group's server lists who has read a message (`supportsMessageReaders`). */
   readersEnabled?: boolean;
   /** The message's reaction version (`messageReactionRevision`): who reacted is re-read when it moves. */
@@ -557,6 +560,15 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       align={self && (message.threadShare || (!hasText && !hasAttachments)) ? 'right' : 'left'}
     />
   ) : null;
+  const attachmentGroupId = props.attachmentGroupId ?? props.reactionGroupId;
+  const retryAttachment = attachmentGroupId
+    ? (attachment: BotGroupAttachment) => {
+        void window.electronAPI?.maker?.chatServer?.manage?.({
+          groupId: attachmentGroupId,
+          action: { type: 'retryAttachment', mediaId: attachment.id, name: attachment.name },
+        });
+      }
+    : undefined;
   const share = message.threadShare;
   const threadPreview = !message.pending && props.onOpenThread && (message.replyCount ?? 0) > 0 ? (
     <BotGroupThreadPreview message={message} members={members}
@@ -566,7 +578,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
     <p className="flex select-none items-center gap-1 text-12 text-[var(--text-tertiary)]">
       <CornerDownRight size={12} aria-hidden />{sending ? t('bots.groupChat.timeline.sending') : botGroupThreadShareLabel(share, t)}</p>
     <BotGroupThreadShareQuote corner={self ? reactions : undefined} share={share} members={members} inset={!self} richScope={props.reactionGroupId ?? shareScope}
-      attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" />}
+      attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" onRetryAttachment={retryAttachment} />}
       onOpenThread={!message.pending && props.onOpenThread ? () => props.onOpenThread!(share.threadRootId, share.messageId) : undefined} />
   </> : null;
   // Keep every action slot while awaiting the server id; inert prevents premature interaction.
@@ -613,7 +625,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                     >
                       {quote}
                       {hasText ? <BotGroupMessageText content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} sharing={sharing} readTail={hasReadMark && !hasAttachments} /> : null}
-                      <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" />
+                      <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" onRetryAttachment={retryAttachment} />
                       {hasReadMark && hasAttachments ? <ReadTailRow /> : null}
                       {readMark}
                     </ChatBubble>
@@ -747,7 +759,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                       botId={message.authorBotId} />
                   ) : null}
                   {!share && message.liveTask ? <BotGroupLiveTaskCard task={message.liveTask} /> : null}
-                  {!share && <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" />}
+                  {!share && <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" onRetryAttachment={retryAttachment} />}
                   <BotGroupHandoffFiles files={message.files ?? []} workDir={props.plan?.workDir ?? null} />
                 </>
               )}

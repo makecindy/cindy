@@ -267,9 +267,11 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0163_purge_deleted_task_history.sql',
         '0164_flat_prism.sql',
         '0165_whole_nemesis.sql',
-        '0166_black_gauntlet.sql',
+        '0166_schedule_revision.sql',
+        '0167_black_gauntlet.sql',
       ]);
       expect(columnNames(db, 'schedules')).toContain('model_group');
+      expect(columnNames(db, 'schedules')).toContain('schedule_revision');
       expect(columnNames(db, 'schedules')).toContain('primary_host_key');
       const reopened = createBetterSqliteDatabase(db.name);
       try {

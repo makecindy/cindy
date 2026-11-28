@@ -2,23 +2,26 @@ import { useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { ModelConfigFlyout } from '../../../src/renderer/components/new-chat/ModelConfigFlyout';
 import { SpeedIcon } from '../../../src/renderer/components/new-chat/SpeedIcon';
-import { BUNDLED_CATALOG, resolveModelMetadata, type Effort, type UnifiedModelEntry } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, resolveModelMetadata, unifiedModelEntries, type Effort, type UnifiedModelEntry } from '@cindy/model-providers';
+import { thirdPartySpeedProvider } from '../model-advanced/third-party-speed-provider';
 
 function Fixture({ variant }: { variant: string }) {
   const modelId = variant === 'sol' ? 'gpt-6.1-sol' : 'gpt-6-astra';
   const metadata = resolveModelMetadata(BUNDLED_CATALOG.modelRegistry, 'openai', modelId, undefined, undefined, 'codex');
-  const capability = {
+  const defaultCapability = {
     agent: 'codex' as const, wireModelId: modelId, efforts: metadata.efforts ?? [],
     defaultEffort: metadata.defaultEffort ?? null, defaultEffortSource: 'catalog' as const,
     supportsFastMode: true, supportsUltrafastMode: true,
     contextWindow: variant === 'remote-context' ? 1_000_000 : metadata.contextWindow ?? 272000,
     contextWindowVerified: true,
   };
-  const entry: UnifiedModelEntry = {
+  const [relayEntry] = variant === 'third-party-speed' ? unifiedModelEntries({ providers: [thirdPartySpeedProvider()] }) : [];
+  const entry: UnifiedModelEntry = relayEntry ?? {
     providerId: 'openai', modelId, displayName: metadata.name ?? modelId,
-    candidates: ['codex'], recommended: 'codex', nativeAgent: 'codex', capabilities: { codex: capability },
+    candidates: ['codex'], recommended: 'codex', nativeAgent: 'codex', capabilities: { codex: defaultCapability },
   };
-  const [fast, setFast] = useState<boolean | 'ultrafast'>('ultrafast');
+  const capability = entry.capabilities.codex!;
+  const [fast, setFast] = useState<boolean | 'ultrafast'>(capability.supportsUltrafastMode ? 'ultrafast' : false);
   const [effort, setEffort] = useState<Effort>('high');
   return (
     <main className="mx-auto w-full max-w-[360px] p-4">
@@ -29,8 +32,8 @@ function Fixture({ variant }: { variant: string }) {
         <ModelConfigFlyout entry={entry}
           deviceId={variant === 'remote-context' ? 'remote-computer' : undefined}
           config={{engine:'codex', agent:'codex', efforts:capability.efforts, effort, fast,
-            fastCapable:true, customized:true, capability, wireModelId:modelId}}
-          state="customized" sourceLabel="OpenAI" price={null}
+            fastCapable:capability.supportsFastMode === true, customized:true, capability, wireModelId:capability.wireModelId}}
+          state="customized" sourceLabel={relayEntry ? 'Example provider' : 'OpenAI'} price={null}
           effortLabelOf={(_, value) => value === 'ultra' ? 'Ultra' : value}
           onEngineChange={()=>{}} onEffortChange={setEffort} onFastChange={setFast}
           onResetToRecommended={()=>{ setFast(false); setEffort(capability.defaultEffort ?? 'medium'); }}

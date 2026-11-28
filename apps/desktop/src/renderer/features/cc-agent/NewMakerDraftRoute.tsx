@@ -1612,33 +1612,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     }
     return findModelGroupRoute(modelGroupsConfig, selection) ? selection : null;
   }, [modelGroupsAllowed, activePluginModel, dlPluginEngine, modelGroupsConfig, draft.modelGroup, isDeviceLinkDraft, devicesModelGroups]);
-  /** 草稿选着的是合并了整个供应商的路由下的模型时，那条路由的名字；否则 null。 */
-  const activeSourceRouteName = activeModelGroup && !activeModelGroup.deviceId
-    ? modelGroupsConfig.routes.find((route) => route.id === activeModelGroup.id)?.parent?.name ?? null
-    : null;
   // 非 SSH 草稿、没在用插件模型或插件引擎时，供应商路由成员的模型一律经路由开任务(本机与被控端一致)。
   const sourceRoutesImplicit = modelGroupsAllowed && !effectiveRemoteHostId && !activePluginModel && !dlPluginEngine;
-  const modelGroupsProps = useMemo(
-    () => modelGroupsAllowed
-      ? {
-          config: modelGroupsConfig,
-          active: activeModelGroup,
-          onSelect: (selection: ModelGroupSelection) => {
-            setAlternateModel(null);
-            forgetRemoteAlternateDraftModel();
-            setRemoteDraftPluginEngine(null);
-            patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null });
-          },
-          // 供应商路由下的模型在面板里是普通模型行：选中后只补记这条路由，不动刚选的模型、思考深度与 Fast(SSH 不合并跨机供应商路由)。
-          ...(effectiveRemoteHostId ? {} : { onAttach: (selection: ModelGroupSelection) => patchDraft({ modelGroup: selection }) }),
-          // 「管理模型组」只在本机：另一台电脑的模式在那台上改。
-          ...(isDeviceLinkDraft ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
-          ...(modelGroupDevices.length > 0 ? { devices: modelGroupDevices } : {}),
-          ...(modelGroupDeviceIds.length > 0 ? { readDevices: readDevicesModelGroups } : {}),
-        }
-      : undefined,
-    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, modelGroupDeviceIds, readDevicesModelGroups, setAlternateModel, forgetRemoteAlternateDraftModel],
-  );
   /** 组里没有能用的模型时，说明里写用户原来选的那个模型的显示名。 */
   const localProvidersForGroupNoteRef = useRef<ReturnType<typeof useProviders>['providers']>([]);
   const keptModelNameForGroupNote = (agentKind: Parameters<typeof dbToMakerAgentKind>[0], providerId: string | null | undefined, model: string) =>
@@ -2974,6 +2949,53 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     draftInitialModel,
     capabilityAgentKind,
   ]);
+  // 展示层与发送层(implicitSourceRouteSelection)使用同一条隐式供应商路由判据：
+  // 草稿里只记着某个成员(含分享/远端成员)但发送时会走未隐藏的合并路由时，横幅、按钮与选择器初始落点必须如实
+  // 显示「由路由决定」，不能先写「Agent 在某分享上运行」发出去又切走。
+  const implicitDraftSourceRoute = useMemo(
+    () =>
+      !activeModelGroup && sourceRoutesImplicit
+        ? implicitSourceRouteSelection(modelGroupsConfig, {
+            providerId: chatInitialProviderId,
+            model: draftInitialModel,
+            agentDeviceId: effectiveAgentDeviceId,
+          })
+        : null,
+    [
+      activeModelGroup,
+      sourceRoutesImplicit,
+      modelGroupsConfig,
+      chatInitialProviderId,
+      draftInitialModel,
+      effectiveAgentDeviceId,
+    ],
+  );
+  const effectiveDisplayModelGroup = activeModelGroup ?? implicitDraftSourceRoute;
+  /** 草稿选着的是合并了整个供应商的路由下的模型时，那条路由的名字；否则 null。 */
+  const activeSourceRouteName = effectiveDisplayModelGroup && !effectiveDisplayModelGroup.deviceId
+    ? modelGroupsConfig.routes.find((route) => route.id === effectiveDisplayModelGroup.id)?.parent?.name ?? null
+    : null;
+  const modelGroupsProps = useMemo(
+    () => modelGroupsAllowed
+      ? {
+          config: modelGroupsConfig,
+          active: effectiveDisplayModelGroup,
+          onSelect: (selection: ModelGroupSelection) => {
+            setAlternateModel(null);
+            forgetRemoteAlternateDraftModel();
+            setRemoteDraftPluginEngine(null);
+            patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null });
+          },
+          // 供应商路由下的模型在面板里是普通模型行：选中后只补记这条路由，不动刚选的模型、思考深度与 Fast(SSH 不合并跨机供应商路由)。
+          ...(effectiveRemoteHostId ? {} : { onAttach: (selection: ModelGroupSelection) => patchDraft({ modelGroup: selection }) }),
+          // 「管理模型组」只在本机：另一台电脑的模式在那台上改。
+          ...(isDeviceLinkDraft ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
+          ...(modelGroupDevices.length > 0 ? { devices: modelGroupDevices } : {}),
+          ...(modelGroupDeviceIds.length > 0 ? { readDevices: readDevicesModelGroups } : {}),
+        }
+      : undefined,
+    [modelGroupsAllowed, modelGroupsConfig, effectiveDisplayModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, modelGroupDeviceIds, readDevicesModelGroups, setAlternateModel, forgetRemoteAlternateDraftModel],
+  );
 
   // 选中来源与型号之后的**档位**:按目标目录里该型号的档位表解析 —— 用户上次在这台设备
   // 为**这个型号**选的档 > 该型号自己记住的档 > 本机偏好(该模型支持才保留)> 模型默认档。
@@ -3201,7 +3223,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       : false;
 
   const localModelIssue = !usesDeviceCatalog && !effectiveRemoteHostId &&
-    !activePluginEngine && !activePluginModel && !activeModelGroup &&
+    !activePluginEngine && !activePluginModel && !effectiveDisplayModelGroup &&
     (savedDraft.defaultTupleSelectionCustomized || localAlternate)
     ? savedDraftModelIssue({
         agent: capabilityAgentKind,
@@ -4425,7 +4447,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   // 模型面板里点那台电脑上的同一个模型一样，把 Agent 落到那台。每个供应商 + 位置只落一次，用户之后再改选
   // 以面板为准；那台下线时草稿由上面的落点校验退回本机。
   const runLocationProvider = !isDeviceLinkDraft && !effectiveRemoteHostId && !sshCodexDraftHostId
-    && !effectiveAgentDeviceId && !activePluginModel && !activeModelGroup && unifiedModelPanelActive && draft.vendor !== 'orca'
+    && !effectiveAgentDeviceId && !activePluginModel && !effectiveDisplayModelGroup && unifiedModelPanelActive && draft.vendor !== 'orca'
     ? localProviders.find((provider) => provider.id === effectiveSourceId) ?? null
     : null;
   const { location: runLocation, routeProviderId: runLocationProviderId, borrowedCatalog: runLocationCatalog } = useProviderBorrow(runLocationProvider);
