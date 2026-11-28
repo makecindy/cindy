@@ -17,6 +17,42 @@ function tone(ms: number, peak: number): Uint8Array {
     writeSample(pcm, i, Math.round(peak * Math.sin((2 * Math.PI * i) / 16)));
   return pcm;
 }
+function gaussianNoise(ms: number, rms: number, seed: number): Uint8Array {
+  const sampleCount = Math.round((ms * rate) / 1000);
+  const pcm = new Uint8Array(sampleCount * 2);
+  const view = new DataView(pcm.buffer);
+  let state = seed >>> 0;
+  const nextUniform = (): number => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  for (let i = 0; i < sampleCount; i += 2) {
+    const u1 = Math.max(1e-12, nextUniform());
+    const u2 = nextUniform();
+    const mag = Math.sqrt(-2 * Math.log(u1));
+    const s0 = Math.max(-32768, Math.min(32767, Math.round(mag * Math.cos(2 * Math.PI * u2) * rms)));
+    view.setInt16(i * 2, s0, true);
+    if (i + 1 < sampleCount) {
+      const s1 = Math.max(-32768, Math.min(32767, Math.round(mag * Math.sin(2 * Math.PI * u2) * rms)));
+      view.setInt16((i + 1) * 2, s1, true);
+    }
+  }
+  return pcm;
+}
+function mixPcm(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const len = Math.min(a.length, b.length);
+  const out = new Uint8Array(len);
+  const viewA = new DataView(a.buffer, a.byteOffset, len);
+  const viewB = new DataView(b.buffer, b.byteOffset, len);
+  const viewOut = new DataView(out.buffer);
+  for (let offset = 0; offset + 1 < len; offset += 2) {
+    const sum = viewA.getInt16(offset, true) + viewB.getInt16(offset, true);
+    viewOut.setInt16(offset, Math.max(-32768, Math.min(32767, sum)), true);
+  }
+  return out;
+}
 function concat(...parts: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
   let offset = 0;
@@ -169,6 +205,78 @@ describe('RecordingSoundDetector', () => {
       }
     }
     expect(triggered).toBe(true);
+  });
+
+  // 测试价值：验证 RecordingSoundDetector 在真实宽带高斯稳态底噪（AC RMS=120 / 风扇 RMS=300）下不被 3.6σ–4.8σ 单样本尖峰穿透，同时保留安静房间 -60 dBFS 灵敏度与轻声/正常人声 100% 召回。
+  // 依据：PR #13667 声学 Benchmark 实测回归（1.6s 纯高斯白噪在旧 noisePeakMultiplier=3.5 与初始 peak<1200 下 2/2 误报 hasSound=true）。
+  // 缺口：既有测试仅用峰均比 1.414 的正弦波模拟底噪，未覆盖宽带高斯噪声的自然高峰均比及初始化前 3 帧击穿路径。
+  // 最小输入：1.6s（40×40ms）确定性 Box-Muller 高斯白噪（RMS=120/300）与混入人声（RMS 420/2200）及安静房 -60 dBFS 样本。
+  // tier: unit，纯内存确定性合成 PCM，耗时 <50ms。
+  it.each([120, 300])('ignores 1.6s steady broadband Gaussian noise (RMS=%s) while recalling speech mixed above it', (noiseRms) => {
+    for (const seed of [101, 202, 303, 404, 505]) {
+      const detector = new RecordingSoundDetector();
+      const noiseStream = gaussianNoise(1600, noiseRms, seed);
+      const chunkBytes = 40 * (rate / 1000) * 2;
+      for (let offset = 0; offset < noiseStream.length; offset += chunkBytes) {
+        const chunk = noiseStream.slice(offset, offset + chunkBytes);
+        expect(detector.append(chunk.buffer as ArrayBuffer, { durationMs: 40 })).toBe(false);
+      }
+      expect(detector.hasSound).toBe(false);
+
+      // Mixing normal speech (RMS ~2200) on top of the same steady noise confirms immediately.
+      const speechOverNoise = mixPcm(
+        gaussianNoise(40, noiseRms, seed + 999),
+        tone(40, Math.round(2200 * Math.SQRT2)),
+      );
+      expect(detector.append(speechOverNoise.buffer as ArrayBuffer, { durationMs: 40 })).toBe(true);
+      expect(detector.hasSound).toBe(true);
+    }
+  });
+
+  it('preserves -60 dBFS quiet-room sensitivity, soft speech (RMS 420), and cue-window barge-in recall', () => {
+    // Quiet room (activeFloor < 24): RMS >= 32 and peak >= 128 both remain detected.
+    const quietFloor = Int16Array.from({ length: 640 }, (_, i) => (i % 2 ? 12 : -12));
+    const rmsDetector = new RecordingSoundDetector();
+    expect(rmsDetector.append(quietFloor.buffer as ArrayBuffer, { durationMs: 40 })).toBe(false);
+    expect(rmsDetector.append(tone(40, 46).buffer as ArrayBuffer, { durationMs: 40 })).toBe(true);
+
+    const peakDetector = new RecordingSoundDetector();
+    expect(peakDetector.append(quietFloor.buffer as ArrayBuffer, { durationMs: 40 })).toBe(false);
+    const briefPeak = new Int16Array(640);
+    briefPeak[300] = 128;
+    expect(peakDetector.append(briefPeak.buffer as ArrayBuffer, { durationMs: 40 })).toBe(true);
+
+    // Soft speech (RMS 420) spoken immediately at t=0 (even across 4 frames) followed by silence is recalled.
+    const openingSoftSpeech = new RecordingSoundDetector();
+    for (let i = 0; i < 4; i += 1) {
+      openingSoftSpeech.append(tone(40, Math.round(420 * Math.SQRT2)).buffer as ArrayBuffer, { durationMs: 40 });
+    }
+    for (let i = 0; i < 4; i += 1) {
+      openingSoftSpeech.append(quietFloor.buffer as ArrayBuffer, { durationMs: 40 });
+    }
+    expect(openingSoftSpeech.hasSound).toBe(true);
+
+    // Soft speech (RMS 420) over AC Gaussian noise (RMS 120) is recalled.
+    const acDetector = new RecordingSoundDetector();
+    const acNoise = gaussianNoise(1600, 120, 777);
+    const chunkBytes = 40 * (rate / 1000) * 2;
+    for (let offset = 0; offset < acNoise.length; offset += chunkBytes) {
+      const chunk = acNoise.slice(offset, offset + chunkBytes);
+      expect(acDetector.append(chunk.buffer as ArrayBuffer, { durationMs: 40 })).toBe(false);
+    }
+    const softOverAc = mixPcm(gaussianNoise(40, 120, 888), tone(40, Math.round(420 * Math.SQRT2)));
+    expect(acDetector.append(softOverAc.buffer as ArrayBuffer, { durationMs: 40 })).toBe(true);
+    expect(acDetector.hasSound).toBe(true);
+
+    // Soft speech (RMS 420) barging in immediately during start-cue echo window (>= 300ms) is recalled.
+    const bargeInDetector = new RecordingSoundDetector();
+    for (let i = 0; i < 8; i += 1) {
+      bargeInDetector.append(tone(40, Math.round(420 * Math.SQRT2)).buffer as ArrayBuffer, {
+        startCueEchoWindow: true,
+        durationMs: 40,
+      });
+    }
+    expect(bargeInDetector.hasSound).toBe(true);
   });
 });
 

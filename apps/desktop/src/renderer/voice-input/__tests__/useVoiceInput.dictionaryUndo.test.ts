@@ -415,20 +415,22 @@ describe('in-app dictionary learning after undo', () => {
     expect(hook.result.current.canUndoRefinement).toBe(true);
 
     // 1st Cmd+Z intercepts and restores raw ASR text without dirty dictionary learning.
-    const preventDefault = vi.fn();
+    const undoEvent = new KeyboardEvent('keydown', {
+      key: 'z',
+      metaKey: true,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      cancelable: true,
+    });
+    const preventDefault = vi.spyOn(undoEvent, 'preventDefault');
     let handled = false;
     act(() => {
-      handled = hook.result.current.handleUndoKeyDown({
-        key: 'z',
-        metaKey: true,
-        ctrlKey: false,
-        shiftKey: false,
-        altKey: false,
-        preventDefault,
-      });
+      handled = hook.result.current.handleUndoKeyDown(undoEvent);
     });
     expect(handled).toBe(true);
     expect(preventDefault).toHaveBeenCalledOnce();
+    expect(undoEvent.defaultPrevented).toBe(true);
     expect(state.doc.textContent).toBe(raw);
     act(() => vi.advanceTimersByTime(15_000));
     expect(mocks.advise).not.toHaveBeenCalled();
@@ -475,10 +477,14 @@ describe('in-app dictionary learning after undo', () => {
       },
     }));
     expect(state.doc.textContent).toBe('润色文本');
-    act(() => expect(hook.result.current.handleUndoKeyDown({
-      key: 'z', metaKey: true, ctrlKey: false, shiftKey: false, altKey: false,
-      preventDefault: vi.fn(),
-    })).toBe(true));
+    act(() => expect(hook.result.current.handleUndoKeyDown(new KeyboardEvent('keydown', {
+      key: 'z',
+      metaKey: true,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      cancelable: true,
+    }))).toBe(true));
     expect(state.doc.textContent).toBe('识别原文');
     act(() => expect(pmUndo(state, dispatch)).toBe(true));
     expect(state.doc.textContent).toBe('旧内容');

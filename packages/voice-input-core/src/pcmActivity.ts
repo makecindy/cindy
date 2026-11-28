@@ -47,8 +47,12 @@ export class RecordingSoundDetector {
   static readonly defaults = {
     quietRmsFloor: 32,
     quietPeakFloor: 128,
+    elevatedNoiseFloorRms: 24,
     noiseRmsMultiplier: 2.0,
-    noisePeakMultiplier: 3.5,
+    noisePeakMultiplier: 6.0,
+    noisePeakMinRmsMultiplier: 1.25,
+    initialHoldPeakFloor: 1_200,
+    initialHoldPeakMultiplier: 6.0,
     maxNoiseFloorRms: 500,
     cueEchoHoldMs: 300,
     stationaryWindowChunks: 6,
@@ -59,6 +63,7 @@ export class RecordingSoundDetector {
   private noiseFloorRms = 0;
   private hasNoiseFloor = false;
   private cueWindowActiveMs = 0;
+  private elevatedPeakStreak = 0;
   private recentChunkRms: number[] = [];
   private pendingFirstChunk = false;
   private pendingFirstRms = 0;
@@ -84,14 +89,36 @@ export class RecordingSoundDetector {
 
     // Update online noise floor only outside the start-cue echo window so a loud
     // beep never inflates the ambient baseline.
+    let stationaryWindowConfirmed = false;
     if (!inCueWindow) {
-      this.updateNoiseFloor(stats.rms);
+      stationaryWindowConfirmed = this.updateNoiseFloor(stats.rms);
     }
 
     const activeFloor = this.hasNoiseFloor ? this.noiseFloorRms : 0;
-    const rmsThreshold = Math.max(d.quietRmsFloor, activeFloor * d.noiseRmsMultiplier);
-    const peakThreshold = Math.max(d.quietPeakFloor, activeFloor * d.noisePeakMultiplier);
-    const chunkAboveFloor = stats.rms >= rmsThreshold || stats.peak >= peakThreshold;
+    const isElevatedNoise = this.hasNoiseFloor && activeFloor >= d.elevatedNoiseFloorRms;
+    const rmsThreshold = isElevatedNoise
+      ? Math.max(d.quietRmsFloor, activeFloor * d.noiseRmsMultiplier)
+      : d.quietRmsFloor;
+    const peakThreshold = isElevatedNoise
+      ? Math.max(d.quietPeakFloor, activeFloor * d.noisePeakMultiplier)
+      : d.quietPeakFloor;
+
+    let chunkAboveFloor: boolean;
+    if (isElevatedNoise) {
+      // Broadband Gaussian room noise (AC/fan/cafe) naturally produces 3.6σ–4.8σ
+      // single-sample peaks in 40 ms chunks while chunk RMS remains flat near
+      // 1.0× floor. Require either a clear RMS rise or a strong peak (>= 6× floor)
+      // backed by modest RMS elevation or two consecutive chunks.
+      const rmsAbove = stats.rms >= rmsThreshold;
+      const peakAbove = stats.peak >= peakThreshold;
+      this.elevatedPeakStreak = peakAbove ? this.elevatedPeakStreak + 1 : 0;
+      const peakTriggered = peakAbove
+        && (stats.rms >= activeFloor * d.noisePeakMinRmsMultiplier || this.elevatedPeakStreak >= 2);
+      chunkAboveFloor = rmsAbove || peakTriggered;
+    } else {
+      this.elevatedPeakStreak = 0;
+      chunkAboveFloor = stats.rms >= rmsThreshold || stats.peak >= peakThreshold;
+    }
 
     if (inCueWindow) {
       if (chunkAboveFloor) {
@@ -108,8 +135,13 @@ export class RecordingSoundDetector {
     this.cueWindowActiveMs = 0;
 
     // Very quiet room (confirmed floor < 24): immediately confirm on any speech-like sound.
-    if (this.hasNoiseFloor && activeFloor < 24) {
+    if (this.hasNoiseFloor && !isElevatedNoise) {
       if (chunkAboveFloor) {
+        this.confirmed = true;
+      } else if (
+        this.pendingFirstChunk
+        && (this.pendingFirstRms >= d.quietRmsFloor || this.pendingFirstPeak >= d.quietPeakFloor)
+      ) {
         this.confirmed = true;
       }
       return this.confirmed;
@@ -120,13 +152,18 @@ export class RecordingSoundDetector {
     // ambient noise ceiling (RMS > maxNoiseFloorRms).
     if (stats.rms > d.maxNoiseFloorRms || chunkAboveFloor) {
       // Guard chunks <= maxNoiseFloorRms before stationarity is established:
-      // steady noise from t=0 has not yet established a floor, so hold moderate
-      // chunks until either a louder jump occurs or a quiet chunk reveals it
-      // wasn't floor.
-      if (!this.hasNoiseFloor && stats.rms <= d.maxNoiseFloorRms && stats.peak < 1_200) {
+      // steady broadband noise from t=0 has not yet established a floor, and
+      // RMS 250–450 Gaussian noise naturally produces 4σ peaks > 1200 in its
+      // opening frames. Hold moderate chunks until either a louder jump occurs
+      // or a quieter floor later reveals it really was speech.
+      const initialPeakLimit = Math.max(
+        d.initialHoldPeakFloor,
+        stats.rms * d.initialHoldPeakMultiplier,
+      );
+      if (!this.hasNoiseFloor && stats.rms <= d.maxNoiseFloorRms && stats.peak < initialPeakLimit) {
         this.pendingFirstChunk = true;
-        this.pendingFirstRms = stats.rms;
-        this.pendingFirstPeak = stats.peak;
+        this.pendingFirstRms = Math.max(this.pendingFirstRms, stats.rms);
+        this.pendingFirstPeak = Math.max(this.pendingFirstPeak, stats.peak);
         return false;
       }
       this.confirmed = true;
@@ -135,17 +172,32 @@ export class RecordingSoundDetector {
 
     // If an earlier moderate chunk was held and ambient RMS later dropped much
     // lower, that earlier chunk really was quiet speech.
-    if (this.pendingFirstChunk && (this.pendingFirstRms >= Math.max(d.quietRmsFloor, activeFloor * d.noiseRmsMultiplier) || this.pendingFirstPeak >= Math.max(d.quietPeakFloor, activeFloor * d.noisePeakMultiplier))) {
-      this.confirmed = true;
+    if (this.pendingFirstChunk) {
+      const pendingTriggered = isElevatedNoise
+        ? this.pendingFirstRms >= rmsThreshold
+          || (this.pendingFirstPeak >= peakThreshold && this.pendingFirstRms >= activeFloor * d.noisePeakMinRmsMultiplier)
+        : this.pendingFirstRms >= d.quietRmsFloor || this.pendingFirstPeak >= d.quietPeakFloor;
+      if (pendingTriggered) {
+        this.confirmed = true;
+        return true;
+      }
+      if (stationaryWindowConfirmed) {
+        this.pendingFirstChunk = false;
+        this.pendingFirstRms = 0;
+        this.pendingFirstPeak = 0;
+      }
     }
     return this.confirmed;
   }
 
   get hasSound(): boolean {
     if (this.confirmed) return true;
-    // Short single-chunk recording where a moderate sound arrived before the
-    // noise-floor estimator saw enough chunks to classify it as stationary noise.
-    if (this.pendingFirstChunk && this.recentChunkRms.length < RecordingSoundDetector.defaults.stationaryWindowChunks) {
+    // Short recording (or non-stationary opening burst) where a moderate sound
+    // arrived before the noise-floor estimator confirmed a stationary ambient floor.
+    if (
+      this.pendingFirstChunk
+      && (!this.hasNoiseFloor || this.recentChunkRms.length < RecordingSoundDetector.defaults.stationaryWindowChunks)
+    ) {
       return this.pendingFirstRms >= RecordingSoundDetector.defaults.quietRmsFloor
         || this.pendingFirstPeak >= RecordingSoundDetector.defaults.quietPeakFloor;
     }
@@ -161,23 +213,24 @@ export class RecordingSoundDetector {
     this.noiseFloorRms = 0;
     this.hasNoiseFloor = false;
     this.cueWindowActiveMs = 0;
+    this.elevatedPeakStreak = 0;
     this.recentChunkRms = [];
     this.pendingFirstChunk = false;
     this.pendingFirstRms = 0;
     this.pendingFirstPeak = 0;
   }
 
-  private updateNoiseFloor(chunkRms: number): void {
+  private updateNoiseFloor(chunkRms: number): boolean {
     const d = RecordingSoundDetector.defaults;
     this.recentChunkRms.push(chunkRms);
     if (this.recentChunkRms.length > d.stationaryWindowChunks) {
       this.recentChunkRms.shift();
     }
 
-    if (chunkRms < 24) {
+    if (chunkRms < d.elevatedNoiseFloorRms) {
       this.noiseFloorRms = this.hasNoiseFloor ? this.noiseFloorRms * 0.5 + chunkRms * 0.5 : chunkRms;
       this.hasNoiseFloor = true;
-      return;
+      return false;
     }
 
     if (!this.hasNoiseFloor) {
@@ -193,16 +246,14 @@ export class RecordingSoundDetector {
         if (min > 0 && max <= min * d.stationaryRatioCap && min <= d.maxNoiseFloorRms) {
           this.noiseFloorRms = Math.min(d.maxNoiseFloorRms, sum / this.recentChunkRms.length);
           this.hasNoiseFloor = true;
-          this.pendingFirstChunk = false;
+          return this.recentChunkRms.length >= d.stationaryWindowChunks;
         }
       }
-      return;
+      return false;
     }
 
-    if (chunkRms < this.noiseFloorRms) {
-      // Fast downward tracking when room gets quieter.
-      this.noiseFloorRms = this.noiseFloorRms * 0.7 + chunkRms * 0.3;
-    } else if (this.recentChunkRms.length >= d.stationaryWindowChunks) {
+    let stationaryFullWindow = false;
+    if (this.recentChunkRms.length >= d.stationaryWindowChunks) {
       let min = Infinity;
       let max = 0;
       for (const v of this.recentChunkRms) {
@@ -210,9 +261,18 @@ export class RecordingSoundDetector {
         if (v > max) max = v;
       }
       if (min > 0 && max <= min * d.stationaryRatioCap && min <= d.maxNoiseFloorRms) {
-        this.noiseFloorRms = Math.min(d.maxNoiseFloorRms, this.noiseFloorRms * 0.9 + min * 0.1);
+        stationaryFullWindow = true;
+        if (chunkRms >= this.noiseFloorRms) {
+          this.noiseFloorRms = Math.min(d.maxNoiseFloorRms, this.noiseFloorRms * 0.9 + min * 0.1);
+        }
       }
     }
+
+    if (chunkRms < this.noiseFloorRms) {
+      // Fast downward tracking when room gets quieter.
+      this.noiseFloorRms = this.noiseFloorRms * 0.7 + chunkRms * 0.3;
+    }
+    return stationaryFullWindow;
   }
 }
 
