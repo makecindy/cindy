@@ -316,6 +316,12 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 8 个）完整�
     CJK 与标点，免得实参本身影响判定。
 
   新增同类手写 catalog 时记得加进对应测试的 `collectEntries()`。**catalog 要单独成模块**：
+
+  `pnpm check:same-source` 是报告型检查：同一句「中文源 + 英文源」在不同模块译成几种说法。
+  它补的是 `check:i18n`（key 齐不齐）与 `check:i18n-glossary`（术语与写法）都看不到的口子：
+  IM 各平台（discord / telegram / feishu / wecom / wechat）同一句提示词分别写过一遍，就是这么分叉的。
+  当前口径只统计非文言语种，报告不阻断；后续按模块收敛后接基线，再切成 `--strict`。
+
   原先这两份分别嵌在 `bootstrap-electron.ts` 与 `fullAccessConfirmation.ts` 里，测试一 import
   就会拉起整个 Electron 主进程 / react-native，根本跑不起来——这也是它们长期是盲区的原因。
 - **IM 控制文案同样走 locale**（2026-11-12 起）：个人 bot（飞书、Telegram、Discord、微信、企业微信、
