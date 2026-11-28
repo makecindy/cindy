@@ -13031,7 +13031,7 @@
       "arrivalPermissions": "{{name}} nutzt jetzt die Standardberechtigungen dieses Computers.",
       "arrivalModel": "Das für {{name}} gespeicherte Modell ist auf diesem Computer nicht verfügbar. Daher wird das Standardmodell dieses Computers verwendet.",
       "arrivalModelSetup": "{{name}} ist auf diesem Computer angekommen, hat aber noch kein nutzbares Modell. Verbinde einen Modellanbieter oder lege das Standardmodell für Buddies unter Anbieter → Smartes Routing fest.",
-      "modelSetupHint": "Auf diesem Computer ist kein Partnermodell verfügbar. Lege unter Anbieter → Intelligentes Routing das Standardmodell für Partner fest. Cindy versucht es automatisch erneut.",
+      "modelSetupHint": "Auf diesem Computer ist kein Modell für Buddies verfügbar. Lege unter Anbieter → Smartes Routing das Standardmodell für Buddies fest. Cindy versucht es automatisch erneut.",
       "arrivalPartialContent": "{{name}} läuft jetzt auf diesem Computer, aber einige synchronisierte Inhalte konnten nicht wiederhergestellt werden. Die Cloud-Kopien bleiben erhalten.",
       "missingProfileTitle": "{{name}} mit Standardprofil starten?",
       "missingProfileDescription": "Der ursprüngliche Hauptcomputer hat Persönlichkeit und Beschreibung von {{name}} noch nicht hochgeladen. Wenn dieser Computer neu installiert wurde oder nicht mehr erreichbar ist, kannst du hier mit einem Standardprofil fortfahren. Bereits synchronisierte Unterhaltungen und Inhalte bleiben erhalten.",
