@@ -40,6 +40,7 @@ import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
+import { checkWorktreeBaseRefArg } from '../../worktree/sourceRef.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
@@ -255,6 +256,9 @@ function botTaskDispatchHarness(
     buildSessionCreatedBy,
     serializeSessionCreatedBy,
     normalizeAutoTitle,
+    // The real argument check: a malformed or misplaced base must be refused by production code.
+    checkWorktreeBaseRefArg,
+    resolveExplicitSourceRef: asyncNoop,
     refineCreatedTaskTitle: asyncNoop,
     messages: {},
     sessions: {},
@@ -823,6 +827,51 @@ it.each([
     projectDir, workingDir: workingDir === undefined ? '' : executionDir, workspaceKind,
   }) }), expect.any(Function));
   expect(h.bootstrapped[0]).toMatchObject({ projectDir, workingDir: executionDir });
+});
+
+// 2026-11-28 multi-computer retrospective: a project whose work branch is not the default one had
+// every new task start from the default branch, and the receipt named neither the base nor the
+// provider computer. This runs the production create closure: the tool test mocks the host, and
+// no other case sends a base through it. Minimal input: one create per outcome. Unit tier.
+it.each([
+  { label: 'explicit base', params: { useWorktree: true, baseRef: ' origin/release/2.x ' }, ok: true },
+  { label: 'default base', params: { useWorktree: true }, ok: true },
+  { label: 'base without a worktree', params: { baseRef: 'release/2.x' }, ok: false },
+  { label: 'malformed base', params: { useWorktree: true, baseRef: '--upload-pack=evil' }, ok: false },
+  { label: 'unresolvable base', params: { useWorktree: true, baseRef: 'origin/gone' }, ok: false },
+])('creates a local task worktree from the requested base and reports what took effect: $label', async ({ label, params, ok }) => {
+  const prepare = vi.fn(async (_deps: unknown, _dispatcher: unknown, _dir: unknown, options?: { sourceRef?: string }) =>
+    options?.sourceRef === 'origin/gone'
+      ? { ok: false as const, message: 'no such ref' }
+      : { ok: true as const, sessionId: 'new-child', staleBaseReason: options?.sourceRef ? 'fetch-failed' : undefined,
+        meta: { path: '/repo/.cindy-worktrees/child',
+          sourceBranch: options?.sourceRef ? `refs/remotes/${options.sourceRef}` : 'refs/remotes/origin/main' } });
+  const open = vi.fn(async (input: { body: Record<string, unknown> }, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) => {
+    const row = { ...input.body, id: 'new-child', workspaceKind: 'project' };
+    return { row, value: await create(row, async () => {}) };
+  });
+  const h = botTaskDispatchHarness({}, {}, {
+    openSession: open, broadcastSessionCreated: vi.fn(), worktreeManager: {}, resolveFreshSourceBranch: vi.fn(),
+    prepareHandoffWorktree: prepare,
+  });
+  const result = await h.sendToSessionInternal({ dispatcherSessionId: 'source', message: 'Work', forceQueue: true, ...params });
+  if (!ok) {
+    expect(result).toMatchObject({ ok: false, errorCode: label === 'unresolvable base' ? 'WORKTREE_UNAVAILABLE' : 'INVALID_ARGS' });
+    if (label === 'unresolvable base') expect((result as { message: string }).message).toContain('base_ref "origin/gone"');
+    else expect(prepare).not.toHaveBeenCalled();
+    // Nothing is created for a refused base, and it never falls back to the default branch.
+    expect(prepare).toHaveBeenCalledTimes(label === 'unresolvable base' ? 1 : 0);
+    expect(open).not.toHaveBeenCalled();
+    return;
+  }
+  const explicit = label === 'explicit base';
+  expect(prepare.mock.calls[0]?.[3]).toEqual(explicit ? { sourceRef: 'origin/release/2.x' } : undefined);
+  expect(result).toMatchObject({ ok: true, wakeKind: 'created', worktreePath: '/repo/.cindy-worktrees/child',
+    worktreeBaseRef: explicit ? 'refs/remotes/origin/release/2.x' : 'refs/remotes/origin/main',
+    // The source task runs on this computer's own provider, so the new task does too.
+    providerDeviceId: null });
+  expect((result as { worktreeBaseStaleReason?: string }).worktreeBaseStaleReason).toBe(explicit ? 'fetch-failed' : undefined);
+  expect(result).not.toHaveProperty('providerDeviceInherited');
 });
 
 // 2026-11-27: real sendToSessionInternal create closure with plugin engine (agentKind="acp").
