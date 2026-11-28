@@ -26,6 +26,7 @@ import { observePluginEngineContextWindow, observePluginEngineModelDetails, reme
 import {
   getPluginHarnessRegistry,
   recordPluginHarnessActivity,
+  trackPluginEngineSession,
   type PluginHarness,
 } from '../cindy-brain/pluginHarnesses.js';
 import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
@@ -151,7 +152,44 @@ export function buildAcpAgentCore(opts: BuildAcpAgentCoreOpts): AcpAgent {
     observeModelDetails: observePluginEngineModelDetails,
     observeContextWindow: observePluginEngineContextWindow,
   });
-  return opts.onActivity ? withPluginHarnessActivityTracking(agent, opts.onActivity) : agent;
+  const tracked = withPluginEngineTurnTracking(agent);
+  return opts.onActivity ? withPluginHarnessActivityTracking(tracked, opts.onActivity) : tracked;
+}
+
+/**
+ * 把每个引擎任务会话登记到插件实例名下,直到它关闭。后台自动更新据此在有回合运行时延后,
+ * 不再停掉插件进程打断正在跑的任务。
+ */
+function withPluginEngineTurnTracking(agent: AcpAgent): AcpAgent {
+  return new Proxy(agent, {
+    get(target, property) {
+      if (property === 'startSession') {
+        return async (options: StartSessionOptions) => {
+          const handle = await target.startSession(options);
+          const ref = parsePluginEngineProviderId(options.providerId);
+          if (!ref) return handle;
+          const untrack = trackPluginEngineSession(ref.ghostId, handle);
+          return new Proxy(handle, {
+            get(session, sessionProperty) {
+              if (sessionProperty === 'close') {
+                return async () => {
+                  try {
+                    return await session.close();
+                  } finally {
+                    untrack();
+                  }
+                };
+              }
+              const value = Reflect.get(session, sessionProperty, session);
+              return typeof value === 'function' ? value.bind(session) : value;
+            },
+          });
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 export interface InstallPluginEnginesCoreOpts {

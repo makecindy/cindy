@@ -12,6 +12,7 @@ import { writeTestCindyPackage } from '../../cindy-brain/__tests__/cindyPackageF
 import { assertGhostInstallConsent, confirmedUiCapability, type GhostInstallConsentDecision } from '../../cindy-brain/ghostInstallConsent.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { emptyPluginInstanceRegistry } from '../../cindy-brain/pluginInstanceRegistry.js';
+import { trackPluginEngineSession } from '../../cindy-brain/pluginHarnesses.js';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -6580,6 +6581,36 @@ describe('organization default Plugin takeover', () => {
     });
     await h.service.snapshot();
     expect(runtime.install).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression (2026-11-28): a silent update stopped a plugin task engine while four tasks were
+  // mid-turn, killing them. A running engine turn now defers the update like other plugin work;
+  // an engine session that is only idle does not, so updates are not postponed indefinitely.
+  it('defers a silent update while a plugin engine turn is running', async () => {
+    setCurrentOrganization();
+    const item = organizationDefaultSummary();
+    const dir = installRuntimeGhost({ ...manifest(item.ghostId), description: 'Local package' });
+    const h = harness([item]);
+    let turnRunning = true;
+    // A root install's busy key is its ghost id (see 'uses the namespaced storage part as the busy key').
+    const untrack = trackPluginEngineSession(item.ghostId, {
+      isTurnRunning: () => turnRunning,
+    });
+    try {
+      await h.service.snapshot();
+      expect(h.api.detail).not.toHaveBeenCalled();
+
+      turnRunning = false;
+      runtime.install.mockImplementationOnce(async (_file, options) => {
+        options.beforeCommitInLock?.();
+        const installed = { manifest: manifest(item.ghostId), dir, enabled: true };
+        fs.writeFileSync(path.join(dir, 'ghost.json'), JSON.stringify(installed.manifest));
+        runtime.ghosts = [installed];
+        return installed;
+      });
+      await h.service.snapshot();
+      expect(runtime.install).toHaveBeenCalledTimes(1);
+    } finally { untrack(); }
   });
 
   it.each(['detail', 'download', 'inspect'] as const)(

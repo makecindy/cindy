@@ -8431,6 +8431,27 @@ function readLocalGhostUpdateSource(
 }
 
 /**
+ * 原位更新前停止旧插件的 Node 进程。等不到退出时更新放弃、旧版本原样留着；此时不能马上恢复
+ * (旧进程可能仍在，会出现两份后台进程)，但也不能让插件一直停着：等这些进程真正退出后，
+ * 若装着的仍是同一份旧版本，就走「该在场了」的统一入口恢复它，并解除任务引擎的启动闸。
+ */
+async function stopGhostNodeRuntimeForUpdate(previousGhost: InstalledGhost): Promise<void> {
+  const instanceId = installedGhostStoragePart(previousGhost);
+  const broker = getGhostNodeRuntimeBroker();
+  try {
+    await broker.stopAndWait(instanceId);
+  } catch (error) {
+    broker.whenProcessesExited(instanceId, () => {
+      const current = findInstalledGhostByInstanceId(getGhostManager().list(), instanceId);
+      if (!current || current.dir !== previousGhost.dir) return;
+      log.info('restoring plugin after its processes exited following a failed update stop', { ghostId: instanceId });
+      spawnIfResident(current);
+    });
+    throw error;
+  }
+}
+
+/**
  * 本地包原位更新的共享事务。调用方必须已经持有 owner lease 和对应 ghostId
  * 的安装锁；Renderer 导入与 Forge 显式安装共用，避免两条路径在运行时、OAuth、
  * 市场来源解绑和失败恢复上产生漂移。
@@ -8487,7 +8508,7 @@ async function updateLocalGhostPackageLocked(
     // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
     // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
     await stopPluginAppInstance(instanceId);
-    await getGhostNodeRuntimeBroker().stopAndWait(instanceId);
+    await stopGhostNodeRuntimeForUpdate(previousGhost);
     // 用户已明确选择了这份本地真实包：同 id 可以原位替换，市场来源不是永久所有权。
     // 替换前先切断旧市场更新路由；用户状态由安装事务隔离归档，落位失败再恢复。
     const detachMarketRecord = Boolean(marketRecord?.installed);
@@ -9115,7 +9136,7 @@ async function installOrUpdateMarketGhostPackageLocked(
     // 无法确认旧进程已退出时保持停止态，不能启动第二份 resident。只有旧进程
     // 已确认退出、后续目录更新失败时，才恢复原版本。
     await stopPluginAppInstance(installedGhostStoragePart(installed));
-    await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));
+    await stopGhostNodeRuntimeForUpdate(installed);
     let result: Awaited<ReturnType<typeof manager.update>>;
     let packagePlaced = false;
     try {

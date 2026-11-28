@@ -83,6 +83,7 @@ import {
   republishGhostRoster,
   uninstallGhostAndCleanup,
 } from '../cindy-brain/index.js';
+import { hasRunningPluginEngineTurn } from '../cindy-brain/pluginHarnesses.js';
 import {
   hasCindyOfficialTrustMetadata,
   isCindyOfficialTrustInfo,
@@ -607,7 +608,9 @@ function isGhostBusy(
   return (
     hasPendingGhostCalls(runtimeId) ||
     hasRunningGhostErrand(runtimeId) ||
-    hasRunningGhostCindyWork(runtimeId)
+    hasRunningGhostCindyWork(runtimeId) ||
+    // 更新会停掉插件全部进程；引擎上有任务回合在跑时延后，不打断正在用的旧版本。
+    hasRunningPluginEngineTurn(runtimeId)
   );
 }
 
