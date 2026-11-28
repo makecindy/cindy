@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { vi } from 'vitest';
 import { buildAttachmentOssRef, buildPeerAttachmentRef } from '@cindy/device-link';
@@ -34,33 +35,42 @@ import {
 } from '@/session/sentAttachmentThumbStore';
 
 const DOC_DIR = 'file:///doc/';
-const THUMB_DIR = `${DOC_DIR}${__testing.thumbDirName}`;
+const THUMB_DIR = `${DOC_DIR}${__testing.fileThumbDirName}`;
+const LEGACY_THUMB_DIR = `${DOC_DIR}${__testing.thumbDirName}`;
 const OSS_REF = 'cindy-oss-attach://m/abc123';
 const OSS_REF_2 = 'cindy-oss-attach://m/def456';
 
 function makeFsDeps(overrides: Partial<SentAttachmentThumbFsDeps> = {}) {
   const copies: Array<{ from: string; to: string }> = [];
   const removed: string[] = [];
-  let dirFiles: string[] = [];
+  const files = new Set<string>();
+  let index: string | null = null;
   const deps: SentAttachmentThumbFsDeps = {
     documentDirectory: async () => DOC_DIR,
     copy: async (from, to) => {
       copies.push({ from, to });
+      files.add(to);
     },
     remove: async (uri) => {
       removed.push(uri);
+      files.delete(uri);
     },
-    readDirectory: async () => dirFiles,
+    readDirectory: async (dir) => [...files]
+      .filter(uri => uri.startsWith(`${dir}/`))
+      .map(uri => uri.slice(dir.length + 1)),
+    readIndex: async () => index,
+    writeIndex: async (_dir, text) => { index = text; },
     makeDirectory: async () => undefined,
-    statSize: async () => 1000,
+    statSize: async (uri) => files.has(uri) ? 1000 : 0,
     ...overrides,
   };
   return {
     deps,
     copies,
     removed,
-    setDirFiles(files: string[]) {
-      dirFiles = files;
+    indexText: () => index,
+    addFiles(dir: string, ...names: string[]) {
+      for (const name of names) files.add(`${dir}/${name}`);
     },
   };
 }
@@ -110,7 +120,7 @@ describe('sentAttachmentThumbStore', () => {
     await __testing.flushPersist();
     expect(getSentAttachmentThumbUri(OSS_REF)).toBeNull();
     expect(removed).toContain(copies[0].to);
-    expect(storage.has(__testing.storageKey)).toBe(false);
+    expect(await deps.readIndex(DOC_DIR)).toBeNull();
   });
 
   it('does not assign unowned legacy records to the next logged-in account', async () => {
@@ -167,11 +177,11 @@ describe('sentAttachmentThumbStore', () => {
   });
 
   it('register 持久化映射(相对文件名,不含容器绝对路径)', async () => {
-    const { deps } = makeFsDeps();
+    const { deps, indexText } = makeFsDeps();
     await registerSentAttachmentThumb(OSS_REF, 'file:///cache/upload-a.png', deps);
     await __testing.flushPersist();
 
-    const raw = storage.get(__testing.storageKey);
+    const raw = indexText();
     expect(raw).toBeTruthy();
     const parsed = JSON.parse(raw!) as Array<{ ossRef: string; file: string; at: number }>;
     expect(parsed).toHaveLength(1);
@@ -189,7 +199,7 @@ describe('sentAttachmentThumbStore', () => {
     const { deps, copies } = makeFsDeps();
     await registerSentAttachmentThumb(mediaRef, 'file:///cache/pasted.png', deps);
     expect(copies).toHaveLength(1);
-    expect(getSentAttachmentThumbUri(mediaRef)).toContain('sent-attachment-thumbs/');
+    expect(getSentAttachmentThumbUri(mediaRef)).toContain(`${THUMB_DIR}/`);
   });
 
   it('非兜底引用 / 空 sourceUri / 重复引用不注册', async () => {
@@ -238,22 +248,75 @@ describe('sentAttachmentThumbStore', () => {
       { ossRef: OSS_REF, file: 'thumb-fresh.jpg', at: now - 1000, accountKey: getMobileAuthOwner().accountKey },
       { ossRef: OSS_REF_2, file: 'thumb-stale.jpg', at: now - 30 * 24 * 60 * 60 * 1000, accountKey: getMobileAuthOwner().accountKey },
     ]));
-    const { deps, removed, setDirFiles } = makeFsDeps();
-    setDirFiles(['thumb-fresh.jpg', 'thumb-stale.jpg', 'thumb-orphan.jpg']);
+    const { deps, removed, addFiles } = makeFsDeps();
+    addFiles(LEGACY_THUMB_DIR, 'thumb-fresh.jpg', 'thumb-stale.jpg', 'thumb-orphan.jpg');
 
     await ensureSentAttachmentThumbsHydrated(deps);
 
-    expect(getSentAttachmentThumbUri(OSS_REF)).toBe(`${THUMB_DIR}/thumb-fresh.jpg`);
-    expect(getSentAttachmentThumbUri(OSS_REF_2)).toBe(`${THUMB_DIR}/thumb-stale.jpg`);
+    expect(getSentAttachmentThumbUri(OSS_REF)).toBe(`${LEGACY_THUMB_DIR}/thumb-fresh.jpg`);
+    expect(getSentAttachmentThumbUri(OSS_REF_2)).toBe(`${LEGACY_THUMB_DIR}/thumb-stale.jpg`);
     // 仍被引用的旧文件保留。
     expect(removed.sort()).toEqual([
-      `${THUMB_DIR}/thumb-orphan.jpg`,
+      `${LEGACY_THUMB_DIR}/thumb-orphan.jpg`,
     ]);
     // 旧映射仍可供重启恢复。
     await __testing.flushPersist();
     const parsed = JSON.parse(storage.get(__testing.storageKey)!) as Array<{ ossRef: string }>;
     expect(parsed.map((entry) => entry.ossRef)).toEqual([OSS_REF, OSS_REF_2]);
   });
+
+  // Unit regression for #5588: Android can reject a single unreadable legacy row.
+  // Existing hydration coverage only exercises successful reads. A rejected read
+  // must retain old image bytes while new registrations survive process restart.
+  it('retains old copies and persists new registrations when the legacy read fails', async () => {
+    const { deps, removed, addFiles } = makeFsDeps();
+    addFiles(LEGACY_THUMB_DIR, 'thumb-legacy.jpg');
+    const error = new Error('Row too big to fit into CursorWindow');
+    vi.mocked(AsyncStorage.getItem).mockRejectedValueOnce(error);
+
+    await registerSentAttachmentThumb(OSS_REF, 'file:///cache/upload.png', deps);
+    await __testing.flushPersist();
+    expect(removed).toEqual([]);
+    expect(storage.has(__testing.storageKey)).toBe(false);
+    const uri = getSentAttachmentThumbUri(OSS_REF);
+
+    __testing.reset();
+    vi.mocked(AsyncStorage.getItem).mockRejectedValueOnce(error);
+    await expect(resolveSentAttachmentThumb(OSS_REF, deps)).resolves.toMatchObject({ uri, size: 1000 });
+    expect(removed).toEqual([]);
+  });
+
+  // Unit regression for #5588: the old fixture listed no files in the new directory.
+  // Restart through the public resolver with a registered copy and one unlisted
+  // file. Only a complete index can establish that the latter is an orphan.
+  it.each(['complete', 'unreadable', 'incomplete'] as const)(
+    'cleans the new directory only with a complete index (%s)',
+    async (indexState) => {
+      const { deps, copies, addFiles } = makeFsDeps();
+      await registerSentAttachmentThumb(OSS_REF, 'file:///cache/upload.png', deps);
+      await __testing.flushPersist();
+      const [{ to: registeredUri }] = copies;
+      const orphan = 'thumb-unlisted.png';
+      addFiles(THUMB_DIR, orphan);
+
+      if (indexState === 'unreadable') {
+        vi.spyOn(deps, 'readIndex').mockRejectedValueOnce(new Error('read failed'));
+      }
+      if (indexState === 'incomplete') {
+        const records = JSON.parse((await deps.readIndex(DOC_DIR))!);
+        records.push({ ossRef: OSS_REF_2, file: orphan, at: 1 });
+        await deps.writeIndex(DOC_DIR, JSON.stringify(records));
+      }
+
+      __testing.reset();
+      const hit = await resolveSentAttachmentThumb(OSS_REF, deps);
+      expect(hit?.uri ?? null).toBe(indexState === 'unreadable' ? null : registeredUri);
+      const registeredName = registeredUri.slice(THUMB_DIR.length + 1);
+      expect(await deps.readDirectory(THUMB_DIR)).toEqual(
+        indexState === 'complete' ? [registeredName] : [registeredName, orphan],
+      );
+    },
+  );
 
   it('损坏的持久化内容按空映射处理', async () => {
     storage.set(__testing.storageKey, 'not-json{');

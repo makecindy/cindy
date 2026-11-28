@@ -23,12 +23,15 @@ import { extOfMime, imageMimeFromUrl, type RemoteMediaDiskCacheHit } from '@/ses
 const STORAGE_KEY = 'xdt.sentAttachmentThumbs.v1';
 /** documentDirectory 下的自有子目录(不放 cache:系统清缓存会把兜底图清裂)。 */
 const THUMB_DIR_NAME = 'sent-attachment-thumbs';
+const FILE_THUMB_DIR_NAME = 'sent-attachment-thumbs-v2';
+const INDEX_FILE_NAME = 'sent-attachment-thumbs-v2.json';
 /** 拷贝产物扩展名白名单(其余回落 .jpg;只影响文件名,不影响渲染)。 */
 const KNOWN_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
 
 interface ThumbEntry {
   accountKey: string;
-  /** THUMB_DIR_NAME 下的相对文件名。 */
+  /** 相对于各自底片目录的文件名。 */
+  legacy: boolean;
   file: string;
   /** 注册时间戳。 */
   at: number;
@@ -42,6 +45,8 @@ export interface SentAttachmentThumbFsDeps {
   readDirectory(dir: string): Promise<string[]>;
   makeDirectory(dir: string): Promise<void>;
   statSize(uri: string): Promise<number>;
+  readIndex(docDir: string): Promise<string | null>;
+  writeIndex(docDir: string, text: string): Promise<void>;
 }
 
 const defaultFsDeps: SentAttachmentThumbFsDeps = {
@@ -70,6 +75,23 @@ const defaultFsDeps: SentAttachmentThumbFsDeps = {
     const { statMobileAttachmentFileSize } = await import('@/session/mobileAttachmentUpload');
     return statMobileAttachmentFileSize(uri);
   },
+  async readIndex(docDir) {
+    const { File } = await import('expo-file-system');
+    const file = new File(docDir, INDEX_FILE_NAME);
+    return file.exists ? file.text() : null;
+  },
+  async writeIndex(docDir, text) {
+    const { File } = await import('expo-file-system');
+    const fs = await import('expo-file-system/legacy');
+    const temporaryUri = `${docDir}${INDEX_FILE_NAME}.tmp`;
+    const temporary = new File(temporaryUri);
+    try {
+      await fs.writeAsStringAsync(temporaryUri, text);
+      temporary.moveSync(new File(docDir, INDEX_FILE_NAME), { overwrite: true });
+    } finally {
+      await fs.deleteAsync(temporaryUri, { idempotent: true }).catch(() => undefined);
+    }
+  },
 };
 
 const entries = new Map<string, ThumbEntry>();
@@ -82,6 +104,9 @@ let cachedDocDir: string | null = null;
 let hydratePromise: Promise<void> | null = null;
 let fileSeq = 0;
 let persistQueue: Promise<void> = Promise.resolve();
+let fileIndexLoaded = false;
+let indexRevision = 0;
+let savedIndexRevision = 0;
 
 function bump(): void {
   version += 1;
@@ -93,8 +118,8 @@ function scopedKey(accountKey: string, ref: string): string {
   return JSON.stringify([accountKey, ref]);
 }
 
-function thumbDir(): string | null {
-  return cachedDocDir ? `${cachedDocDir}${THUMB_DIR_NAME}` : null;
+function thumbDir(legacy = false): string | null {
+  return cachedDocDir ? `${cachedDocDir}${legacy ? THUMB_DIR_NAME : FILE_THUMB_DIR_NAME}` : null;
 }
 
 function contentHash(ref: string): string | undefined {
@@ -128,23 +153,34 @@ export function ensureSentAttachmentThumbsHydrated(
 
 async function hydrateInternal(deps: SentAttachmentThumbFsDeps): Promise<void> {
   cachedDocDir = await deps.documentDirectory().catch(() => null);
-  const raw = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
-  const keep = parseStoredEntries(raw);
-  // 内存以磁盘为底、保留 hydrate 期间已注册的新条目(register 先 await hydrate,
-  // 实际不会先写;防御性合并保证后写胜)。
-  for (const [ossRef, entry] of keep) {
-    if (!entries.has(scopedKey(entry.accountKey, ossRef))) rememberEntry(ossRef, entry);
-  }
-  // 目录孤儿清理:磁盘上存在但映射不再引用的文件。
-  const dir = thumbDir();
-  if (dir) {
-    const kept = new Set([...entries.values()].map((entry) => entry.file));
-    const names = await deps.readDirectory(dir).catch(() => [] as string[]);
-    for (const name of names) {
-      if (!kept.has(name)) void deps.remove(`${dir}/${name}`).catch(() => undefined);
-    }
-  }
+  if (!cachedDocDir) return;
+  // Keep the old index and copies available to older clients. A failed SQLite
+  // read (including an oversized row) cannot establish which copies are unused.
+  await hydrateIndex(deps, true, () => AsyncStorage.getItem(STORAGE_KEY)).catch(() => undefined);
+  const docDir = cachedDocDir;
+  fileIndexLoaded = await hydrateIndex(deps, false, () => deps.readIndex(docDir))
+    .then(() => true, () => false);
   bump();
+}
+
+async function hydrateIndex(
+  deps: SentAttachmentThumbFsDeps,
+  legacy: boolean,
+  read: () => Promise<string | null>,
+): Promise<void> {
+  const raw = await read();
+  if (raw === null) return;
+  const { records, complete } = parseStoredEntries(raw, legacy);
+  for (const [ref, entry] of records) rememberEntry(ref, entry);
+  const dir = thumbDir(legacy);
+  if (dir && complete) {
+    const kept = new Set(records.map(([, entry]) => entry.file));
+    const names = await deps.readDirectory(dir).catch(() => [] as string[]);
+    await Promise.all(names.filter(name => !kept.has(name)).map(name =>
+      deps.remove(`${dir}/${name}`).catch(() => undefined)));
+  }
+  // Never overwrite a partially read file index.
+  if (!complete && !legacy) throw new Error('Invalid sent attachment index');
 }
 
 /**
@@ -176,9 +212,10 @@ export async function registerSentAttachmentThumb(
   if (!current()) return;
   try {
     await ensureSentAttachmentThumbsHydrated(deps);
-    if (!current() || entries.has(scopedKey(owner.accountKey, ossRef))) return;
+    if (!current() || !fileIndexLoaded || entries.has(scopedKey(owner.accountKey, ossRef))) return;
     const dir = thumbDir();
-    if (!dir) return;
+    const docDir = cachedDocDir;
+    if (!dir || !docDir) return;
     const at = Date.now();
     fileSeq += 1;
     // Upload snapshots intentionally have no extension. Keep the image's actual
@@ -192,8 +229,8 @@ export async function registerSentAttachmentThumb(
       await deps.remove(`${dir}/${file}`);
       return;
     }
-    rememberEntry(ossRef, { file, at, accountKey: owner.accountKey });
-    schedulePersist();
+    rememberEntry(ossRef, { file, at, accountKey: owner.accountKey, legacy: false });
+    schedulePersist(deps, docDir);
     bump();
   } catch {
     // 拷贝 / 持久化失败:放弃这条兜底,气泡回落占位卡(现状),不影响发送。
@@ -208,12 +245,11 @@ export function getSentAttachmentThumbUri(ossRef: string): string | null {
   const { accountKey } = getMobileAuthOwner();
   if (!accountKey) return null;
   if (!hydratePromise) void ensureSentAttachmentThumbsHydrated();
-  const dir = thumbDir();
-  if (!dir) return null;
   const hash = contentHash(ossRef);
   const entry = entries.get(scopedKey(accountKey, ossRef))
     ?? (hash ? entriesByHash.get(scopedKey(accountKey, hash)) : undefined);
-  return entry ? `${dir}/${entry.file}` : null;
+  const dir = entry && thumbDir(entry.legacy);
+  return entry && dir ? `${dir}/${entry.file}` : null;
 }
 
 /** Original-image reads must wait for hydration and verify the retained file still exists. */
@@ -279,51 +315,50 @@ function extForUri(uri: string): string {
   return KNOWN_EXTS.has(ext) ? ext : 'jpg';
 }
 
-function parseStoredEntries(raw: string | null): Array<[string, ThumbEntry]> {
-  if (!raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const out: Array<[string, ThumbEntry]> = [];
-    for (const item of parsed) {
-      if (!item || typeof item !== 'object') continue;
-      const record = item as Record<string, unknown>;
-      if (
-        typeof record.ossRef === 'string'
-        && record.ossRef.length > 0
-        && typeof record.file === 'string'
-        && record.file.length > 0
-        && typeof record.at === 'number'
-        && Number.isFinite(record.at)
-        && typeof record.accountKey === 'string'
-        && record.accountKey.length > 0
-      ) {
-        out.push([record.ossRef, { file: record.file, at: record.at, accountKey: record.accountKey }]);
-      }
+function parseStoredEntries(raw: string, legacy: boolean) {
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error('Invalid sent attachment index');
+  const records: Array<[string, ThumbEntry]> = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    if (
+      typeof record.ossRef === 'string'
+      && record.ossRef.length > 0
+      && typeof record.file === 'string'
+      && record.file.length > 0
+      && typeof record.at === 'number'
+      && Number.isFinite(record.at)
+      && typeof record.accountKey === 'string'
+      && record.accountKey.length > 0
+    ) {
+      records.push([record.ossRef, { file: record.file, at: record.at, accountKey: record.accountKey, legacy }]);
     }
-    return out;
-  } catch {
-    return [];
   }
+  return { records, complete: records.length === parsed.length };
 }
 
-function schedulePersist(): void {
-  const snapshot = [...entries.entries()].map(([key, entry]) => ({
-    ossRef: (JSON.parse(key) as [string, string])[1],
-    accountKey: entry.accountKey,
-    file: entry.file,
-    at: entry.at,
-  }));
-  persistQueue = persistQueue
-    .catch(() => undefined)
-    .then(() => AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot)))
-    .catch(() => undefined);
+function schedulePersist(deps: SentAttachmentThumbFsDeps, docDir: string): void {
+  indexRevision += 1;
+  persistQueue = persistQueue.then(async () => {
+    const revision = indexRevision;
+    if (revision === savedIndexRevision) return;
+    const snapshot = [...entries].flatMap(([key, entry]) => entry.legacy ? [] : [{
+      ossRef: (JSON.parse(key) as [string, string])[1],
+      accountKey: entry.accountKey,
+      file: entry.file,
+      at: entry.at,
+    }]);
+    await deps.writeIndex(docDir, JSON.stringify(snapshot));
+    savedIndexRevision = revision;
+  }).catch(() => undefined);
 }
 
 export const __testing = {
   storageKey: STORAGE_KEY,
   thumbDirName: THUMB_DIR_NAME,
-  /** 等持久化队列排空(测试断言 AsyncStorage 内容前调用)。 */
+  fileThumbDirName: FILE_THUMB_DIR_NAME,
+  /** 等持久化队列排空(测试断言索引内容前调用)。 */
   flushPersist(): Promise<void> {
     return persistQueue;
   },
@@ -335,6 +370,9 @@ export const __testing = {
     cachedDocDir = null;
     hydratePromise = null;
     fileSeq = 0;
+    fileIndexLoaded = false;
+    indexRevision = 0;
+    savedIndexRevision = 0;
     persistQueue = Promise.resolve();
   },
 };
