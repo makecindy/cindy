@@ -89,9 +89,9 @@ describe('mobileHomeListCache', () => {
     const { getCachedHomeListSnapshot, cacheHomeListSnapshot } = await import('@/session/mobileHomeListCache');
     const companion = { id: 'cindy-default', role: 'routine' };
     const taskTeammate = { id: 'cindy-default', name: 'Cindy', avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' } };
-    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3) })]);
+    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3), archivedAt: isoAt(6) })]);
     const [cached] = await getCachedHomeListSnapshot(USER_ID);
-    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3) });
+    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3), archivedAt: isoAt(6) });
   });
 
   // Unit: opening a cold-start list row must still identify the history cutoff
@@ -218,6 +218,23 @@ describe('mobileHomeListCache', () => {
     expect(cached.extraDirs).toBeUndefined();
     expect(cached.providerId).toBeUndefined();
     expect(cached.contextTokens).toBeUndefined();
+  });
+
+  it('preserves acp agentKind, providerId, and agentDeviceId across cold-start cache round trips', async () => {
+    await cacheHomeListSnapshot(USER_ID, [
+      makeSession('s-acp', 'dev-a', {
+        agentKind: 'acp',
+        providerId: 'acp-plugin:dsh:dsh',
+        agentDeviceId: 'share:s1',
+      }),
+    ]);
+    const [cached] = await getCachedHomeListSnapshot(USER_ID);
+    expect(cached.sessions[0]).toMatchObject({
+      id: 's-acp',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:dsh:dsh',
+      agentDeviceId: 'share:s1',
+    });
   });
 
   it('drops orca worker sessions, deleted sessions and unstamped sessions', async () => {

@@ -1223,7 +1223,8 @@ export function LoginMethodRow({
   subtitle?: string;
   onClick: () => void;
   disabled?: boolean;
-  icon?: 'enterprise' | 'person';
+  /** person-add：注册确认「创建新账号」（同 leftIcon 24 设计px 槽）。 */
+  icon?: 'enterprise' | 'person' | 'person-add';
   /** 企业 logo(auth console 上传);加载失败或缺省时回落到矢量 icon。 */
   logoUrl?: string | null;
   testId?: string;
@@ -1285,6 +1286,8 @@ export function LoginMethodRow({
           />
         ) : icon === 'person' ? (
           <PersonIcon />
+        ) : icon === 'person-add' ? (
+          <PersonAddIcon />
         ) : (
           <EnterpriseIcon />
         )}
@@ -1362,6 +1365,21 @@ function EnterpriseIcon() {
       <path
         d="M22.5 10.5C22.5 10.1022 22.342 9.72064 22.0607 9.43934C21.7794 9.15804 21.3978 9 21 9H16.5V3C16.5 2.60218 16.342 2.22064 16.0607 1.93934C15.7794 1.65804 15.3978 1.5 15 1.5H3C2.60218 1.5 2.22064 1.65804 1.93934 1.93934C1.65804 2.22064 1.5 2.60218 1.5 3V22.5H22.5V10.5ZM3 3H15V21H3V3ZM16.5 21V10.5H21V21H16.5Z"
         fill={LOGIN_COLORS.controlText}
+      />
+    </svg>
+  );
+}
+
+/** 注册确认「创建新账号」：人形 + 加号，描边与 PersonIcon 同墨水色。 */
+function PersonAddIcon() {
+  return (
+    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="10" cy="8" r="4" stroke={LOGIN_COLORS.controlText} strokeWidth="2" />
+      <path
+        d="M3 20C3.8 16.4 6.6 14.5 10 14.5C11.3 14.5 12.5 14.8 13.5 15.3M18.5 14V20M15.5 17H21.5"
+        stroke={LOGIN_COLORS.controlText}
+        strokeWidth="2"
+        strokeLinecap="round"
       />
     </svg>
   );

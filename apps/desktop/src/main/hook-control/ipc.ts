@@ -139,6 +139,7 @@ import {
   mergeTelegramGroupActivationViews,
   resetGroupContextCursorsSafely,
 } from './groupWindow.js';
+import { collectOfficialGroupHistoryImages } from './groupHistoryImages.js';
 import { createHookDispatcher } from './dispatcher.js';
 import { hookModelProviderName } from './modelProviderName.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
@@ -747,6 +748,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       runner: createMakerHookSessionRunner({ log }),
       resolveCompanionTarget: resolveXCompanionTarget,
       buildContextPrefix: buildGroupContextPrefix,
+      collectGroupHistoryImages: collectOfficialGroupHistoryImages,
       // 新建 hook 会话默认预建独立 worktree(并发隔离); deps 组装与
       // maker-ipc/register.ts 的 use_worktree 分支同款。失败由 dispatcher
       // 回退共享目录。
@@ -1512,6 +1514,10 @@ export function registerHookControlIpc(): void {
       if (agentDeviceId && (!/^[A-Za-z0-9_.:-]{1,128}$/.test(agentDeviceId) || !providerId)) {
         throwIpcError('INVALID_PARAMS', 'remote provider route invalid');
       }
+      const modelGroup = p.modelGroup == null ? null : requireString(p.modelGroup, 'modelGroup');
+      if (modelGroup && (modelGroup.length > 128 || !providerId)) {
+        throwIpcError('INVALID_PARAMS', 'workspace modelGroup invalid');
+      }
       // 条目总量上限(codex review): 键合法性校验挡不住海量唯一 teamId 的无限
       // 追加 —— 新增(非替换/删除)且已达上限时拒绝。按精确键判新增(不能用
       // getWorkspaceProviderSource, 它的 teamId null 兜底会把新 team 误判为已存在)。
@@ -1531,7 +1537,7 @@ export function registerHookControlIpc(): void {
       // throwIpcError 协议给稳定错误码, 细节留 main 日志。
       let entries: ReturnType<typeof setWorkspaceProviderSource>;
       try {
-        entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId, agentDeviceId);
+        entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId, agentDeviceId, modelGroup);
         // 用户在设置页亲手换了共用那份的来源: 这个项目的配置不再算「升级时原样并入」。
         if (channel === 'shared') noteSharedPrefEdited(workspace);
       } catch (err) {

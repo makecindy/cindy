@@ -1,6 +1,11 @@
 import type { BrowserWindow } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
-import { applyMacWindowBackdrop, refreshMacSidebarGeometry, setMacSidebarWidth } from '../macosDesktopBlur';
+import {
+  applyMacWindowBackdrop,
+  inspectMacWindowFullscreen,
+  refreshMacSidebarGeometry,
+  setMacSidebarWidth,
+} from '../macosDesktopBlur';
 
 // Unit regression for the nonzero -> nonzero slider bug: exercise the production
 // dispatcher, preserving radius and window identity. The existing resolver tests
@@ -156,5 +161,43 @@ describe('Mac desktop blur application', () => {
     expect(native.setSidebar).toHaveBeenLastCalledWith(first.getNativeWindowHandle(), 0, false);
     applyMacWindowBackdrop(win, config, load);
     expect(native.setSidebar).toHaveBeenLastCalledWith(first.getNativeWindowHandle(), 325, false);
+  });
+
+  it('forwards native handle for fullscreen inspection and fails closed when unavailable', () => {
+    const first = windowFixture();
+    const win = first as unknown as BrowserWindow;
+    const snapshot = {
+      styleMaskFullScreen: true,
+      onActiveSpace: true,
+      visible: true,
+      spaceTypes: [0],
+      cgBounds: { x: 33, y: 0, width: 1736, height: 1088 },
+      cgOnScreen: true,
+    };
+    const native = {
+      apply: vi.fn(() => true),
+      setSidebar: vi.fn(() => true),
+      inspectFullscreen: vi.fn(() => snapshot),
+    };
+
+    expect(inspectMacWindowFullscreen(win, () => native, 'darwin')).toEqual(snapshot);
+    expect(native.inspectFullscreen).toHaveBeenCalledWith(first.getNativeWindowHandle());
+    expect(inspectMacWindowFullscreen(win, () => native, 'win32')).toBeNull();
+    expect(
+      inspectMacWindowFullscreen(
+        win,
+        () => ({ apply: vi.fn(() => true), setSidebar: vi.fn(() => true) }),
+        'darwin',
+      ),
+    ).toBeNull();
+    expect(inspectMacWindowFullscreen(win, () => null, 'darwin')).toBeNull();
+
+    native.inspectFullscreen.mockImplementationOnce(() => {
+      throw new Error('native boom');
+    });
+    expect(inspectMacWindowFullscreen(win, () => native, 'darwin')).toBeNull();
+
+    first.isDestroyed.mockReturnValue(true);
+    expect(inspectMacWindowFullscreen(win, () => native, 'darwin')).toBeNull();
   });
 });

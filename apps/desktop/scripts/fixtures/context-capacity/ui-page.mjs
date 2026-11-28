@@ -44,7 +44,7 @@ export default {
       const trigger = footer.getByRole('button');
       await trigger.waitFor();
       assert.match(await footer.innerText(), /12%/);
-      assert.match(await trigger.innerText(), ui.data.usage === 'balance' ? /CNY\s*0[.,]00/ : /Claude\/GPT[\s\S]*0%/);
+      assert.match(await trigger.innerText(), ui.data.usage === 'balance' ? /CNY\s*0[.,]00/ : /(?:6天|6d)[\s\S]*0%/);
       await ui.capture('entry', { locator: footer });
       if (ui.data.usage === 'balance') {
         await page.keyboard.press('Tab');

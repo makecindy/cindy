@@ -124,6 +124,7 @@ export function RemotePluginCatalogSource({
   const secondaryTabs = useRef<HTMLDivElement>(null);
   const installedGridCache = pluginInstalledGrid(catalogMemory, query);
   const [originFilter, setOriginFilter] = usePluginCatalogState(catalogMemory, 'originFilter');
+  const [searchScope, setSearchScope] = usePluginCatalogState(catalogMemory, 'searchScope');
   const [status, setStatus] = useState<
     'readFailed' | 'unknown' | 'changed' | 'actionFailed' | null
   >(null);
@@ -980,6 +981,8 @@ export function RemotePluginCatalogSource({
         onSelectCatalogTab,
         query,
         onQueryChange: setQuery,
+        searchScope,
+        onSearchScope: setSearchScope,
         scrollRef: catalogScroller,
         onScroll: onListScroll,
         tabsRef: secondaryTabs,

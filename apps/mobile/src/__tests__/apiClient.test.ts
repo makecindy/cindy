@@ -326,6 +326,21 @@ describe('apiFetchRaw', () => {
       dispose();
     }
   });
+
+  it('parses Retry-After onto ApiError.retryAt for 429 and 503 responses', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-26T04:00:00.000Z'));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'slow down' } }),
+      { status: 429, headers: { 'Retry-After': '12' } },
+    )));
+    await expect(apiFetchRaw('/v1/conversations', { baseUrl: 'https://chat.example.invalid' }))
+      .rejects.toMatchObject({
+        code: 'RATE_LIMITED',
+        status: 429,
+        retryAt: Date.parse('2026-11-26T04:00:12.000Z'),
+      });
+  });
 });
 
 // Self-hosted relay (docs/self-hosted-relay-plan.md §5.3, §8): every device-link REST consumer goes

@@ -26,6 +26,7 @@ export interface OfflineInboxSessionSnapshot {
   pinnedAt?: string | null;
   snoozedUntil?: string | null;
   snoozedAt?: string | null;
+  archivedAt?: string | null;
   userSendAt?: string | null;
   lastActivityAt?: string | null;
   updatedAt?: string | null;
@@ -239,11 +240,13 @@ export function projectSessionWithOfflineInboxIntent<T extends OfflineInboxSessi
 ): T {
   if (!intent) return session;
   if (intent.kind === 'complete') {
+    const archivedAt = session.status === 'archived' && session.archivedAt ? session.archivedAt : intent.createdAt;
     if (
       session.status === 'archived' &&
       session.pinnedAt == null &&
       session.snoozedUntil == null &&
-      session.snoozedAt == null
+      session.snoozedAt == null &&
+      session.archivedAt === archivedAt
     ) {
       return session;
     }
@@ -253,6 +256,7 @@ export function projectSessionWithOfflineInboxIntent<T extends OfflineInboxSessi
       pinnedAt: null,
       snoozedUntil: null,
       snoozedAt: null,
+      archivedAt,
     };
   }
   const until = intent.snoozedUntil ?? null;
@@ -265,23 +269,6 @@ export function projectSessionWithOfflineInboxIntent<T extends OfflineInboxSessi
   const snoozedAt = maxIsoTimestamp(intent.createdAt, session.userSendAt);
   if (session.snoozedUntil === until && session.snoozedAt === snoozedAt) return session;
   return { ...session, snoozedUntil: until, snoozedAt };
-}
-
-/**
- * Apply an offline snooze/wake intent onto a teammate conversation's `inboxSnooze` snapshot.
- */
-export function projectTeammateSnoozeWithOfflineInboxIntent<
-  T extends { snoozedUntil: string | null; snoozedAt: string | null; userSendAt: string | null },
->(snooze: T | null, intent: OfflineInboxIntent | undefined): T | null {
-  if (!snooze || !intent || intent.kind !== 'snooze') return snooze;
-  const until = intent.snoozedUntil ?? null;
-  if (until === null) {
-    if (snooze.snoozedUntil === null && snooze.snoozedAt === null) return snooze;
-    return { ...snooze, snoozedUntil: null, snoozedAt: null };
-  }
-  const snoozedAt = maxIsoTimestamp(intent.createdAt, snooze.userSendAt);
-  if (snooze.snoozedUntil === until && snooze.snoozedAt === snoozedAt) return snooze;
-  return { ...snooze, snoozedUntil: until, snoozedAt };
 }
 
 /**

@@ -1,3 +1,4 @@
+import { isStrictBase64Chars } from '@cindy/maker-shared';
 import type {
   AnthropicImageCodec,
   AnthropicImageCodecInput,
@@ -25,7 +26,7 @@ function strictBase64Bytes(data: string): Buffer | null {
   if (
     compact.length === 0
     || compact.length % 4 === 1
-    || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)
+    || !isStrictBase64Chars(compact, { allowEmpty: true })
   ) return null;
   try {
     return Buffer.from(compact, 'base64');

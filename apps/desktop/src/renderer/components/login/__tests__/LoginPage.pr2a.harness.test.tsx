@@ -39,7 +39,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, params?: Record<string, unknown>) => {
       if (!params) return key;
-      const shown = ['n', 'identifier', 'name', 'org', 'email', 'provider']
+      const shown = ['n', 'identifier', 'name', 'org', 'email', 'provider', 'target']
         .filter((p) => p in params)
         .map((p) => String(params[p]));
       return shown.length ? `${key}#${shown.join('|')}` : key;
@@ -208,7 +208,8 @@ describe('verification-code', () => {
     view.rerender(<LoginPage />);
 
     expect((screen.getByTestId('login-input') as HTMLInputElement).value).toBe('');
-    expect(screen.getByText('login.signIn').closest('button')?.disabled).toBe(true);
+    // 验证通过后才知道是登录还是需要创建账号(注册确认),按钮统一为「继续」。
+    expect(screen.getByText('login.continue').closest('button')?.disabled).toBe(true);
     // 倒计时首帧 60(247:1614 样式:次要档、无 underline、不可交互)
     const countdown = screen.getByTestId('login-resend-countdown');
     expect(countdown.textContent).toBe('login.resendCountdown#60');
@@ -234,7 +235,7 @@ describe('verification-code', () => {
   it('filled:6 位验证码 → 登录钮 enabled;重发链接为 underline 墨色 Text_link', async () => {
     mount(await verificationState());
     fireEvent.change(screen.getByTestId('login-input'), { target: { value: '123456' } });
-    expect(screen.getByText('login.signIn').closest('button')?.disabled).toBe(false);
+    expect(screen.getByText('login.continue').closest('button')?.disabled).toBe(false);
     const link = screen.getByTestId('login-resend-link');
     expect(link.className).toContain('underline');
     expect(link.getAttribute('style')).toContain('var(--login-link-text)');
@@ -387,6 +388,33 @@ describe('binding', () => {
     expect(button.disabled).toBe(true);
     fireEvent.change(screen.getByTestId('login-input'), { target: { value: '654321' } });
     expect(button.disabled).toBe(false);
+  });
+});
+
+/*
+ * 测试价值(注册确认屏)
+ * - 生产入口与可观察结果:LoginPage 对 signup-confirmation 的渲染与派发的 DesktopLoginAction。
+ * - 规则依据:docs/design-rules/login-flow.md §16.4;服务端 signup_confirmation_v1 契约。电脑登录页
+ *   不提供扫码登录(扫码只有「已登录电脑出码、手机扫码」一个方向,入口在「远程控制 Cindy」弹窗)。
+ * - 现有覆盖缺口:既有用例只覆盖四种登录结果与验证码页。
+ * - 最小失败输入:signup_required 结果渲染成空面板;登录页又出现扫码入口。
+ * - tier:unit(jsdom + mock useLogin + 真实 reducer / scenario fetch)。
+ */
+describe('signup confirmation', () => {
+  it('asks before creating an account and offers no QR login on the computer', async () => {
+    const dispatch = vi.fn(async () => true);
+    mount(await outcomeState('outcome:signup-required'), { dispatch });
+    expect(screen.getByTestId('login-panel-signup-confirmation')).toBeTruthy();
+    expect(screen.getByText('login.signup.title')).toBeTruthy();
+    expect(screen.getByText('login.signup.subtitle#a***@example.com')).toBeTruthy();
+    expect(screen.queryByTestId('login-signup-qr')).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-signup-create'));
+    });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'confirm-signup' });
+    cleanup();
+    mount(await identifierState());
+    expect(screen.queryByTestId('login-social-qr')).toBeNull();
   });
 });
 

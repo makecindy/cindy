@@ -3,6 +3,7 @@ import { peerMediaPlayback } from '@/device-link/peerFileRegistry';
 import { isLocalAgentNetMediaReceipt } from '@/device-link/agentNetLocalMediaReceipt';
 import type { NormalizedToolMedia } from "@/session/messageNormalize";
 import type { RemoteMediaDiskCache } from "./remoteMediaDiskCache";
+import { isCanonicalBase64 } from "@cindy/maker-shared";
 import {
   isPayloadDesktopLocalMediaUrl,
   isPayloadDirectPreviewableUrl,
@@ -402,9 +403,7 @@ function isValidInlineResult(
     Number.isSafeInteger(value.size) &&
     value.size >= 0 &&
     value.inlineBase64.length <= 1024 * 1024 &&
-    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-      value.inlineBase64,
-    ) &&
+    isCanonicalBase64(value.inlineBase64) &&
     (value.inlineBase64.length / 4) * 3 -
       (value.inlineBase64.endsWith("==")
         ? 2

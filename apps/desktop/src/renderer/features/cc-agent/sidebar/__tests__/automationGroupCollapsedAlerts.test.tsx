@@ -44,8 +44,24 @@ vi.mock('react-router-dom', () => ({
 
 // 子行探针:只登记「哪些运行被渲染成行」,不拖进 SessionItem 的全套依赖。
 vi.mock('../SessionItem', () => ({
-  SessionItem: ({ session }: { session: { id: string } }) =>
-    createElement('div', { 'data-child-run': session.id }),
+  SessionItem: ({
+    session,
+    onClick,
+  }: {
+    session: { id: string };
+    onClick?: (id: string, modifiers?: Record<string, unknown>) => void;
+  }) =>
+    createElement('div', {
+      'data-child-run': session.id,
+      onClick: (event: MouseEvent) =>
+        onClick?.(session.id, {
+          shiftKey: event.shiftKey,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          button: event.button,
+        }),
+    }),
   hasSessionSelectionModifier: () => false,
 }));
 
@@ -141,6 +157,7 @@ function GroupHarness({
   notifications,
   urgentSessionIds,
   initialCollapsed,
+  selectedSessionIds,
   onSessionClick = noop,
   onScheduleAction = noop,
   deviceLinkDeviceId,
@@ -150,7 +167,8 @@ function GroupHarness({
   notifications: string[];
   urgentSessionIds: ReadonlySet<string>;
   initialCollapsed: boolean;
-  onSessionClick?: (sessionId: string) => void;
+  selectedSessionIds?: ReadonlySet<string>;
+  onSessionClick?: (sessionId: string, modifiers?: unknown) => void;
   onScheduleAction?: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
   deviceLinkDeviceId?: string;
   /** null models an automation that has been deleted: the group keeps its runs but loses its schedule. */
@@ -172,6 +190,7 @@ function GroupHarness({
       runningSessionIds: new Set<string>(),
       attachedSessionIds: new Set<string>(),
       notifications: new Set(notifications),
+      selectedSessionIds,
       collapsed,
       onCollapsedChange: setCollapsed,
       onSessionClick,
@@ -188,13 +207,15 @@ function renderGroup({
   notifications = [],
   urgentSessionIds = new Set<string>(),
   collapsed = true,
+  selectedSessionIds,
   onSessionClick,
 }: {
   sessions?: Session[];
   notifications?: string[];
   urgentSessionIds?: ReadonlySet<string>;
   collapsed?: boolean;
-  onSessionClick?: (sessionId: string) => void;
+  selectedSessionIds?: ReadonlySet<string>;
+  onSessionClick?: (sessionId: string, modifiers?: unknown) => void;
 } = {}) {
   return render(
     createElement(GroupHarness, {
@@ -202,6 +223,7 @@ function renderGroup({
       notifications,
       urgentSessionIds,
       initialCollapsed: collapsed,
+      selectedSessionIds,
       onSessionClick,
     }),
   );
@@ -429,8 +451,54 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     });
 
     fireEvent.click(screen.getByText('产品决策巡检'));
-    expect(onSessionClick).toHaveBeenCalledWith('run-3');
-    expect(onSessionClick).not.toHaveBeenCalledWith('run-0');
+    expect(onSessionClick).toHaveBeenCalledWith(
+      'run-3',
+      expect.objectContaining({ shiftKey: false, metaKey: false, ctrlKey: false, button: 0 }),
+    );
+    expect(onSessionClick).not.toHaveBeenCalledWith('run-0', expect.anything());
+
+    fireEvent.click(screen.getByText('产品决策巡检'), { metaKey: true });
+    expect(onSessionClick).toHaveBeenLastCalledWith(
+      'run-3',
+      expect.objectContaining({ metaKey: true }),
+    );
+  });
+
+  it('多选期间普通点击组头或子行会透传点击参数且不冻结展开布局', () => {
+    const onSessionClick = vi.fn();
+    const selected = new Set(['run-1']);
+    const { container, rerender } = renderGroup({
+      sessions: MANY_RUNS,
+      notifications: ['run-7'],
+      collapsed: false,
+      selectedSessionIds: selected,
+      onSessionClick,
+    });
+    expect(childRunIds(container)).toEqual(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-7']);
+
+    fireEvent.click(screen.getByText('产品决策巡检'));
+    expect(onSessionClick).toHaveBeenLastCalledWith(
+      'run-0',
+      expect.objectContaining({ shiftKey: false, metaKey: false, ctrlKey: false, button: 0 }),
+    );
+    fireEvent.click(container.querySelector('[data-child-run="run-2"]')!);
+    expect(onSessionClick).toHaveBeenLastCalledWith(
+      'run-2',
+      expect.objectContaining({ shiftKey: false, metaKey: false, ctrlKey: false, button: 0 }),
+    );
+
+    // 未导航因此未冻结：清除 run-7 未读后列表立刻收回至前 5 条。
+    rerender(
+      createElement(GroupHarness, {
+        sessions: MANY_RUNS,
+        notifications: [],
+        urgentSessionIds: new Set<string>(),
+        initialCollapsed: false,
+        selectedSessionIds: selected,
+        onSessionClick,
+      }),
+    );
+    expect(childRunIds(container)).toEqual(['run-0', 'run-1', 'run-2', 'run-3', 'run-4']);
   });
 
   // 用户规则（unit）：只在折叠时排除组头任务；展开后无论已读未读都保留子行。
@@ -442,7 +510,10 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     });
     expect(childRunIds(container)).toEqual(['run-7']);
     fireEvent.click(screen.getByText('产品决策巡检'));
-    expect(onSessionClick).toHaveBeenLastCalledWith('run-0');
+    expect(onSessionClick).toHaveBeenLastCalledWith(
+      'run-0',
+      expect.objectContaining({ shiftKey: false, metaKey: false, ctrlKey: false, button: 0 }),
+    );
     fireEvent.click(screen.getByLabelText('ccAgent.sidebar.automationGroup.expand'));
     expect(childRunIds(container)).toEqual(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-7']);
     fireEvent.click(screen.getByText('产品决策巡检'));
