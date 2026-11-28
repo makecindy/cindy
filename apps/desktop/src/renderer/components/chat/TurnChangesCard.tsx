@@ -47,6 +47,8 @@ function TurnChangeFileRow({
   const fileRowRef = useRef<HTMLButtonElement>(null);
   const [sourcePreviewOpen, setSourcePreviewOpen] = useState(false);
   const sessionFileContext = useChatSessionFile();
+  const fileName = basename(file.path);
+  const directory = file.path.slice(0, file.path.length - fileName.length);
   const absolutePath = resolveToolFilePath(file.path, cwd);
   const htmlWithSession = isHtmlFilePath(absolutePath) ? sessionId : undefined;
   const contextMenu = useFileChipContextMenu({
@@ -75,8 +77,10 @@ function TurnChangeFileRow({
         className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
       >
         <FileTypeIcon name={file.path} size={15} className="shrink-0 text-[var(--text-secondary)]" />
-        <span className="min-w-0 flex-1 truncate text-13 text-[var(--text-primary)]">
-          {file.path}
+        <span className="sr-only">{file.path}</span>
+        <span aria-hidden="true" className="flex min-w-0 flex-1 text-13 text-[var(--text-primary)]">
+          {directory && <span className="min-w-0 truncate">{directory}</span>}
+          <span className="max-w-full shrink-0 truncate">{fileName}</span>
         </span>
         <span className="shrink-0 whitespace-nowrap font-mono text-12 tabular-nums">
           {file.additions > 0 && (
