@@ -12985,6 +12985,7 @@
       "arrivalPermissions": "{{name}} 已按这台电脑的默认权限运行。",
       "arrivalModel": "{{name}} 之前选的模型在这台电脑上不可用，已改用这台电脑的默认模型。",
       "arrivalModelSetup": "{{name}} 已来到这台电脑，但还没有可用模型。请连接模型供应商，或在「模型供应商 → 智能路由」里设置伙伴的默认模型。",
+      "modelSetupHint": "这台电脑还没有可用的伙伴模型。请在「模型供应商 → 智能路由」中设置伙伴默认模型，Cindy 会自动重试。",
       "arrivalPartialContent": "{{name}} 已来到这台电脑，部分云端内容未能恢复，原内容仍保留在云端。",
       "missingProfileTitle": "用初始资料继续 {{name}}？",
       "missingProfileDescription": "原主力电脑还没上传 {{name}} 的人设和简介。如果原电脑已重装或无法恢复，可以在这台电脑用初始资料继续，已同步到云端的对话和内容仍会保留。",

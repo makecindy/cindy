@@ -78,9 +78,9 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
       className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
     >
       <div className={`min-w-0 flex-1${conflict.action ? ' basis-full' : ''}`}>
-        <p className="text-14 font-medium text-[var(--text-primary)]">{t('bots.cloud.shadowTitle', { device })}</p>
+        <p className="text-14 font-medium text-[var(--text-primary)]">{actor?.needsModelSetup ? t('bots.cloud.takeOverFailed', { name }) : t('bots.cloud.shadowTitle', { device })}</p>
         <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
-          {busy ? t('bots.cloud.takingOver', { name }) : error ?? t('bots.cloud.shadowHint')}
+          {busy ? t('bots.cloud.takingOver', { name }) : error ?? t(actor?.needsModelSetup ? 'bots.cloud.modelSetupHint' : 'bots.cloud.shadowHint')}
         </p>
       </div>
       <CompanionCindyConflictAction action={conflict.action} />

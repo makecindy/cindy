@@ -12985,6 +12985,7 @@
       "arrivalPermissions": "{{name}} 已依此机预设权柄运作。",
       "arrivalModel": "{{name}} 前所选之模型此机不可用，已改用此机预设模型。",
       "arrivalModelSetup": "{{name}} 已至此机，然尚无可用模型。请连模型供方，或于「模型供方 → 智能路由」设伙伴之默认模型。",
+      "modelSetupHint": "此机尚无可用之伙伴模型。请于「模型供方 → 智能路由」设伙伴之默认模型，Cindy 将自重试。",
       "arrivalPartialContent": "{{name}} 已至此机，部分云端所存未能复原，原物仍留于云端。",
       "missingProfileTitle": "以初设资料续 {{name}} 乎？",
       "missingProfileDescription": "原主力电脑尚未传 {{name}} 之人设与简介。若原机已重装或不可复，可于此机以初设资料续之，已同步云端之对话与所存仍保留。",
