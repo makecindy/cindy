@@ -1569,9 +1569,6 @@ function CCAgentSessionContent({
           prev?.id === patchedId ? patchBuffer.merge(patchedId, prev) : prev,
         );
       }
-      // 被控端本机:控制端远程切的 fastMode 经 persistSessionFields 广播到这里 → 镜像进 chat
-      // in-memory,让本机打开的 fast 开关也即时跟随(以被控端为准;幂等,不碰本机乐观路径)。
-      makerChatStore.mirrorSessionFields(patchedId, patch);
     });
     return unsub;
   }, [sessionId]);
@@ -4708,10 +4705,7 @@ function CCAgentSessionContent({
         });
         return true;
       }
-      // 插件引擎：实时 usage_update 已带回上下文窗口时直接查 live 会话或用当前快照展示，不拿内置引擎的 createOpts 去冷启动。
       if (isPluginEngineKind(session?.agentKind)) {
-        const snapshotWindow = agentStatus.contextWindow;
-        const snapshotTokens = agentStatus.contextTokens;
         const cardClientId = insertSystemCard('context', { usage: undefined });
         if (!cardClientId) return true;
         void makerApiFor(sessionId)
@@ -4720,30 +4714,29 @@ function CCAgentSessionContent({
             updateSystemCardData(cardClientId, { usage });
           })
           .catch(() => {
-            if (snapshotWindow > 0) {
+            const { contextTokens, contextWindow, contextWindowFromRuntime } =
+              makerChatStore.getSnapshot(sessionId).agentStatus;
+            if (
+              !contextWindowFromRuntime ||
+              !Number.isFinite(contextWindow) || contextWindow <= 0 ||
+              !Number.isFinite(contextTokens) || contextTokens < 0
+            ) {
               updateSystemCardData(cardClientId, {
-                usage: {
-                  categories: [],
-                  totalTokens: snapshotTokens,
-                  maxTokens: snapshotWindow,
-                  rawMaxTokens: snapshotWindow,
-                  percentage: Math.min(100, (snapshotTokens / snapshotWindow) * 100),
-                  gridRows: [],
-                  model: session?.model ?? '',
-                  memoryFiles: [],
-                  mcpTools: [],
-                  agents: [],
-                  isAutoCompactEnabled: true,
-                  apiUsage: null,
-                },
+                usage: null,
+                error: t('chat.systemCard.context.noReportedUsage'),
               });
               return;
             }
             updateSystemCardData(cardClientId, {
-              usage: null,
-              error: t('chat.systemCard.context.unsupportedAgent', {
-                agent: pluginEngine?.name ?? t('newChat.pluginEngines.genericName'),
-              }),
+              summaryOnly: true,
+              usage: {
+                totalTokens: contextTokens,
+                maxTokens: contextWindow,
+                rawMaxTokens: contextWindow,
+                percentage: Math.min(100, (contextTokens / contextWindow) * 100),
+                categories: [],
+                model: session?.model ?? '',
+              },
             });
           });
         return true;
@@ -4786,7 +4779,7 @@ function CCAgentSessionContent({
         });
       return true;
     },
-    [agentStatus.contextTokens, agentStatus.contextWindow, fastMode, insertSystemCard, remoteDeviceId, session, sessionId, t, updateSystemCardData, pluginEngine?.name],
+    [fastMode, insertSystemCard, remoteDeviceId, session, sessionId, t, updateSystemCardData],
   );
 
   type DeferredCreationSend = {
