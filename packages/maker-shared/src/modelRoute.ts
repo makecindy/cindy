@@ -95,3 +95,20 @@ export function serializeModelRoutes(routes: readonly CompanionModelRoute[]): st
     ? { ...route, providerId: REMOTE_SOURCE_PREFIX + JSON.stringify([route.agentDeviceId, route.providerId]) }
     : route));
 }
+
+/** Provider IDs come from dispatch snapshots. Older history only has model names. */
+export interface TurnModelChange {
+  fromModel: string;
+  toModel: string;
+  fromProviderId?: string | null;
+  toProviderId?: string | null;
+  modelOnly: true;
+}
+
+export function formatTurnModelChange(data: Record<string, unknown>): string {
+  function label(provider: unknown, model: unknown): string {
+    const name = typeof model === 'string' ? model : '';
+    return typeof provider === 'string' && provider ? `${provider} · ${name}` : name;
+  }
+  return `${label(data.fromProviderId, data.fromModel)} → ${label(data.toProviderId, data.toModel)}`;
+}

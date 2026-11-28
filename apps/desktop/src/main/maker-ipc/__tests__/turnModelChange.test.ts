@@ -8,7 +8,7 @@ describe('dispatched model boundaries', () => {
   it.each([
     ['first input', null, previous, false],
     ['same model', previous, previous, false],
-    ['different source only', previous, { ...previous, providerId: 'other' }, false],
+    ['different source only', previous, { ...previous, providerId: 'other' }, true],
     ['different model', previous, { ...previous, model: 'automation-model' }, true],
     ['cross engine already has a handoff', previous, { ...previous, agentKind: 'pi' as const }, false],
   ] as const)('%s', async (_label, old, current, visible) => {
@@ -22,7 +22,8 @@ describe('dispatched model boundaries', () => {
     expect(recorded).toEqual(current);
     expect(publish.mock.calls).toHaveLength(visible ? 1 : 0);
     if (visible) expect(publish).toHaveBeenCalledWith({
-      fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true,
+      fromModel: previous.model, toModel: current.model, modelOnly: true,
+      fromProviderId: previous.providerId, toProviderId: current.providerId,
     });
   });
   // Unit regressions #10082/#8635: actual dispatch must suppress hidden control
@@ -40,7 +41,7 @@ describe('dispatched model boundaries', () => {
     });
     expect(record).toHaveBeenCalledTimes(autoResume ? 1 : 0);
     expect(publish.mock.calls).toEqual(autoResume
-      ? [[{ fromModel: 'owner-model', toModel: 'backup-model', modelOnly: true }]] : []);
+      ? [[{ fromModel: 'owner-model', toModel: 'backup-model', fromProviderId: 'account', toProviderId: 'account', modelOnly: true }]] : []);
   });
   it('records a real attachment input even when it quotes a hidden trigger', async () => {
     const publish = vi.fn(async () => {});
@@ -48,7 +49,7 @@ describe('dispatched model boundaries', () => {
       input: { content: JSON.stringify({ text: 'Explain [UI_ACTION_TRIGGER]', files: [] }), autoResume: false },
       readPrevious: async () => previous, record: async () => true, publish,
     });
-    expect(publish).toHaveBeenCalledWith({ fromModel: previous.model, toModel: 'other', modelOnly: true });
+    expect(publish).toHaveBeenCalledWith({ fromModel: previous.model, toModel: 'other', fromProviderId: 'account', toProviderId: 'account', modelOnly: true });
   });
   it('does not publish a separator when its input disappeared before persistence', async () => {
     const publish = vi.fn(async () => {});
