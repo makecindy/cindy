@@ -10999,12 +10999,14 @@
       "fileCount_other": "{{count}} 個檔案",
       "emptyTitle": "暫無改動",
       "emptyDesc": "本任務還沒有任何檔案改動。讓 Agent 編輯或建立檔案後，會在這裡出現。",
+      "emptyDescSvn": "版本控制下的檔案與 SVN 基準版本一致。",
+      "svnSelectFile": "選擇檔案以檢視差異。",
       "emptyDescGit": "當前 git worktree 沒有 staged 或 unstaged 改動。",
       "filterEmptyTitle": "當前過濾下暫無改動",
-      "filterEmptyDesc": "當前篩選或設定下沒有可顯示的 git 改動。",
+      "filterEmptyDesc": "當前篩選或設定下沒有可顯示的改動。",
       "noSessionTitle": "暫無任務",
       "noSessionDesc": "選擇一個本機任務後可檢視 git worktree 改動。",
-      "loadingTitle": "正在讀取 git 改動",
+      "loadingTitle": "正在讀取改動",
       "loadingDesc": "面板會保留上一次內容，讀取完成後重新整理。",
       "errorTitle": "讀取失敗",
       "refresh": "重新整理",
@@ -11278,6 +11280,10 @@
         "non-git": {
           "title": "不是 git 倉庫",
           "desc": "當前工作目錄下沒有可用的 git 倉庫。"
+        },
+        "svn-unavailable": {
+          "title": "找不到 SVN",
+          "desc": "安裝 Subversion 命令列用戶端即可檢視工作副本的差異。"
         },
         "git-unavailable": {
           "title": "git 不可用",

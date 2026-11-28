@@ -10999,12 +10999,14 @@
       "fileCount_other": "{{count}} 卷",
       "emptyTitle": "一字未动",
       "emptyDesc": "此差事尚未动一卷。待 Agent 落笔修卷或立卷，即现于此。",
+      "emptyDescSvn": "所录诸档，与 SVN 底本相同。",
+      "svnSelectFile": "择档以观异同。",
       "emptyDescGit": "当前 git worktree 无 staged 或 unstaged 改动。",
       "filterEmptyTitle": "此筛之下，一无所见",
-      "filterEmptyDesc": "当前筛选或设置之下，无可显之 git 改动。",
+      "filterEmptyDesc": "当前筛选或设置之下，无可显之改动。",
       "noSessionTitle": "尚无差事",
       "noSessionDesc": "择一本机差事，即可察其 git worktree 改动。",
-      "loadingTitle": "方读 git 改动",
+      "loadingTitle": "方读改动",
       "loadingDesc": "面板暂留前次内容，读毕即重整。",
       "errorTitle": "读取未成",
       "refresh": "重整",
@@ -11278,6 +11280,10 @@
         "non-git": {
           "title": "非 git 仓库",
           "desc": "当前工作目录下无可用之 git 仓库。"
+        },
+        "svn-unavailable": {
+          "title": "未见 SVN",
+          "desc": "请装 Subversion 命令列程式，以观副本异同。"
         },
         "git-unavailable": {
           "title": "git 弗能用",

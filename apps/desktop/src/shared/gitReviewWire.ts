@@ -13,6 +13,7 @@ export type ReviewDisableReason =
   | 'no-workdir'
   | 'non-git'
   | 'git-unavailable'
+  | 'svn-unavailable'
   | 'invalid-worktree'
   | 'unknown';
 
@@ -24,6 +25,7 @@ export interface AheadBehind {
 }
 
 export interface ReviewScope {
+  vcs?: 'svn' | 'git';
   sessionId: string;
   workdir: string | null;
   worktreePath: string | null;
