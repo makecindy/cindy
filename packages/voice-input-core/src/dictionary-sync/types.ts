@@ -31,7 +31,7 @@
  */
 
 import type { HlcTimestamp } from './hlc';
-import { hlcNodeId, isCanonicalHlc } from './hlc';
+import { compareHlc, hlcNodeId, isCanonicalHlc, maxHlc } from './hlc';
 
 /** 状态结构版本;不兼容改动 +1,收到更高版本的状态整份忽略而不是猜着合并。 */
 export const VOICE_DICTIONARY_SYNC_VERSION = 1;
@@ -110,6 +110,21 @@ export interface DictionarySuppression {
   stamp: HlcTimestamp;
 }
 
+/**
+ * 抑制/恢复的 LWW 事件记录（v1 可选扩展字段）。
+ *
+ * 旧客户端只认识 `suppressed`（G-Set，合并取 min stamp）。为了在不升版本号、不破坏旧端
+ * 合并的前提下支持「恢复自动学习」以及恢复后的再次抑制，这里用逐字段取 max HLC 的
+ * 可选映射记录后续切换：
+ *  - 未出现或无 `unsuppressedAt`：只要在 `suppressed` 里即处于抑制态（与旧端一致）；
+ *  - 存在 `unsuppressedAt`：比较 `max(suppressed[k].stamp, suppressedAt)` 与 `unsuppressedAt`，
+ *    前者 >= 后者为抑制，否则为已恢复。
+ */
+export interface DictionarySuppressionEvent {
+  suppressedAt?: HlcTimestamp;
+  unsuppressedAt?: HlcTimestamp;
+}
+
 /** 一份完整的可交换状态。JSON 可序列化:直接落盘、直接进 device-link push 帧。 */
 export interface VoiceDictionarySyncState {
   version: typeof VOICE_DICTIONARY_SYNC_VERSION;
@@ -121,6 +136,21 @@ export interface VoiceDictionarySyncState {
   records: Record<string, DictionaryRecord>;
   /** key = 归一化词条主键。 */
   suppressed: Record<string, DictionarySuppression>;
+  /** Optional v1 suppress/unsuppress transition ledger; merged per field by maxHlc. */
+  suppressionEvents?: Record<string, DictionarySuppressionEvent>;
+}
+
+/** 判断某词条主键当前是否处于自动学习抑制状态。 */
+export function isTermSuppressed(state: VoiceDictionarySyncState, key: string): boolean {
+  if (!hasDictionaryKey(state.suppressed, key)) return false;
+  const event = state.suppressionEvents && hasDictionaryKey(state.suppressionEvents, key)
+    ? state.suppressionEvents[key]
+    : undefined;
+  if (!event?.unsuppressedAt) return true;
+  const latestSuppressed = event.suppressedAt
+    ? maxHlc(state.suppressed[key].stamp, event.suppressedAt)
+    : state.suppressed[key].stamp;
+  return compareHlc(latestSuppressed, event.unsuppressedAt) >= 0;
 }
 
 /**
@@ -216,6 +246,16 @@ export function isValidSyncState(raw: unknown): raw is VoiceDictionarySyncState 
     if (!isPlainRecord(suppression)) return false;
     const { text, stamp } = suppression as Partial<DictionarySuppression>;
     if (typeof text !== 'string' || !isCanonicalHlc(stamp)) return false;
+  }
+  if (candidate.suppressionEvents !== undefined) {
+    if (!isPlainRecord(candidate.suppressionEvents)) return false;
+    for (const event of Object.values(candidate.suppressionEvents)) {
+      if (!isPlainRecord(event)) return false;
+      const { suppressedAt, unsuppressedAt } = event as Partial<DictionarySuppressionEvent>;
+      if (suppressedAt === undefined && unsuppressedAt === undefined) return false;
+      if (suppressedAt !== undefined && !isCanonicalHlc(suppressedAt)) return false;
+      if (unsuppressedAt !== undefined && !isCanonicalHlc(unsuppressedAt)) return false;
+    }
   }
   return true;
 }

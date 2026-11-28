@@ -26,6 +26,7 @@
  *    会被 dedup 静默吞掉,丢消息比双发更糟)。
  */
 import { useSyncExternalStore } from 'react';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
 import type { SlowSendPhase } from '@/session/SlowSendNotice';
 import * as ExpoCrypto from 'expo-crypto';
@@ -33,7 +34,7 @@ import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
-import { formatRemoteError } from '@/device-link/remoteStatus';
+import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
 import type { MobileMakerTransport, MobileOrcaEnableOptions } from '@/device-link/mobileMakerTransport';
 import { describeOrcaError, enableOrcaTeam, rememberOrcaStartFailure, type OrcaWorkerFormValue } from '@/session/orcaTeam';
 import { buildQueuedTextMessage } from '@/session/inputProjection';
@@ -52,7 +53,7 @@ import {
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { getCurrentMobileOutboxRecords, holdDurableOutboxCreation, isDurableOutboxCreationHeld, mobileDurableOutbox, persistCancelledCreationDraft, suspendCreationDraftForCleanup } from './mobileDurableOutbox';
-import { isDurableCreationDraft, type DurableOutboxRecord } from './durableOutbox';
+import { isDurableCreationDraft, isPendingHostDialogueCreation, needsHostCreation, type DurableOutboxRecord } from './durableOutbox';
 import { isExplicitRemoteNotFoundError } from './newSessionWorktree';
 import { mergeAttachmentsWithinLimit } from './attachments';
 import type { MobileLocalAttachmentUploadCandidate } from './mobileLocalAttachmentUpload';
@@ -138,6 +139,7 @@ export interface NewSessionCreationParams {
   revalidateDraftAfterAuth?: (fresh: DeviceProvidersPayload) => Promise<Partial<NewSessionDraft> | null>;
   /** Account-generation fence captured before the create flow starts. */
   isCurrentOwner?: () => boolean;
+  endBackgroundDelivery?: () => void;
   transport: NewSessionCreationTransport;
   /** 退避 / 轮询的 sleep 注入点(单测替换为立即返回;对齐 resolveInteractionResilient 的 opts.sleep 模式)。 */
   sleep?: (ms: number) => Promise<void>;
@@ -193,6 +195,7 @@ interface InternalTask extends NewSessionCreationTask {
 
 const tasks = new Map<string, InternalTask>();
 const subs = new Set<() => void>();
+const deliverySubs = new Set<() => void>();
 // useSyncExternalStore 的快照必须引用稳定:每次变更 bump 版本并重建缓存数组。
 let snapshotVersion = 0;
 const taskSnapshots = new Map<string, NewSessionCreationTask | null>();
@@ -205,10 +208,11 @@ function durableEditKey(record: DurableOutboxRecord): string {
   return JSON.stringify([record.accountId, record.deviceId, record.storageSessionId ?? record.item.sessionId, record.item.clientId]);
 }
 
-function emit(): void {
+function emit(change: 'task' | 'progress' = 'task'): void {
   snapshotVersion += 1;
   taskSnapshots.clear();
   for (const sub of subs) sub();
+  if (change === 'task') for (const sub of deliverySubs) sub();
 }
 
 // Failed pipelines have no pending continuation to retire them on account change.
@@ -417,9 +421,13 @@ export function retryNewSessionCreation(sessionId: string): void {
  * removeSyntheticRow = true 时把乐观合成行从列表隐藏(仅 create-failed:会话在
  * 被控端不存在,残行点进去只会再挂一次)。
  */
-export function dismissNewSessionCreation(sessionId: string, opts: { removeSyntheticRow?: boolean } = {}): void {
+export function dismissNewSessionCreation(
+  sessionId: string,
+  opts: { removeSyntheticRow?: boolean; keepBackgroundDelivery?: boolean } = {},
+): void {
   const task = tasks.get(sessionId);
   if (!task) return;
+  if (!opts.keepBackgroundDelivery) task.params.endBackgroundDelivery?.();
   tasks.delete(sessionId);
   if (opts.removeSyntheticRow) {
     remoteSessionStore.applySessionPatch(task.deviceId, sessionId, { status: 'deleted' });
@@ -713,22 +721,37 @@ export function dismissRecoveredPrecreatedSession(record: { sessionId: string; d
   remoteSessionStore.clearPendingTitlePreview(record.sessionId);
 }
 
+export function hasPendingHostDialogueCreation(sessionId: string, deviceId?: string): boolean {
+  if (!sessionId || !deviceId) return false;
+  return getCurrentMobileOutboxRecords().some(
+    (record) => record.item.sessionId === sessionId
+      && record.deviceId === deviceId
+      && isPendingHostDialogueCreation(record),
+  );
+}
+
 /**
  * 会话页 syncSession 守卫:running(被控端可能还没有这个会话,getSession 会
  * NOT_FOUND 报错横幅)与 create-failed(确定不存在)都要跳过同步;
  * enqueue-failed / done 时会话已建成,照常同步。
  */
-export function shouldBlockSessionSync(sessionId: string): boolean {
+export function shouldBlockSessionSync(sessionId: string, deviceId?: string): boolean {
   const status = getNewSessionCreationTask(sessionId)?.status;
-  return status === 'running' || status === 'create-failed';
+  if (status === 'running' || status === 'create-failed') return true;
+  return getCurrentMobileOutboxRecords().some(
+    (record) => record.item.sessionId === sessionId
+      && (!deviceId || record.deviceId === deviceId)
+      && isPendingHostDialogueCreation(record),
+  );
 }
 
-export function subscribeNewSessionCreationTasks(callback: () => void): () => void {
-  subs.add(callback);
+export function subscribeNewSessionCreationTasks(callback: () => void, mode: 'all' | 'delivery' = 'all'): () => void {
+  const listeners = mode === 'delivery' ? deliverySubs : subs;
+  listeners.add(callback);
   const offOutbox = mobileDurableOutbox.subscribe(callback);
   return () => {
     offOutbox();
-    subs.delete(callback);
+    listeners.delete(callback);
   };
 }
 
@@ -746,6 +769,14 @@ function getTaskSnapshot(sessionId: string): NewSessionCreationTask | null {
 /** 会话页订阅本会话的创建 task(null = 无 task / 已完成)。 */
 export function useNewSessionCreationTask(sessionId: string): NewSessionCreationTask | null {
   return useSyncExternalStore(subscribeNewSessionCreationTasks, () => getTaskSnapshot(sessionId));
+}
+
+/** Subscribe to whether this device/session still awaits durable host dialogue creation. */
+export function usePendingHostDialogueCreation(sessionId: string, deviceId?: string): boolean {
+  return useSyncExternalStore(
+    subscribeNewSessionCreationTasks,
+    () => hasPendingHostDialogueCreation(sessionId, deviceId),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -926,6 +957,7 @@ export function completeNewSessionDurableEdit(sessionId: string, deviceId: strin
 // ---------------------------------------------------------------------------
 
 function failTask(task: InternalTask, status: 'create-failed' | 'enqueue-failed', error: string): void {
+  task.params.endBackgroundDelivery?.();
   // task 可能已被 dismiss(用户返回编辑)——不要复活。
   if (!tasks.has(task.sessionId)) return;
   if (!isTaskOwnerCurrent(task)) {
@@ -1118,7 +1150,15 @@ async function createSessionIdempotent(
       } catch (probeError) {
         if (isStaleNewSessionOwnerError(probeError)) throw probeError;
       }
-      throw new Error(`${formatRemoteError(error)}\n${i18n.t('session.new.worktreeCleanupPending')}`);
+      // The worktree stays retained either way. A definite rejection (the
+      // computer answered with a reason) is not fixed by reconnecting. The failed
+      // task already returns to the new-task form on its own (and cancels the
+      // managed directory), so the hint only says the content is back to resend.
+      // Only an uncertain transport failure keeps the reconnect hint.
+      const nextStep = isTransientRemoteError(error)
+        ? 'session.new.worktreeCleanupPending'
+        : 'session.new.createRejectedResend';
+      throw new Error(`${formatRemoteError(error)}\n${i18n.t(nextStep)}`);
     }
   }
 
@@ -1278,7 +1318,11 @@ async function runPipeline(task: InternalTask, retry = false): Promise<void> {
 async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTimer): Promise<void> {
   const phase = (value: SlowSendPhase) => {
     task.phase = value;
-    emit();
+    mobileDebugLog('debug', 'new-session', 'creation phase', {
+      client: task.firstMessageClientId.slice(-8), phase: value,
+      elapsedMs: Date.now() - task.startedAt,
+    });
+    emit('progress');
   };
   const { params } = task;
   const { maker, openLink, subscribe } = params.transport;
@@ -1337,8 +1381,7 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     assertTaskOwnerCurrent(task);
     if (auth?.unauthenticated) {
       params.onUnauthenticated();
-      failTask(task, 'create-failed', params.authGateHint);
-      return;
+      throw new Error(params.authGateHint);
     }
     // 鉴权 fresh revalidate 之后、createSession 之前,用工作站当前目录联合校验
     // (model, providerId)(codex review P2):终检在 handoff 前完成,建链/鉴权期间
@@ -1570,6 +1613,20 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     if (isStaleNewSessionOwnerError(err) || !isTaskOwnerCurrent(task)) {
       cancelStaleOwnerTask(task);
       return;
+    }
+    const pending = getCurrentMobileOutboxRecords().find(record => record.deviceId === task.deviceId
+      && record.item.sessionId === sessionId && record.item.clientId === task.firstMessageClientId
+      && needsHostCreation(record));
+    if (pending && isAutoRecoveringRemoteError(err)) {
+      // The persisted send still owns these IDs. Release the live task so the outbox
+      // can resume after reconnect while keeping the bounded background delivery window alive.
+      dismissNewSessionCreation(sessionId, { keepBackgroundDelivery: true });
+      return;
+    }
+    if (pending) {
+      // Keep the editor recovery path even when its ledger write races cancellation.
+      await mobileDurableOutbox.update(pending, { state: 'failed', error: formatRemoteError(err) }).catch(() => undefined);
+      if (tasks.get(sessionId) !== task || !isTaskOwnerCurrent(task)) return;
     }
     failTask(task, 'create-failed', formatRemoteError(err));
   }

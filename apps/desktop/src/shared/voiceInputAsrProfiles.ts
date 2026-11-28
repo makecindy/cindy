@@ -4,7 +4,7 @@ export type VoiceInputRealtimeProtocolProfile =
 
 export type VoiceInputNativeProtocolProfile = 'volcengine-sauc-duration';
 
-export type VoiceInputAsrAuthKind = 'api-key' | 'codex';
+export type VoiceInputAsrAuthKind = 'api-key' | 'codex' | 'local';
 
 export type VoiceInputAsrSettingsTab = 'api-keys' | 'connections' | 'providers';
 
@@ -12,7 +12,8 @@ export type VoiceInputAsrMode =
   | 'elevenlabs-realtime'
   | 'realtime-websocket'
   | 'provider-native-websocket'
-  | 'batch-http';
+  | 'batch-http'
+  | 'local-offline';
 
 export type VoiceInputAsrPricing =
   | { unit: 'audio-second'; usd: number }
@@ -65,6 +66,7 @@ export const LITELLM_VOLCENGINE_SAUC_ASR_RESOURCE_ID = 'volc.seedasr.sauc.durati
 export const LITELLM_VOLCENGINE_SAUC_ASR_PCM_SAMPLE_RATE = 16_000;
 export const LITELLM_TRANSCRIPTION_MODEL = 'elevenlabs/scribe_v2';
 export const CUSTOM_REALTIME_ASR_DISPLAY_MODEL = 'Custom realtime ASR';
+export const LOCAL_SHERPA_ONNX_ASR_MODEL = 'local-sherpa-onnx';
 
 export const DEFAULT_VOICE_INPUT_PROVIDER_KIND = 'litellm-volcengine-sauc-asr';
 
@@ -79,6 +81,16 @@ export const DEFAULT_VOICE_INPUT_ASR_PROVIDER_CHAIN = [
   'litellm-qwen3-asr-flash-realtime',
   'litellm-gpt-realtime-whisper',
 ] as const;
+
+const elevenLabsRealtimeProfile = {
+  auth: 'api-key',
+  // 「工具密钥」页 2026-07-13 下架(最后一把 mivo key 随意识化迁走),
+  // 直连 key 的配置引导落到模型供应商页。
+  settingsTab: 'providers',
+  mode: 'elevenlabs-realtime',
+  missingCredentialMessage: 'API key is required for ElevenLabs Scribe realtime voice input.',
+  errorFallbackMessage: 'ElevenLabs Scribe realtime transcription failed.',
+} as const;
 
 // ASR provider registry shared by main/preload/renderer. Future realtime ASR
 // models should be added here first: endpoint/auth/sample-rate/pricing belong
@@ -100,15 +112,14 @@ export const VOICE_INPUT_ASR_PROFILES = {
     errorFallbackMessage: 'Custom realtime speech recognition failed.',
   },
   'elevenlabs-scribe-realtime': {
+    ...elevenLabsRealtimeProfile,
     id: 'elevenlabs-scribe-realtime',
     model: SCRIBE_REALTIME_MODEL,
-    auth: 'api-key',
-    // 「工具密钥」页 2026-07-13 下架(最后一把 mivo key 随意识化迁走),
-    // 直连 key 的配置引导落到模型供应商页。
-    settingsTab: 'providers',
-    mode: 'elevenlabs-realtime',
-    missingCredentialMessage: 'API key is required for ElevenLabs Scribe realtime voice input.',
-    errorFallbackMessage: 'ElevenLabs Scribe realtime transcription failed.',
+  },
+  'elevenlabs-scribe-v3-live': {
+    ...elevenLabsRealtimeProfile,
+    id: 'elevenlabs-scribe-v3-live',
+    model: 'scribe_v3_live',
   },
   // Kept as an explicit fallback for future experiments. It is not the
   // default today because the Codex OAuth realtime route cannot reliably drive
@@ -187,6 +198,15 @@ export const VOICE_INPUT_ASR_PROFILES = {
     missingCredentialMessage: 'API key is required for LiteLLM voice input.',
     errorFallbackMessage: 'XD LiteLLM batch transcription failed.',
   },
+  'local-sherpa-onnx': {
+    id: 'local-sherpa-onnx',
+    model: LOCAL_SHERPA_ONNX_ASR_MODEL,
+    auth: 'local',
+    settingsTab: 'providers',
+    mode: 'local-offline',
+    missingCredentialMessage: 'Select a local sherpa-onnx ASR model folder to enable offline voice input.',
+    errorFallbackMessage: 'Local offline speech recognition failed.',
+  },
 } as const satisfies Record<string, VoiceInputAsrProfile>;
 
 export type VoiceInputProviderKind = keyof typeof VOICE_INPUT_ASR_PROFILES;
@@ -238,11 +258,16 @@ const VOICE_INPUT_PROVIDER_ALIASES: Record<string, VoiceInputProviderKind> = {
   elevenlabs: 'elevenlabs-scribe-realtime',
   scribe: 'elevenlabs-scribe-realtime',
   'scribe-realtime': 'elevenlabs-scribe-realtime',
+  scribe_v3_live: 'elevenlabs-scribe-v3-live',
   scribe_v2_realtime: 'elevenlabs-scribe-realtime',
   'elevenlabs-scribe-realtime': 'elevenlabs-scribe-realtime',
   custom: 'custom-realtime-asr',
   'custom-realtime': 'custom-realtime-asr',
   'custom-realtime-asr': 'custom-realtime-asr',
+  local: 'local-sherpa-onnx',
+  offline: 'local-sherpa-onnx',
+  'sherpa-onnx': 'local-sherpa-onnx',
+  'local-sherpa-onnx': 'local-sherpa-onnx',
 };
 
 export function resolveVoiceInputProviderKindAlias(value: string): VoiceInputProviderKind | null {

@@ -14,7 +14,7 @@ import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupAssistantChanged, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupAssistantChanged, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot, type ResolveChatServerMedia } from './chatServerClient';
 import type { TeammateActivity } from '@cindy/maker-shared/teammate-status';
 import { subscribeChatServer, type ChatChangesFrame } from './chatServerSubscription';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
@@ -1035,10 +1035,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       throw error;
     }
   }, [enabled, valid, identity, api, groupId, loseAccess, t]);
-  const media = useCallback(async (mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> => {
+  const media = useCallback<ResolveChatServerMedia>(async (mediaId, signal, options) => {
     const generation = accessGeneration.current;
     try {
-      const attachment = await api.client.media(groupId, mediaId, signal);
+      const attachment = await api.client.media(groupId, mediaId, signal, options);
       if (!valid() || generation !== accessGeneration.current) throw new Error('OWNER_CHANGED');
       return attachment;
     } catch (error) {

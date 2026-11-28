@@ -3,7 +3,7 @@ import type { XdtHelperMcpDeps } from '@cindy/mcps';
 import { sessions } from '../localDb/schema.js';
 import { broadcastWorktreeChanged, recycleSessionWorktreeForStatusChange } from '../localDb/ipc/sessions.js';
 import { prepareTaskWorktree } from '../maker-ipc/handoffWorktree.js';
-import { resolveFreshSourceBranch, WorktreeManager } from '../worktree/index.js';
+import { resolveExplicitSourceRef, resolveFreshSourceBranch, WorktreeManager } from '../worktree/index.js';
 import { withLocalProjectContext } from './createProject.js';
 
 type CreateTaskWorktree = NonNullable<XdtHelperMcpDeps['createTaskWorktree']>;
@@ -22,6 +22,7 @@ export function createTaskWorktreeHost(): CreateTaskWorktree {
     // The agent that asked is already running: hand it the directory only once the tree is fully there.
     createWorktree: (req: Parameters<typeof WorktreeManager.createWorktree>[0]) => WorktreeManager.createWorktree(req, { awaitFullCheckout: true }),
     resolveFreshSource: resolveFreshSourceBranch,
+    resolveExplicitSource: resolveExplicitSourceRef,
   };
   return ({ callerSessionId, repoDir, baseRef }) => {
     const pending = inFlight.get(callerSessionId);

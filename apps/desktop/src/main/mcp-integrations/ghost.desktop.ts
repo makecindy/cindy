@@ -64,6 +64,6 @@ const gateway = createGhostGateway({
   forkForgeIconConversionHost: (...args) => forkForgeIconConversionHost(...args),
   t: (...args) => t(...args),
   openGithubSignIn: (...args) => openGithubSignIn(...args),
-  readGithubConnection: (...args) => readGithubConnection(...args)
+  readGithubConnection: (...args) => readGithubConnection(...args),
 });
-export const { authorizeDesktopSessionPath, setPageControlGhostProvider, getGhostRosterPrompt, getCindyGhostsMcpDeps } = gateway;
+export const { authorizeDesktopSessionPath, setPageControlGhostProvider, setSessionGoalActiveProvider, getGhostRosterPrompt, getCindyGhostsMcpDeps } = gateway;

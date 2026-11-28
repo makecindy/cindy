@@ -2380,6 +2380,12 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/voice-input/local-asr/localAsrWorker.ts',
+          config: 'vite.speaker-gate-worker.config.ts',
+          // 本地离线 ASR（sherpa-onnx）的 ONNX 推理隔离在独立线程中，避免阻塞 Electron main。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/im/imessage/archiveWorker.ts',
           config: 'vite.node-worker.config.ts',
           target: 'preload',

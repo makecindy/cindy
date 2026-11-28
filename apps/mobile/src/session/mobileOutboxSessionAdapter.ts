@@ -120,6 +120,7 @@ export interface OutboxMessageLeaseDeps {
   isCurrent(): boolean;
   getRecords(): readonly DurableOutboxRecord[];
   hidden(record: DurableOutboxRecord): boolean;
+  isCreationHeld?(sessionId: string): boolean;
   needsReconciliation(record: DurableOutboxRecord): boolean;
   restoreEditable(record: DurableOutboxRecord): boolean;
   dismissCancelled(record: { sessionId: string; deviceId: string }): void;
@@ -135,6 +136,7 @@ export function createOutboxMessageLeases(deps: OutboxMessageLeaseDeps) {
     for (const record of deps.getRecords()) {
       if (record.chat) continue;
       if (isDurableOutboxSettled(record) || deps.hidden(record)) continue;
+      if (deps.isCreationHeld?.(record.item.sessionId)) continue;
       if (deps.restoreEditable(record)) continue;
       if (record.creation?.cancelled) {
         deps.dismissCancelled({

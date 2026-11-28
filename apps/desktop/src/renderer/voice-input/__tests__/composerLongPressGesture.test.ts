@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { VoiceInputState } from '@cindy/voice-input-core';
 import {
+  COMPOSER_LONG_PRESS_HOLD_WARMUP_MS,
   COMPOSER_LONG_PRESS_MOVE_TOLERANCE_PX,
   COMPOSER_LONG_PRESS_VOICE_INPUT_MS,
   createComposerLongPressVoiceGesture,
@@ -308,5 +309,59 @@ describe('createComposerLongPressVoiceGesture', () => {
     vi.advanceTimersByTime(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
     await settle();
     expect(start).toHaveBeenCalledOnce();
+  });
+
+  // 测试价值：验证长按 240ms 静默 ASR 预热在早松手/拖动时立即清理且绝不触碰麦克风，按满 600ms 时无感交接不清理。
+  // 依据：语音输入优化 ⑥ 要求按压触发型预热压缩 TTFT，同时严格守住“蓝牙麦克风在 600ms 前不得打开”红线与“取消即拆连”红线。
+  // 缺口：既有长按手势用例未覆盖 240ms onHoldWarmup 触发、早松手清理、拖动清理及 600ms 交接路径。
+  // 最小输入：按压 239ms / 240ms 后松手或拖动 vs 按满 600ms。
+  // tier: unit，假时钟纯内存执行，耗时 <10ms。
+  it('按住 240ms 触发静默预热而不开麦，早松手或拖动立即清理，按满 600ms 交接不清理', async () => {
+    const cleanupWarmup = vi.fn();
+    const onHoldWarmup = vi.fn(() => cleanupWarmup);
+    const prepare = vi.fn();
+    const start = vi.fn(async () => true);
+    const stop = vi.fn(async () => {});
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => 'idle',
+      prepare,
+      onHoldWarmup,
+      start,
+      stop,
+    });
+
+    // Short click (<240ms) never warms up.
+    gesture.press(origin);
+    vi.advanceTimersByTime(COMPOSER_LONG_PRESS_HOLD_WARMUP_MS - 1);
+    gesture.release();
+    expect(onHoldWarmup).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+
+    // Hold past 240ms then release before 600ms: warmup runs, cleanup fires on release, mic never opens.
+    gesture.press(origin);
+    vi.advanceTimersByTime(COMPOSER_LONG_PRESS_HOLD_WARMUP_MS);
+    expect(onHoldWarmup).toHaveBeenCalledTimes(1);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(cleanupWarmup).not.toHaveBeenCalled();
+    gesture.release();
+    expect(cleanupWarmup).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+
+    // Hold past 240ms then drag outside tolerance: cleanup fires immediately.
+    gesture.press(origin);
+    vi.advanceTimersByTime(COMPOSER_LONG_PRESS_HOLD_WARMUP_MS);
+    expect(onHoldWarmup).toHaveBeenCalledTimes(2);
+    gesture.move({ x: origin.x + COMPOSER_LONG_PRESS_MOVE_TOLERANCE_PX + 2, y: origin.y });
+    expect(cleanupWarmup).toHaveBeenCalledTimes(2);
+    expect(prepare).not.toHaveBeenCalled();
+
+    // Hold all the way to 600ms: hands off warmup WITHOUT running cleanup, then opens mic & starts.
+    gesture.press(origin);
+    vi.advanceTimersByTime(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
+    await settle();
+    expect(onHoldWarmup).toHaveBeenCalledTimes(3);
+    expect(cleanupWarmup).toHaveBeenCalledTimes(2);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(1);
   });
 });

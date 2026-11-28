@@ -3184,7 +3184,8 @@
           "gatewayKey": "Requires your AI gateway to support this realtime ASR route",
           "codexLogin": "Uses your Codex sign-in",
           "elevenlabsKey": "Uses your ElevenLabs key (environment variable)",
-          "codexRealtimeUnsupported": "Unavailable: Codex sign-in is not an OpenAI API Realtime credential"
+          "codexRealtimeUnsupported": "Unavailable: Codex sign-in is not an OpenAI API Realtime credential",
+          "localOffline": "Runs offline on this device (no account or API key required)"
         },
         "credentialError": {
           "gatewayMissing": "No AI gateway key found; this model is unavailable.",
@@ -3192,10 +3193,24 @@
           "elevenlabsMissing": "No ElevenLabs key configured (environment variable); this model is unavailable.",
           "customAsrConfigMissing": "Complete and save the realtime ASR service settings before starting voice input.",
           "customAsrKeyMissing": "Add and save an API key for the custom realtime ASR service.",
-          "codexRealtimeUnsupported": "Codex sign-in cannot be used for realtime speech recognition. Choose a supported ASR service."
+          "codexRealtimeUnsupported": "Codex sign-in cannot be used for realtime speech recognition. Choose a supported ASR service.",
+          "localAsrModelMissing": "Select a local sherpa-onnx ASR model folder before starting offline voice input.",
+          "localAsrUnsupported": "Local offline speech recognition is not supported on this computer architecture."
         },
         "manageProviders": "Open model providers",
-        "reset": "Reset to default"
+        "reset": "Reset to default",
+        "localAsr": {
+          "optionLabel": "Local offline ASR (sherpa-onnx)",
+          "optionDescription": "On-device ONNX recognition; works completely offline without an account or API key",
+          "notice": "Choose a local sherpa-onnx offline model folder (SenseVoice, Paraformer, Whisper, or Transducer containing tokens.txt and .onnx weights). Audio stays on this computer.",
+          "modelDirLabel": "Local model folder",
+          "readyStatus": "Ready · {{kind}} ({{folder}})",
+          "unsupportedStatus": "Not supported on this platform",
+          "notConfiguredStatus": "No model folder selected yet",
+          "clearFolder": "Clear",
+          "chooseFolder": "Choose model folder",
+          "invalidFolder": "That folder does not contain a supported sherpa-onnx model (tokens.txt and .onnx files)."
+        }
       },
       "historyToggle": {
         "show": "Show recent history",
@@ -3343,7 +3358,9 @@
           "filters": {
             "all": "All",
             "automatic": "Auto-added",
-            "manual": "Manual"
+            "manual": "Manual",
+            "candidates": "Candidates",
+            "suppressed": "Suppressed"
           },
           "sources": {
             "automatic": "Auto",
@@ -3356,6 +3373,28 @@
             "automaticAddedMultiple": "Auto-added {{count}} terms, including {{term}}",
             "delete": "Delete",
             "deleteAriaLabel": "Delete auto-added term: {{term}}"
+          },
+          "export": {
+            "csv": "Export CSV",
+            "json": "Export JSON",
+            "successCsv": "Exported dictionary as CSV",
+            "successJson": "Exported dictionary as JSON"
+          },
+          "candidates": {
+            "hint": "Terms observed from your manual edits but not yet auto-promoted. Promote a term immediately or remove it.",
+            "evidenceCount": "Observed {{count}}×",
+            "promote": "Promote",
+            "promoteTooltip": "Promote candidate to active dictionary immediately",
+            "promotedToast": "Promoted “{{term}}” to dictionary",
+            "empty": "No candidate terms yet."
+          },
+          "suppressed": {
+            "hint": "Deleted auto-learned terms are suppressed so they will not be re-added automatically. Restore a term to allow learning again or add it back.",
+            "restore": "Allow learning",
+            "addToDictionary": "Add back",
+            "restoredToast": "Restored “{{term}}” for automatic learning",
+            "addedToast": "Added “{{term}}” back to dictionary",
+            "empty": "No suppressed terms."
           }
         }
       },
@@ -3400,7 +3439,15 @@
         "toast": {
           "copied": "Copied",
           "copyFailed": "Copy failed"
-        }
+        },
+        "searchAriaLabel": "Search voice history",
+        "searchPlaceholder": "Search transcripts or raw recognition…",
+        "showRawComparison": "Compare raw vs refined",
+        "hideRawComparison": "Hide comparison",
+        "rawLabel": "Raw ASR",
+        "refinedLabel": "Refined",
+        "loadMore": "Load more ({{count}} remaining)",
+        "noSearchResults": "No matching transcripts."
       },
       "speakerFilter": {
         "label": "Recognize my voice",
@@ -11043,12 +11090,14 @@
       "fileCount_other": "{{count}} files",
       "emptyTitle": "No changes yet",
       "emptyDesc": "This session hasn't edited any files yet. Changes by the agent will appear here.",
+      "emptyDescSvn": "Versioned files match their SVN BASE revisions.",
+      "svnSelectFile": "Select a file to read its changes.",
       "emptyDescGit": "The current git worktree has no staged or unstaged changes.",
       "filterEmptyTitle": "No changes in this filter",
-      "filterEmptyDesc": "No git changes are visible with the current filter or settings.",
+      "filterEmptyDesc": "No changes are visible with the current filter or settings.",
       "noSessionTitle": "No session",
       "noSessionDesc": "Select a local session to review its git worktree changes.",
-      "loadingTitle": "Reading git changes",
+      "loadingTitle": "Reading changes",
       "loadingDesc": "The panel keeps the previous content until the refresh completes.",
       "errorTitle": "Failed to read changes",
       "refresh": "Refresh",
@@ -11248,7 +11297,20 @@
         "leaseExpired": "The remote changed after confirmation. Push was stopped; refresh and confirm again.",
         "noRemote": "This repository has no git remote configured, so it cannot be pushed.",
         "failedTitle": "Push failed",
-        "successToast": "Commits pushed"
+        "successToast": "Commits pushed",
+        "divergedTitle": "Remote branch has new commits",
+        "syncCleanDesc_one": "Remote {{remoteRef}} has {{count}} commit you do not have, and preflight found no conflicts. Sync via rebase before pushing to avoid overwriting remote history.",
+        "syncCleanDesc_other": "Remote {{remoteRef}} has {{count}} commits you do not have, and preflight found no conflicts. Sync via rebase before pushing to avoid overwriting remote history.",
+        "divergedConflictDesc_one": "Remote {{remoteRef}} has {{count}} commit you do not have, with conflicts in {{files}}. Hand off to Agent to sync and resolve conflicts, or force push instead.",
+        "divergedConflictDesc_other": "Remote {{remoteRef}} has {{count}} commits you do not have, with conflicts in {{files}}. Hand off to Agent to sync and resolve conflicts, or force push instead.",
+        "divergedDirtyDesc_one": "Remote {{remoteRef}} has {{count}} commit you do not have, and the working tree has uncommitted changes. Hand off to Agent to sync and push, or force push instead.",
+        "divergedDirtyDesc_other": "Remote {{remoteRef}} has {{count}} commits you do not have, and the working tree has uncommitted changes. Hand off to Agent to sync and push, or force push instead.",
+        "divergedGeneralDesc_one": "Remote {{remoteRef}} has {{count}} commit you do not have. Hand off to Agent to integrate remote updates safely, or force push instead.",
+        "divergedGeneralDesc_other": "Remote {{remoteRef}} has {{count}} commits you do not have. Hand off to Agent to integrate remote updates safely, or force push instead.",
+        "syncAndPushConfirm": "Sync and push",
+        "askAgentSyncConfirm": "Resolve with Agent",
+        "syncedAndPushedToast": "Synced with remote and pushed",
+        "agentPromptFilled": "Added sync instructions to the composer. Press Enter to run with Agent."
       },
       "changeStatus": {
         "renamed": "Renamed",
@@ -11313,6 +11375,10 @@
         "non-git": {
           "title": "Not a git repository",
           "desc": "The current working directory does not contain a usable git repository."
+        },
+        "svn-unavailable": {
+          "title": "SVN unavailable",
+          "desc": "Install the Subversion command-line client to review this working copy."
         },
         "git-unavailable": {
           "title": "Git unavailable",
@@ -12891,7 +12957,19 @@
         "failed": "Could not complete this action. Try again.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving."
       },
-      "externalBadge": "External"
+      "externalBadge": "External",
+      "links": {
+        "kind": {
+          "pull": "Pull request",
+          "issue": "Issue",
+          "discussion": "Discussion",
+          "commit": "Commit",
+          "file": "File",
+          "folder": "Folder",
+          "release": "Release",
+          "repo": "Repository"
+        }
+      }
     },
     "joined": {
       "today": "Joined today",
@@ -13166,6 +13244,7 @@
       "arrivalPermissions": "{{name}} now uses this computer’s default permissions.",
       "arrivalModel": "{{name}}’s saved model isn’t available on this computer, so it follows this computer’s default model.",
       "arrivalModelSetup": "{{name}} has arrived on this computer but has no usable model yet. Connect a model provider, or set the buddy default model in Providers → Smart routing.",
+      "modelSetupHint": "This computer has no usable buddy model. Set the buddy default in Providers → Smart routing. Cindy will retry automatically.",
       "arrivalPartialContent": "{{name}} now runs on this computer, though some synced items couldn’t be restored. Their cloud copies remain intact.",
       "missingProfileTitle": "Start {{name}} with default profile?",
       "missingProfileDescription": "The original main computer hasn’t uploaded {{name}}’s persona or description yet. If that computer was reinstalled or can’t be recovered, you can continue here with a default profile while keeping any synced conversations and content.",
@@ -15283,6 +15362,24 @@
       "removeFromList": "Remove from list",
       "missingDir": "Folder not found"
     },
+    "remoteOutbox": {
+      "notSent": "Not sent",
+      "retry": "Retry",
+      "delete": "Delete",
+      "deliveryUnconfirmed": "Delivery unconfirmed",
+      "recheckDelivery": "Check again",
+      "waitingForPrevious": "Waiting for the previous message",
+      "taskInactive": "This task cannot receive messages right now.",
+      "inputNotSupported": "This computer does not support sending this type of message to the task.",
+      "taskClearedBeforeSend": "The task was cleared or is being cleared. The message is still saved on this device.",
+      "invalidInput": "The computer rejected the message because its contents are invalid.",
+      "profileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
+      "other": "This action did not finish. Try again in a moment.",
+      "deleteConfirmTitle": "Delete this message?",
+      "deleteConfirmBody": "This message wasn't sent. Deleting it can't be undone.",
+      "deleteUnconfirmedBody": "The computer may have received this message. Deleting it only removes the pending message from this device. If the computer received it, it will still appear in the conversation history.",
+      "cancel": "Cancel"
+    },
     "pendingQueue": {
       "waitingForDevice": "Not sent · Will send when the other computer reconnects",
       "stopping": "Stopping…",
@@ -15402,7 +15499,11 @@
           "description": "Allow microphone access, then click voice input again.",
           "confirm": "Grant permission",
           "cancel": "Cancel"
-        }
+        },
+        "rewriteSelected": "Voice rewrite",
+        "rewriteSelectedTooltip": "Speak an instruction to rewrite the selected text (original text is kept on failure)",
+        "rewriteSelectedAria": "Voice rewrite selected text",
+        "rewriteFailed": "Voice rewrite did not complete; your selected text was kept unchanged."
       },
       "remoteSwitchFailed": "Remote setting change failed; not applied",
       "switchFailed": "Setting change failed; not applied",
@@ -15607,7 +15708,26 @@
         "missing": "The remote branch no longer exists.",
         "busy": "The repository is busy. Try again later.",
         "changed": "The checked-out branch changed. Retry."
-      }
+      },
+      "rebased_one": "Rebased onto {{count}} remote commit",
+      "rebased_other": "Rebased onto {{count}} remote commits",
+      "divergedCanRebase": "{{ahead}} ahead and {{behind}} behind {{remote}}/{{remoteBranch}}, with no conflicts detected. Click to rebase local commits onto {{remote}}/{{remoteBranch}}.",
+      "divergedConflictHint": "Diverged from {{remote}}/{{remoteBranch}} with conflicts ({{files}}). Click to inspect or hand off to Agent.",
+      "divergedOpenDetails": "Inspect branch divergence and resolve with Agent",
+      "divergedRebaseNotice": "Diverged from {{remote}} ({{ahead}} ahead, {{behind}} behind). Preflight found no conflicts.",
+      "divergedConflictNoticeFiles": "Diverged from {{remote}} with conflicts ({{files}}).",
+      "divergedDirtyNotice_one": "Diverged from {{remote}} with {{count}} uncommitted change.",
+      "divergedDirtyNotice_other": "Diverged from {{remote}} with {{count}} uncommitted changes.",
+      "divergedConflictNotice": "Diverged from {{remote}} with potential conflicts.",
+      "rebaseNow": "Rebase now",
+      "askAgentResolve": "Resolve with Agent",
+      "agentPromptFilled": "Added branch sync instructions to the input. Send when ready.",
+      "agentPromptDivergedCounts": "Currently {{ahead}} ahead and {{behind}} behind",
+      "agentPromptConflictFiles": "Preflight conflict files: {{files}}",
+      "agentPromptDirty_one": "Working tree also has {{count}} uncommitted file",
+      "agentPromptDirty_other": "Working tree also has {{count}} uncommitted files",
+      "agentPromptSyncOnly": "Safely sync local branch {{branch}} with {{remoteRef}}.{{details}}\nCheck git status and recent commits first, integrate remote updates via rebase or merge, and resolve conflicts while preserving local intent. Do not run git reset --hard or discard uncommitted changes. Summarize the result and run relevant checks when done.",
+      "agentPromptSyncAndPush": "Safely sync local branch {{branch}} with {{remoteRef}} and push.{{details}}\nCheck git status and recent commits first, integrate remote updates via rebase or merge, and resolve conflicts while preserving local intent. Do not run git reset --hard or discard uncommitted changes. Verify checks before pushing."
     },
     "pluginUi": {
       "title": "Plugin “{{name}}” added interactive pages. Review them to enable them.",
@@ -15710,6 +15830,106 @@
       "engineMissing": "The plugin that provides this engine is turned off or uninstalled.",
       "worktreeUnsupported": "Plugin engines can’t start tasks in a worktree yet. Turn off worktree to send.",
       "modelChangeFailed": "Could not switch the model"
+    },
+    "workspaceCapsule": {
+      "popoverTitle": "Task workspace",
+      "checkUpdates": "Check updates",
+      "checkingUpdates": "Checking…",
+      "checkUpdatesAria": "Check latest remote branch status",
+      "openGuideAria": "New to branches & worktree? Quick visual guide",
+      "back": "Back",
+      "worktreeTitle": "Run in isolated copy",
+      "worktreeOnDesc": "Creates a separate working copy so your current folder stays untouched",
+      "worktreeOffDesc": "Edits your current folder directly; switching branches affects local files",
+      "worktreeCompareToggle": "What is the difference?",
+      "compareDirectTitle": "Off · Direct edit",
+      "compareIsolatedTitle": "On · Isolated copy",
+      "badgeCurrent": "Active",
+      "badgeOff": "Off",
+      "badgeRecommended": "Recommended",
+      "compareMainDir": "Main folder",
+      "compareDirectWrite": "Direct edits",
+      "compareDirectNote": "Fast for one task, but parallel tasks can overwrite each other",
+      "compareUntouched": "Untouched",
+      "compareTaskCopy": "Task copy",
+      "compareIsolatedRun": "Isolated",
+      "remoteLatestReady": "Using latest cloud version; no sync needed",
+      "syncedStatus": "Up to date with remote",
+      "aheadOnlyStatus": "{{count}} local commit(s) ahead (no pull needed)",
+      "behindTitle": "{{count}} new update(s) on remote",
+      "behindDesc": "Pull cleanly into local with zero AI tokens and no overwrites",
+      "syncNow": "Sync locally",
+      "divergedCleanTitle": "Both local and remote have new changes",
+      "divergedCleanDesc": "Preflight found no conflicts — safe one-click sync with zero AI tokens",
+      "divergedConflictTitle": "Local and remote edited the same lines",
+      "divergedConflictDesc": "{{count}} overlapping file(s) — hand off to Agent to merge safely without losing changes",
+      "divergedDirtyTitle": "{{count}} uncommitted local change(s)",
+      "divergedDirtyDesc": "To protect your edits, auto-sync paused — hand off to Agent to sync safely",
+      "divergedGenericDesc": "Local and remote history diverged — hand off to Agent to sync safely without losing edits",
+      "techDetails": "Technical details",
+      "filesAndDetails": "Files & details",
+      "techRefsLabel": "Local / Remote",
+      "techCommitsLabel": "Commits",
+      "techWorkingTreeLabel": "Working tree",
+      "techFfSafety": "Uses strict fast-forward (git merge --ff-only): aborts automatically on unexpected changes.",
+      "techRebaseSafety": "Read-only merge-tree passed with 0 conflicts; runs git rebase with auto-abort on error.",
+      "techAgentSafety": "Includes strict safety constraints for Agent: never runs git reset --hard and preserves all local edits.",
+      "tooltipBehind": "{{count}} new update(s) on remote — click to sync",
+      "tooltipConflict": "Local and remote changes overlap — click to review options",
+      "branchSwitchReadOnly": "Currently on {{branch}}; turn on isolated copy above to choose a different source branch",
+      "remoteGroupHint": "Latest merged team code",
+      "localGroupHint": "Branches on this computer",
+      "remoteOptionSub": "Start fresh from the latest merged remote code",
+      "footerGuideCta": "New to branches & worktree? 30s guide",
+      "kbdSwitchHint": "↑↓ navigate",
+      "guideTitle": "Branches & worktree guide",
+      "guideBranchTitle": "1. What is a branch?",
+      "guideBranchDesc": "Think of it as a parallel draft of your project. You can build features or experiment safely without affecting the main version.",
+      "guideGraphMain": "main",
+      "guideGraphTask": "task draft",
+      "guideWorktreeTitle": "2. What is an isolated copy?",
+      "guideWorktreeDesc": "When enabled, Cindy prepares a dedicated folder for this task so you and multiple Agents can work in parallel without overwriting files.",
+      "guideChoiceTitle": "3. Cloud latest vs local branch?",
+      "guideRemoteLabel": "Cloud latest:",
+      "guideRemoteDesc": "Best when starting a brand-new task from the latest merged team code.",
+      "guideLocalLabel": "Local branch:",
+      "guideLocalDesc": "Best when continuing work that is still only on your computer.",
+      "guideProHint": "Familiar with Git? Expand “Technical details” in the status strip anytime to inspect refs and commands."
+    },
+    "workspaceCleanup": {
+      "entrySuggestTitle": "Ask AI to tidy local branches & worktrees",
+      "entryUrgentTitle": "Cleanup recommended for branches & worktrees",
+      "entrySub": "{{cindyBranches}} historical branches & {{idleWorktrees}} idle copies accumulated",
+      "entrySubWithFailed": "{{cindyBranches}} historical branches, {{idleWorktrees}} idle copies & {{failed}} leftover(s)",
+      "entryCountBadge": "{{branches}} branches · {{worktrees}} idle",
+      "capsuleRedDotTooltip": "{{branches}} local branches & {{worktrees}} idle copies accumulated — click to tidy safely with AI",
+      "paneTitle": "Tidy branches & worktrees with AI",
+      "safeBannerTitle": "Read-only audit first — nothing deleted until you confirm",
+      "safeBannerDesc": "AI groups items into Safe to clean, Needs review, and Protected so no unmerged work or active task is touched.",
+      "statBranchesLabel": "Local branches",
+      "statWorktreesLabel": "Isolated copies (worktree)",
+      "statCount": "{{count}}",
+      "statCindyBranches": "{{count}} cindy/* task branch(es)",
+      "statActiveProtected": "{{count}} active task(s) protected",
+      "statIdleOnly": "{{count}} idle to review",
+      "statIdleAndFailed": "{{idle}} idle · {{failed}} pending cleanup",
+      "scopesTitle": "Focus areas (multi-select)",
+      "scopeMerged": "Merged old branches",
+      "scopeWorktrees": "Idle worktree copies",
+      "scopeUnpushed": "Flag unpushed edits",
+      "mainRepoNote": "Runs in the main project folder (automatically skips creating another worktree) and checks PR merge state via the GitHub plugin first.",
+      "startAuditAction": "Fill composer to start read-only audit",
+      "snooze7Days": "Not now · hide red dot for 7 days",
+      "snoozedToast": "Red dot muted for 7 days — you can still tidy anytime from the branch menu",
+      "agentPromptFilled": "Read-only audit prompt filled in main repo mode (nothing will be deleted automatically). Press Enter to start.",
+      "promptIntro": "Run a STRICTLY READ-ONLY audit of this repository’s local branches and git worktrees first (Phase 1 must NOT delete, reset, checkout, fetch/prune, or run full-branch diff/cherry across large repos):",
+      "promptFocusMerged": "merged local and cindy/* branches (including squash-merged PRs: prefer the GitHub plugin GraphQL batch query and MUST verify local HEAD SHA equals or is an ancestor of the merged PR headRefOid — never match by branch name alone)",
+      "promptFocusWorktrees": "idle worktrees (estimate disk space quickly for cleanable candidates only — never recursive du on the main repo; on macOS APFS distinguish shared node_modules CoW blocks from real build-artifact space)",
+      "promptFocusUnpushed": "branches or worktrees with unpushed commits, uncommitted edits, or git stash entries that need my confirmation",
+      "promptStepFocus": "1. Audit scope: {{focus}}.",
+      "promptStepProtect": "2. Protect and exclude via triple verification: (a) unarchived Cindy tasks (including freshly created clean ahead=0 tasks, distinguishing ended legacy Workers); (b) directories held by live OS processes (lsof/handle check) or .worktree-keep; (c) branches/worktrees linked to OPEN/DRAFT PRs or containing uncommitted/unmerged changes.",
+      "promptStepOutput": "3. Report clearly in three buckets (“Safe to clean”, “Needs my confirmation”, “Protected / active”); aggregate by prefix/directory and highlight top space consumers when counts are large, then end with numbered cleanup options and wait for my confirmation.",
+      "promptProtectedList": "4. Cindy detected {{count}} unarchived active task worktree(s) that MUST stay in “Protected / active”: {{paths}}."
     }
   },
   "onboarding": {
@@ -15799,7 +16019,9 @@
     "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
     "recognitionStalled": "Voice recognition stopped returning results. Try again.",
     "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
-    "transcriptKeptOverlay": "{{message}} The text recognized so far was kept — copy it to continue."
+    "transcriptKeptOverlay": "{{message}} The text recognized so far was kept — copy it to continue.",
+    "retryRecognition": "Retry recognition",
+    "recordAgain": "Record again"
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT Sign-In Is No Longer Valid",
@@ -16075,7 +16297,7 @@
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "piRetryHistoryTooLarge": "Your message was not sent. Pi could not read the history needed to retry after a frame exceeded the local 16 MiB limit. You can continue in a new task.",
       "piRetryHistoryUnavailable": "Your message was not sent. Pi could not read the history needed to send it. You can retry, or continue in a new task.",
-      "upstreamStatusError": "The upstream returned {{status}}, so this reply is incomplete.",
+      "upstreamStatusError": "The model provider service returned an error (HTTP {{status}}). This reply did not complete.",
       "messageNotSent": "Your message was not sent.",
       "replyFailed": "Could not complete the reply",
       "queuedSendRecovery": "Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.",
@@ -16133,12 +16355,12 @@
       "networkUnreachableNoRetry": "Network error: the service is temporarily unreachable.",
       "networkAutoRetrying": "Network error — retrying automatically…",
       "networkReconnecting": "Connection interrupted — reconnecting ({{attempt}}/{{maxAttempts}})…",
-      "overloadRetrying": "The model service is busy — retrying automatically ({{attempt}}/{{maxAttempts}})…",
+      "overloadRetrying": "The model provider is temporarily busy. Retrying automatically ({{attempt}}/{{maxAttempts}})…",
       "rateLimitRetrying": "Request rate limited — retrying automatically ({{attempt}}/{{maxAttempts}})…",
-      "overloadBusy": "The model service is busy — the upstream has no capacity right now. Click “Retry”, or switch to another model.",
-      "overloadBusyNoRetry": "The model service is busy — the upstream has no capacity right now. Try again later, or switch to another model.",
-      "streamInterrupted": "The model stream was interrupted. This is usually a temporary upstream issue — click Retry.",
-      "streamInterruptedNoRetry": "The model stream was interrupted. This is usually a temporary upstream issue. Try again in a little while.",
+      "overloadBusy": "The model provider is temporarily busy and has no available capacity. Click Retry or switch to another model.",
+      "overloadBusyNoRetry": "The model provider is temporarily busy and has no available capacity. Try again later or switch to another model.",
+      "streamInterrupted": "The reply stream from the model provider was interrupted mid-response. Click Retry to try again.",
+      "streamInterruptedNoRetry": "The reply stream from the model provider was interrupted mid-response. Try again later.",
       "networkShowRaw": "Error Details",
       "networkHideRaw": "Hide Details",
       "diagnose": "Diagnose",
@@ -16147,7 +16369,7 @@
       "diagnosePromptWithoutSession": "Diagnose this error: find the cause and tell me how to fix it.\n\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
       "gatewayProxyTokenInvalid": "Cindy AI credentials are no longer valid. Click Retry. If it happens again, sign out and sign back in.",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI credentials are no longer valid. If it happens again, sign out and sign back in.",
-      "modelAccessDenied": "The upstream account cannot access this model. Select another model or check its access with the provider",
+      "modelAccessDenied": "Your current model provider account does not have access to this model. Switch models or verify access with the provider.",
       "providerSafetyRefusal": "The model provider's safety policy blocked this response. Adjust your request before sending again.",
       "silentStopContinue": "Continue",
       "silentStopContinueTitle": "Continue the current task",
@@ -16157,7 +16379,20 @@
       "remoteCompactEncryptedContent": "Context compaction failed because the model could not read encrypted history. Automatic continuation did not complete. Retry to attempt recovery.",
       "contextOverflow": "This message itself exceeds the model's context window, so Cindy cannot continue it in a fresh agent session. Shorten the input or remove a large attachment, then try again.",
       "attachmentAccessDeniedTitle": "Cindy cannot read the source attachment; the message was not sent.",
-      "attachmentAccessDeniedRecovery": "Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again."
+      "attachmentAccessDeniedRecovery": "Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again.",
+      "providerSafetyRefusalWithProvider": "{{provider}}'s safety policy blocked this reply. Adjust your request and try sending again.",
+      "overloadRetryingWithProvider": "{{provider}} is temporarily busy. Retrying automatically ({{attempt}}/{{maxAttempts}})…",
+      "overloadBusyWithProvider": "{{provider}} is temporarily busy and has no available capacity. Click Retry or switch to another model.",
+      "overloadBusyNoRetryWithProvider": "{{provider}} is temporarily busy and has no available capacity. Try again later or switch to another model.",
+      "streamInterruptedWithProvider": "The reply stream from {{provider}} was interrupted mid-response. Click Retry to try again.",
+      "streamInterruptedNoRetryWithProvider": "The reply stream from {{provider}} was interrupted mid-response. Try again later.",
+      "upstreamStatusErrorWithProvider": "{{provider}} returned an error (HTTP {{status}}). This reply did not complete.",
+      "modelAccessDeniedWithProvider": "Your {{provider}} account does not have access to this model. Switch models or verify model access.",
+      "providerQuotaExhaustedWithProvider": "Your {{provider}} account has insufficient quota or balance. Check your account.",
+      "usageLimitReachedWithProvider": "Your {{provider}} account has reached its usage limit",
+      "usageLimitReachedWithResetWithProvider": "Your {{provider}} account has reached its usage limit. Expected to reset at {{resetAt}}.",
+      "usageLimitReachedNoResetWithProvider": "Your {{provider}} account has reached its usage limit. Wait for the limit to reset or switch to another model.",
+      "invalidEncryptedContentWithProvider": "{{provider}} cannot read some encrypted history from earlier turns. Switch back to the original provider or continue in a new task."
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
@@ -17119,7 +17354,20 @@
       "viewGhostCard": "View plugin card"
     },
     "modelMismatch": {
-      "notice": "This turn was answered by {{actual}} instead of the selected {{selected}} (temporarily downgraded by the provider)"
+      "notice": "The model provider answered this turn with {{actual}} instead of {{selected}}",
+      "noticeWithProvider": "{{provider}} answered this turn with {{actual}} instead of {{selected}}",
+      "infoLink": "Why this happened",
+      "infoTitle": "Why a different model answered",
+      "infoSummary": "Cindy sent this turn to {{selected}} as you selected, and the model provider returned the reply using {{actual}}.",
+      "infoSummaryWithProvider": "Cindy sent this turn to {{selected}} as you selected, and {{provider}} returned the reply using {{actual}}.",
+      "infoCausesTitle": "Common causes",
+      "infoCausePolicy": "Safety or content policy fallback (some models automatically fall back to an earlier model instead of refusing).",
+      "infoCauseLoad": "Temporary rerouting by the model provider during peak load.",
+      "infoCauseGateway": "Model mapping or routing rules on a third-party or custom gateway.",
+      "infoActionsTitle": "What you can do",
+      "infoActionContinue": "No settings change needed: this only affected this turn, and later messages keep requesting {{selected}}.",
+      "infoActionRetry": "If this reply does not meet your needs, rephrase your message and send again, or switch to another available model.",
+      "infoActionCheckProvider": "If this persists across turns, check your model provider’s quota status or gateway routing settings."
     },
     "ghostNotify": {
       "secretSaved": "Credential “{{name}}” saved",
@@ -17198,6 +17446,88 @@
       "signingIn": "The subscription account used by this task is signing in. Retry after sign-in finishes.",
       "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",
       "legacy": "The subscription account assigned to this task is unavailable. Check its sign-in and usage status on the computer running the task, or choose another model source. This task does not switch accounts automatically."
+    },
+    "errorExplain": {
+      "providerSafetyRefusal": {
+        "title": "Why this reply was blocked",
+        "summary": "Cindy sent your request as-is, and the model provider's built-in safety or content policy blocked the response. This is not Cindy moderation or a local plugin block.",
+        "summaryWithProvider": "Cindy sent your request as-is, and {{provider}}'s built-in safety or content policy blocked the response. This is not Cindy moderation or a local plugin block.",
+        "cause1": "The prompt, an attachment, or earlier conversation context triggered the provider’s safety classifier.",
+        "cause2": "An output safety filter stopped the model mid-generation.",
+        "action1": "Retrying the exact same prompt usually hits the same block; rephrase or remove the triggering section before sending again.",
+        "action2": "If earlier context caused the block, start a new task or switch to another model."
+      },
+      "overload": {
+        "title": "Why the provider is busy",
+        "summary": "The model provider is temporarily short on compute capacity (such as peak-load congestion or HTTP 529). This is unrelated to Cindy or your local network.",
+        "summaryWithProvider": "{{provider}} is temporarily short on compute capacity (such as peak-load congestion or HTTP 529). This is unrelated to Cindy or your local network.",
+        "cause1": "High demand during peak hours saturated the provider’s capacity for this model.",
+        "cause2": "Temporary provider maintenance or capacity throttling is active.",
+        "action1": "No need to restart Cindy or change your network setup—wait a moment and click Retry.",
+        "action2": "To continue right away, switch to another model or another source in your model group."
+      },
+      "streamInterrupted": {
+        "title": "Why the reply was interrupted",
+        "summary": "The model provider dropped the streaming connection before finishing the reply. Cindy did not crash, and completed steps and conversation history are intact.",
+        "summaryWithProvider": "{{provider}} dropped the streaming connection before finishing the reply. Cindy did not crash, and completed steps and conversation history are intact.",
+        "cause1": "A transient server error on the model provider interrupted generation mid-stream.",
+        "cause2": "A third-party or custom relay gateway timed out while streaming a long reply.",
+        "action1": "Click Retry, or send “continue” to have the model pick up from where it stopped.",
+        "action2": "If this repeats across turns, try another model or check your custom gateway’s timeout settings."
+      },
+      "upstreamStatus": {
+        "title": "Why a service error was returned",
+        "summary": "Cindy sent your request, but the model provider returned an HTTP {{status}} internal error with no details. This comes from the external service, not Cindy.",
+        "summaryWithProvider": "Cindy sent your request, but {{provider}} returned an HTTP {{status}} internal error with no details. This comes from the external service, not Cindy.",
+        "cause1": "The model provider’s backend experienced a temporary internal failure.",
+        "cause2": "A third-party or self-hosted gateway failed to forward the request or returned a custom 5xx status.",
+        "action1": "Click Retry in a moment; transient upstream blips usually clear quickly.",
+        "action2": "If you use a third-party or custom gateway, check its status and logs, or switch to another provider."
+      },
+      "modelAccessDenied": {
+        "title": "Why this model cannot be accessed",
+        "summary": "The model provider rejected access to this model for the current account. Cindy cannot override provider-side model permissions.",
+        "summaryWithProvider": "{{provider}} rejected access to this model for your current account. Cindy cannot override {{provider}} model permissions.",
+        "cause1": "Your current subscription tier or API key does not include access to this model.",
+        "cause2": "An organization admin restricted the allowed model list, or the model is unavailable in your region.",
+        "action1": "Switch to another model enabled on your current account to keep going.",
+        "action2": "Check permissions in your provider console or plan settings; if you just upgraded, reconnect the account and try again."
+      },
+      "providerQuotaExceeded": {
+        "title": "Why quota or balance is exhausted",
+        "summary": "The external model provider account you connected has run out of balance or quota and rejected the request. This is separate from your Cindy account.",
+        "summaryWithProvider": "Your connected {{provider}} account has run out of balance or quota, so {{provider}} rejected the request. This is separate from your Cindy account.",
+        "cause1": "Prepaid credits on the provider account are depleted, or no valid payment method is attached.",
+        "cause2": "A spend cap on this API key or organization quota has been reached.",
+        "action1": "Top up your balance or raise the spend limit on the provider’s billing page, then click Retry.",
+        "action2": "Or switch to another provider with available quota in the model selector."
+      },
+      "usageLimit": {
+        "title": "Why the usage limit was reached",
+        "summary": "Your connected model account hit the periodic usage window set by the model provider and cannot accept new requests right now. This limit is not imposed by Cindy.",
+        "summaryWithProvider": "Your connected {{provider}} account hit the periodic usage window set by {{provider}} and cannot accept new requests right now. This limit is not imposed by Cindy.",
+        "cause1": "Your subscription used up its allowance for the current window (such as a 5-hour or weekly cap).",
+        "cause2": "Multiple tasks or devices sharing the same account count toward the same usage window.",
+        "action1": "Wait for the window to reset and retry; if auto-continue is armed, the task will resume automatically.",
+        "action2": "To continue immediately, switch to another model, another connected subscription account, or an API provider."
+      },
+      "encryptedContent": {
+        "title": "Why some history cannot be read",
+        "summary": "Some models store encrypted internal reasoning in conversation history that only the original provider and account can decrypt. After switching providers/accounts or compacting remotely, the current provider may be unable to read older encrypted blocks.",
+        "summaryWithProvider": "Some models store encrypted internal reasoning in conversation history that only the original provider and account can decrypt. After switching providers/accounts or compacting remotely, {{provider}} may be unable to read older encrypted blocks.",
+        "cause1": "You switched to a different model provider or account that cannot decrypt earlier encrypted reasoning.",
+        "cause2": "Remote context compaction or cross-endpoint routing did not match the key used for earlier turns.",
+        "action1": "Switch back to the original provider or account to continue this task directly.",
+        "action2": "Or choose “Continue in a new task”—Cindy keeps all readable conversation history and strips unreadable encrypted blocks while leaving the original task intact."
+      },
+      "failedSamplingAttempt": {
+        "title": "Why an incomplete reply is shown",
+        "summary": "The model failed or was interrupted before finishing this reply, producing only partial output. Cindy kept the partial text visible for reference so useful context is not lost.",
+        "cause1": "A provider error, connection drop, or safety block interrupted streaming mid-reply.",
+        "cause2": "The turn errored or stopped before the response could finalize.",
+        "action1": "Check the error card below for the specific failure reason and whether you should retry.",
+        "action2": "Click Retry or send a follow-up message to continue—you can reference the partial text without starting over."
+      }
     }
   },
   "ccAgent": {
@@ -17986,7 +18316,46 @@
         "offlineCompleteRejectedNewActivity": "“{{title}}” returned to Pending: new activity arrived on its computer while offline.",
         "offlineCompleteRejectedRunning": "“{{title}}” returned to Pending: the task is currently running.",
         "offlineCompleteRejectedAttached": "“{{title}}” returned to Pending: the task is currently attached or shared and could not be archived automatically.",
-        "offlineCompleteRejectedPreflight": "“{{title}}” returned to Pending: could not verify its worktree before archiving."
+        "offlineCompleteRejectedPreflight": "“{{title}}” returned to Pending: could not verify its worktree before archiving.",
+        "health": {
+          "regionLabel": "Environment health alerts",
+          "dismiss": "Dismiss alert",
+          "summaryTitle_one": "{{count}} environment issue needs attention",
+          "summaryTitle_other": "{{count}} environment issues need attention",
+          "providerAuthSingleTitle": "{{name}} sign-in expired",
+          "providerAuthSingleDesc": "Reconnect this provider to resume using its models.",
+          "providerAuthMultiTitle_one": "{{count}} model provider needs reconnection",
+          "providerAuthMultiTitle_other": "{{count}} model providers need reconnection",
+          "providerAuthMultiDesc": "Affected: {{names}}. Reconnect to resume.",
+          "githubMissingTitle": "GitHub not connected",
+          "githubNotLoggedInTitle": "GitHub connection expired",
+          "gitlabMissingTitle": "GitLab not connected",
+          "gitlabNotLoggedInTitle": "GitLab connection expired",
+          "prAffectedDesc_one": "Affects status updates for {{count}} PR.",
+          "prAffectedDesc_other": "Affects status updates for {{count}} PRs.",
+          "auxiliaryTitle": "Auxiliary model chain degraded",
+          "auxiliarySingleDesc": "{{model}} is unavailable; titles and summaries may degrade.",
+          "auxiliaryMultiDesc_one": "{{count}} auxiliary model route is degraded.",
+          "auxiliaryMultiDesc_other": "{{count}} auxiliary model routes are degraded.",
+          "auxiliaryUnavailableDesc": "No usable auxiliary model is available; titles and summaries are paused.",
+          "automationSingleTitle": "Automation “{{name}}” is blocked",
+          "automationMissingPluginDesc": "Required plugin “{{plugin}}” is missing or disabled.",
+          "automationPrecheckDesc": "Pre-run check blocked the latest run.",
+          "automationFailedDesc": "The latest run failed. Review its settings and logs.",
+          "automationMultiTitle_one": "{{count}} automation needs attention",
+          "automationMultiTitle_other": "{{count}} automations need attention",
+          "automationMultiDesc": "Affected: {{names}}.",
+          "actions": {
+            "reconnect": "Reconnect",
+            "openProviders": "Open providers",
+            "configureGitlab": "Configure GitLab",
+            "openSettings": "Open Settings",
+            "inspectAutomation": "Inspect and fix",
+            "viewAutomations": "View automations",
+            "connectGithub": "Connect GitHub",
+            "openGithubPlugin": "Open GitHub plugin"
+          }
+        }
       },
       "taskListMode": {
         "heading": "Task mode",
@@ -18649,6 +19018,7 @@
       "subtitlePaused": "Paused",
       "subtitleWaitingForResources": "Waiting for a slot ({{inFlight}}/{{max}})",
       "subtitleQueuedForSession": "Queued until the session is idle",
+      "subtitleDeferredForSession": "{{reason}} · deferred {{count}} time(s)",
       "subtitleManual": "Manual",
       "subtitleOnce": "Once",
       "tagOnce": "Once",
@@ -18667,6 +19037,7 @@
     },
     "detail": {
       "manualTrigger": "Manual trigger",
+      "deferredBanner": "{{reason}} · deferred {{count}} time(s) since {{since}}",
       "recentRuns": "RECENT RUNS · {{count}}",
       "noRunsHeading": "No runs yet",
       "noRunsHint": "Click “Run now” or wait for the next scheduled run.",
@@ -19435,6 +19806,12 @@
       "cleanMergedConfirmAction": "Delete",
       "cleanMergedDone": "Deleted {{count}} completed PR automations",
       "checkFailed": "Unable to check PR status right now"
+    },
+    "deferral": {
+      "busy": "Waiting for target task to be idle",
+      "usage": "Waiting for usage limit to reset",
+      "permission": "Waiting for permission status",
+      "other": "Execution deferred"
     }
   },
   "issueTracker": {
@@ -20644,6 +21021,8 @@
     },
     "errors": {
       "piStartupCloudFile": "A cloud-only instruction file may be delaying Pi startup: {{path}}. Download this file in Finder, wait until it is available locally, then retry. The timeout may have another cause.",
+      "remoteEngineMissing": "The remote computer has no available engine. Install an engine on that computer, restart Cindy, and try again.",
+      "remoteCapabilityUnavailable": "The current server or computer does not support this action yet.",
       "hostProfileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
       "hostProfileInUseByDesktopAtStart": "This data is in use by the Cindy desktop app running on its own, so the Cindy background service did not start. Quit that app, restart the Cindy background service, then reopen this Cindy window.",
       "hostProfileInUseByDesktopRetry": "This data is in use by the Cindy desktop app running on its own, so this can’t be changed right now. Quit that app, then try again.",
@@ -23359,10 +23738,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "This connection will stop receiving new tasks from the group. Tasks already running will stay on this connection.",
-    "mergeDescription": "New tasks started through {{target}} can use both providers. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}} before adding the scheduling connection.",
+    "mergeDescription": "New tasks started through {{target}} will be assigned to available members. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}}. Insufficient balance or a billing limit will not prevent adding it, but it will not receive automatic assignments until available again.",
     "modelUnavailable": "This connection cannot use the model chosen for the test. Test again to try another candidate.",
     "noTestModel": "No configured model is available for testing. Check which models your OpenAI project can use, then refresh or update this connection’s model list.",
-    "billingPaused": "Group assignment paused due to insufficient balance or a billing limit.",
+    "billingPaused": "Automatic assignment paused due to insufficient balance or a billing limit.",
     "title": "Account group",
     "testPassed": "Test passed",
     "refresh": "Refresh quota"
@@ -23604,7 +23983,15 @@
       "exceptionImage": "The message has images, so only sources that can see images were considered",
       "exceptionImageFallback": "The message has images, but no source can see images, so it picked as usual",
       "exceptionHours": "During this time, it uses “{{name}}” instead",
-      "separator": "; "
+      "separator": "; ",
+      "usageHabit": "Picked first based on your usual usage",
+      "usageHabitQuota": "Picked first based on your usual usage ({{left}}% quota left)",
+      "autoBalance": "Taking load while other sources are tight or busy",
+      "autoBalanceQuota": "Balanced by quota headroom and load ({{left}}% quota left)",
+      "lessBusy": "Other sources are running tasks, so this idle one goes first",
+      "paygFallback": "Subscriptions and shared sources are unavailable, falling back to pay-as-you-go",
+      "paygReserve": "Pay-as-you-go reserve; used only when other sources are unavailable",
+      "standbyQuotaNeutral": "{{left}}% of its quota is left and resets {{reset}}; not picked this time"
     },
     "settings": {
       "autoSwitch": {
