@@ -81,7 +81,8 @@ export const TELEGRAM_TOOLS_HINT =
 
 export interface TelegramAdapterOptions {
   /** 伙伴自有连接: 不注入设置页人格, 私聊按主人 / 外部用户分落点。 */
-  companionBotId?: string;
+  /** 交给哪位伙伴: 固定 id(伙伴自有连接), 或每次现读(设置页那份个人机器人的「谁来回复」)。 */
+  companionBotId?: string | (() => string | null);
   /**
    * 全响应(ambient)群消息的前置判定器(辅助模型链)。不给 = 每条都起轮次, 由主模型
    * NO_REPLY(老行为)。
@@ -102,7 +103,10 @@ export function buildTelegramAdapter(
   config: ImOrchestratorConfig,
   options: TelegramAdapterOptions = {},
 ): ImChannelAdapter {
-  const companion = Boolean(options.companionBotId);
+  // 交给伙伴与否按每条消息现读: 设置页那份个人机器人可以随时在「谁来回复」里切换。
+  const isCompanion = (): boolean => Boolean(
+    typeof options.companionBotId === 'function' ? options.companionBotId() : options.companionBotId,
+  );
   // 同一条群任务会混入 owner 与非 owner 的消息。Full access 只能取缔 owner
   // 触发轮次的逐轮策略；用对象身份记录这批 policy，避免把会话级权限误当成
   // 整个群所有成员的授权。WeakSet 不延长排队 policy 的生命周期。
@@ -170,7 +174,7 @@ export function buildTelegramAdapter(
           cursorScope: lane.threadId,
           triggerMessageId,
         }).catch(() => ({ prefix: '' })),
-        (options.describeSelfForAmbientJudge ?? describePersonaForAmbientJudge)().catch(() => ({
+        (isCompanion() && options.describeSelfForAmbientJudge ? options.describeSelfForAmbientJudge : describePersonaForAmbientJudge)().catch(() => ({
           name: '',
           description: '',
         })),
@@ -201,7 +205,7 @@ export function buildTelegramAdapter(
       if (!event.speaker) return undefined;
       // 伙伴自有 bot(2026-10-16 Chris 裁决): 伙伴设置里的权限档是唯一开关。主人触发
       // 的轮次不另挂策略; 成员 / 外部用户触发的轮次只在破坏性动作上要主人确认。
-      if (companion) {
+      if (isCompanion()) {
         return event.speaker.isOwner
           ? undefined
           : createTelegramGuestTurnPermissionPolicy(event.messageId, false);
@@ -221,7 +225,7 @@ export function buildTelegramAdapter(
     // 无法兑现逐轮策略, 成员触发的轮次同样取缔策略而不是拒跑 —— 要成员动手前
     // 必须确认, 把伙伴设成 Auto 或 Ask。
     turnPolicyOptionalForMode: (mode, policy) =>
-      mode === 'bypassPermissions' && (companion || ownerGroupTurnPolicies.has(policy)),
+      mode === 'bypassPermissions' && (isCompanion() || ownerGroupTurnPolicies.has(policy)),
     groupHistoryAccessFor: (event): GroupHistoryAccessScope | undefined => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       // Keep the verified identity check even though transport rejects guest DMs;
@@ -278,7 +282,7 @@ export function buildTelegramAdapter(
         chatKind: lane ? 'group' : 'direct',
         requesterIsOwner,
         triggerMessageId,
-        companion,
+        companion: isCompanion(),
       };
     },
     prepareAgentTurnText: async (event) => {
@@ -286,7 +290,7 @@ export function buildTelegramAdapter(
       const replyBlock = event.replyContext
         ? buildTelegramReplyContextBlock(event.replyContext, event.text)
         : '';
-      const persona = companion ? '' : personaBlock();
+      const persona = isCompanion() ? '' : personaBlock();
       if (!lane) {
         // DM: 无群窗口, 但人格块与引用注入(回复某条消息触发)同样生效。
         if (!replyBlock && !persona) return null;
