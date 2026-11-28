@@ -3,6 +3,9 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { __testing as ownerState, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import * as sessionOrigin from '@/features/device-link/stickySessionOrigin';
+
 import type { WorkerInfo } from '../hooks/useWorkers';
 import { WorkerListToolbar, workerTabsScrollStep } from '../RolePillDropdown';
 import { __resetWorkerAttentionStoreForTest, hasWorkerAttention, markWorkerAttention } from '../lib/workerAttentionStore';
@@ -95,11 +98,13 @@ function setReducedMotion(reduced: boolean): void {
 describe('WorkerTabsList overflow scrolling', () => {
   beforeEach(() => {
     localStorage.clear();
+    ownerState.reset();
     __resetWorkerAttentionStoreForTest();
   });
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -120,6 +125,88 @@ describe('WorkerTabsList overflow scrolling', () => {
     expect(hasWorkerAttention(done.workerId)).toBe(true);
     view.rerender(<WorkerListToolbar {...props} selectedWorkerId={done.workerId} clearAttentionWhenVisible />);
     expect(hasWorkerAttention(done.workerId)).toBe(true);
+  });
+
+  // Unit: toolbar order is a client preference, independent of focus and incoming projections.
+  // Existing cases only cover scrolling. Two Workers + Alt/Arrow is the minimal missing reorder.
+  it('remembers manual order per Lead while appending new Workers and preserving focus', () => {
+    const workers = manyWorkers(3);
+    const onSwitchFocus = vi.fn();
+    const props = { leadSessionId: 'lead-a', worker: workers[0], workers,
+      selectedWorkerId: workers[0].workerId, activeWorkerCount: 3, softLimit: 5, hardLimit: 8,
+      onSwitchFocus, onOpenCreate: vi.fn(), onArchiveWorker: vi.fn() };
+    const order = () => Array.from(screen.getByTestId('worker-tabs-scroller')
+      .querySelectorAll('[data-sortable-id]')).map((el) => el.getAttribute('data-sortable-id'));
+    const view = render(<WorkerListToolbar {...props} />);
+    fireEvent.keyDown(screen.getAllByRole('button', { name: 'developer' })[0], { key: 'ArrowRight', altKey: true });
+    expect(order()).toEqual(['worker-1', 'worker-0', 'worker-2']);
+    expect(onSwitchFocus).not.toHaveBeenCalled();
+    view.unmount();
+    // Production snapshots are newest-first; a second arrival must not displace
+    // the first newcomer, even after a temporary empty/loading projection.
+    const newcomers = manyWorkers(5).slice(3);
+    const reopened = render(<WorkerListToolbar {...props} workers={[newcomers[0], ...workers]} />);
+    expect(order()).toEqual(['worker-1', 'worker-0', 'worker-2', 'worker-3']);
+    reopened.rerender(<WorkerListToolbar {...props} workers={[newcomers[1], newcomers[0], ...workers]} />);
+    expect(order()).toEqual(['worker-1', 'worker-0', 'worker-2', 'worker-3', 'worker-4']);
+    reopened.rerender(<WorkerListToolbar {...props} workers={[]} />);
+    reopened.rerender(<WorkerListToolbar {...props} workers={[newcomers[1], newcomers[0], ...workers]} />);
+    expect(order()).toEqual(['worker-1', 'worker-0', 'worker-2', 'worker-3', 'worker-4']);
+    reopened.rerender(<WorkerListToolbar {...props} workers={[workers[0], workers[2]]} />);
+    expect(order()).toEqual(['worker-0', 'worker-2']);
+    reopened.rerender(<WorkerListToolbar {...props} leadSessionId="lead-b" />);
+    expect(order()).toEqual(['worker-0', 'worker-1', 'worker-2']);
+    reopened.rerender(<WorkerListToolbar {...props} />);
+    expect(order()).toEqual(['worker-1', 'worker-0', 'worker-2']);
+  });
+
+  it('appends arrivals before manual sorting without writing projection updates to storage', () => {
+    const workers = manyWorkers(4);
+    const props = { leadSessionId: 'lead-arrivals', worker: workers[0], workers: workers.slice(0, 2),
+      selectedWorkerId: workers[0].workerId, activeWorkerCount: 4, softLimit: 5, hardLimit: 8,
+      onSwitchFocus: vi.fn(), onOpenCreate: vi.fn(), onArchiveWorker: vi.fn() };
+    const write = vi.spyOn(Storage.prototype, 'setItem');
+    const view = render(<WorkerListToolbar {...props} />);
+    view.rerender(<WorkerListToolbar {...props} workers={[workers[2], ...props.workers]} />);
+    view.rerender(<WorkerListToolbar {...props} workers={[workers[3], workers[2], ...props.workers]} />);
+    const order = Array.from(screen.getByTestId('worker-tabs-scroller')
+      .querySelectorAll('[data-sortable-id]')).map((el) => el.getAttribute('data-sortable-id'));
+    expect(order).toEqual(['worker-0', 'worker-1', 'worker-2', 'worker-3']);
+    expect(write).not.toHaveBeenCalled();
+    expect(props.onSwitchFocus).not.toHaveBeenCalled();
+  });
+
+  it('isolates saved order by account and Lead host and recovers malformed storage', () => {
+    const origin = vi.spyOn(sessionOrigin, 'getStickySessionDeviceId').mockReturnValue('host-a');
+    setDataOwnerGeneration('owner-a');
+    const workers = manyWorkers(2);
+    const props = { leadSessionId: 'lead', worker: workers[0], workers,
+      selectedWorkerId: workers[0].workerId, activeWorkerCount: 2, softLimit: 5, hardLimit: 8,
+      onSwitchFocus: vi.fn(), onOpenCreate: vi.fn(), onArchiveWorker: vi.fn() };
+    const order = () => Array.from(screen.getByTestId('worker-tabs-scroller')
+      .querySelectorAll('[data-sortable-id]')).map((el) => el.getAttribute('data-sortable-id'));
+    const view = render(<WorkerListToolbar {...props} />);
+    fireEvent.keyDown(screen.getAllByRole('button', { name: 'developer' })[0], { key: 'ArrowRight', altKey: true });
+    const savedKey = Object.keys(localStorage).find((key) => key.startsWith('orca-worker-tab-order-v1:'))!;
+    setDataOwnerGeneration('owner-b');
+    view.rerender(<WorkerListToolbar {...props} />);
+    expect(order()).toEqual(['worker-0', 'worker-1']);
+    setDataOwnerGeneration('owner-a');
+    origin.mockReturnValue('host-b');
+    view.rerender(<WorkerListToolbar {...props} />);
+    expect(order()).toEqual(['worker-0', 'worker-1']);
+    origin.mockReturnValue('host-a');
+    view.rerender(<WorkerListToolbar {...props} />);
+    expect(order()).toEqual(['worker-1', 'worker-0']);
+    view.unmount();
+    localStorage.setItem(savedKey, '{broken');
+    const reopened = render(<WorkerListToolbar {...props} />);
+    expect(order()).toEqual(['worker-0', 'worker-1']);
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+    fireEvent.keyDown(screen.getAllByRole('button', { name: 'developer' })[0], { key: 'ArrowRight', altKey: true });
+    expect(order()).toEqual(['worker-1', 'worker-0']);
+    write.mockRestore();
+    reopened.unmount();
   });
 
   it('uses a bounded step that fits the visible tab strip', () => {

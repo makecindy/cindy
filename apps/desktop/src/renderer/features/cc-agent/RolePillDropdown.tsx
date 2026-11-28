@@ -25,6 +25,8 @@ import { cn } from '@/lib/utils';
 import { useAppShortcutDisplay } from '@/hooks/useAppShortcut';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { SortableList } from '@/components/sidebar/SortableList';
+import { useWorkerTabOrder } from './lib/useWorkerTabOrder';
 import { Tip } from '@/components/ui/tooltip';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
@@ -901,6 +903,7 @@ function WorkerTabsList({
   selectedWorkerId,
   onSwitchFocus,
   onArchiveWorker,
+  onReorder,
   clearAttentionWhenVisible = true,
 }: {
   leadSessionId?: string;
@@ -908,12 +911,15 @@ function WorkerTabsList({
   selectedWorkerId: string | null;
   onSwitchFocus: (workerId: string) => void;
   onArchiveWorker: (workerId: string) => void;
+  onReorder: (ids: string[]) => void;
   clearAttentionWhenVisible?: boolean;
 }) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const focusedTabRef = useRef<HTMLButtonElement | null>(null);
+  const keyboardMovedTabRef = useRef<HTMLButtonElement | null>(null);
   const [scrollState, setScrollState] = useState({ left: false, right: false });
+  const [dragging, setDragging] = useState(false);
   const attention = useWorkerAttentionSnapshot();
   const taskAttention = useWorkerTaskAttention(workers, leadSessionId);
   const reducedMotion = useReducedMotion();
@@ -958,6 +964,15 @@ function WorkerTabsList({
     ensureChildHorizontallyVisible(container, focusedTab);
     updateScrollState();
   }, [focusedWorkerId, updateScrollState, workers.length]);
+
+  useLayoutEffect(() => {
+    const tab = keyboardMovedTabRef.current;
+    keyboardMovedTabRef.current = null;
+    const container = scrollRef.current;
+    if (!tab || !container?.contains(tab)) return;
+    ensureChildHorizontallyVisible(container, tab);
+    updateScrollState();
+  }, [workers, updateScrollState]);
 
   const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
@@ -1016,80 +1031,108 @@ function WorkerTabsList({
         onScroll={updateScrollState}
         onWheel={handleWheel}
       >
-        {workers.map((worker) => {
-          const selected = worker.workerId === focusedWorkerId;
-          const attentionKind = resolveWorkerListAttention(
-            worker,
-            taskAttention.get(worker.sessionId),
-            selected,
-            attention.has(worker.workerId),
-            leadSessionId,
-          );
-          // error 终态整体描红: 选中态保留 accent 底 (标明当前 tab) 但换红边, 非选中态
-          // 走软红底 + 红边 + 红字, 让出错 worker 的 tab 一眼可定位。
-          const isError = attentionKind === 'error';
-          return (
-            <Tip
-              key={worker.workerId}
-              side="bottom"
-              delay={250}
-              contentClassName="min-w-[220px] max-w-[260px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]"
-              text={
-                <div className="py-0.5">
-                  <WorkerSummary worker={worker} attentionKind={attentionKind} />
+        <SortableList
+          items={workers}
+          getId={(worker) => worker.workerId}
+          onReorder={onReorder}
+          onDragActiveChange={setDragging}
+          reducedMotion={reducedMotion}
+          handle="[data-worker-tab]"
+          filter="[data-no-drag]"
+          className="flex min-w-max items-center gap-1"
+          rowClassName="right-sidebar-tab-sortable-row shrink-0"
+          renderItem={(worker, index) => {
+            const selected = worker.workerId === focusedWorkerId;
+            const attentionKind = resolveWorkerListAttention(
+              worker,
+              taskAttention.get(worker.sessionId),
+              selected,
+              attention.has(worker.workerId),
+              leadSessionId,
+            );
+            // error 终态整体描红: 选中态保留 accent 底 (标明当前 tab) 但换红边, 非选中态
+            // 走软红底 + 红边 + 红字, 让出错 worker 的 tab 一眼可定位。
+            const isError = attentionKind === 'error';
+            return (
+              <Tip
+                key={worker.workerId}
+                controlledOpen={dragging ? false : undefined}
+                resetHoverOnControlChange
+                side="bottom"
+                delay={250}
+                contentClassName="min-w-[220px] max-w-[260px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]"
+                text={
+                  <div className="py-0.5">
+                    <WorkerSummary worker={worker} attentionKind={attentionKind} />
+                    <div className="mt-1 text-11 text-[var(--text-secondary)]">{t('orca.rolePill.reorderHint')}</div>
+                  </div>
+                }
+              >
+                <div className="group relative inline-flex shrink-0">
+                  <button
+                    type="button"
+                    ref={selected ? focusedTabRef : undefined}
+                    data-worker-tab
+                    aria-description={t('orca.rolePill.reorderHint')}
+                    aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
+                    onKeyDown={(event) => {
+                      if (!event.altKey || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return;
+                      event.preventDefault();
+                      const target = index + (event.key === 'ArrowLeft' ? -1 : 1);
+                      if (target < 0 || target >= workers.length) return;
+                      const ids = workers.map((item) => item.workerId);
+                      ids.splice(target, 0, ...ids.splice(index, 1));
+                      keyboardMovedTabRef.current = event.currentTarget;
+                      onReorder(ids);
+                    }}
+                    className={cn(
+                      'inline-flex h-6 cursor-grab shrink-0 items-center gap-1.5 rounded-full border py-0 pl-2 pr-6 text-11 leading-none transition-colors',
+                      selected
+                        ? isError
+                          ? 'border-[var(--error-fg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
+                          : 'border-[var(--accent-cta-bg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
+                        : isError
+                          ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg-strong)] hover:bg-[var(--error-bg)]'
+                          : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
+                    )}
+                    onClick={() => {
+                      onSwitchFocus(worker.workerId);
+                    }}
+                  >
+                    <WorkerSummary
+                      worker={worker}
+                      attentionKind={attentionKind}
+                      selected={selected}
+                      compact
+                    />
+                    {/* ERR 徽章行内放在 pill 内部, 而非溢出角标 —— 平铺容器是 overflow-x-auto
+                        (会连带裁剪垂直溢出), 角标朝上溢出会被切掉; 行内则始终在 pill 边界内。 */}
+                    {isError && <WorkerErrorBadge className="ml-0.5" />}
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      'absolute right-[3px] top-1/2 inline-flex h-[18px] w-[18px] -translate-y-1/2 items-center justify-center rounded-full opacity-0 transition-opacity group-hover:opacity-100',
+                      selected
+                        ? 'text-[var(--surface-on-card)] hover:text-[var(--surface-on-card)]'
+                        : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]',
+                    )}
+                    data-no-drag
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void requestArchiveWorker(worker);
+                    }}
+                    aria-label={t('orca.rolePill.archiveWorkerAria', {
+                      name: getWorkerArchiveDisplayName(worker),
+                    })}
+                  >
+                    <X size={12} />
+                  </button>
                 </div>
-              }
-            >
-              <div className="group relative inline-flex shrink-0">
-                <button
-                  type="button"
-                  ref={selected ? focusedTabRef : undefined}
-                  className={cn(
-                    'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border py-0 pl-2 pr-6 text-11 leading-none transition-colors',
-                    selected
-                      ? isError
-                        ? 'border-[var(--error-fg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
-                        : 'border-[var(--accent-cta-bg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
-                      : isError
-                        ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg-strong)] hover:bg-[var(--error-bg)]'
-                        : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
-                  )}
-                  onClick={() => {
-                    onSwitchFocus(worker.workerId);
-                  }}
-                >
-                  <WorkerSummary
-                    worker={worker}
-                    attentionKind={attentionKind}
-                    selected={selected}
-                    compact
-                  />
-                  {/* ERR 徽章行内放在 pill 内部, 而非溢出角标 —— 平铺容器是 overflow-x-auto
-                      (会连带裁剪垂直溢出), 角标朝上溢出会被切掉; 行内则始终在 pill 边界内。 */}
-                  {isError && <WorkerErrorBadge className="ml-0.5" />}
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    'absolute right-[3px] top-1/2 inline-flex h-[18px] w-[18px] -translate-y-1/2 items-center justify-center rounded-full opacity-0 transition-opacity group-hover:opacity-100',
-                    selected
-                      ? 'text-[var(--surface-on-card)] hover:text-[var(--surface-on-card)]'
-                      : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]',
-                  )}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void requestArchiveWorker(worker);
-                  }}
-                  aria-label={t('orca.rolePill.archiveWorkerAria', {
-                    name: getWorkerArchiveDisplayName(worker),
-                  })}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            </Tip>
-          );
-        })}
+              </Tip>
+            );
+          }}
+        />
       </div>
       {scrollState.left && (
         <div
@@ -1164,7 +1207,7 @@ export function WorkerListToolbar({ pluginEngineDeviceId, ...props }: WorkerList
 function WorkerListToolbarContent({
   leadSessionId,
   worker,
-  workers,
+  workers: unorderedWorkers,
   selectedWorkerId,
   activeWorkerCount,
   softLimit,
@@ -1180,6 +1223,7 @@ function WorkerListToolbarContent({
 }: WorkerListToolbarProps) {
   const { t } = useTranslation();
   const [layout, setLayout] = useState<WorkerListLayout>(readStoredWorkerListLayout);
+  const { workers, reorder, scope } = useWorkerTabOrder(unorderedWorkers, leadSessionId);
   const activeCount = activeWorkerCount;
 
   const handleLayoutChange = useCallback((nextLayout: WorkerListLayout) => {
@@ -1228,6 +1272,8 @@ function WorkerListToolbarContent({
             onOpenSettings={onOpenSettings}
           />
           <WorkerTabsList
+            key={scope}
+            onReorder={reorder}
             leadSessionId={leadSessionId}
             workers={workers}
             selectedWorkerId={selectedWorkerId}
