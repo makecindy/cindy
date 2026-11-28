@@ -72,9 +72,9 @@ describe('openSubagentsTab', () => {
     });
   });
 
-  it('silently adds the automatic tab without replacing another active tab', async () => {
+  it.each([null, 'files-1'])('preserves session selection %s during silent registration', async (activeId) => {
     mocks.bucket.tabs = [{ id: 'files-1', kind: 'file-browser', state: null }];
-    mocks.bucket.activeTabId = 'files-1';
+    mocks.bucket.activeTabId = activeId;
 
     await openSubagentsTab('session-1', {
       focusTab: false,
