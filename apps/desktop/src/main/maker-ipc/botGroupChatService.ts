@@ -847,10 +847,14 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       incomingMessageTimes: incoming.reverse().map((row) => new Date(row.createdAt).toISOString()) };
   };
 
-  const summarize = async (group: GroupRow): Promise<BotGroupSummary> => {
+  const summarize = async (
+    group: GroupRow,
+    /** `latestMessages` 已在途时直接复用:getGroup 里它的 `latest` 还要另用,别重跑一遍。 */
+    groupRead?: Promise<Awaited<ReturnType<typeof latestMessages>>>,
+  ): Promise<BotGroupSummary> => {
     const [members, { latestSpoken, lastReplyAt, incomingMessageTimes }, openPlan] = await Promise.all([
       readMembers(group.id),
-      latestMessages(group.id),
+      groupRead ?? latestMessages(group.id),
       readOpenPlan(group.id),
     ]);
     const openSteps = openPlan ? await readSteps(openPlan.id) : [];
@@ -1883,11 +1887,12 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       .limit(limit + 1);
     const hasMoreBefore = page.length > limit;
     const messages = page.slice(0, limit).reverse().map(toMessageView);
-    const summary = await summarize(group);
+    const groupRead = latestMessages(groupId);
+    const summary = await summarize(group, groupRead);
     const runtime = runtimes.get(groupId);
     const round = runtime?.round ?? null;
     const speakers = speakersOf(groupId);
-    const { latest } = await latestMessages(groupId);
+    const { latest } = await groupRead;
     const planIds = new Set(messages.map((message) => message.planId).filter((id): id is string => !!id));
     if (summary.openPlan) planIds.add(summary.openPlan.id);
     return {
