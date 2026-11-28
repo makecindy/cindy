@@ -8,7 +8,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
-import { readBranchSyncStatus, readOriginDefaultBranch, syncBranch } from '../branchSync';
+import {
+  readBranchSyncStatus,
+  readOriginDefaultBranch,
+  syncBranch,
+  tryFastForwardDefaultBranchAfterMerge,
+} from '../branchSync';
 import * as gitModule from '../gitExec';
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -310,4 +315,92 @@ it('refuses an unchecked-branch write if another worktree checks it out after pr
   } finally {
     spy.mockRestore();
   }
+});
+
+it('detects conflict-free divergence with merge-tree and rebases cleanly when strategy=rebase', async () => {
+  const f = fixture();
+  f.advance('remote-file');
+  commit(f.repo, 'local-file', 'local non-overlapping commit');
+  git(f.repo, 'fetch', 'origin');
+
+  const preflight = await readBranchSyncStatus(f.req);
+  expect(preflight).toMatchObject({
+    blocked: 'diverged',
+    ahead: 1,
+    behind: 1,
+    divergedConflict: false,
+  });
+
+  // Default strategy still preserves ff-only fail-closed behavior.
+  expect(await syncBranch(f.req)).toMatchObject({ updated: 0, status: { blocked: 'diverged' } });
+
+  // Explicit rebase strategy cleanly replays local commit onto remote.
+  const synced = await syncBranch({ ...f.req, strategy: 'rebase' });
+  expect(synced).toMatchObject({
+    updated: 1,
+    syncedMode: 'rebase',
+    status: { ahead: 1, behind: 0 },
+  });
+  expect(synced.status.blocked).toBeUndefined();
+  expect(fs.existsSync(path.join(f.repo, 'remote-file'))).toBe(true);
+  expect(fs.existsSync(path.join(f.repo, 'local-file'))).toBe(true);
+});
+
+it('reports conflicting paths via merge-tree and refuses rebase without leaving rebase in progress', async () => {
+  const f = fixture();
+  f.advance('base');
+  const before = commit(f.repo, 'base', 'local conflicting change');
+  git(f.repo, 'fetch', 'origin');
+
+  const preflight = await readBranchSyncStatus(f.req);
+  expect(preflight).toMatchObject({
+    blocked: 'diverged',
+    divergedConflict: true,
+    divergedConflictFiles: ['base'],
+  });
+
+  const attempted = await syncBranch({ ...f.req, strategy: 'rebase' });
+  expect(attempted).toMatchObject({
+    updated: 0,
+    status: { blocked: 'diverged', divergedConflict: true },
+  });
+  expect(git(f.repo, 'rev-parse', 'HEAD')).toBe(before);
+  expect(fs.existsSync(path.join(f.repo, '.git', 'rebase-merge'))).toBe(false);
+});
+
+it('auto fast-forwards clean default branch after merge and skips dirty or ahead checkouts', async () => {
+  const repo = path.join(root, `auto-ff-${++sequence}`);
+  git(root, 'clone', remote, repo);
+  git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+
+  // Advance remote main directly from the shared seed repository.
+  git(seed, 'checkout', 'main');
+  const nextSha = commit(seed, 'merged-pr.txt', 'merged PR commit');
+  git(seed, 'push', 'origin', 'main');
+
+  // Dirty checkout must be skipped silently without moving HEAD.
+  const dirtyBefore = git(repo, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(repo, 'scratch.txt'), 'uncommitted');
+  expect(await tryFastForwardDefaultBranchAfterMerge(repo)).toEqual({
+    status: 'skipped',
+    reason: 'dirty',
+  });
+  expect(git(repo, 'rev-parse', 'HEAD')).toBe(dirtyBefore);
+
+  // Clean checkout fast-forwards automatically.
+  fs.unlinkSync(path.join(repo, 'scratch.txt'));
+  expect(await tryFastForwardDefaultBranchAfterMerge(repo)).toEqual({
+    status: 'updated',
+    branch: 'main',
+    updated: 1,
+  });
+  expect(git(repo, 'rev-parse', 'HEAD')).toBe(nextSha);
+
+  // Local unpushed commit must be skipped silently.
+  const aheadSha = commit(repo, 'local-unpushed.txt', 'unpushed');
+  expect(await tryFastForwardDefaultBranchAfterMerge(repo)).toEqual({
+    status: 'skipped',
+    reason: 'ahead',
+  });
+  expect(git(repo, 'rev-parse', 'HEAD')).toBe(aheadSha);
 });

@@ -42,7 +42,8 @@ import { prStatusKey, isPrHost, parseSessionPrUrl, sessionPrUrl } from '@cindy/m
 import { getScheduleWebhookHost } from '../scheduler-host/webhook/runtime';
 import { GITHUB_EVENT_CACHE_TTL_MS, type GithubPrRefresh } from '../scheduler-host/webhook/github';
 import { cachedGithubPrHeads, refreshGithubPrEvents } from './githubPrEvents';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
+import path from 'node:path';
 
 import { createLogger } from '../logger.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current';
@@ -93,6 +94,9 @@ import {
 
 import { fetchPrRemoteWithFallback } from './prSummary';
 import { changesBetween, PrFollowWatch } from './prFollowWatch';
+import { PrMergedAutoSync } from './prMergedAutoSync.js';
+import { tryFastForwardDefaultBranchAfterMerge } from '../worktree/branchSync.js';
+import { gitExec } from '../worktree/gitExec.js';
 import { getSchedulerIfInitialized, getScheduleStorageIfInitialized } from '../scheduler-host/index.desktop.js';
 
 const gitlabSetupSubscriptions: Array<() => void> = [];
@@ -172,6 +176,63 @@ const prFollowWatch = new PrFollowWatch({
     // explicit prTrigger and legacy hook URLs), so busy deferrals must not clobber nextFireAt.
     return scheduler.runNow(id, { trigger, mrObservation, expectedSchedule, deferToCaller: true });
   },
+  log,
+});
+
+/** Resolve unique local repository roots linked to sessions referencing a PR. */
+async function findLocalBaseReposForPr(query: PrStatusQuery): Promise<string[]> {
+  if (getCurrentDbClientUserId() === null) return [];
+  const targetKey = prStatusKey(query);
+  const allRefs = await listAllPrRefs();
+  const matchingSessionIds = [
+    ...new Set(
+      allRefs
+        .filter((ref) => prStatusKey(ref) === targetKey)
+        .map((ref) => ref.sessionId),
+    ),
+  ];
+  if (matchingSessionIds.length === 0) return [];
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({
+      id: sessions.id,
+      workingDir: sessions.workingDir,
+      remoteHostId: sessions.remoteHostId,
+    })
+    .from(sessions)
+    .where(inArray(sessions.id, matchingSessionIds));
+  const repos = new Set<string>();
+  for (const row of rows) {
+    if (row.remoteHostId) continue;
+    const wt = worktreeStore.get(row.id);
+    if (wt?.baseRepo && path.isAbsolute(wt.baseRepo)) {
+      repos.add(wt.baseRepo);
+      continue;
+    }
+    if (!row.workingDir || !path.isAbsolute(row.workingDir)) continue;
+    try {
+      const commonDir = (
+        await gitExec(
+          ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+          row.workingDir,
+          { timeoutMs: 3_000, extraEnv: { LC_ALL: 'C' } },
+        )
+      ).stdout.trim();
+      if (commonDir) {
+        const candidate = path.basename(commonDir) === '.git' ? path.dirname(commonDir) : row.workingDir;
+        if (path.isAbsolute(candidate)) repos.add(candidate);
+      }
+    } catch {
+      // Not a local git repo or directory removed; ignore silently.
+    }
+  }
+  return [...repos];
+}
+
+/** Auto fast-forwards local default branch when an observed PR transitions to merged. */
+const prMergedAutoSync = new PrMergedAutoSync({
+  findLocalBaseReposForPr,
+  fastForwardDefaultBranch: tryFastForwardDefaultBranchAfterMerge,
   log,
 });
 /** Re-read current facts before running the existing follow-up gate. No new agent task. */
@@ -273,10 +334,12 @@ export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: st
     },
     onInvalidated: () => {
       prFollowWatch.reset();
+      prMergedAutoSync.reset();
       prStatusBroadcaster.reset();
     },
     onObserved: (query, result) => {
       prFollowWatch.observe(query, result);
+      prMergedAutoSync.observe(query, result);
       prStatusBroadcaster.observe(query, result);
     },
   });

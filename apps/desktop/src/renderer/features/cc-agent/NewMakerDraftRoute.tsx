@@ -102,9 +102,13 @@ import { ChatInput } from '@/components/new-chat/ChatInput';
 import { useTaskBotMentions } from './hooks/useTaskBotMentions';
 import {
   WorktreeChipsRow,
+  type DivergedBranchResolveInfo,
+  type WorkspaceCleanupRequestInfo,
   type WorktreeDefaultSource,
   type CheckoutBranchView,
 } from '@/components/new-chat/WorktreeChipsRow';
+import { buildBranchConflictResolvePrompt } from '@/lib/branchConflictPrompt';
+import { buildBranchCleanupPrompt } from '@/lib/branchCleanupPrompt';
 import { checkDraftBranchBeforeStart } from './newMakerDraftBranchCheck';
 import {
   FolderPickerPopover,
@@ -8050,6 +8054,37 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     });
     return true;
   }, []);
+  const handleResolveBranchConflict = useCallback(
+    (info: DivergedBranchResolveInfo) => {
+      const prompt = buildBranchConflictResolvePrompt(t, {
+        branch: info.branch,
+        remoteRef: `${info.remote}/${info.remoteBranch}`,
+        ahead: info.ahead,
+        behind: info.behind,
+        dirtyFiles: info.dirtyFiles,
+        conflictFiles: info.conflictFiles,
+        pushAfterSync: false,
+      });
+      if (fillComposerWithSuggestion(prompt)) {
+        toast.info(t('newChat.branchSync.agentPromptFilled'));
+      }
+    },
+    [fillComposerWithSuggestion, t],
+  );
+  const handleOrganizeWorkspace = useCallback(
+    (info: WorkspaceCleanupRequestInfo) => {
+      const prompt = buildBranchCleanupPrompt(t, {
+        scopes: info.scopes,
+        protectedWorktreePaths: info.protectedWorktreePaths,
+      });
+      // Explicit user action: run workspace cleanup directly in the primary repo instead of spawning another worktree.
+      if (wtEnabled) handleWtEnabledChange(false);
+      if (fillComposerWithSuggestion(prompt)) {
+        toast.info(t('newChat.workspaceCleanup.agentPromptFilled'));
+      }
+    },
+    [fillComposerWithSuggestion, handleWtEnabledChange, t, wtEnabled],
+  );
   // 一条建议的预览与读屏描述:内容与点击填入的 pluginSuggestionComposerText 一致,
   // 只是同名限定符按输入框胶囊的规则收起。插件可用时带 $指令(或插件调用说明);需要
   // 先安装的插件点击后走安装引导、不会立即填入,只显示建议本身。插件清单变化时随之重算。
@@ -8502,6 +8537,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   disabled={wtCreating || sendInFlight || directoryRecoverySelecting}
                   branchDisabled={wtBranchPreferenceLoading || wtBranchPreferenceSaving}
                   checkboxDisabled={wtPreferenceSaving}
+                  onResolveBranchConflict={handleResolveBranchConflict}
+                  onOrganizeWorkspace={handleOrganizeWorkspace}
                 />
               </div>
               <ThemeBrandLockup

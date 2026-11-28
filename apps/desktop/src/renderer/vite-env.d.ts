@@ -4811,6 +4811,7 @@ interface ElectronAPI {
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
+  worktreeWorkspaceClutterSummary?: (req: import('../shared/worktreeWorkspaceClutter').WorkspaceClutterRequest) => Promise<import('../shared/worktreeWorkspaceClutter').WorkspaceClutterSummary>;
   worktreeListBranches: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').ListBranchesResp>;
@@ -5083,6 +5084,7 @@ interface ElectronAPI {
     push: (params: {
       sessionId: string;
       confirmForce?: import('@/lib/gitReview.types').ReviewPushConfirmForce;
+      syncBeforePush?: boolean;
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 

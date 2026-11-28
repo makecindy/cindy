@@ -6,6 +6,7 @@
  */
 
 import { GitRunError, runGit } from './gitRunner.js';
+import { parseMergeTreeConflictFiles } from '../worktree/branchSync.js';
 import type { ReviewPushConfirmForce, ReviewScope, ReviewStatus } from './types.js';
 
 const GIT_WRITE_MAX_STDOUT_BYTES = 4 * 1024 * 1024;
@@ -26,6 +27,7 @@ export type GitReviewPushOperation =
       remoteRef: string;
       stdout: string;
       stderr: string;
+      syncedBeforePush?: boolean;
     }
   | {
       kind: 'needs-force';
@@ -36,6 +38,10 @@ export type GitReviewPushOperation =
       behind: number;
       upstream: string | null;
       stderr: string;
+      branch?: string;
+      canSyncCleanly?: boolean;
+      conflictFiles?: string[];
+      dirty?: boolean;
     };
 
 export type GitReviewPushErrorKind = 'lease-expired' | 'no-remote' | 'generic';
@@ -201,22 +207,100 @@ function isForceLeaseRejection(err: GitRunError): boolean {
   return /stale info|rejected.*\(stale info\)/i.test(output);
 }
 
+async function preflightMergeTreeForPush(
+  repoRoot: string,
+  localRef: string,
+  trackingRef: string,
+): Promise<{ conflict: boolean; conflictFiles: string[] }> {
+  try {
+    await runGit(
+      ['merge-tree', '--write-tree', '--name-only', '--no-messages', localRef, trackingRef],
+      { cwd: repoRoot, timeoutMs: 10_000 },
+    );
+    return { conflict: false, conflictFiles: [] };
+  } catch (err) {
+    if (err instanceof GitRunError && err.exitCode === 1) {
+      return { conflict: true, conflictFiles: parseMergeTreeConflictFiles(err.stdout) };
+    }
+    return { conflict: true, conflictFiles: [] };
+  }
+}
+
+async function fetchTrackingBranchForPush(
+  repoRoot: string,
+  target: PushTarget,
+): Promise<boolean> {
+  try {
+    await runGit(
+      [
+        'fetch',
+        '--no-tags',
+        '--recurse-submodules=no',
+        '--',
+        target.remote,
+        `+refs/heads/${target.remoteBranch}:${target.trackingRef}`,
+      ],
+      { cwd: repoRoot, timeoutMs: 60_000, maxStdoutBytes: GIT_WRITE_MAX_STDOUT_BYTES },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readAheadBehindForPush(
+  repoRoot: string,
+  localRef: string,
+  trackingRef: string,
+  fallback: { ahead: number; behind: number },
+): Promise<{ ahead: number; behind: number }> {
+  try {
+    const { stdout } = await runGit(
+      ['rev-list', '--left-right', '--count', `${localRef}...${trackingRef}`],
+      { cwd: repoRoot, timeoutMs: 5_000 },
+    );
+    const [aheadRaw, behindRaw] = stdout.trim().split(/\s+/).map(Number);
+    if (Number.isFinite(aheadRaw) && Number.isFinite(behindRaw)) {
+      return { ahead: aheadRaw, behind: behindRaw };
+    }
+  } catch {
+    // Fall back to status counts.
+  }
+  return fallback;
+}
+
 async function needsForceResult(
   repoRoot: string,
+  branch: string,
   status: ReviewStatus,
   target: PushTarget,
   stderr = '',
+  opts?: { refreshRemote?: boolean },
 ): Promise<GitReviewPushOperation> {
+  if (opts?.refreshRemote) {
+    await fetchTrackingBranchForPush(repoRoot, target);
+  }
   const remoteOid = await readTrackingOid(repoRoot, target);
+  const localRef = `refs/heads/${branch}`;
+  const [counts, preflight] = await Promise.all([
+    readAheadBehindForPush(repoRoot, localRef, target.trackingRef, status.scope.aheadBehind),
+    preflightMergeTreeForPush(repoRoot, localRef, target.trackingRef),
+  ]);
+  const dirty = status.dirty;
+  const canSyncCleanly = !dirty && status.inProgress.length === 0 && !preflight.conflict;
   return {
     kind: 'needs-force',
     remote: target.remote,
     remoteRef: target.remoteRef,
     remoteOid,
-    ahead: status.scope.aheadBehind.ahead,
-    behind: Math.max(status.scope.aheadBehind.behind, 1),
+    ahead: counts.ahead,
+    behind: Math.max(counts.behind, 1),
     upstream: target.upstream,
     stderr,
+    branch,
+    canSyncCleanly,
+    dirty,
+    ...(preflight.conflictFiles.length > 0 ? { conflictFiles: preflight.conflictFiles } : {}),
   };
 }
 
@@ -225,6 +309,7 @@ async function pushNormally(
   branch: string,
   status: ReviewStatus,
   target: PushTarget,
+  syncedBeforePush = false,
 ): Promise<GitReviewPushOperation> {
   const localRef = `refs/heads/${branch}`;
   const refspec = `${localRef}:${target.remoteRef}`;
@@ -239,14 +324,60 @@ async function pushNormally(
       remoteRef: target.remoteRef,
       stdout: result.stdout,
       stderr: result.stderr,
+      ...(syncedBeforePush ? { syncedBeforePush: true } : {}),
     };
   } catch (err) {
     if (err instanceof GitRunError && isNonFastForwardRejection(err)) {
-      return needsForceResult(repoRoot, status, target, err.stderr || err.stdout);
+      return needsForceResult(repoRoot, branch, status, target, err.stderr || err.stdout, {
+        refreshRemote: true,
+      });
     }
     if (err instanceof GitRunError) throw new GitReviewPushError(err.stderr || err.message, err.stderr);
     throw err;
   }
+}
+
+async function syncAndPush(
+  repoRoot: string,
+  branch: string,
+  status: ReviewStatus,
+  target: PushTarget,
+): Promise<GitReviewPushOperation> {
+  if (status.dirty || status.inProgress.length > 0) {
+    return needsForceResult(repoRoot, branch, status, target);
+  }
+  const fetched = await fetchTrackingBranchForPush(repoRoot, target);
+  if (!fetched) {
+    throw new GitReviewPushError(`failed to fetch ${target.remote}/${target.remoteBranch} before push`);
+  }
+  const localRef = `refs/heads/${branch}`;
+  const counts = await readAheadBehindForPush(
+    repoRoot,
+    localRef,
+    target.trackingRef,
+    status.scope.aheadBehind,
+  );
+  if (counts.behind > 0) {
+    const preflight = await preflightMergeTreeForPush(repoRoot, localRef, target.trackingRef);
+    if (preflight.conflict) {
+      return needsForceResult(repoRoot, branch, status, target);
+    }
+    try {
+      await runGit(['rebase', '--no-autostash', target.trackingRef], {
+        cwd: repoRoot,
+        timeoutMs: 120_000,
+        maxStdoutBytes: GIT_WRITE_MAX_STDOUT_BYTES,
+      });
+    } catch {
+      await runGit(['rebase', '--abort'], { cwd: repoRoot, timeoutMs: 15_000 }).catch(() => {});
+      const fallback = await needsForceResult(repoRoot, branch, status, target);
+      if (fallback.kind === 'needs-force') {
+        return { ...fallback, canSyncCleanly: false };
+      }
+      return fallback;
+    }
+  }
+  return pushNormally(repoRoot, branch, status, target, true);
 }
 
 async function pushWithLease(
@@ -294,6 +425,7 @@ export async function pushBranch(
   scope: ReviewScope,
   status: ReviewStatus,
   confirmForce?: ReviewPushConfirmForce,
+  options?: { syncBeforePush?: boolean },
 ): Promise<GitReviewPushOperation> {
   const { repoRoot, branch } = assertCanPush(scope, status);
   const target = await resolvePushTarget(repoRoot, branch, status.scope.aheadBehind.upstream);
@@ -304,12 +436,18 @@ export async function pushBranch(
     }
     return pushWithLease(repoRoot, branch, target, confirmForce);
   }
+  if (options?.syncBeforePush) {
+    if (status.scope.aheadBehind.ahead === 0) {
+      throw new GitReviewPushError('local branch has no new commits to push; pushing would rewind the remote');
+    }
+    return syncAndPush(repoRoot, branch, status, target);
+  }
   if (status.scope.aheadBehind.behind > 0) {
     // 纯落后(本地无新提交)不给 needs-force:强推只会把远端回退。分叉(ahead>0)才进入确认流程。
     if (status.scope.aheadBehind.ahead === 0) {
       throw new GitReviewPushError('local branch has no new commits to push; pushing would rewind the remote');
     }
-    return needsForceResult(repoRoot, status, target);
+    return needsForceResult(repoRoot, branch, status, target);
   }
   return pushNormally(repoRoot, branch, status, target);
 }
