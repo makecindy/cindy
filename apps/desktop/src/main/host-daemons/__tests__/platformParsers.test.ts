@@ -305,6 +305,34 @@ describe('crontab', () => {
     else expect(resolved.env.USER).toBe('yyy');
   });
 
+  it('系统环境整份照搬，条目赋值再覆盖，只有 LOGNAME 是 crond 强制的', async () => {
+    // crond 给任务的是 PAM 那份系统环境（/etc/environment 等），不是挑几个键近似：
+    // 少给一个变量（JAVA_HOME 之类），原本能被 cron 正常执行的脚本就可能跑不成。
+    const systemEnv = {
+      PATH: '/usr/local/bin:/usr/bin',
+      LANG: 'C.UTF-8',
+      LC_ALL: 'C.UTF-8',
+      JAVA_HOME: '/opt/jdk',
+    };
+    const resolved = resolveCronEnvironment({ FOO: 'bar' }, systemEnv);
+    expect(resolved.env.JAVA_HOME).toBe('/opt/jdk');
+    // LANG 与 LC_ALL 同时存在时两个都留着：优先级由 libc 决定，不能在这里替它选。
+    expect(resolved.env.LANG).toBe('C.UTF-8');
+    expect(resolved.env.LC_ALL).toBe('C.UTF-8');
+    // 条目的赋值覆盖系统那一份。
+    expect(resolveCronEnvironment({ JAVA_HOME: '/opt/other' }, systemEnv).env.JAVA_HOME).toBe(
+      '/opt/other',
+    );
+    // 只有 LOGNAME 由 crond 强制，条目改不动。
+    expect(resolveCronEnvironment({ LOGNAME: 'zzz' }, systemEnv).env.LOGNAME).toBe(
+      userInfo().username,
+    );
+    // SHELL 由 crond 自己定（crontab 的 SHELL=，没有就是 /bin/sh），不来自 PAM。
+    expect(resolveCronEnvironment({}, { SHELL: '/bin/zsh' }).shell).toBe('/bin/sh');
+    // 工作目录跟的是生效后的 HOME。
+    expect(await resolveCronCwd(resolveCronEnvironment({}, { HOME: homedir() }).env)).toBe(homedir());
+  });
+
   it('条目自己的语言环境赋值不被 Cindy 进程的环境覆盖', () => {
     // 基础环境先建立、条目赋值后覆盖：条目写了 LANG 就以条目为准
     // （crontab 里写 `LANG=zh_CN.UTF-8` 是用户明确要的语言环境）。

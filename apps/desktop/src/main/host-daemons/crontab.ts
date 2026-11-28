@@ -306,19 +306,22 @@ async function readSystemEnvironment(): Promise<Record<string, string>> {
 /**
  * 条目的环境赋值 + crond 的基础环境 → 一次本地复现该用的执行上下文。
  *
- * crond 起任务时给的是固定环境（HOME、LOGNAME、PATH、SHELL），不是继承谁的 shell；
- * crontab 里的赋值覆盖它。带着 Cindy 进程自己的环境去跑，跑的就不是用户写的那件事。
+ * crond 起任务时给的是「PAM 那份系统环境 + 它自己定的几个变量」，不是继承谁的
+ * shell；crontab 里的赋值覆盖它。带着 Cindy 进程自己的环境去跑，跑的就不是用户
+ * 写的那件事。
  *
  * 基础环境按 crond 的实际行为定（Debian cron 3.0pl1 真机实测）：
- * - `SHELL` 默认 `/bin/sh`，不是用户的登录 shell；
- * - `PATH` 取系统环境文件里的那份（Linux），crontab 里的 `PATH=` 覆盖它；
+ * - 系统环境整份照搬（`systemEnv`，即 PAM 从 /etc/environment 等文件读的那份）：
+ *   里面的 `JAVA_HOME` 之类同样会进任务环境，少给一个变量，脚本就可能跑不成；
+ * - `LANG` 与 `LC_ALL` 都保留：同时存在时由 libc 按 `LC_ALL` 优先，丢掉谁都不对；
+ * - `SHELL` 由 crond 自己定（crontab 的 `SHELL=`，没写就是 `/bin/sh`），不来自 PAM，
+ *   也不是用户的登录 shell；
  * - `HOME` 默认用户家目录，工作目录就是 `$HOME`；
  * - `LOGNAME` 由 crond 强制设成真实用户名，crontab 改不动；
  * - `USER` 在 Linux 上 crond 不设（BSD/macOS 才设），crontab 里写 `USER=` 只是
  *   一个普通变量，照传即可。
  *
- * `systemEnv` 是 crond 那套系统的环境（PATH、LANG 等），由调用方给，好让这段逻辑
- * 不依赖本机有哪些文件。
+ * `systemEnv` 是 crond 那套系统的环境，由调用方给，好让这段逻辑不依赖本机有哪些文件。
  */
 export function resolveCronEnvironment(
   env: Record<string, string>,
@@ -329,25 +332,23 @@ export function resolveCronEnvironment(
 } {
   const user = currentUser();
   // 基础环境先建立，再让条目的赋值覆盖它；只有实测不可覆盖的变量才强制。
-  const base: Record<string, string> = {
-    HOME: homedir(),
-    PATH: systemEnv.PATH || cronBasePath(),
-    SHELL: '/bin/sh',
-  };
-  // 语言同样取系统那一份：不继承 Cindy 进程的 locale（那是另一个进程的环境）。
-  if (systemEnv.LANG) base.LANG = systemEnv.LANG;
-  else if (systemEnv.LC_ALL) base.LC_ALL = systemEnv.LC_ALL;
+  // 系统环境整份带上：挑几个键近似，等于把「cron 下能跑」变成「说不准能不能跑」。
+  const base: Record<string, string> = { ...systemEnv };
+  if (!base.HOME) base.HOME = homedir();
+  if (!base.PATH) base.PATH = cronBasePath();
   const merged: Record<string, string> = { ...base, ...env };
-  // LOGNAME 由 crond 说了算，crontab 里的赋值覆盖不了它（实测：写 LOGNAME=zzz 无效）。
+  // SHELL 由 crond 说了算：crontab 的 SHELL= 优先，没有就是 /bin/sh（不是登录 shell）。
+  merged.SHELL = env.SHELL || '/bin/sh';
+  // LOGNAME 由 crond 强制设成真实用户名，crontab 里的赋值覆盖不了它（实测：写 LOGNAME=zzz 无效）。
   merged.LOGNAME = user;
   // BSD/macOS 的 crond 默认给 USER；条目自己写了就以条目为准
   // （Linux 上 crond 根本不设它，条目里的 USER= 只是普通变量）。
   if (process.platform === 'darwin' && merged.USER === undefined) merged.USER = user;
-  return { shell: merged.SHELL || '/bin/sh', env: merged };
+  return { shell: merged.SHELL, env: merged };
 }
 
 /**
- * crond 起任务时的工作目录：就是 `$HOME`；HOME 不存在时才退回 cron 的表格目录。
+ * crond 起任务时的工作目录：就是生效后的 `$HOME`；HOME 不存在时才退回 cron 的表格目录。
  *
  * 目录检查必须异步：扫描与动作都走 IPC handler，同步 stat 会卡住主进程
  * （工程规范 §8.5）。
@@ -509,7 +510,7 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
         shell: context.shell,
         command: split.command,
         env: context.env,
-        cwd: await resolveCronCwd(entry.env),
+        cwd: await resolveCronCwd(context.env),
         stdin: split.stdin,
       });
     },
