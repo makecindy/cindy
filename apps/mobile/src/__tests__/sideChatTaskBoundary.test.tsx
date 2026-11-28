@@ -310,6 +310,76 @@ describe('side chat task lifecycle', () => {
     ] }, 'selected')).toBe(false);
   });
 
+  // PR #11841 split (send handoff navigation): persistent wide-screen sidebar switches,
+  // companion drawer navigation, and sidebar route actions must wait for an in-flight
+  // local send handoff before discarding composer state or leaving the originating
+  // session. Unit, real SessionTaskLayout.
+  it('defers persistent sidebar switches and sidebar routes until send handoff finishes', () => {
+    const order: string[] = [];
+    let pendingLeave: (() => void) | null = null;
+    let handoffActive = true;
+    let dispatch: React.ContextType<typeof SessionDrawerNavigationContext>;
+    function Probe() { dispatch = React.useContext(SessionDrawerNavigationContext); return <textarea />; }
+    state.replaceParams.mockImplementation(() => order.push('navigate'));
+    act(() => root.render(<SessionTaskLayout>{chrome => {
+      chrome.beforeSessionSwitchRef.current = () => order.push('discard');
+      chrome.deferSendNavigationRef.current = (leave) => {
+        if (!handoffActive) return false;
+        pendingLeave ??= leave;
+        return true;
+      };
+      return <Probe />;
+    }}</SessionTaskLayout>));
+
+    // 1. Direct sidebar task switch waits for handoff release before discard + navigate.
+    const target = {
+      session: { id: 'next', canonicalDeviceId: 'canonical-host', deviceLinkDeviceId: 'old-host', deviceLinkDeviceName: 'Mac' },
+    } as unknown as RemoteSessionListItem;
+    act(() => state.sidebar!.onSelectSession!(target));
+    expect(order).toEqual([]);
+    expect(state.replaceParams).not.toHaveBeenCalled();
+
+    act(() => {
+      const release = pendingLeave;
+      pendingLeave = null;
+      release?.();
+    });
+    expect(order).toEqual(['discard', 'navigate']);
+    expect(state.replaceParams).toHaveBeenCalledTimes(1);
+
+    // 2. SessionDrawerNavigationContext switch returns true immediately and replays on release.
+    order.length = 0;
+    const companionParams = {
+      sessionId: 'companion-chat', deviceId: 'other-host', deviceName: 'Mac',
+      resourceCollectionId: 'teammates', resourceKind: 'bot', resourceId: 'bot',
+    };
+    act(() => expect(dispatch!({ pathname: '/sessions/[sessionId]', params: companionParams })).toBe(true));
+    expect(order).toEqual([]);
+    act(() => {
+      const release = pendingLeave;
+      pendingLeave = null;
+      release?.();
+    });
+    expect(order).toEqual(['discard', 'navigate']);
+    expect(state.replaceParams).toHaveBeenCalledTimes(2);
+
+    // 3. Sidebar route navigation (e.g. New Session / Settings) defers while active and runs immediately once idle.
+    const routeAction = vi.fn();
+    act(() => state.sidebar!.runNavigation!(routeAction));
+    expect(routeAction).not.toHaveBeenCalled();
+    act(() => {
+      const release = pendingLeave;
+      pendingLeave = null;
+      release?.();
+    });
+    expect(routeAction).toHaveBeenCalledTimes(1);
+
+    handoffActive = false;
+    const immediateAction = vi.fn();
+    act(() => state.sidebar!.runNavigation!(immediateAction));
+    expect(immediateAction).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ['next', 'host'],
     ['child', 'other-host'],
