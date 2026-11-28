@@ -9388,8 +9388,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 不归组管时原样返回 null。
    */
   async function applyProviderGroupAssignment(o: CreateOpts): Promise<ProviderGroupStartContext | null> {
-    // Plugin engines run on this computer with their own models; provider groups do not apply.
-    if (!providerGroupService || !o.id || o.remoteHostId || o.agentKind === 'acp') return null;
+    // Plugin engines do not belong to built-in provider groups. Clear any stale binding
+    // (for example, left over from an earlier version before switch-time cleanup) before
+    // starting so remote opens and status views never treat the task as group-assigned.
+    if (o.agentKind === 'acp') {
+      if (o.id && !o.remoteHostId && readProviderGroupBinding(o.id)) {
+        await writeProviderGroupBinding(o.id, null).catch((error) => {
+          log.warn('provider group: failed to clear stale binding before plugin engine start', {
+            sessionId: o.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      return null;
+    }
+    if (!providerGroupService || !o.id || o.remoteHostId) return null;
     if (typeof o.model !== 'string' || !o.model) return null;
     // 本机没有建组、任务不指向同账号另一台电脑(那台可能建了组)、也没有归组时不读数据库，
     // 启动路径与没有这个功能时完全一致。
@@ -11978,6 +11991,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 换到供应商组那一项时由组选一台能用的电脑(provider-groups.md §6)。
     resolveProviderGroupTarget: (sessionId, target) =>
       providerGroupService ? providerGroupService.resolveSwitchTarget(sessionId, target) : Promise.resolve(null),
+    clearProviderGroupBinding: async (sessionId) => {
+      if (readProviderGroupBinding(sessionId)) {
+        await writeProviderGroupBinding(sessionId, null);
+      }
+    },
     withSessionLock: withSendToSessionLock,
     canSwitchCompletedAutomationSession: async (sessionId, returningToBuiltin) => {
       if (!returningToBuiltin) {
