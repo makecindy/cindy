@@ -13,7 +13,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, DeviceLinkError, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
-  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, DL_SESSION_REFERENCE_CAPABILITY_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL, SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
@@ -1996,4 +1996,228 @@ test('Host device-link pushes session activity, turn-ended patches, and serves h
   const dismissMissing = await c1.invoke('host', { channel: 'local-db:messages:dismiss-error', args: ['task-1', 'c-reply'] });
   assert.equal(dismissMissing.ok, false);
   assert.match(dismissMissing.error?.message ?? '', /NOT_FOUND/);
+});
+
+test('Host device-link serves remote queued input edit, lock, expand, and move channels', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-dl-queue-edit-'));
+  const profile = path.join(root, 'profile');
+  fs.mkdirSync(profile, { recursive: true });
+  fs.writeFileSync(path.join(profile, 'device-link-settings.json'), JSON.stringify({ remoteControlEnabled: true }));
+  configureAppDataDir(profile);
+  configureHostOwner({ userDataDir: profile, ownerId: 'test-queue-edit-owner' });
+  commitVolatileAppSession('cloud', 'test-queue-edit-owner', true);
+  const sqlite = new Database(':memory:');
+  for (const table of [sessions, messages, botSessionLinks, botProfiles]) {
+    sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  }
+  sqlite.exec(`INSERT INTO sessions(id, source, title, working_dir, agent_kind, status, created_at, updated_at) VALUES ('task-qe', 'desktop', 'Queue Edit', '/repo', 'cc', 'active', 1000, 1000)`);
+  const db = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  setCurrentDbClient(db, 'test-queue-edit-owner');
+
+  const sockets = new Map();
+  const platforms = new Map();
+  const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  wss.on('connection', (socket, request) => {
+    const match = /^Bearer synthetic-(host|ctrl-1|ctrl-2)$/.exec(request.headers.authorization ?? '');
+    if (!match) { socket.close(1008); return; }
+    const id = match[1];
+    sockets.set(id, socket);
+    socket.on('message', raw => {
+      const frame = JSON.parse(raw.toString());
+      if (frame.kind === 'hello') {
+        platforms.set(id, frame.payload.platform);
+        socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+          serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: 'synthetic-user', capabilities: [],
+        } }));
+        for (const [peer, target] of sockets) for (const [deviceId, platform] of platforms) {
+          if (peer !== deviceId && target.readyState === WebSocket.OPEN) {
+            target.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId, platform, online: true, remoteControlEnabled: true } }));
+          }
+        }
+      } else if (frame.kind === 'ping') {
+        socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'pong' }));
+      } else if (frame.dst && sockets.get(frame.dst)?.readyState === WebSocket.OPEN) {
+        sockets.get(frame.dst).send(JSON.stringify({ ...frame, src: id }));
+      }
+    });
+    socket.once('close', () => { if (sockets.get(id) === socket) sockets.delete(id); });
+  });
+  await once(wss, 'listening');
+  const url = `ws://127.0.0.1:${wss.address().port}`;
+
+  const liveSessions = new Map();
+  const makeSession = (id) => {
+    let running = false;
+    const listeners = new Set();
+    return {
+      id,
+      agentKind: 'claude-code',
+      isTurnRunning: () => running,
+      getTurnGeneration: () => 1,
+      getCapabilities: () => ({}),
+      onEvent: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+      send: () => { running = true; return new Promise(() => {}); },
+      abort: async () => { running = false; },
+    };
+  };
+  const maker = {
+    getSession: (id) => liveSessions.get(id),
+    createSession: async (opts) => { const s = makeSession(opts.sessionId); liveSessions.set(opts.sessionId, s); return s; },
+    closeSession: async (id) => { liveSessions.delete(id); },
+    listActiveSessions: () => [...liveSessions.values()],
+  };
+  let lastSavedSnapshot = [];
+  const queue = createInputQueue({
+    getMaker: () => maker,
+    readSession: async () => ({ agentKind: 'claude-code', model: 'm1', workingDir: root }),
+    loadQueueSnapshot: async () => [],
+    persistQueueSnapshot: async (_id, snap) => { lastSavedSnapshot = Array.isArray(snap) ? snap : (snap?.items ?? []); },
+    loadClearBoundary: async () => 500,
+    hub: { publish() {} },
+    isCurrent: () => true,
+  });
+  const service = createHostService({ input: queue });
+  const worktree = createHostWorktreeLifecycle(profile);
+  const host = createHostDeviceLink({
+    profileDir: profile,
+    worktree,
+    version: '1.0.0',
+    getWsUrl: () => url,
+    getToken: async () => 'synthetic-host',
+    canRegister: () => true,
+    invoke: service,
+    isBusyForProjectArchive: () => false,
+    sessionInTurn: () => false,
+    onProjectTaskStatus: () => {},
+    preparePiSkillRuntime: async () => {},
+    createRuntimeSession: async () => ({}),
+    closeRuntimeSession: async () => {},
+    send: async () => ({}),
+    assertRemoteInputControlBoundary: (id, opts) => queue.assertRemoteInputControlBoundary(id, opts),
+    setExtraDirs: async () => [],
+    isSessionClaimed: async () => true,
+    subscribe: () => () => {},
+    disableShareAvailability: async () => {},
+    createWebSocket: (u, headers) => new WebSocket(u, { headers }),
+  });
+  const c1 = new DeviceLinkClient({
+    getWsUrl: () => url,
+    getToken: async () => 'synthetic-ctrl-1',
+    getHello: () => ({ platform: 'darwin', deviceName: 'c1', appVersion: '1.0.0', remoteControlEnabled: false, busy: false, capabilities: [] }),
+    createWebSocket: (u, headers) => new WebSocket(u, { headers }),
+  });
+  t.after(async () => {
+    c1.stop();
+    await host.stop();
+    queue.dispose();
+    for (const s of wss.clients) s.terminate();
+    await new Promise(resolve => wss.close(resolve));
+    clearCurrentDbClient(db);
+    sqlite.close();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await host.setEnabled(true);
+  c1.start();
+  await waitFor(() => host.state().status === 'online' && c1.getStatus() === 'online');
+  await c1.openLink('host', { controllerName: 'Mac 1', protocolVersion: PROTOCOL_VERSION, appVersion: '1.0.0' });
+
+  await queue.setInteractionLock('task-qe', 'test-hold', true);
+  const enq2 = await c1.invoke('host', { channel: 'maker:input:enqueue', args: ['task-qe', { clientId: 'c1', text: 'first' }] });
+  assert.equal(enq2.ok, true, JSON.stringify(enq2));
+  const enq3 = await c1.invoke('host', { channel: 'maker:input:enqueue', args: ['task-qe', { clientId: 'c2', text: 'second' }] });
+  assert.equal(enq3.ok, true, JSON.stringify(enq3));
+
+  const lock = await c1.invoke('host', { channel: 'maker:input:set-edit-lock', args: ['task-qe', 'c1', true, { expectedClearBoundaryMs: 500 }] });
+  assert.equal(lock.ok, true, JSON.stringify(lock));
+  assert.deepEqual(lock.result.queueEditLocks, ['c1']);
+
+  const edited = await c1.invoke('host', { channel: 'maker:input:update-content', args: ['task-qe', 'c1', { clientId: 'c1', text: 'edited via content' }, { expectedClearBoundaryMs: 500 }] });
+  assert.equal(edited.ok, true, JSON.stringify(edited));
+  assert.equal(edited.result.pendingQueue[0].text, 'edited via content');
+  assert.equal(edited.result.pendingQueue[0].chatMessage.content, 'edited via content');
+
+  const textEdited = await c1.invoke('host', { channel: 'maker:input:update-text', args: ['task-qe', 'c1', 'edited via text', undefined, undefined, { expectedClearBoundaryMs: 500 }] });
+  assert.equal(textEdited.ok, true, JSON.stringify(textEdited));
+  assert.equal(textEdited.result.pendingQueue[0].text, 'edited via text');
+
+  const moved = await c1.invoke('host', { channel: 'maker:input:move', args: ['task-qe', 'c1', 2, { expectedClearBoundaryMs: 500 }] });
+  assert.equal(moved.ok, true, JSON.stringify(moved));
+  assert.deepEqual(moved.result.pendingQueue.map(x => x.clientId), ['c2', 'c1']);
+
+  const expanded = await c1.invoke('host', { channel: 'maker:input:set-expanded', args: ['task-qe', true, { expectedClearBoundaryMs: 500 }] });
+  assert.equal(expanded.ok, true, JSON.stringify(expanded));
+  assert.equal(expanded.result.queueExpanded, true);
+
+  const ilock = await c1.invoke('host', { channel: 'maker:input:set-interaction-lock', args: ['task-qe', 'il-1', true, { expectedClearBoundaryMs: 500 }] });
+  assert.equal(ilock.ok, true, JSON.stringify(ilock));
+  assert.ok(ilock.result.queueInteractionLocks.includes('il-1'));
+
+  const stale = await c1.invoke('host', { channel: 'maker:input:update-content', args: ['task-qe', 'c1', { clientId: 'c1', text: 'stale' }, { expectedClearBoundaryMs: 400 }] });
+  assert.equal(stale.ok, false);
+  assert.match(stale.error?.message ?? '', /REMOTE_OPTIMISTIC_INPUT_CLEARED/);
+
+  const cap = await c1.invoke('host', { channel: DL_SESSION_REFERENCE_CAPABILITY_CHANNEL, args: [] });
+  assert.equal(cap.ok, true, JSON.stringify(cap));
+  assert.deepEqual(cap.result, { supported: true, version: 1 });
+
+  const missingRefs = await c1.invoke('host', { channel: 'maker:input:update-text', args: ['task-qe', 'c1', 'see ref', [{ sessionId: 'other' }], undefined, { expectedClearBoundaryMs: 500 }] });
+  assert.equal(missingRefs.ok, false);
+  assert.match(missingRefs.error?.message ?? '', /SESSION_REFERENCE_UNAVAILABLE/);
+
+  const badRefSnap = await c1.invoke('host', {
+    channel: 'maker:input:update-text',
+    args: ['task-qe', 'c1', 'see ref', [{ sessionId: 'other' }], [{ sessionId: 'wrong', source: 'local', range: 'recent', messageCount: 0, truncated: false, messages: [] }], { expectedClearBoundaryMs: 500 }],
+  });
+  assert.equal(badRefSnap.ok, false);
+  assert.match(badRefSnap.error?.message ?? '', /SESSION_REFERENCE_UNAVAILABLE/);
+
+  const validContext = { sessionId: 'other', source: 'local', range: 'recent', messageCount: 1, truncated: false, messages: [{ role: 'user', content: 'hi' }] };
+  const okContentRef = await c1.invoke('host', {
+    channel: 'maker:input:update-content',
+    args: ['task-qe', 'c1', { clientId: 'c1', text: 'with ref', sessionRefs: [{ sessionId: 'other' }], trustedSessionReferenceContexts: [validContext] }, { expectedClearBoundaryMs: 500 }],
+  });
+  assert.equal(okContentRef.ok, true, JSON.stringify(okContentRef));
+  const editedRefItem = okContentRef.result.pendingQueue.find(x => x.clientId === 'c1');
+  assert.deepEqual(editedRefItem.sessionRefs, [{ sessionId: 'other' }]);
+  assert.equal(editedRefItem.sourceDevice?.deviceId, 'ctrl-1');
+  assert.equal(lastSavedSnapshot.find(x => x.clientId === 'c1')?.sessionReferencesRequireTrustedSnapshot, true);
+
+  const c2 = new DeviceLinkClient({
+    getWsUrl: () => url,
+    getToken: async () => 'synthetic-ctrl-2',
+    getHello: () => ({ platform: 'ios', deviceName: 'iPhone', appVersion: '1.0.0', remoteControlEnabled: false, busy: false, capabilities: [] }),
+    createWebSocket: (u, headers) => new WebSocket(u, { headers }),
+  });
+  t.after(() => c2.stop());
+  c2.start();
+  await waitFor(() => c2.getStatus() === 'online');
+  await c2.openLink('host', { controllerName: 'iPhone', protocolVersion: PROTOCOL_VERSION, appVersion: '1.0.0' });
+
+  const c2Edit = await c2.invoke('host', { channel: 'maker:input:update-text', args: ['task-qe', 'c1', 'mobile edit', undefined, undefined, { expectedClearBoundaryMs: 500 }] });
+  assert.equal(c2Edit.ok, true, JSON.stringify(c2Edit));
+  const c2Item = c2Edit.result.pendingQueue.find(x => x.clientId === 'c1');
+  assert.equal(c2Item.sourceDevice?.deviceId, 'ctrl-2');
+  assert.equal(c2Item.fromMobileClient, true);
+
+  const legacyLocalSnap = { sessionId: 'on-ctrl', source: 'local', range: 'recent', messageCount: 1, truncated: false, messages: [{ role: 'user', content: 'from old ctrl' }] };
+  const legacyEnqueue = await c1.invoke('host', {
+    channel: 'maker:input:enqueue',
+    args: ['task-qe', { clientId: 'c-legacy', text: 'legacy ref', sessionRefs: [{ sessionId: 'on-ctrl', deviceId: 'ctrl-1' }], trustedSessionReferenceContexts: [legacyLocalSnap] }],
+  });
+  assert.equal(legacyEnqueue.ok, true, JSON.stringify(legacyEnqueue));
+  assert.deepEqual(legacyEnqueue.result.pendingQueue.find(x => x.clientId === 'c-legacy')?.sessionRefs, [{ sessionId: 'on-ctrl' }]);
+
+  const spoofedLocal = await c1.invoke('host', {
+    channel: 'maker:input:enqueue',
+    args: ['task-qe', { clientId: 'c-spoof', text: 'spoof ref', sessionRefs: [{ sessionId: 'on-ctrl', deviceId: 'other-device' }], trustedSessionReferenceContexts: [legacyLocalSnap] }],
+  });
+  assert.equal(spoofedLocal.ok, false);
+  assert.match(spoofedLocal.error?.message ?? '', /SESSION_REFERENCE_UNAVAILABLE/);
+
+  const storedSteer = await c1.invoke('host', {
+    channel: 'maker:input:steer',
+    args: ['task-qe', { clientId: 'c-legacy', text: 'legacy ref', sessionRefs: [{ sessionId: 'on-ctrl' }] }, { removeFromQueue: true }],
+  });
+  assert.equal(storedSteer.ok, true, JSON.stringify(storedSteer));
 });

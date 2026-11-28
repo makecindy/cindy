@@ -190,6 +190,40 @@ describe('rewriteOutboundSessionReferences', () => {
     );
   });
 
+  it('strips self deviceId from outbound refs when resolved as local snapshots and deduplicates', async () => {
+    const localSnapshot = {
+      sessionId: 'on-a',
+      source: 'local' as const,
+      range: 'recent' as const,
+      messageCount: 1,
+      truncated: false,
+      messages: [{ role: 'user' as const, content: 'hi' }],
+    };
+    const refs = [
+      { sessionId: 'on-a', deviceId: 'self-device' },
+      { sessionId: 'on-a' },
+    ];
+    resolveSessionReferences.mockResolvedValueOnce([localSnapshot, localSnapshot]);
+    const contentRewritten = await rewriteOutboundSessionReferences('maker:input:update-content', [
+      'target-on-b',
+      'client-1',
+      queued(refs),
+    ]);
+    const rewrittenItem = contentRewritten[2] as AgentInputQueuedMessage;
+    expect(rewrittenItem.sessionRefs).toEqual([{ sessionId: 'on-a' }]);
+    expect(rewrittenItem.trustedSessionReferenceContexts).toEqual([localSnapshot]);
+
+    resolveSessionReferences.mockResolvedValueOnce([localSnapshot]);
+    const textRewritten = await rewriteOutboundSessionReferences('maker:input:update-text', [
+      'target-on-b',
+      'client-1',
+      'ref cindy://session/on-a?device=self-device',
+      [{ sessionId: 'on-a', deviceId: 'self-device' }],
+    ]);
+    expect(textRewritten[3]).toEqual([{ sessionId: 'on-a' }]);
+    expect(textRewritten[4]).toEqual([localSnapshot]);
+  });
+
   it('does not rewrite unrelated channels', async () => {
     const args = ['target-on-b', queued([{ sessionId: 'on-c', deviceId: 'device-c' }])];
     await expect(rewriteOutboundSessionReferences('maker:input:stop', args)).resolves.toBe(args);

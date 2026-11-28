@@ -4,7 +4,7 @@
  * queued item 中的 deviceId 是相对控制端 renderer 的地址，不能交给被控端
  * 再解释。这里在越过 device-link 前由控制端 main 读取权威历史并固化快照。
  */
-import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import type { AgentInputQueuedMessage, AgentInputSessionRef, AgentInputSessionReferenceContext } from '../../shared/agentInputQueue.js';
 import { createLogger } from '../logger.js';
 import { resolveSessionReferences } from '../maker-ipc/sessionReferenceResolver.js';
 
@@ -64,6 +64,39 @@ export function stripOutboundSessionReferenceSideChannels(
   return next;
 }
 
+function alignOutboundSessionReferences(
+  refs: readonly AgentInputSessionRef[],
+  contexts: readonly AgentInputSessionReferenceContext[],
+): {
+  sessionRefs: AgentInputSessionRef[];
+  trustedSessionReferenceContexts: AgentInputSessionReferenceContext[];
+} {
+  const sessionRefs: AgentInputSessionRef[] = [];
+  const trustedSessionReferenceContexts: AgentInputSessionReferenceContext[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < refs.length; i += 1) {
+    const ref = refs[i];
+    const context = contexts[i];
+    if (!context) {
+      sessionRefs.push(ref);
+      continue;
+    }
+    const alignedRef: AgentInputSessionRef =
+      context.source === 'local' && ref.deviceId !== undefined
+        ? {
+            sessionId: ref.sessionId,
+            ...(ref.messageClientId !== undefined ? { messageClientId: ref.messageClientId } : {}),
+          }
+        : ref;
+    const key = `${alignedRef.deviceId ?? ''}\u0000${alignedRef.sessionId}\u0000${alignedRef.messageClientId ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sessionRefs.push(alignedRef);
+    trustedSessionReferenceContexts.push(context);
+  }
+  return { sessionRefs, trustedSessionReferenceContexts };
+}
+
 export async function rewriteOutboundSessionReferences(
   channel: string,
   args: unknown[],
@@ -73,7 +106,14 @@ export async function rewriteOutboundSessionReferences(
     const refs = args[3] as AgentInputQueuedMessage['sessionRefs'];
     const next = [...args];
     try {
-      next[4] = refs && refs.length > 0 ? await resolveSessionReferences(refs) : [];
+      if (refs && refs.length > 0) {
+        const contexts = await resolveSessionReferences(refs);
+        const aligned = alignOutboundSessionReferences(refs, contexts);
+        next[3] = aligned.sessionRefs;
+        next[4] = aligned.trustedSessionReferenceContexts;
+      } else {
+        next[4] = [];
+      }
     } catch (error) {
       // Preserve the edited text, but do not ask the target to trust an
       // unresolved controller-side reference or reject the whole edit.
@@ -97,7 +137,10 @@ export async function rewriteOutboundSessionReferences(
   delete nextItem.trustedSessionReferenceContexts;
   if (queued.sessionRefs && queued.sessionRefs.length > 0) {
     try {
-      nextItem.trustedSessionReferenceContexts = await resolveSessionReferences(queued.sessionRefs);
+      const contexts = await resolveSessionReferences(queued.sessionRefs);
+      const aligned = alignOutboundSessionReferences(queued.sessionRefs, contexts);
+      nextItem.sessionRefs = aligned.sessionRefs;
+      nextItem.trustedSessionReferenceContexts = aligned.trustedSessionReferenceContexts;
     } catch (error) {
       // The raw deep link remains in `text`.  Dropping both side-channel
       // fields keeps the target from reinterpreting a foreign session id in

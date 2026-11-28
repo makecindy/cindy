@@ -1727,6 +1727,17 @@ test('Host queue edits keep referenced images and release dropped copies only af
   await h.queue.updateContent('attachments', 'removable', { text: 'text only', files: [], persistedContent: 'text only' });
   await waitFor(() => h.refs().length === 1);
   assert.equal(existsSync(storedPath), true);
+
+  await h.queue.enqueue('attachments', h.attached('omitted-files'));
+  assert.equal(h.refs().length, 2);
+  const omitProj = await h.queue.updateContent('attachments', 'omitted-files', { clientId: 'omitted-files', text: 'dropped last file', persistedContent: 'dropped last file' });
+  assert.equal(omitProj.pendingQueue.find(item => item.clientId === 'omitted-files')?.files, undefined);
+  await waitFor(() => h.refs().length === 1);
+
+  await h.queue.enqueue('attachments', h.attached('attach-only'));
+  const attachOnlyRow = h.queue.projection('attachments').pendingQueue.find(item => item.clientId === 'attach-only');
+  const attachOnlyProj = await h.queue.updateContent('attachments', 'attach-only', { clientId: 'attach-only', text: '', persistedContent: '', files: attachOnlyRow.files });
+  assert.equal(attachOnlyProj.pendingQueue.find(item => item.clientId === 'attach-only')?.files?.length, 1);
 });
 
 test('Host rollback releases only the originating account ref and keeps shared bytes', async t => {
@@ -2175,6 +2186,46 @@ test('updateText and move modify pending queue entries', async () => {
   // Composer targets the insertion gap in the original list (desktop contract).
   const proj2 = await h.queue.move('task-6', 'b', 2);
   assert.deepEqual(proj2.pendingQueue.map((item) => item.clientId), ['c', 'b']);
+});
+
+test('queue edit operations validate inputs, refresh display content, and enforce clear boundary', async t => {
+  const h = createHarness({ loadQueueSnapshot: async () => [], loadClearBoundary: async () => 500 });
+  t.after(() => h.queue.dispose());
+  await enqueue(h, 'task-qe', { clientId: 'a', text: 'running' });
+  await enqueue(h, 'task-qe', { clientId: 'b', text: 'old text', chatMessage: { content: 'old text' } });
+  await enqueue(h, 'task-qe', { clientId: 'c', text: 'second' });
+
+  const updated = await h.queue.updateContent('task-qe', 'b', { clientId: 'b', text: 'new text' }, { expectedClearBoundaryMs: 500 });
+  assert.equal(updated.pendingQueue[0].text, 'new text');
+  assert.equal(updated.pendingQueue[0].chatMessage.content, 'new text');
+  assert.equal(updated.queueInteractionLocks.includes('execution-pause'), false);
+
+  const textUpdated = await h.queue.updateText('task-qe', 'b', 'newer text', undefined, undefined, { expectedClearBoundaryMs: 500 });
+  assert.equal(textUpdated.queueInteractionLocks.includes('execution-pause'), false);
+  const movedProj = await h.queue.move('task-qe', 'b', 2, { expectedClearBoundaryMs: 500 });
+  assert.equal(movedProj.queueInteractionLocks.includes('execution-pause'), false);
+
+  await assert.rejects(() => h.queue.updateText('task-qe', 'b', 123), /INVALID_PARAMS/);
+  await assert.rejects(() => h.queue.updateContent('task-qe', 'b', { clientId: 'other', text: 'x' }), /INVALID_PARAMS/);
+  await assert.rejects(() => h.queue.move('task-qe', 'b', Number.NaN), /INVALID_PARAMS/);
+  await assert.rejects(
+    () => h.queue.updateContent('task-qe', 'b', { clientId: 'b', text: 'stale' }, { expectedClearBoundaryMs: 400 }),
+    /REMOTE_OPTIMISTIC_INPUT_CLEARED/,
+  );
+  await assert.rejects(
+    () => h.queue.updateText('task-qe', 'b', 'stale', undefined, undefined, { expectedClearBoundaryMs: 400 }),
+    /REMOTE_OPTIMISTIC_INPUT_CLEARED/,
+  );
+  await assert.rejects(
+    () => h.queue.setEditLock('task-qe', 'b', true, { expectedClearBoundaryMs: 400 }),
+    /REMOTE_OPTIMISTIC_INPUT_CLEARED/,
+  );
+  await assert.rejects(
+    () => h.queue.move('task-qe', 'b', 2, { expectedClearBoundaryMs: 400 }),
+    /REMOTE_OPTIMISTIC_INPUT_CLEARED/,
+  );
+  h.maker.getSession('task-qe').emit({ type: 'done' });
+  await waitFor(() => h.maker.getSession('task-qe').sent.length === 2);
 });
 
 test('setExpanded, setInteractionLock, setEditLock, clearSession update projection state', async () => {

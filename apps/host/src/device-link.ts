@@ -8,7 +8,7 @@ import { AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL } from '../../desktop/src/shared
 import {
   CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
-  DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, MACHINE_STATUS_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, DL_SESSION_REFERENCE_CAPABILITY_CHANNEL, MACHINE_STATUS_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   REMOTE_AGENT_PLUGIN_ENGINE_KIND, SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT,
   DeviceLinkClient, RoutedDeviceLinkClient, isProviderSharePeer, isScopedPeer, resolveRemoteInvokeTimeoutMs,
   type DeviceInfo, type DeviceLinkClientOptions, type LinkAcceptPayload, type MachineStatus,
@@ -353,6 +353,10 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     const result = await mkdirP(requireString(obj.path, 'path'));
     assertCurrent();
     return result;
+  });
+  registry.register(DL_SESSION_REFERENCE_CAPABILITY_CHANNEL, () => {
+    assertCurrent();
+    return { supported: true, version: 1 };
   });
   registry.register(MAKER_INVOKE.SESSION_IN_TURN, ([sessionId]) => {
     assertCurrent();

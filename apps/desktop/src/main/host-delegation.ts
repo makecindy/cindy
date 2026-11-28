@@ -216,7 +216,7 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
   for (const entry of PROXIED_CHANNELS) {
     deps.ipcMain.removeHandler(entry.channel);
     rawHandle(entry.channel, async (event, ...args: unknown[]) => {
-      if (entry.trustedRenderer || entry.channel === 'local-db:messages:work-details') {
+      if (entry.trustedRenderer || entry.channel === 'local-db:messages:work-details' || entry.channel === 'maker:input:update-text' || entry.channel === 'maker:input:update-content') {
         if (!deps.assertTrusted) throw new Error('Trusted renderer admission is required');
         deps.assertTrusted(event);
       }
