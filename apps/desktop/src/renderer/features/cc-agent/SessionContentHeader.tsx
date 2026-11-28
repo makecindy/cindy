@@ -1,6 +1,6 @@
 import { SessionProjectMenuButton } from './sidebar/SessionProjectMenuButton';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
-import { deviceDisplayName } from '@/lib/deviceName';
+import { SessionDeviceIndicator } from './SessionDeviceIndicator';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { PluginUiSlot, PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
 import { TaskMigrationStatus } from './TaskMigrationStatus';
@@ -85,7 +85,7 @@ import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardErr
 import { NewProjectFromTaskDialog } from './sidebar/NewProjectFromTaskDialog';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
-import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
+import { remoteProjectsStore, useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
@@ -188,15 +188,6 @@ export function SessionContentHeader({
   const displayTitle =
     getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'), t)?.trim() ||
     t('ccAgent.sessionHeader.untitled');
-  const remoteIconKind = session.deviceLinkDeviceId
-    ? 'device-link'
-    : session.remoteHostId
-      ? 'ssh'
-      : null;
-  const remoteIconConnectionStatus = session.deviceLinkDeviceId
-    ? (session.deviceLinkConnectionStatus ?? 'connected')
-    : null;
-
   /* ---- 行内重命名（与 SessionItem 同交互：双击进入，Enter 提交 / Esc 取消 / Blur 提交，
           输入框本体 + Magic AI 改名按钮统一在 SessionRenameInput） ---- */
   const [isEditing, setIsEditing] = useState(false);
@@ -589,19 +580,20 @@ export function SessionContentHeader({
           />
         </span>
       )}
-      {!isEditing && remoteIconKind && (
-        <Tip
-          text={
-            session.deviceLinkDeviceId ? deviceDisplayName(session.deviceLinkDeviceId, session.deviceLinkDeviceName) : session.remoteHostId ?? ''
-          }
-        >
-          <RemoteProjectIcon
-            kind={remoteIconKind}
-            connectionStatus={remoteIconConnectionStatus}
-            className="mr-1 text-[var(--cmd-palette-item-meta)]"
-          />
+      {!isEditing && (session.deviceLinkDeviceId ? (
+        <SessionDeviceIndicator
+          key={session.deviceLinkDeviceId}
+          deviceId={session.deviceLinkDeviceId}
+          fallbackName={session.deviceLinkDeviceName ?? remoteProjectsStore.getDeviceName(session.deviceLinkDeviceId)}
+          connectionStatus={session.deviceLinkConnectionStatus}
+        />
+      ) : session.remoteHostId ? (
+        <Tip text={session.remoteHostId} side="bottom">
+          <span className="mr-1 inline-flex shrink-0" style={WINDOW_NO_DRAG_STYLE}>
+            <RemoteProjectIcon kind="ssh" className="text-[var(--cmd-palette-item-meta)]" />
+          </span>
         </Tip>
-      )}
+      ) : null)}
       {/* Agent 在另一台电脑运行时，标题不再加标识(2026-11-17 用户要求)：侧栏任务图标的波纹与悬停说明已标明运行电脑。 */}
 
       {session.workspaceKind === 'dialogue' ? (

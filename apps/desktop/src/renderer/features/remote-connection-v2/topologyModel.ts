@@ -161,12 +161,12 @@ function deriveTransport(
   return path === 'direct' ? 'webrtc' : 'websocket';
 }
 
-function deriveNode(
+export function derivePeerNode(
   d: DeviceLinkDeviceView,
   link: DeviceLinkPeerLinkView | undefined,
   route: DeviceLinkAgentNetPeerRouteView | undefined,
-  controlledBy: ReadonlySet<string>,
-  unresponsive: ReadonlySet<string>,
+  controlling: boolean,
+  unresponsive: boolean,
 ): TopologyNode {
   const isMobile = isMobilePlatform(d.platform);
   const control = link?.open ? link : undefined;
@@ -174,7 +174,7 @@ function deriveNode(
   const path = control?.path ?? agentNetPath;
   const online = d.online || route !== undefined;
   let attention: AttentionReason | null = null;
-  if (online && unresponsive.has(d.deviceId)) attention = 'unresponsive';
+  if (online && unresponsive) attention = 'unresponsive';
   // 手机 / 平板是控制端,没有被控能力,不算「没开被控」。
   else if (online && isCindyApp(d.app) && !isMobile && !d.remoteControlEnabled) attention = 'peer-control-off';
   const status: TopologyStatus = !online
@@ -203,7 +203,7 @@ function deriveNode(
     flowText: control && (status === 'direct' || status === 'relay') ? flowTextOf(control) : null,
     busy: d.busy,
     lastSeenAt: d.lastSeenAt,
-    controlling: controlledBy.has(d.deviceId),
+    controlling,
     attention,
     remoteControlEnabled: d.remoteControlEnabled,
     controlEnabled: d.controlEnabled,
@@ -270,12 +270,12 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
   const unresponsive = new Set(input.unresponsive);
   const nodes = others
     .map((d) =>
-      deriveNode(
+      derivePeerNode(
         d,
         linkById.get(d.deviceId),
         routeById.get(d.deviceId),
-        controlledBy,
-        unresponsive,
+        controlledBy.has(d.deviceId),
+        unresponsive.has(d.deviceId),
       ),
     )
     .sort(compareNodes);
