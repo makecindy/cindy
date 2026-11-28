@@ -1263,6 +1263,49 @@ describe('unbound Codex pre-send history wiring', () => {
     expect(order).toEqual(['durable-handoff', 'cancel-wait']);
     expect(failover).not.toHaveBeenCalled();
   });
+
+  // 2026-11-28 regression: plugin engine account handoffs must forward `retry` (so zero-progress
+  // auto-retries do not duplicate the user message in context handoff) and `invokeRemote` (remote Agent).
+  it('forwards retry context and invokeRemote to plugin engine account handoffs before cancelling the usage wait', async () => {
+    const start = registerSource.indexOf('export async function prepareUnhealthySessionForSend(');
+    const end = registerSource.indexOf('let runtimePluginBudgetClearer:', start);
+    const body = ts.transpileModule(registerSource.slice(start, end).replace('export ', ''), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const assertCurrent = vi.fn();
+    const prepareNativeSessionRecovery = vi.fn(async (_id: string, _mode: string, check: () => void) => { check(); });
+    const cancelUsageLimitWait = vi.fn();
+    const invokeRemote = vi.fn();
+    const retry = { clientId: 'retry-1', text: 'continue' };
+    const pluginPrepare = vi.fn(async (id: string, deps: {
+      invokeRemote?: unknown;
+      rebuild(id: string, check: () => void): Promise<void>;
+    }) => {
+      expect(deps.invokeRemote).toBe(invokeRemote);
+      await deps.rebuild(id, assertCurrent);
+      return true;
+    });
+    const prepare = vi.fn();
+    const failover = vi.fn();
+    const ports = {
+      withRemoteAccountReads,
+      subscriptionAccountRecoveryDeps: { rebuild: vi.fn(), invokeRemote, isRunning: vi.fn(), log: vi.fn() },
+      readCodexThreadStorageReadOnly: vi.fn(),
+      preparePluginEngineAccountForSend: pluginPrepare,
+      readSubscriptionRuntimeSession: vi.fn(),
+      prepareSubscriptionAccountForSend: prepare,
+      prepareSubscriptionAccountFailover: failover,
+      agentInputCoordinatorHolder: { cancelUsageLimitWait, getInputAbortSignal: () => undefined },
+      contextOverflowRolloverHolder: { prepareNativeSessionRecovery },
+    };
+    const run = new Function(...Object.keys(ports), `${body}; return prepareUnhealthySessionForSend;`)(...Object.values(ports));
+    expect(await run('acp-task', retry)).toBe(true);
+    expect(pluginPrepare).toHaveBeenCalledOnce();
+    expect(prepareNativeSessionRecovery).toHaveBeenCalledExactlyOnceWith('acp-task', 'retain-route', assertCurrent, undefined, retry);
+    expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('acp-task');
+    expect(prepare).not.toHaveBeenCalled();
+    expect(failover).not.toHaveBeenCalled();
+  });
 });
 
 // 依据：send_to_session create 分支在省略 working_dir 时此前缺省落到 bypassPermissions，
