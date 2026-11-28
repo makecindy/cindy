@@ -22,6 +22,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { ModelAccessCreditUsage } from '../../../../shared/modelAccess';
 
 const mocks = vi.hoisted(() => ({
+  locale: 'zh-CN',
   claudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   codexSnapshot: null as RateLimitSnapshot | null,
   xaiSnapshot: null as XaiSubscriptionUsageSnapshot | null,
@@ -50,7 +51,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    i18n: { language: 'zh-CN', resolvedLanguage: 'zh-CN' },
+    i18n: { language: mocks.locale, resolvedLanguage: mocks.locale },
     t: (key: string, options: Record<string, string | number> = {}) => {
       const templates: Record<string, string> = {
         'quotaCard.usageTitle': '用量明细',
@@ -283,6 +284,7 @@ beforeEach(() => {
   mocks.xaiSnapshot = null;
   mocks.gatewaySnapshot = null;
   mocks.creditSnapshot = null;
+  mocks.locale = 'zh-CN';
   mocks.sessionTokens = null;
   mocks.codexAuthInjection = null;
   mocks.providers = [];
@@ -398,15 +400,16 @@ describe('TodaySpendChip credit snapshot time', () => {
   });
 
   // #13698: tiny nine-place ledger values must format like billing's decimal-string input.
-  it('formats tiny credit usage like billing without changing the balance percentage', () => {
+  it.each(['zh-CN', 'de-DE'])('formats tiny credit usage like billing in %s without changing the balance percentage', (locale) => {
+    mocks.locale = locale;
     mocks.creditSnapshot = {
       ...creditSnapshot(new Date().toISOString()),
       available: '2.9999999',
       plan: { remaining: '2.9999999', used: '0.0000001', total: '3.00' },
     };
     render(gatewayChip());
-    const used = formatBillingAmount('0.0000001', BILLING_CURRENCY, 'zh-CN');
-    const total = formatBillingAmount('3.00', BILLING_CURRENCY, 'zh-CN');
+    const used = formatBillingAmount('0.0000001', BILLING_CURRENCY, locale);
+    const total = formatBillingAmount('3.00', BILLING_CURRENCY, locale);
     expect(screen.getByRole('button', { name: '用量明细' }).textContent).toContain(`${used} / ${total}`);
     const card = openUsageCard();
     expect(card.textContent).toContain(`账号已用 ${used} · 总额 ${total}`);
