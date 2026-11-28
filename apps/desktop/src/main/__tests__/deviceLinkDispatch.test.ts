@@ -7,6 +7,9 @@ vi.mock('../device-link/providerShareAvailability.js', () => ({ prepareShareAvai
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// This dispatch suite runs without an Electron profile. The dedicated GLM
+// dispatch tests supply the per-provider permission and exercise both verdicts.
+vi.mock('../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => false }));
 let remoteControlEnabled = true;
 let revokedControllers: string[] = [];
 vi.mock('../device-link/settings-store.desktop', () => ({

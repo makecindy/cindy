@@ -175,7 +175,7 @@ const pickUsageBreakdown = (dimension: 'party' | 'computer' | 'model') =>
 
 /** 这台电脑上 xd 的供应商组：本机、Studio、一台分享来的电脑。 */
 const xdGroup: ProviderGroupConfig = {
-  strategy: 'least',
+  strategy: 'expiring',
   autoSwitch: true,
   members: [
     { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'xd', limit: 4, weight: 1, paused: false },

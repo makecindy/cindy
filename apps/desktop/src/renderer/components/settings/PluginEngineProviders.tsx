@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
+import { isAntigravityPluginId } from '@cindy/maker-shared/branding';
 
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import { useUninstallPlugin } from '@/features/plugin/lib/useUninstallPlugin';
@@ -455,6 +456,8 @@ function EngineModels({ engine }: { engine: PluginEngineView }) {
         <PluginModelAdvancedDialog
           key={currentModel.id}
           model={currentModel}
+          reported={engine.reportedModelDetails?.find(details => details.modelId === currentModel.id)}
+          antigravity={isAntigravityPluginId(engine.ghostId)}
           providerName={engine.name}
           customized={Object.hasOwn(engine.modelEfforts ?? {}, currentModel.id)}
           enabled={Boolean(enabledModel)}

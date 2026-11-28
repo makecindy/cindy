@@ -23,6 +23,20 @@ describe('ElevenLabsScribeProvider helpers', () => {
     expect(url.searchParams.get('commit_strategy')).toBe('vad');
     expect(url.searchParams.get('language_code')).toBe('zho');
     expect(url.searchParams.get('vad_silence_threshold_secs')).toBe('1.50');
+    expect(url.searchParams.getAll('keyterms')).toEqual([]);
+  });
+
+  it('appends bounded personal dictionary keyterms to the Scribe realtime URL', () => {
+    const url = new URL(buildElevenLabsScribeRealtimeUrl({
+      baseUrl: 'https://api.elevenlabs.io/',
+      sourceLanguage: 'auto',
+      recognitionHints: {
+        hotwords: ['PostgreSQL', 'LiteLLM'],
+        recentContext: ['不应该把长句历史塞进 keyterms'],
+      },
+    }));
+
+    expect(url.searchParams.getAll('keyterms')).toEqual(['PostgreSQL', 'LiteLLM']);
   });
 
   it.each([

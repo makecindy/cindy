@@ -207,16 +207,26 @@ describe('Pi-owned transport for Cindy harnesses', () => {
   });
   // PR server#1096 P1: route-label checks missed the SDK appending /v1/messages
   // to a versioned base. Exercise the production default and official serializer.
-  it.each(['agnes', 'openhubs', 'tokenrhythm'].flatMap(id => (['claude-code', 'pi', 'codex'] as const).map(agent => [id, agent] as const)))
+  it.each(['agnes', 'openhubs', 'tokenrhythm', 'command-code'].flatMap(id => (['claude-code', 'pi', 'codex'] as const).map(agent => [id, agent] as const)))
   ('sends %s %s defaults to a single version prefix', async (id, agent) => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
     const runtime = preset.runtimes[agent]!;
-    const host = id === 'agnes' ? 'apihub.agnes-ai.com' : id === 'openhubs' ? 'openhubs.zhidemai.com' : 'tokenrhythm.studio';
+    const roots: Record<string, string> = {
+      agnes: 'https://apihub.agnes-ai.com',
+      openhubs: 'https://openhubs.zhidemai.com',
+      tokenrhythm: 'https://tokenrhythm.studio',
+      'command-code': 'https://api.commandcode.ai/provider',
+    };
+    const root = roots[id];
     const provider = buildUserProvider({ id: 'agnes-request', name: 'Agnes', runtimes: {
-      [agent]: { ...runtime, catalogPresetId: id, models: id === 'tokenrhythm' ? [{ id: 'tokenrhythm-fixture', name: 'Simulated account model' }] : runtime.models },
+      [agent]: { ...runtime, catalogPresetId: id, models: runtime.models.length ? runtime.models : [{ id: 'vendor/model-fixture', name: 'Simulated account model' }] },
     } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
     const model = provider.models[agent]![0];
-    const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl)!;
+    const api = id === 'command-code'
+      ? { 'claude-code': 'anthropic-messages', codex: 'openai-responses', pi: 'openai-completions' } as const
+      : undefined;
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl, api?.[agent])!;
+    expect(row).toBeDefined();
     let destination = '';
     const decision = buildRouteDecision(provider.routing[agent]!, null, agent, 'fixture-key')!;
     const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', headers: decision.headerOverride, fetchImpl: async (url, init) => {
@@ -236,10 +246,10 @@ describe('Pi-owned transport for Cindy harnesses', () => {
     const result = await (await send('https://unused.invalid', { body: JSON.stringify({
       model: model.id, input: 'Hello', max_output_tokens: 1024, stream: true,
     }) })).text();
-    expect(destination.split('?')[0]).toBe(`https://${host}/v1/${agent === 'pi' ? 'chat/completions' : agent === 'codex' ? 'responses' : 'messages'}`);
+    expect(destination.split('?')[0]).toBe(`${root}/v1/${agent === 'pi' ? 'chat/completions' : agent === 'codex' ? 'responses' : 'messages'}`);
     expect(result).toContain('response.completed');
     expect(result).not.toContain('response.failed');
-    expect(runtime.modelsUrl).toBe(`https://${host}/v1/models`);
+    expect(runtime.modelsUrl).toBe(`${root}/v1/models`);
   });
 
   // Tier 2: exercise official serializers, not just selected API labels. Responses

@@ -1,4 +1,9 @@
-import { readProviderAccountLimitCode } from '@cindy/maker-shared/error-redaction';
+import {
+  hasExplicitPaymentRequiredText,
+  isAccountUsageLimitReachedText,
+  isProviderSafetyRefusalError,
+  readProviderAccountLimitCode,
+} from '@cindy/maker-shared/error-redaction';
 
 /**
  * Usage-limit detection shared by the renderer banner and the main-process
@@ -9,8 +14,6 @@ import { readProviderAccountLimitCode } from '@cindy/maker-shared/error-redactio
  * codexErrorInfo / human-readable message. Keep this deliberately conservative
  * because a reset time here schedules an automatic continuation.
  */
-
-import { isProviderSafetyRefusalError } from '@cindy/maker-shared/error-redaction';
 
 export interface UsageLimitRecoveryHint {
   resetAtMs: number | null;
@@ -320,6 +323,19 @@ const BILLING_DEPLETION_PATTERN =
   /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i;
 const GROK_BILLING_DEPLETION_PATTERN = /\byou have run out of credits or need a Grok subscription\b/i;
 
+export function isGrokBillingRejection(data: unknown): boolean {
+  const root = asRecord(data);
+  if (!root) return false;
+  const status = finiteNumber(root.errorStatus ?? root.status);
+  if (status !== null && status !== 403) return false;
+  const records = collectRecords(root);
+  const text = collectText(records);
+  if (status === null && /\bHTTP(?:\/\d(?:\.\d)?)?\s+(?!403\b)\d{3}\b/i.test(text)) return false;
+  const now = Date.now();
+  return GROK_BILLING_DEPLETION_PATTERN.test(text) &&
+    parseStructuredResetAt(records, now) === null && parseTextResetAt(text, now) === null;
+}
+
 /**
  * 余额 / 计费耗尽（要充值，不会到点恢复）。即使文案里也出现 quota / limit，也不是周期额度上限，
  * 所有「等额度重置」的判定都必须先排除它。
@@ -336,6 +352,7 @@ export function isBillingDepletionError(data: unknown): boolean {
   } }) : typeof root.message === 'string' ? root.message : text);
   if (code) return code !== 'rate_limit_exceeded';
   if (root.sdkError === 'billing_error') return true;
+  if (hasExplicitPaymentRequiredText(text)) return true;
   if ((status === undefined || status === 403 || status === 429) && GROK_BILLING_DEPLETION_PATTERN.test(text)) return true;
   if (status !== undefined && status !== 429) return false;
   return BILLING_DEPLETION_PATTERN.test(text);
@@ -353,6 +370,7 @@ export function extractUsageLimitRecoveryHint(
 
   const sdkError = typeof root.sdkError === 'string' ? root.sdkError : '';
   const codexErrorInfo = typeof root.codexErrorInfo === 'string' ? root.codexErrorInfo : '';
+  const reason = typeof root.reason === 'string' ? root.reason : '';
   const status = finiteNumber(root.errorStatus ?? root.status);
 
   const hasSafetyRefusal =
@@ -369,13 +387,15 @@ export function extractUsageLimitRecoveryHint(
     hasSafetyRefusal ||
     isBillingDepletionError(root) ||
     codexErrorInfo === 'serverOverloaded' ||
+    reason === 'acp-overloaded' ||
     status === 529 ||
     /\b(?:at capacity|overloaded_error|currently overloaded)\b/i.test(text)
   ) {
     return null;
   }
 
-  const isAccountUsageLimit = EXPLICIT_ACCOUNT_USAGE_LIMIT_PATTERN.test(text);
+  const isAccountUsageLimit =
+    reason === 'acp-usage-limit' || EXPLICIT_ACCOUNT_USAGE_LIMIT_PATTERN.test(text);
   const isUsageLimit =
     sdkError === 'rate_limit' ||
     codexErrorInfo === 'usageLimitExceeded' ||
@@ -384,7 +404,8 @@ export function extractUsageLimitRecoveryHint(
     root.usageLimit === true ||
     status === 429 ||
     isClaudeUsageLimitMessage(text) ||
-    /\b(?:rate.?limit|usage.?limit|too\s+many\s+requests|quota\s+(?:exceeded|exhausted))\b/i.test(
+    isAccountUsageLimitReachedText(text) ||
+    /\b(?:rate.?limit|usage.?limit|too\s+many\s+requests|quota\s+(?:exceeded|exhausted|reached))\b/i.test(
       text,
     );
   if (!isUsageLimit) return null;

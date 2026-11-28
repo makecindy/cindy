@@ -137,7 +137,45 @@ async function verifierFor(guest, store) {
   if (legacy) await removeLegacyVerifier(guest);
   return verifier;
 }
-class GuestSignInRefused extends Error {}
+// The service turned this guest down for good (revoked receipt, paused delivery, changed owner): retrying cannot help.
+class GuestSignInRefused extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
+// The service could not answer yet (a network failure, 5xx, or 409 while the computer is still starting).
+class GuestSignInUnavailable extends Error {
+  constructor(status) {
+    super("Guest sign-in temporarily unavailable");
+    this.status = status;
+  }
+}
+// The caller no longer wants this sign-in, for example because the owner signed in by hand.
+class GuestSignInStopped extends Error {}
+/**
+ * Why a guest sign-in ended, for logs: a fixed reason, the HTTP status when a service answered and, for the
+ * code exchange that follows (AuthApiError), its error code. Never includes the receipt, the verifier, the
+ * authorization code or any token.
+ */
+export function cloudGuestFailureReason(error) {
+  const status =
+    typeof error?.status === "number" ? error.status
+      : error?.name === "AuthApiError" && typeof error.statusCode === "number" ? error.statusCode
+        : undefined;
+  const code =
+    error?.name === "AuthApiError" && typeof error.code === "string" && /^[A-Z0-9_]{1,64}$/.test(error.code)
+      ? error.code
+      : undefined;
+  const reason =
+    error instanceof GuestSignInRefused ? "refused"
+      : error instanceof GuestSignInUnavailable ? "unavailable"
+        : error instanceof GuestSignInStopped ? "stopped"
+          : error?.name === "AuthApiError" ? "exchange"
+            : error?.name === "TimeoutError" || error?.name === "AbortError" ? "timeout"
+              : "failed";
+  return { reason, ...(status !== undefined && { status }), ...(code && { code }) };
+}
 const directFetch = (input, init) => globalThis.fetch(input, init);
 
 async function authorize(guest, deviceId, authBase, verifier, serviceFetch) {
@@ -159,8 +197,9 @@ async function authorize(guest, deviceId, authBase, verifier, serviceFetch) {
       )
         throw new GuestSignInRefused(
           "Guest authorization is no longer available",
+          response.status,
         );
-      throw new Error("Guest sign-in temporarily unavailable");
+      throw new GuestSignInUnavailable(response.status);
     }
     return response;
   };
@@ -247,16 +286,46 @@ async function authorize(guest, deviceId, authBase, verifier, serviceFetch) {
   return { code: result.code, verifier };
 }
 
-export async function cloudGuestAuthorization(guest, deviceId, authBase, store, serviceFetch = directFetch) {
+const FIRST_BOOT_MS = 600000;
+const FIRST_BOOT_RETRY_MS = 5000;
+const LATER_RETRY_MS = 30000;
+const LATER_RETRY_MAX_MS = 300000;
+const RETRY_REPORT_MS = 3600000;
+/**
+ * Exchanges this guest's provisioned identity for a sign-in code. While the computer boots it retries every 5 s
+ * for 10 minutes. With `persistent`, a guest still signed out keeps trying after that, backing off from 30 s to
+ * 5 minutes, so an enrollment service that was down for longer does not leave it at the sign-in screen until
+ * the next restart. A refusal ends at once either way, and `stopped()` ends a persistent retry. While it keeps
+ * trying past the window, `onRetrying` receives the failure reason when it first starts, when the reason
+ * changes, and otherwise at most once an hour.
+ */
+export async function cloudGuestAuthorization(guest, deviceId, authBase, store, serviceFetch = directFetch, options = {}) {
+  const { persistent = false, stopped = () => false, onRetrying } = options;
   const verifier = await store.withLock(() => verifierFor(guest, store));
-  const until = Date.now() + 600000;
+  const until = Date.now() + FIRST_BOOT_MS;
+  let later = LATER_RETRY_MS;
+  let reported;
+  let reportedAt = 0;
   for (;;) {
+    if (stopped()) throw new GuestSignInStopped("Guest sign-in is no longer needed");
     try {
       return await authorize(guest, deviceId, authBase, verifier, serviceFetch);
     } catch (error) {
-      if (error instanceof GuestSignInRefused || Date.now() + 5000 >= until)
-        throw error;
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      if (error instanceof GuestSignInRefused) throw error;
+      let delay = FIRST_BOOT_RETRY_MS;
+      if (Date.now() + FIRST_BOOT_RETRY_MS >= until) {
+        if (!persistent) throw error;
+        delay = later;
+        later = Math.min(later * 2, LATER_RETRY_MAX_MS);
+        const reason = cloudGuestFailureReason(error);
+        const key = JSON.stringify(reason);
+        if (key !== reported || Date.now() - reportedAt >= RETRY_REPORT_MS) {
+          reported = key;
+          reportedAt = Date.now();
+          onRetrying?.(reason);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }

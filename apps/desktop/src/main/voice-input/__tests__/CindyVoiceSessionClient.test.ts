@@ -160,4 +160,28 @@ describe('CindyVoiceRunContext', () => {
     resolveFirst(SESSION);
     await expect(first).rejects.toThrow('superseded by a newer provider attempt');
   });
+
+  it('tracks optional server-declared supportedContextFields and defaults to false on legacy servers', async () => {
+    serverApiFetch.mockReset();
+    serverApiFetch
+      .mockResolvedValueOnce(SESSION)
+      .mockResolvedValueOnce({
+        ...SESSION,
+        sessionId: 'session-2',
+        refiner: {
+          enabled: true,
+          provider: 'auto',
+          supportedContextFields: ['activeApp'],
+        },
+      });
+    const context = new CindyVoiceRunContext('zh-CN', 'auto');
+
+    expect(context.supportsRefinementContextField('activeApp')).toBe(false);
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.supportsRefinementContextField('activeApp')).toBe(false);
+
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.supportsRefinementContextField('activeApp')).toBe(true);
+    expect(context.supportsRefinementContextField('unknownField')).toBe(false);
+  });
 });

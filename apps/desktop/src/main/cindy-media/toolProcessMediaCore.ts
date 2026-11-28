@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { isLooseBase64Chars, parseBase64DataUrl } from '@cindy/maker-shared';
 import type { NativeToolMedia, ProcessMediaRef } from '@cindy/maker-shared/tool-process-media';
 import { isProcessMediaUrl } from '@cindy/maker-shared/tool-process-media';
 import type { createMediaIngest } from './ingestCore';
@@ -35,10 +36,15 @@ export function createToolProcessMedia(ports: ToolMediaPorts) {
           result.push({ kind: item.kind, url: item.url });
           continue;
         }
-        const dataUrl = item.url?.match(
-          /^data:((?:image|video)\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/,
-        );
-        const encoded = item.data ?? dataUrl?.[2];
+        const parsedDataUrl = item.url
+          ? parseBase64DataUrl(item.url, /^data:((?:image|video)\/[a-zA-Z0-9.+-]+);base64$/, {
+            allowLineTerminators: true,
+          })
+          : null;
+        const dataUrl = parsedDataUrl && isLooseBase64Chars(parsedDataUrl.payload, { allowWhitespace: true })
+          ? parsedDataUrl
+          : null;
+        const encoded = item.data ?? dataUrl?.payload;
         const sourcePath =
           item.path ?? (item.url?.startsWith('file:') ? fileURLToPath(item.url) : undefined);
         let buffer: Buffer;
@@ -57,7 +63,7 @@ export function createToolProcessMedia(ports: ToolMediaPorts) {
           buffer = await fs.readFile(localPath);
         } else continue;
         assertStillValid();
-        const mimeType = sniffMediaMime(buffer, item.mimeType ?? dataUrl?.[1]);
+        const mimeType = sniffMediaMime(buffer, item.mimeType ?? dataUrl?.header[1]);
         if (!mimeType?.startsWith(item.kind + '/')) continue;
         const media = await ingestMedia({ buffer, mimeType, refs: [], assertStillValid }, db);
         result.push({ kind: item.kind, url: media.url });

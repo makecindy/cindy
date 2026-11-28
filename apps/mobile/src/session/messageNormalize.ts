@@ -1,3 +1,4 @@
+import { hasVoiceCallContent, readVoiceCallRecord, type VoiceCallRecord } from '@cindy/maker-shared/voice-call-record';
 import { normalizeAskQuestions, answerKey } from "@cindy/maker-shared/interaction";
 import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
@@ -112,6 +113,7 @@ export interface NormalizedRemoteMessage {
   /** user 专用：伙伴私聊的引用回复（信封 replyQuote），气泡正文上方显示引用块。 */
   replyQuote?: ChatReplyQuote;
   secondaryBody?: string;
+  voiceCall?: VoiceCallRecord;
   authorization?: Record<string, unknown>;
   systemCardData?: MobileSystemCardData;
   systemCardType?: MobileSystemCardType;
@@ -143,8 +145,11 @@ export interface NormalizedRemoteMessage {
    * 只落这一份用量事实,操作行据此退回显示 token 而不是空着一格。
    */
   turnTotalTokens?: number;
-  /** assistant 专用:本轮模型降级标记(agentMeta.modelMismatch,桌面 main 在 turn 结束检测命中时落库)。 */
-  modelMismatch?: { selected: string; actual: string };
+  /** error 行专用：桌面落库的稳定 reason key 与出错来源 providerId，供「了解原因」浮层匹配。 */
+  errorReason?: string;
+  errorProviderId?: string;
+  /** assistant 专用:本轮模型改派标记(agentMeta.modelMismatch,桌面 main 在 turn 结束检测命中时落库)。 */
+  modelMismatch?: { selected: string; actual: string; providerName?: string };
   /** Orca 协同卡片(Lead 派活 / Lead↔worker 互发消息);存在时由 MessageRenderer 渲染成专属卡片而非普通气泡。 */
   orcaCard?: OrcaCollabCard;
   companion?: { kind: 'task'; meta: BotCollaborationMeta } | { kind: 'direct'; meta: BotDirectMessageMeta };
@@ -235,6 +240,8 @@ export interface NormalizedAttachment {
   path?: string;
   mimeType?: string;
   sha256?: string;
+  /** Optional stable cache key for images whose URI rotates (e.g. short-lived signed URLs). */
+  cacheKey?: string;
   previewable: boolean;
 }
 
@@ -243,6 +250,8 @@ export interface NormalizedToolMedia {
   url: string;
   mimeType?: string;
   title?: string;
+  /** Optional stable cache key for expo-image and intrinsic size cache across signed URL rotations. */
+  cacheKey?: string;
   previewable: boolean;
   actions?: NormalizedToolMediaActions;
 }
@@ -304,6 +313,16 @@ export function normalizeRemoteMessages(
   for (const message of sorted) {
     if (message.role === 'tool_result') continue;
     if (message.role === 'assistant') {
+      const call = readVoiceCallRecord(message.agentMeta?.voiceCall);
+      if (call) {
+        if (hasVoiceCallContent(call)) {
+          result.push({
+            key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,
+            label: 'voice-call', body: '', align: 'agent', createdAt: message.createdAt, voiceCall: call,
+          });
+        }
+        continue;
+      }
       const app = message.agentMeta?.mcpApp === true ? parseMcpAppHistory(message.content) : undefined;
       if (app) {
         result.push({ key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,
@@ -412,8 +431,22 @@ export function normalizeRemoteMessages(
     if (message.role === 'error') {
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
+      const errorReason = typeof c?.reason === 'string' ? c.reason : undefined;
+      const errorProviderId =
+        (typeof c?.providerId === 'string' && c.providerId.trim()) ||
+        readString(message.agentMeta?.errorProviderId)?.trim() ||
+        undefined;
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
-      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText, c?.outputLimit);
+      const guidance =
+        describeAgentAuthError(rawText) ??
+        localizeAgentError(
+          c?.reason,
+          toolLoop,
+          rawText,
+          c?.outputLimit,
+          c?.reconnectHandoff,
+          errorProviderId ? { providerId: errorProviderId } : undefined,
+        );
       const errText = guidance ?? localizeUnclassifiedAgentError(rawText, options.sessionSource);
       result.push({
         key: messageNormalizeKey(message),
@@ -423,6 +456,8 @@ export function normalizeRemoteMessages(
         label: 'error',
         body: errText,
         rawError: rawText,
+        ...(errorReason ? { errorReason } : {}),
+        ...(errorProviderId ? { errorProviderId } : {}),
         ...(!guidance ? { errorSummaryKey: unclassifiedAgentErrorI18nKey(rawText, options.sessionSource) } : {}),
         align: 'agent',
         createdAt: message.createdAt,
@@ -1178,8 +1213,8 @@ function readTurnCost(
   return projected ? { ...usage, ...projected } : usage;
 }
 
-// 桌面 main 在 turn 结束检测到模型被上游降级时写 agentMeta.modelMismatch =
-// { selected, actual }(modelMismatchBroadcaster);字段不全的一律忽略。
+// 桌面 main 在 turn 结束检测到模型被供应商改派时写 agentMeta.modelMismatch =
+// { selected, actual, providerName? }(modelMismatchBroadcaster);字段不全的一律忽略。
 function readModelMismatch(message: RemoteMessage): Pick<NormalizedRemoteMessage, 'modelMismatch'> {
   if (message.role !== 'assistant') return {};
   const mm = readRecord(message.agentMeta?.modelMismatch);
@@ -1187,7 +1222,8 @@ function readModelMismatch(message: RemoteMessage): Pick<NormalizedRemoteMessage
   const selected = readString(mm.selected);
   const actual = readString(mm.actual);
   if (!selected || !actual) return {};
-  return { modelMismatch: { selected, actual } };
+  const providerName = readString(mm.providerName)?.trim() || undefined;
+  return { modelMismatch: { selected, actual, ...(providerName ? { providerName } : {}) } };
 }
 
 // 工具投递落库时在 agentMeta.origin 写 { kind:'session', senderSessionId, senderSessionTitle? };

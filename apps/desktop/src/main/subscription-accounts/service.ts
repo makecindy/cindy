@@ -1,5 +1,5 @@
 import { isProviderDisabled } from '@cindy/model-providers';
-import { isPluginEngineProviderIdShape, type SubscriptionAccountCommand } from '../../shared/subscriptionAccounts.js';
+import { isPluginEngineProviderIdShape, type SubscriptionAccountCommand, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { runPluginEngineAccountCommand } from '../plugin-engine-accounts/runtime.js';
 import { readSubscriptionPool, runSubscriptionAccountCommand } from './runtime.js';
 import {
@@ -41,6 +41,17 @@ async function registerLegacyCodexConnection(providerId: string | null, assertCu
   if (!accountId) throw new Error('Too many subscription accounts');
   await placeSubscriptionAccount('openai', accountId, providerId);
   assertCurrent();
+}
+
+function requestAccountModels(kind: SubscriptionProvider | undefined) {
+  if (kind === 'anthropic') requestAnthropicModelProbe();
+  else void getMaker().refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer' }).catch(() => {});
+}
+
+export function refreshLinkedSubscriptionProvider(kind: SubscriptionProvider) {
+  requestAccountModels(kind);
+  publishSubscriptionPoolProviders();
+  refreshSelectableModelsAndBroadcast({ providerId: kind });
 }
 
 /** Shared by the owner UI and helper, after their ordinary authorization checks. */
@@ -100,11 +111,7 @@ export async function executeSubscriptionAccountCommand(
     }
   }
   if (command.action === 'add' || command.action === 'connect' || command.action === 'login' || command.action === 'create') {
-    if (kind === 'anthropic') requestAnthropicModelProbe();
-    else
-      void getMaker()
-        .refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer' })
-        .catch(() => {});
+    requestAccountModels(kind);
   }
   if (command.action !== 'read' && command.action !== 'preview' && command.action !== 'cancel') {
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())

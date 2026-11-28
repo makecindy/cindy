@@ -88,6 +88,24 @@ describe('Telegram group history access scope', () => {
     expect(adapter.turnPolicyOptionalForMode?.('ask', ownerPolicy!)).toBe(false);
   });
 
+  // 设置页那份个人 bot 的「谁来回复」(2026-11-24): 伙伴归属每条消息现读, 切到伙伴时主人轮次按伙伴
+  // 权限档、不挂逐轮策略; 切回 Cindy 立刻恢复个人 bot 口径(unit)。
+  it('settings bot: a teammate chosen in 谁来回复 takes effect per message and can be switched back', () => {
+    let companion: string | null = null;
+    const adapter = buildTelegramAdapter({ getOwnerUserId: () => '123' } as never, {} as never, {
+      companionBotId: () => companion,
+    });
+    const ownerTurn = {
+      messageId: 'm-owner',
+      speaker: { id: 'owner', name: 'Owner', isOwner: true },
+    } as unknown as IMMessageEvent;
+    expect(adapter.turnPermissionPolicyFor?.(ownerTurn)).toBeDefined();
+    companion = 'bot-mimi';
+    expect(adapter.turnPermissionPolicyFor?.(ownerTurn)).toBeUndefined();
+    companion = null;
+    expect(adapter.turnPermissionPolicyFor?.(ownerTurn)).toBeDefined();
+  });
+
   it('teammate bot: owner turns carry no policy, guest turns confirm destructive calls only, Full access wins', () => {
     const teammate = buildTelegramAdapter({ getOwnerUserId: () => '123' } as never, {} as never, {
       companionBotId: 'bot-mimi',
@@ -370,6 +388,49 @@ describe('Telegram group history media', () => {
     } as never);
     expect(collectGroupHistoryMedia).not.toHaveBeenCalled();
     expect(result?.contextAttachments).toBeUndefined();
+  });
+
+  it('collects up to 2 recent same-sender images for ambient turns without downloading non-images', async () => {
+    const collectGroupHistoryMedia = vi.fn(async () => ({
+      attachments: [
+        {
+          kind: 'image' as const,
+          absPath: '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/ab12.jpg',
+          originalName: 'forwarded.jpg',
+          mimeType: 'image/jpeg',
+          author: 'Tom',
+        },
+      ],
+      unavailable: [],
+    }));
+    const adapter = buildTelegramAdapter({ collectGroupHistoryMedia } as never, {} as never);
+    const result = await adapter.prepareAgentTurnText?.({
+      contextId: 'bot-1',
+      senderId: 'g/-100200',
+      messageId: TRIGGER_MESSAGE_ID,
+      chatId: '-100200',
+      text: '帮我看下这张图',
+      attachments: [],
+      unsupported: [],
+      ambient: true,
+      speaker: { id: '222', name: 'Tom', isOwner: false },
+    } as never);
+    expect(collectGroupHistoryMedia).toHaveBeenCalledWith('-100200', ['80'], undefined, {
+      provided: [],
+      imagesOnly: true,
+      sameSenderId: '222',
+      maxAgeMs: 120_000,
+      maxImages: 2,
+    });
+    expect(result?.contextAttachments).toEqual([
+      {
+        kind: 'image',
+        absPath: '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/ab12.jpg',
+        originalName: 'forwarded.jpg',
+        mimeType: 'image/jpeg',
+      },
+    ]);
+    expect(result?.agentText).toContain('forwarded.jpg（Tom）');
   });
 
   it('keeps the turn going when history media download throws', async () => {

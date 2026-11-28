@@ -93,8 +93,9 @@ export function apiKeyMemberForConnection(connectionId: string): ApiKeyPoolMembe
   return Object.hasOwn(members, connectionId) ? members[connectionId] : undefined;
 }
 
-export function apiKeyPoolMembers(providerId: string): ApiKeyPoolMember[] {
-  return Object.values(read().members).filter(member => member.providerId === providerId);
+/** Omit the provider to take one membership image for a mixed-account batch. */
+export function apiKeyPoolMembers(providerId?: string): ApiKeyPoolMember[] {
+  return Object.values(read().members).filter(member => providerId === undefined || member.providerId === providerId);
 }
 
 export function hasApiKeyPoolWithMultipleMembers(): boolean {

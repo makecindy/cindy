@@ -17,7 +17,11 @@ vi.mock('react-native', async () => {
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
 });
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
-vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, Split: () => null, CircleAlert: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null }));
+vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, Split: () => null, CircleAlert: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null, Info: () => null }));
+vi.mock('@/session/NoticeExplainSheet', () => ({
+  NoticeExplainSheet: () => null,
+  NoticeExplainButton: () => null,
+}));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string, opts?: { seconds?: number }) => opts?.seconds === undefined ? key : key + ' ' + opts.seconds }),
@@ -160,4 +164,40 @@ it('counts down the executing host’s Gemini retry and offers cancellation', as
     expect(host.textContent).toContain(i18n.t('chat.geminiRateLimit.exhausted'));
     expect(host.textContent).not.toContain('chat.geminiRateLimit.retryIn');
   } finally { vi.useRealTimers(); }
+});
+
+it('shows the steer-unsupported notice only while running with queued items and not paused or aborting', async () => {
+  const base = {
+    sessionId: 's1',
+    pendingQueue: [{ clientId: 'q1' }],
+    steerUnsupported: true,
+    steeringQueueClientIds: [],
+    queuePaused: false,
+    queueExpanded: false,
+    queueInteractionLocks: [],
+    queueEditLocks: [],
+    queueAbortPending: false,
+    error: null,
+    errorRetryText: null,
+    credentialSwitchWait: null,
+  } as unknown as InputProjection;
+  const notice = () => host.querySelector('[data-testid="queue.inline.steerUnsupportedNotice"]');
+
+  await show({ projection: base, isRunning: true });
+  expect(notice()?.textContent).toBe('message.queue.steerUnsupportedNotice');
+
+  await show({ projection: base, isRunning: false });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, pendingQueue: [] }, isRunning: true });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, queuePaused: true }, isRunning: true });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, queueAbortPending: true }, isRunning: true });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, steerUnsupported: false }, isRunning: true });
+  expect(notice()).toBeNull();
 });

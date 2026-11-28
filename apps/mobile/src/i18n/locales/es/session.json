@@ -398,7 +398,13 @@
     "forkConfirmTitle": "¿Iniciar una nueva sesión desde aquí?",
     "forkConfirmDescription": "Se creará una sesión independiente con el contexto hasta este punto. La sesión original no cambia y los mensajes futuros en cualquiera de las sesiones no afectarán a la otra.",
     "forkConfirm": "Iniciar nueva sesión",
-    "forkCancel": "Cancelar"
+    "forkCancel": "Cancelar",
+    "modelSwitchPreparation": {
+      "pending": "Próximo mensaje",
+      "preparing": "Preparando…",
+      "failed": "Error al cambiar",
+      "usingPrevious": "Este mensaje usa {{actual}}; {{target}} aún no está listo."
+    }
   },
   "shareImage": {
     "title": "Compartir conversación",
@@ -652,6 +658,9 @@
     "ignore": "Ignorar",
     "executionResultUnavailable": "No se puede recuperar el resultado de la ejecución. La continuación automática se ha detenido. Pide al asistente que verifique el resultado de la ejecución existente.",
     "unexecutedToolMarkup": "El modelo escribió una llamada a una herramienta como texto. No se pudo confirmar la ejecución, por lo que este turno no se completó.",
+    "codexReconnectStalled": "No se pudo restablecer la conexión con el modelo en 2 minutos.",
+    "reconnectAutoResumeDisabled": "La continuación automática está desactivada.",
+    "reconnectAutoResumeExhausted": "Se alcanzó el límite de reintentos automáticos.",
     "silentStopExhausted": "Se ha detectado una respuesta vacía. La continuación automática está en pausa.",
     "outputLimit": "El modelo alcanzó su límite de salida, por lo que esta respuesta puede estar incompleta. Envía un nuevo mensaje para continuar. Si se repite, reduce la intensidad de razonamiento o compacta primero el historial de la conversación.",
     "outputLimitReasoning": "El razonamiento consumió la mayor parte del presupuesto de salida de esta solicitud, por lo que la respuesta puede estar incompleta. Reduce la intensidad de razonamiento o compacta el historial de la conversación antes de continuar.",
@@ -664,7 +673,20 @@
     "toolUseLoopDetectedRotationWithCount": "El modelo recorría repetidamente las mismas llamadas a herramientas. Cindy detectó {{count}} llamadas en el bucle y detuvo este turno para evitar que fuera infinito. Envía un mensaje nuevo para continuar.",
     "codexThreadLost": "El modo de autenticación de Codex cambió, por lo que esta sesión no puede continuar. Inicia una nueva sesión.",
     "remoteCompactEncryptedContent": "La compactación del contexto falló porque el modelo no pudo leer el historial cifrado. La continuación automática no se completó. Reintenta para intentar recuperarla.",
-    "encryptedContentInvalid": "El cambio de proveedor hizo que el cifrado no estuviera disponible, por lo que esta sesión solo funciona con el proveedor original. Resuélvelo en la computadora (usa “Iniciar nueva sesión desde aquí” para eliminar el contenido cifrado del protocolo y continuar en una nueva sesión)."
+    "encryptedContentInvalid": "El cambio de proveedor hizo que el cifrado no estuviera disponible, por lo que esta sesión solo funciona con el proveedor original. Resuélvelo en la computadora (usa “Iniciar nueva sesión desde aquí” para eliminar el contenido cifrado del protocolo y continuar en una nueva sesión).",
+    "providerSafetyRefusal": "La política de seguridad del proveedor de modelos bloqueó esta respuesta. Ajusta tu solicitud y vuelve a enviarla.",
+    "providerSafetyRefusalWithProvider": "La política de seguridad de {{provider}} bloqueó esta respuesta. Ajusta tu solicitud y vuelve a enviarla.",
+    "overloadBusy": "El proveedor de modelos está ocupado temporalmente y sin capacidad disponible. Vuelve a intentarlo más tarde o cambia de modelo.",
+    "overloadBusyWithProvider": "{{provider}} está ocupado temporalmente y sin capacidad disponible. Vuelve a intentarlo más tarde o cambia de modelo.",
+    "streamInterrupted": "La respuesta del proveedor de modelos se interrumpió a mitad de transmisión. Inténtalo de nuevo más tarde.",
+    "streamInterruptedWithProvider": "La respuesta de {{provider}} se interrumpió a mitad de transmisión. Inténtalo de nuevo más tarde.",
+    "upstreamStatusError": "El servicio del proveedor de modelos devolvió un error (HTTP {{status}}). Esta respuesta no se completó.",
+    "upstreamStatusErrorWithProvider": "El servicio de {{provider}} devolvió un error (HTTP {{status}}). Esta respuesta no se completó.",
+    "modelAccessDenied": "Tu cuenta actual del proveedor de modelos no tiene acceso a este modelo. Cambia de modelo o verifica los permisos con el proveedor.",
+    "modelAccessDeniedWithProvider": "Tu cuenta de {{provider}} no tiene acceso a este modelo. Cambia de modelo o verifica los permisos de acceso.",
+    "providerQuotaExhausted": "Cuota o saldo insuficiente en la cuenta del proveedor de modelos. Revisa tu cuenta del proveedor.",
+    "providerQuotaExhaustedWithProvider": "Tu cuenta de {{provider}} no tiene suficiente cuota o saldo. Revisa el estado de la cuenta.",
+    "usageLimitReachedWithProvider": "Tu cuenta de {{provider}} ha alcanzado el límite de uso"
   },
   "row": {
     "markRead": "Marcar como leído",
@@ -698,7 +720,7 @@
     "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "No se envió el mensaje. Cindy no pudo confirmar a tiempo el registro de seguridad.",
     "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Las cuentas disponibles para este modelo alcanzaron su límite de uso. Cambia de modelo o continúa cuando se restablezca la cuota.",
-    "REMOTE_AGENT_GROUP_UNAVAILABLE": "Ninguna computadora del grupo de proveedores puede ejecutar esta tarea en este momento. Es posible que estén desconectadas, en pausa, enfriándose o sin este modelo. Revisa el grupo en la página Remoto y compartido de este proveedor en la computadora.",
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "Ninguna computadora del grupo de equipos puede ejecutar esta tarea en este momento. Es posible que estén desconectadas, en pausa, enfriándose o sin este modelo. Revisa el grupo en la página Remoto y compartido de este proveedor en la computadora.",
     "REMOTE_DAEMON_CLOSED": "La conexión remota se interrumpió, posiblemente durante una actualización. Este turno ha terminado. Envía el mensaje nuevamente.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "No se puede acceder a archivos ni imágenes adjuntos locales en sesiones remotas. En su lugar, pega el contenido directamente.",
     "AUTO_REVIEW_UNAVAILABLE_QUOTA": "Un modelo de revisión automática ha agotado su cuota. Revisa el uso o la facturación, o personaliza los modelos auxiliares en los ajustes del ordenador que ejecuta el Agent. Las acciones que requieren revisión siguen necesitando tu confirmación.",
@@ -735,7 +757,7 @@
     "REMOTE_WORKDIR_UNAVAILABLE": "El directorio de trabajo remoto no está disponible. Comprueba que la carpeta aún exista en esa computadora y vuelve a intentarlo.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "La computadora aún no puede confirmar si se envió este mensaje. Espera un momento y vuelve a intentarlo. No envíes el mismo mensaje dos veces.",
     "REMOTE_AGENT_UNAVAILABLE": "No se pudo comunicar con la computadora que ejecuta el Agent. Revisa los detalles del error.",
-    "REMOTE_AGENT_TIMEOUT": "Se agotó el tiempo de espera de la computadora que ejecuta el Agent. El resultado es desconocido. Revisa la tarea antes de volver a intentarlo.",
+    "REMOTE_AGENT_TIMEOUT": "El equipo que ejecuta el Agent aún no ha respondido. Revisa el progreso de la tarea. Si sigue en curso o ya ha terminado, no hace falta volver a intentarlo.",
     "REMOTE_AGENT_LINK_BUSY": "La comunicación con la computadora que ejecuta el Agent está saturada. Espera un momento antes de volver a intentarlo.",
     "REMOTE_AGENT_UNRESPONSIVE": "La computadora que ejecuta el Agent no respondió en varios intentos, por lo que las llamadas se pausaron temporalmente. Espera un momento antes de volver a intentarlo.",
     "REMOTE_AGENT_OFFLINE": "La computadora que ejecuta el Agent está sin conexión. Vuelve a intentarlo cuando se conecte de nuevo.",
@@ -864,7 +886,8 @@
       "WORKER_CREATION_IN_PROGRESS": "Se está creando un Worker con el mismo nombre. Vuelve a intentarlo en breve.",
       "WORKER_NOT_FOUND": "Este Worker ya no existe. La lista fue actualizada.",
       "ORCA_CREATE_UNCONFIRMED": "Se agotó el tiempo de espera para crear el Worker y no se pudo confirmar. Primero revisa la lista de Workers y vuelve a intentarlo solo si no aparece ningún Worker nuevo.",
-      "ORCA_ACTION_UNCONFIRMED": "Se agotó el tiempo de espera de la solicitud, así que el resultado aún no está confirmado. La lista se actualizó; guíate por lo que muestra ahora."
+      "ORCA_ACTION_UNCONFIRMED": "Se agotó el tiempo de espera de la solicitud, así que el resultado aún no está confirmado. La lista se actualizó; guíate por lo que muestra ahora.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "La versión en este equipo no admite iniciar colaboración en una tarea con motor de complemento."
     },
     "workerCountSummary_many": "{{count}} Workers · {{running}} funcionando",
     "barLead_many": "Colaboración · {{count}} Workers · {{running}} en ejecución"

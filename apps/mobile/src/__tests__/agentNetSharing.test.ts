@@ -35,11 +35,18 @@ import { bindMobileAgentNetSharing, joinMobileAgentNetSharedTask, requestMobileA
   setMobileAgentNetPrivateSharingSupport, stopMobileAgentNetSharing } from '@/device-link/agentNetSharing';
 let receipt: NonNullable<ReturnType<typeof parseAgentNetSharingInvitation>>['receipt'];
 const context = { deviceId: 'phone', apiFetch: fake.card };
+/** Account-service identity card shape: a JWT whose iat/exp the client reads for its lifetime. */
+const UNIT_CARD_SIGNATURE = 'unit-limited-card';
+function unitIdentityCard() {
+  const iat = Math.floor(Date.now() / 1000), exp = iat + 300;
+  return { card: ['e30', Buffer.from(JSON.stringify({ iat, exp })).toString('base64url'), UNIT_CARD_SIGNATURE].join('.'),
+    expiresAt: new Date(exp * 1000).toISOString() };
+}
 beforeEach(() => {
   setMobileAuthOwner('guest'); fake.storage.clear(); fake.secure.clear(); fake.http.mockReset(); fake.card.mockReset();
   fake.member.mockReturnValue(null);
   setMobileAgentNetPrivateSharingSupport('', '', false);
-  fake.card.mockResolvedValue({ card: 'unit-limited-card', expiresAt: new Date(Date.now() + 300_000).toISOString() });
+  fake.card.mockImplementation(async () => unitIdentityCard());
   const { bootstrap } = createPrivateNetwork('Fixture', generateIdentity('host'));
   receipt = { v: 2, kind: 'shared-task', resourceId: 'private-task', invitation: 'A'.repeat(43), networkId: bootstrap.networkId,
     rootPublicKey: bootstrap.rootPublicKey, hostDeviceId: 'host', region: 'global' };
@@ -114,12 +121,12 @@ it('joins and pins an invited private task without official enrollment or accoun
     expect(url).toBe('https://friend.example.test/api/agent-net/sharing/shared-tasks/join');
     const authorization = new Headers(init.headers).get('authorization')!; expect(authorization).toMatch(/^AgentNetIdentity /);
     const value = JSON.parse(Buffer.from(authorization.slice('AgentNetIdentity '.length), 'base64url').toString());
-    expect(value.card).toBe('unit-limited-card'); expect(verifyRequestProof(value.signingKey, value.proof, 'POST', new URL(url).pathname, String(init.body), Date.now())).toBe(true);
+    expect(value.card.endsWith('.' + UNIT_CARD_SIGNATURE)).toBe(true); expect(verifyRequestProof(value.signingKey, value.proof, 'POST', new URL(url).pathname, String(init.body), Date.now())).toBe(true);
     return admitted();
   });
   await expect(joinMobileAgentNetSharedTask(link(), 'Guest', context)).resolves.toMatchObject({ memberId: 'guest-member' });
   expect(book().routes[0]).toMatchObject({ server: 'https://friend.example.test', rootPublicKey: receipt.rootPublicKey });
-  expect(JSON.stringify(book())).not.toContain(receipt.invitation); expect(JSON.stringify(book())).not.toContain('unit-limited-card');
+  expect(JSON.stringify(book())).not.toContain(receipt.invitation); expect(JSON.stringify(book())).not.toContain(UNIT_CARD_SIGNATURE);
   expect([...fake.secure.values()].every(value => /^[A-Za-z0-9_-]{43}$/.test(value))).toBe(true);
   const options = { getWsUrl: () => 'wss://unavailable.example.test', getToken: async () => null,
     createWebSocket: () => { throw new Error('PRIMARY_MUST_NOT_BE_REQUIRED'); },

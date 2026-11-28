@@ -184,6 +184,7 @@ export const sessions = sqliteTable(
     pinnedAt: integer('pinned_at'), // unix ms
     snoozedUntil: integer('snoozed_until'), // unix ms; presentation only
     snoozedAt: integer('snoozed_at'), // host time of the explicit snooze
+    archivedAt: integer('archived_at'), // host time of the explicit archive (unix ms)
     /**
      * 后台隐藏时刻（unix ms）。非 NULL = 插件以 `agent.hiddenTasks` 声明创建或切换为
      * 隐藏的后台任务：不进入任务列表、搜索、未结束提示与新任务通知；用户仍可在插件
@@ -331,6 +332,12 @@ export const sessions = sqliteTable(
      * 任务、目录与命令都在本机；Lead 与团队在那台。NULL = 普通任务。
      */
     orcaRemoteLead: text('orca_remote_lead'),
+    /**
+     * 由其他任务通过 send_to_session（create 模式）新建时的来源任务元数据
+     * (JSON，见 shared/sessionOrigin.ts)。独立于 parent_session_id（仅用于 fork / 侧边追问）。
+     * NULL = 非任务新建（用户直接新建、自动化、导入或旧版数据）。
+     */
+    createdBySession: text('created_by_session'),
     /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
@@ -1608,6 +1615,7 @@ export const schedules = sqliteTable(
       .default('active'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
+    scheduleRevision: integer('schedule_revision').notNull().default(0),
     lastFiredAt: integer('last_fired_at'),
     /**
      * 上一次终态完成时间（success/failed/aborted）。NULL = 从未跑完过。
@@ -1872,6 +1880,12 @@ export const embeddingJobs = sqliteTable(
   }),
 );
 
+// Row IDs only. Writers without sqlite-vec can unlink chat content immediately;
+// the next vector-capable connection finishes deleting the physical index rows.
+export const deletedChatVectorRows = sqliteTable('deleted_chat_vector_rows', {
+  rowid: integer('rowid').primaryKey(),
+});
+
 /**
  * embedding-host (Phase 1.1): vec 虚表元信息登记。
  *
@@ -1956,6 +1970,7 @@ export const auxiliaryUsageReceipts = sqliteTable('auxiliary_usage_receipts', {
   providerId: text('provider_id').notNull(),
   model: text('model').notNull(),
   source: text('source').notNull(),
+  harness: text('harness').notNull().default('unknown'),
   sessionId: text('session_id'),
   transport: text('transport').notNull(),
   day: text('day').notNull(),
@@ -2033,11 +2048,12 @@ export const dailyTokenAttribution = sqliteTable('daily_token_attribution', {
   provider: text('provider').notNull(),
   billingSource: text('billing_source').notNull(),
   model: text('model').notNull(),
+  harness: text('harness').notNull().default('unknown'),
   inputTokens: integer('input_tokens').notNull(),
   outputTokens: integer('output_tokens').notNull(),
   cacheReadTokens: integer('cache_read_tokens').notNull(),
   cacheCreateTokens: integer('cache_create_tokens').notNull(),
-}, t => ({ pk: primaryKey({ columns: [t.day, t.provider, t.billingSource, t.model] }) }));
+}, t => ({ pk: primaryKey({ columns: [t.day, t.provider, t.billingSource, t.model, t.harness] }) }));
 
 // Only the first, partial UTC day needs an exact enrollment timestamp. All later days
 // reuse dailyTokenAttribution. A fresh generation isolates same-day opt-out/re-enrollment.
@@ -2052,12 +2068,13 @@ export const tokenReportingFirstDay = sqliteTable('token_reporting_first_day', {
   provider: text('provider').notNull(),
   billing: text('billing').notNull(),
   model: text('model').notNull(),
+  harness: text('harness').notNull().default('unknown'),
   generation: text('generation').notNull(),
   input: integer('input').notNull(),
   output: integer('output').notNull(),
   cacheRead: integer('cache_read').notNull(),
   cacheWrite: integer('cache_write').notNull(),
-}, t => ({ pk: primaryKey({ columns: [t.provider, t.billing, t.model] }) }));
+}, t => ({ pk: primaryKey({ columns: [t.provider, t.billing, t.model, t.harness] }) }));
 
 /**
  * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选
