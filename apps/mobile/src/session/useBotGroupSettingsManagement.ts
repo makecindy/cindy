@@ -155,14 +155,18 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
   const editable = !loading && !!settings?.managerId && canManageBotGroup(settings.group) && !settings.group.dissolvedAt;
   // Settings reads skip `/actors`; the chat page already knows which computer runs each of your teammates.
   const homes = new Map(source.members.flatMap(member => member.homeDeviceId && member.actorId ? [[member.actorId, member.homeDeviceId] as const] : []));
-  const group = settings && homes.size ? { ...settings.group, members: settings.group.members.map(member =>
+  const read = settings && homes.size ? { ...settings.group, members: settings.group.members.map(member =>
     member.homeDeviceId === null && member.actorId && homes.has(member.actorId) ? { ...member, homeDeviceId: homes.get(member.actorId) } : member) }
     : settings?.group;
-  // Without a settings read of its own (e.g. offline), the sheet shows the chat page's group, with the newest
-  // 「群里的 Cindy」 value this account has read for it rather than the chat page's possibly older one. Read-only:
-  // writes still need this opening's own settings read.
-  const known = !group && source.supportsGroupAssistant && source.selfActorId ? api.client.knownGroupAssistant(source.id, source.selfActorId) : undefined;
-  const shown = group ?? (known === undefined ? source : { ...source, assistantEnabled: known });
+  // 「群里的 Cindy」 shows the newest value this account has read for the group, whatever the shown data carries: a
+  // settings read kept while the next one loads, a chat page copy that is older or restored without the server's
+  // capabilities. Without a settings read of its own (loading, or failed e.g. offline) the sheet shows the chat page's
+  // group. Display only: writes still need this opening's own settings read. Every case: bot-group-mobile-direct-settings.md.
+  const known = api.client.knownGroupAssistant(source.id);
+  const withKnown = (data: BotGroupRemoteChatData) => known === null ? { ...data, supportsGroupAssistant: false }
+    : known === undefined ? data : { ...data, supportsGroupAssistant: true, assistantEnabled: known };
+  const group = read && withKnown(read);
+  const shown = group ?? withKnown(source);
   return { group, shown, act, invite, refresh, loading, editable, ready: !loading && !!settings,
     reason: loading ? null : own && state.failed ? 'unavailable' as const : editable ? null : 'permission' as const };
 }

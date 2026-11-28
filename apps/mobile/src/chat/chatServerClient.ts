@@ -928,9 +928,15 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (Number.isSafeInteger(room.revision) && (!known || room.revision >= known.revision)) rooms.set(key, { revision: room.revision, assistant: room.assistant !== false });
       return { assistantEnabled: rooms.get(key)?.assistant ?? room.assistant !== false };
     },
-    /** The newest value read for a group, without a read of its own (e.g. settings shown offline). */
-    knownGroupAssistant: (roomId: string, self: string): boolean | undefined =>
-      supportsGroupAssistant ? account.groupAssistant?.get(`${self}\n${roomId}`)?.assistant : undefined,
+    /** The newest value this account has read for a group, looked up by the account's own verified actor and the
+     * room only, never by what a view carries. `null`: the account's latest `/me` says the server has no switch;
+     * `undefined`: nothing known (no `/me` read yet in this account session, or no value read for the room). */
+    knownGroupAssistant(roomId: string): boolean | null | undefined {
+      const known = account.known;
+      if (!known) return undefined;
+      if (known.capabilities?.groupAssistant !== 1) return null;
+      return account.groupAssistant?.get(`${known.id}\n${roomId}`)?.assistant;
+    },
     lifecycleCapabilities: () => ({ supportsPersonalMentionHistory, supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsGroupAssistant, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([

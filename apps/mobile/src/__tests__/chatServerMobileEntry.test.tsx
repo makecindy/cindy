@@ -371,6 +371,56 @@ it('shows the newest group Cindy value read online when direct settings reopen o
   expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'PATCH')).toBe(false);
 });
 
+// Review on #13593 (unit, direct entry): a group opened from the phone's saved copy has no server capabilities
+// until the chat page's own refresh lands. Settings read online (revision 2, off) and reopened offline then hid
+// the row, because the fallback asked the chat page's copy whether the server has the switch. The known value
+// is looked up by account, own actor and group alone.
+it('shows the group Cindy value read by settings when the chat page is still a saved copy without capabilities', async () => {
+  const admin = { id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'admin', avatar: null };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  const me = { actor: { id: self, kind: 'human' }, capabilities: { groupAssistant: 1 }, groupAssistantActorId: '00000000-0000-4000-8000-000000000020' };
+  let offline = false;
+  let server = { ...room, revision: 1, assistant: true };
+  let identity: Promise<unknown> | undefined;
+  let stall = false;
+  h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
+    if (offline) throw new Error('NETWORK_ERROR');
+    if (path === '/v1/me') return identity ?? me;
+    if (path.endsWith('/snapshot')) return { room: server, members: [admin], messages: [], cursor: '1' };
+    // The chat page's own refresh does not finish yet; only the settings read (snapshot and /me) gets through.
+    if (stall) return new Promise(() => {});
+    if (path.endsWith('/members')) return [admin];
+    return original(path, options);
+  });
+  let open = false;
+  let settings!: ReturnType<typeof useBotGroupSettingsManagement>;
+  function Sheet({ group }: { group: Parameters<typeof useBotGroupSettingsManagement>[0] }) { settings = useBotGroupSettingsManagement(group, open); return null; }
+  function Screen() { chat = useBotGroupChat(host, id); return chat.state.kind === 'ready' ? createElement(Sheet, { group: chat.state.group }) : null; }
+  // A first visit saves the group to disk; signing in again starts a new account session with nothing in memory.
+  await render(Screen);
+  await vi.waitFor(() => expect(chat.state).toMatchObject({ kind: 'ready', group: { revision: 1, assistantEnabled: true } }));
+  await act(async () => { root!.unmount(); root = undefined; });
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  server = { ...server, revision: 2, assistant: false };
+  let identified!: (value: unknown) => void;
+  identity = new Promise(resolve => { identified = resolve; });
+  stall = true;
+  await render(Screen);
+  await vi.waitFor(() => expect(chat.state).toMatchObject({ kind: 'ready', group: { revision: 1 } }));
+  expect(chat.state.kind === 'ready' && chat.state.group.supportsGroupAssistant).not.toBe(true);
+  await act(async () => { identified(me); identity = undefined; });
+  open = true; await render(Screen);
+  await vi.waitFor(() => expect(settings?.ready).toBe(true));
+  expect(settings).toMatchObject({ editable: true, group: { revision: 2, assistantEnabled: false } });
+  expect(chat.state.kind === 'ready' && chat.state.group.supportsGroupAssistant).not.toBe(true);
+  open = false; await render(Screen);
+  offline = true; open = true; await render(Screen);
+  await vi.waitFor(() => expect(settings.reason).toBe('unavailable'));
+  expect(settings).toMatchObject({ group: undefined, editable: false, shown: { supportsGroupAssistant: true, assistantEnabled: false } });
+  await act(async () => { await expect(settings.act('set-assistant', { assistant: true })).rejects.toThrow('PERMISSION_DENIED'); });
+  expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'PATCH')).toBe(false);
+});
+
 // Integration tier: real hook, real disk store, controlled native IO / HTTP.
 it('reopens saved history offline from memory and disk, and purges it after membership loss', async () => {
   setMobileAuthOwner('owner'); showChat = true; await render();

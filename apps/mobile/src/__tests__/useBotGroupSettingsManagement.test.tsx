@@ -167,10 +167,10 @@ it('withdraws an owned companion as that actor without granting removal of other
 it('switches the group Cindy as a manager only on servers with groupAssistant', async () => {
   snapshot.room.assistant = false;
   let me: Record<string, unknown> = {};
-  let offline = false;
+  let offline = false, snapshotDown = false;
   const original = request.getMockImplementation()!;
   request.mockImplementation(async (path, method, body, actor) => {
-    if (offline) throw new Error('NETWORK_ERROR');
+    if (offline || (snapshotDown && path.endsWith('/snapshot'))) throw new Error('NETWORK_ERROR');
     if (path === '/me') return { actor: { id: id(2), kind: 'human' }, ...me };
     const saved = await original(path, method, body, actor);
     if (method === 'PATCH' && body.assistant !== undefined) snapshot.room.assistant = body.assistant;
@@ -201,6 +201,32 @@ it('switches the group Cindy as a manager only on servers with groupAssistant', 
   offline = true; h.enabled = true; await render();
   await act(async () => { await Promise.resolve(); });
   expect(result).toMatchObject({ group: undefined, editable: false, reason: 'unavailable', shown: { revision: 4, assistantEnabled: true } });
+  // The server stops offering the switch (its /me says so) while the settings read fails: the row goes, although
+  // the chat page's older copy still carries the flag.
+  h.enabled = false; await render();
+  offline = false; snapshotDown = true; me = {}; h.enabled = true; await render();
+  await act(async () => { await Promise.resolve(); }); await render();
+  expect(result).toMatchObject({ group: undefined, reason: 'unavailable', shown: { supportsGroupAssistant: false } });
+});
+
+// Review on #13593: while settings read again (a write's read-back, or the chat page moved on), the sheet keeps the
+// previous read on screen. Its 「群里的 Cindy」 value is the newest the account has read, not the one frozen in it.
+it('shows the newest group Cindy value while the settings read again', async () => {
+  snapshot.room.assistant = false;
+  let hold: Promise<never> | undefined;
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (path, method, body, actor) => {
+    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupAssistant: 1 }, groupAssistantActorId: id(20) };
+    if (hold && path.endsWith('/snapshot')) return hold;
+    return original(path, method, body, actor);
+  });
+  await render(); await act(async () => { await result.refresh(); });
+  expect(result.group).toMatchObject({ revision: 4, assistantEnabled: false });
+  // The chat page reads the room at revision 6 (on); the settings' own re-read does not finish yet.
+  h.api.client.groupAssistant({ ...snapshot.room, revision: 6, assistant: true }, id(2));
+  hold = new Promise<never>(() => {});
+  source = { ...source, revision: 6 }; await render();
+  expect(result).toMatchObject({ loading: true, editable: false, group: { revision: 4, assistantEnabled: true } });
 });
 
 it('selects only an owned manager, never a foreign owner', async () => {

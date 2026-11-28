@@ -478,9 +478,12 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     }
     return saved;
   })();
-  const [state, setState] = useJsonSnapshotState<{ identity: string; value: BotGroupChatState; online: boolean; verified: boolean; loadingOlder: boolean }>(() => ({ identity,
-    value: cached ? { kind: 'ready', group: chatGroupView(cached.page, cached.self, cached.actors, 'group') } : { kind: 'loading' },
-    online: true, verified: false, loadingOlder: false }));
+  const [state, setState] = useJsonSnapshotState<{ identity: string; value: BotGroupChatState; online: boolean; verified: boolean; loadingOlder: boolean }>(() => {
+    // Not built through `view`, but the account's copy may be newer than anything read here: record its 群里的 Cindy value.
+    if (cached) api.client.groupAssistant(cached.page.snapshot.room, cached.self);
+    return { identity, value: cached ? { kind: 'ready', group: chatGroupView(cached.page, cached.self, cached.actors, 'group') } : { kind: 'loading' },
+      online: true, verified: false, loadingOlder: false };
+  });
   const page = useRef<{ identity: string; page: ChatPage; self: string; actors: ChatActor[] } | null>(cached ? { identity, ...cached } : null);
   const accessGeneration = useRef(0);
   const deferredMetadataVersion = useRef(0);
