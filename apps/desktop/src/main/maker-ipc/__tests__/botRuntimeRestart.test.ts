@@ -14,7 +14,9 @@ afterEach(() => vi.useRealTimers());
 
 function harness() {
   return {
+    ensureQueueRestored: vi.fn(async () => {}),
     stopInput: vi.fn(),
+    flushStopPersistence: vi.fn(async () => {}),
     withSessionLock: async <T>(_id: string, run: () => Promise<T>) => run(),
     rebuild: vi.fn(async (_id: string, assertCurrent: () => void) => assertCurrent()),
     onClosed: vi.fn(),
@@ -123,6 +125,109 @@ describe('Bot runtime restart', () => {
     closed();
     await vi.advanceTimersByTimeAsync(1);
     expect(commit).not.toHaveBeenCalled();
+    expect(deps.onClosed).not.toHaveBeenCalled();
+  });
+
+  it('persists the stop cause before rebuilding so a restart never completes without it', async () => {
+    // #7534:「重启伙伴」按住的队列必须先把暂停来源落盘,再重建运行时。
+    // 顺序反了的话,重启报成功时快照里还没有暂停来源,进程随后退出就会把它
+    // 当成崩溃恢复暂停,外部投递会重放用户已经收手的请求。
+    const deps = harness();
+    const order: string[] = [];
+    deps.flushStopPersistence.mockImplementation(async () => { order.push('flush'); });
+    deps.rebuild.mockImplementation(async (_id, assertCurrent) => {
+      order.push('rebuild');
+      assertCurrent();
+    });
+    await restartBotRuntime('canonical', vi.fn(), deps);
+    expect(order).toEqual(['flush', 'rebuild']);
+  });
+
+  it('restores the queue before stopping so the stop cause can be persisted at all', async () => {
+    // #7512 review P1:未恢复的会话上 stop 只能标内存态,maybePersistQueueSnapshot
+    // 因「未恢复不写」早退,flush 空转 —— 重启报成功而快照里没有暂停来源。
+    // 与 explicitStopImpl 同序:恢复 → stop → 落盘。
+    const deps = harness();
+    const order: string[] = [];
+    deps.ensureQueueRestored.mockImplementation(async () => { order.push('restore'); });
+    deps.stopInput.mockImplementation(() => { order.push('stop'); });
+    deps.flushStopPersistence.mockImplementation(async () => { order.push('flush'); });
+    deps.rebuild.mockImplementation(async (_id, assertCurrent) => {
+      order.push('rebuild');
+      assertCurrent();
+    });
+    await restartBotRuntime('canonical', vi.fn(), deps);
+    expect(order).toEqual(['restore', 'stop', 'flush', 'rebuild']);
+  });
+
+  it('fences sends and bounds a stalled queue restore before stopping input', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：restartBotRuntime + withSessionRestartLock；快照恢复挂起时，新发送被拒绝且重启 30 秒内失败。
+    // - Bug／规则依据：#7512 Codex P2，重启 fence 与超时必须覆盖队列恢复。
+    // - 现有覆盖缺口：既有超时用例只挂在 rebuild，未覆盖 restore 尚未完成的窗口。
+    // - 最小失败输入：ensureQueueRestored 不结束，同时尝试向同一 session 发送。
+    // - tier：unit；通过真实 restart lock 和注入的挂起恢复依赖验证时序。
+    // - 实测耗时：4.74s wall（单文件 Vitest）。
+    vi.useFakeTimers();
+    const deps = harness();
+    let finishRestore!: () => void;
+    let enteredRestore!: () => void;
+    const restoreEntered = new Promise<void>((resolve) => { enteredRestore = resolve; });
+    let lockSettled!: () => void;
+    const restartLockSettled = new Promise<void>((resolve) => { lockSettled = resolve; });
+    deps.ensureQueueRestored.mockImplementation(async () => {
+      enteredRestore();
+      await new Promise<void>((resolve) => { finishRestore = resolve; });
+    });
+    deps.withSessionLock = async (id, run) => {
+      try {
+        return await withSessionRestartLock(id, run);
+      } finally {
+        lockSettled();
+      }
+    };
+
+    const operation = restartBotRuntime('restore-hung', vi.fn(), deps);
+    const failed = expect(operation).rejects.toThrow('timed out');
+    await restoreEntered;
+    const send = vi.fn();
+    await expect(withSendToSessionLock('restore-hung', send)).rejects.toThrow(
+      'restart is still in progress',
+    );
+    const otherSend = vi.fn();
+    await withSendToSessionLock('other-bot', otherSend);
+    expect(otherSend).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await failed;
+    expect(deps.stopInput).not.toHaveBeenCalled();
+    expect(deps.flushStopPersistence).not.toHaveBeenCalled();
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    await expect(withSendToSessionLock('restore-hung', send)).rejects.toThrow(
+      'restart is still in progress',
+    );
+
+    finishRestore();
+    await restartLockSettled;
+    expect(deps.stopInput).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('fails the restart before stopping when the queue snapshot cannot be restored', async () => {
+    const deps = harness();
+    deps.ensureQueueRestored.mockImplementation(async () => { throw new Error('snapshot read failed'); });
+    await expect(restartBotRuntime('canonical', vi.fn(), deps)).rejects.toThrow('snapshot read failed');
+    expect(deps.stopInput).not.toHaveBeenCalled();
+    expect(deps.flushStopPersistence).not.toHaveBeenCalled();
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    expect(deps.onClosed).not.toHaveBeenCalled();
+  });
+
+  it('fails the restart when the stop cause cannot be persisted', async () => {
+    const deps = harness();
+    deps.flushStopPersistence.mockImplementation(async () => { throw new Error('snapshot write failed'); });
+    await expect(restartBotRuntime('canonical', vi.fn(), deps)).rejects.toThrow('snapshot write failed');
+    expect(deps.rebuild).not.toHaveBeenCalled();
     expect(deps.onClosed).not.toHaveBeenCalled();
   });
 
