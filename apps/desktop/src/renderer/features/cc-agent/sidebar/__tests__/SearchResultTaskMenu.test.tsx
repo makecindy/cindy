@@ -281,6 +281,7 @@ describe('SearchResultTaskMenu', () => {
       'rename',
       'muteNotifications',
       'copySessionLink',
+      'deliveryReceipt',
       'title',
       'moveToProject',
       'exportShare',
