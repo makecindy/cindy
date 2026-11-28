@@ -6,6 +6,7 @@
  * handler 时拉起 Electron / runtime config 副作用。
  */
 
+import { captureScheduledBillingRecovery } from '../scheduler-host/billingHolds.js';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import { createHash } from 'node:crypto';
@@ -183,6 +184,7 @@ async function readXaiCredentialsInfo(): Promise<{ accessToken: string } | null>
 }
 
 const xaiSubscriptionUsageReader = createXaiSubscriptionUsageReader({
+  captureBillingRecovery: () => captureScheduledBillingRecovery('xai'),
   readCredentials: readXaiCredentialsInfo,
   fetchSnapshot: (credentials) =>
     fetchXaiSubscriptionUsageSnapshot({
@@ -539,8 +541,8 @@ export function registerMakerUsageIpc(maker: Maker): void {
 
   // 订阅会话的 CLI 在会话里上报 SDK rate_limit_event → 落库 + 广播(maker-core 只对本机
   // Claude 订阅会话转发)。事件晚于登出 / 断开到达时丢弃,不复活刚清掉的快照。
-  setClaudeRateLimitInfoListener((info, account) => {
-    if (account) { observeSubscriptionAccountUsage(account, info); return; }
+  setClaudeRateLimitInfoListener((info, account, longLivedTokenVersion) => {
+    if (account) { observeSubscriptionAccountUsage(account, info, { claudeTokenVersion: longLivedTokenVersion }); return; }
     if (!hasClaudeNativeLogin()) return;
     const snapshot = parseClaudeSdkRateLimitInfo(info, Date.now());
     if (!snapshot) return;

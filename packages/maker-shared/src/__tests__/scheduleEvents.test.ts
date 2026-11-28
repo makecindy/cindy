@@ -124,6 +124,29 @@ describe('shared scheduler event projection', () => {
       runId: 'run-1',
       error: 'boom',
     }).runPatch.sessionId).toBeNull();
+    expect(projectScheduleEvent({
+      type: 'failed',
+      scheduleId: 'sched-1',
+      runId: 'run-quiet',
+      error: 'pre-run hook failed: rate limit',
+      sessionId: 'chat-1',
+      silenced: true,
+    })).toMatchObject({
+      event: {
+        type: 'failed',
+        scheduleId: 'sched-1',
+        runId: 'run-quiet',
+        sessionId: 'chat-1',
+        silenced: true,
+      },
+      refresh: {
+        runRefresh: { mode: 'schedule', scheduleId: 'sched-1' },
+        scheduleList: false,
+        sessionIndex: true,
+        unreadSummary: false,
+      },
+      unreadImpact: 'none',
+    });
   });
 
   it('routes skipped (pre-run hook) events without touching unread badges', () => {

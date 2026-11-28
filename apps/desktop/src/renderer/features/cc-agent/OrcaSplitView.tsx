@@ -10,6 +10,7 @@ import { X } from 'lucide-react';
 
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { cn } from '@/lib/utils';
 import { CCAgentSessionView } from './CCAgentSessionView';
@@ -76,21 +77,35 @@ export function OrcaSplitView({
 
   const leadAgentKind = normalizeOrcaDisplayAgentKind(leadSession?.agentKind);
   const leadVendor = orcaVendorForAgentKind(leadAgentKind);
+  const leadPluginIdentity = usePluginEngineIdentity(
+    leadAgentKind === 'acp' ? leadSession?.providerId : null,
+    leadSession?.agentDeviceId || leadSession?.deviceLinkDeviceId || undefined,
+  );
   const leadPaneLabel = t('orca.split.leadLabel', {
-    agent: orcaAgentLabel(leadAgentKind),
+    agent: orcaAgentLabel(leadAgentKind, leadPluginIdentity.name),
   });
   const leadPaneIcon = (
     <VendorIcon
       vendor={leadVendor}
       size={leadVendor === 'cc' ? 14 : 13}
       className="text-current"
+      iconDataUrl={leadAgentKind === 'acp' ? leadPluginIdentity.iconDataUrl : undefined}
     />
   );
   const workerAgentKind = normalizeOrcaDisplayAgentKind(
     selectedWorkerRecord?.agent ?? workerSession?.agentKind,
   );
+  const workerPluginIdentity = usePluginEngineIdentity(
+    workerAgentKind === 'acp'
+      ? (workerSession?.providerId ?? selectedWorkerRecord?.providerId)
+      : null,
+    workerSession?.agentDeviceId
+      ?? selectedWorkerRecord?.agentDeviceId
+      ?? workerSession?.deviceLinkDeviceId
+      ?? undefined,
+  );
   const workerPaneLabel = t('orca.split.workerLabel', {
-    agent: orcaAgentLabel(workerAgentKind),
+    agent: orcaAgentLabel(workerAgentKind, workerPluginIdentity.name),
   });
   const attention = useWorkerAttentionSnapshot();
   const agentIslandVisibleSessionIds = useMemo(() => {

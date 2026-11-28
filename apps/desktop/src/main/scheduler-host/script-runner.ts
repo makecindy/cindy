@@ -164,8 +164,12 @@ export class ScriptScheduleRunner {
   }
 
   async fire(schedule: Schedule, ctx: FireContext): Promise<FireResult> {
+    const hookState: {
+      quietFailure?: boolean;
+      preRunHookResult?: ScheduleRun['preRunHookResult'];
+    } = {};
     try {
-      return await this.fireInner(schedule, ctx);
+      return await this.fireInner(schedule, ctx, hookState);
     } catch (error) {
       // 用户主动 pause/delete 触发的中断不该发"失败"通知——engine 那侧本就会把
       // 这轮 run 记成 'aborted' 而非 'failed'(agent 模式 runner.ts 的 abort 路径
@@ -175,9 +179,14 @@ export class ScriptScheduleRunner {
       // 不代表这是我们的取消,按文本猜会把真实失败误吞成"已取消"而不通知
       // (codex review 三次发现:engine 侧那个 message 正则兜底,是因为它在事后
       // 才拿到 error 字符串、没有 signal 对象;这里有 signal 第一方引用,不需要
-      // 也不该退化到模糊匹配)。
-      if (!ctx.signal.aborted) {
-        await this.notifyFailure(schedule, ctx, error instanceof Error ? error.message : String(error));
+      // 也不该退化到模糊匹配)。静默期内的瞬时前置检查失败同样跳过外发通知。
+      if (!ctx.signal.aborted && !hookState.quietFailure) {
+        await this.notifyFailure(
+          schedule,
+          ctx,
+          error instanceof Error ? error.message : String(error),
+          hookState.preRunHookResult,
+        );
       }
       throw error;
     }
@@ -216,7 +225,11 @@ export class ScriptScheduleRunner {
     return null;
   }
 
-  private async fireInner(schedule: Schedule, ctx: FireContext): Promise<FireResult> {
+  private async fireInner(
+    schedule: Schedule,
+    ctx: FireContext,
+    hookState: { quietFailure?: boolean; preRunHookResult?: ScheduleRun['preRunHookResult'] },
+  ): Promise<FireResult> {
     const config = schedule.scriptConfig;
     if (schedule.executionMode !== 'script' || !config?.command.trim()) {
       throw new Error('script execution requires a non-empty command');
@@ -252,7 +265,8 @@ export class ScriptScheduleRunner {
           ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
         },
       }), schedule.preRunHook.command, this.deps.diagnosePreRunHookFailure);
-      await ctx.onPreRunHookCompleted?.(hook);
+      const hookOutcome = await ctx.onPreRunHookCompleted?.(hook);
+      hookState.preRunHookResult = hook;
       if (hook.aborted || ctx.signal.aborted) {
         this.deps.logger.info?.('[script-runner] pre-run hook aborted by pause/delete', {
           scheduleId: schedule.id,
@@ -275,6 +289,7 @@ export class ScriptScheduleRunner {
         };
       }
       if (hook.decision === 'block') {
+        hookState.quietFailure = hookOutcome?.quietFailure === true;
         const errMsg = formatPreRunHookFailure(hook);
         this.deps.logger.warn?.('[script-runner] pre-run hook failed; fail-closed (script blocked)', {
           scheduleId: schedule.id,
@@ -792,7 +807,12 @@ export class ScriptScheduleRunner {
     return result;
   }
 
-  private async notifyFailure(schedule: Schedule, ctx: FireContext, errMsg: string): Promise<void> {
+  private async notifyFailure(
+    schedule: Schedule,
+    ctx: FireContext,
+    errMsg: string,
+    preRunHookResult?: ScheduleRun['preRunHookResult'],
+  ): Promise<void> {
     if (!this.deps.notifier) return;
     const fauxRun: ScheduleRun = {
       id: ctx.runId,
@@ -801,6 +821,7 @@ export class ScriptScheduleRunner {
       finishedAt: Date.now(),
       status: 'failed',
       errorMsg: errMsg,
+      ...(preRunHookResult ? { preRunHookResult } : {}),
     };
     try {
       await this.deps.notifier.notify(schedule, fauxRun);

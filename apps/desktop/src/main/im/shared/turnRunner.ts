@@ -121,9 +121,9 @@ import type {
 import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
-import { hasBuiltinAgentKind } from '../../maker-host/engineKind';
 import { readImPluginEngine } from './pluginEngineCatalog';
 import { persistUserMessage } from '../messagePersistence';
+import { getModelGroupStartBridge } from '../../model-groups/startBridge.js';
 import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
 import { buildImUserMessage } from './inboundMessage';
@@ -407,6 +407,8 @@ interface QueuedSend {
   onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
   /** 调用方在拼群上下文之前已落库的 user 行(见 ImRunAgentTurnArgs 同名字段)。 */
   prePersistedUserMessage?: { sessionId: string; clientId: string };
+  /** 个人机器人的群成员轮次(deps.personalGuests): 渠道策略不可跳过。 */
+  guestCapped?: boolean;
 }
 
 type DetachDrainOutcome = 'rewire' | 'cancelled';
@@ -417,15 +419,14 @@ type DetachDrainOutcome = 'rewire' | 'cancelled';
  */
 type BuiltinMakerSession = MakerSession;
 
-
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
   preserveSessionConfig: boolean;
   waitingForAuthRetry?: boolean;
   /** Both cancel this channel's turn; only runtime disposal retires late replacements. */
   disposalIntent?: 'runtime' | 'observation';
-  /** Maker session (in-process), always on a built-in engine (see IM_CHANNEL_FEATURE). */
-  makerSession: BuiltinMakerSession;
+  /** Maker session (in-process), supports built-in engines and plugin ACP engines. */
+  makerSession: MakerSession;
   /** 渠道 user id of the bot's owner — kept here so listeners can address replies. */
   userId: string;
   /** 当前 session 的受管工作目录；本地生成图片仅允许从这里物化。 */
@@ -561,7 +562,7 @@ function companionUnavailableReason(unavailable: CompanionRouteUnavailable): str
 
 type DefaultRouteTargetResolution =
   | { target: RouteTarget; missingAuth?: never }
-  | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: AgentKind; model: string } };
+  | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: EngineKind; model: string } };
 
 export interface ImRunAgentTurnArgs {
   /** Revalidate the ingress lease immediately before provider start, including internally queued sends. */
@@ -713,6 +714,7 @@ export interface ImTurnRunner {
     text: string;
     attachments?: readonly IMAttachment[];
     protectedContent?: boolean;
+    requesterIsOwner?: boolean;
     messageOrigin?: ImMessageOrigin;
   }) => Promise<{ sessionId: string; clientId: string } | null>;
   /**
@@ -737,6 +739,8 @@ export interface ImTurnRunner {
   prewireAttachedSession(botContextId: string, userId: string, scopeKey?: string): Promise<void>;
   /** 接管 detach 清理(原 detachFeishuFromSession)— binding cleanup hook 调用。 */
   detachFromSession(sessionId: string): void;
+  /** 这个渠道此刻是否有正在执行、排队、接线或仍在回传中的消息(切「谁来回复」前用于拦截)。 */
+  hasActiveWork(): boolean;
   disposeAllSessions(): Promise<void>;
   detachIdleCompanionGroup(botContextId: string, chatId: string): void;
   disposeOneSession(sessionId: string): Promise<void>;
@@ -767,7 +771,6 @@ export interface ImTurnRunner {
    * 未接线 / 接管 / 通知回复任务返回 undefined。
    */
   vendorOptionsForSession(sessionId: string): Record<string, unknown> | undefined;
-  /** Permission choices exposed by the session's concrete Agent implementation. */
   /**
    * The task's permission menu. A plugin-engine task (agentKind 'acp') offers its engine's own modes: the
    * live session's negotiated modes, then its execution computer's catalog. Only local tasks use
@@ -806,8 +809,7 @@ function routeOfRow(
 ): ImDefaultRoute {
   return {
     agentDeviceId: row.agentDeviceId ?? null,
-    // Channel default routes are built-in; a plugin-engine row ('acp') simply never matches one.
-    agentKind: row.agentKind as AgentKind,
+    agentKind: row.agentKind,
     model: row.model,
     providerId: row.providerId,
     effort: row.effort,
@@ -839,6 +841,12 @@ export interface ImTurnRunnerDeps {
     sessionId: string,
     retry?: { userClientId: string; onHandoff(full: string, forRetry: string): void },
   ) => Promise<void>;
+  /**
+   * 设置页那份个人机器人(由 Cindy 自己回复时)的群成员轮次(「群成员也能提问」, guestGate.ts):
+   * 每个任务最多排队 `queueLimit` 条群成员的提问, 再多的不回答; 不进主人 `/ctr` 接管的桌面任务;
+   * 渠道的群轮次策略不因会话是完全访问而被跳过(最高按自动审批)。伙伴连接不传。
+   */
+  personalGuests?: { queueLimit: number };
 }
 
 export function createTurnRunner(
@@ -1111,19 +1119,21 @@ export function createTurnRunner(
     botContextId: string,
     userId: string,
     scopeKey?: string,
+    opts: { skipBinding?: boolean } = {},
   ): Promise<RouteTarget | null> {
-    return routeTargetOnly(await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey));
+    return routeTargetOnly(await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, opts));
   }
 
   async function resolveExistingRouteOrUnavailable(
     botContextId: string,
     userId: string,
     scopeKey?: string,
-    opts: { createCompanion?: boolean } = {},
+    opts: { createCompanion?: boolean; skipBinding?: boolean } = {},
   ): Promise<RouteTarget | CompanionRouteUnavailable | null> {
     // 优先查 binding 是否命中 — bindingStore.get 走进程内 Map, 同步且 O(1)。
     // threadScoped 渠道的 binding 按 (identity, scopeKey) 维度存(多重接管)。
-    const targetSessionId = bindingStore.get({
+    // 个人机器人的群成员轮次不进主人 `/ctr` 接管的桌面任务, 落在群自己的任务上。
+    const targetSessionId = opts.skipBinding ? undefined : bindingStore.get({
       channel,
       botContextId,
       userId,
@@ -1202,6 +1212,11 @@ export function createTurnRunner(
     return dispatchAgentTurnInternal(args);
   }
 
+  function isPersonalGuest(args: Pick<ImRunAgentTurnArgs, 'botContextId' | 'userId' | 'requesterIsOwner' | 'notificationSessionId'>): boolean {
+    return deps.personalGuests !== undefined && args.requesterIsOwner !== true
+      && !args.notificationSessionId && !companionBotIdFor(args.botContextId, args.userId);
+  }
+
   async function dispatchAgentTurnInternal(
     args: ImRunAgentTurnArgs & {
       queueMode: 'internal' | 'external';
@@ -1209,12 +1224,20 @@ export function createTurnRunner(
     },
   ): Promise<ImTurnDispatch> {
     const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
+    // 个人机器人的群成员轮次(交给伙伴回复时按伙伴规则, 不算)。
+    const guestCapped = isPersonalGuest(args);
+    // 群成员的轮次必须带渠道的群轮次策略(最高自动审批); 渠道漏挂时不按会话档位放行。
+    if (guestCapped && !args.turnPermissionPolicy) {
+      log.warn(`dropped group member turn without a permission policy channel=${channel}`);
+      await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
+      return { kind: 'rejected', reason: 'guest_policy_missing' };
+    }
 
     // 路由分流 — 先查 binding: 命中走 desktop session (接管模式 C),
     // 未命中走渠道默认 session (B' 行为)。这是 /ctr 接管能生效的关键入口。
     const routed = args.notificationSessionId
       ? await resolveNotificationTarget(args.notificationSessionId, scopeKey)
-      : await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, { createCompanion: true });
+      : await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, { createCompanion: true, skipBinding: guestCapped });
     if (routed && 'kind' in routed) {
       // 伙伴连接上伙伴解析不出: 与已有专线的发送前守卫同一口径拒绝, 不建渠道自己的任务。
       const notice = companionUnavailableText(routed);
@@ -1245,6 +1268,16 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'missing_auth' };
       }
       target = created.target;
+    }
+    // 同一个群最多排队 personalGuests.queueLimit 条群成员的提问, 再多的不回答(静默, 同微信插件)。
+    if (guestCapped) {
+      const queuedGuests = sessionStates.get(target.row.id)?.sendQueue
+        .filter((item) => item.guestCapped === true).length ?? 0;
+      if (queuedGuests >= deps.personalGuests!.queueLimit) {
+        log.info(`dropped group member turn: queue full session=${target.row.id.slice(-8)}`);
+        await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
+        return { kind: 'busy', reason: 'guest_queue_full' };
+      }
     }
     // A cold companion task must reconcile its saved model before starting an
     // agent. Otherwise a disconnected old provider can prevent both wiring and
@@ -1347,6 +1380,9 @@ export function createTurnRunner(
     cold?: { row: ImSessionRow; release(): void },
   ): Promise<ImTurnDispatch> {
     const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
+    // 个人机器人的群成员轮次(落在伙伴任务上的按伙伴规则): 排队时记下, 渠道策略不可跳过。
+    const guestCapped = deps.personalGuests !== undefined && args.requesterIsOwner !== true
+      && !args.notificationSessionId && !target.botOwned;
     // Keep the entry row for title/new-conversation decisions; use the refreshed execution
     // row for authentication and wiring after a recovery clears its native id.
     const row = target.row;
@@ -1649,6 +1685,7 @@ export function createTurnRunner(
     if (args.protectedContent !== true) await adoptStagedInboundFiles(row.id, attachments);
     const autoReviewReferences = imAutoReviewReferences({
       attachments,
+      contextAttachments: args.contextAttachments,
       replyContext: args.replyContext,
     });
     const item: QueuedSend = {
@@ -1679,6 +1716,7 @@ export function createTurnRunner(
         && args.requesterIsOwner === true && target.botOwned)
         ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
       ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),
+      ...(guestCapped ? { guestCapped: true } : {}),
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
@@ -1842,7 +1880,7 @@ export function createTurnRunner(
   async function resolveEffectiveTurnPolicy(
     item: QueuedSend,
   ): Promise<TurnPermissionPolicy | undefined> {
-    if (!item.turnPermissionPolicy || !adapter.turnPolicyOptionalForMode) {
+    if (!item.turnPermissionPolicy || !adapter.turnPolicyOptionalForMode || item.guestCapped === true) {
       return item.turnPermissionPolicy;
     }
     try {
@@ -2293,13 +2331,11 @@ export function createTurnRunner(
           // 别的 session(/new 重置等), 那份预落库不属于本轮, 照常自己落一条。
           const persisted = await persistAcceptedInput(item);
           if (persisted) {
+            getModelGroupStartBridge()?.dispatched(rowId, persisted.clientId);
             item.prePersistedUserMessage = { sessionId: rowId, clientId: persisted.clientId };
             if (item.channelToolScope) item.channelToolScope.inputClientId = persisted.clientId;
-            // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
-            if (hasBuiltinAgentKind(state.makerSession)) {
-              await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
-              turnChangeSetStarted = true;
-            }
+            await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
+            turnChangeSetStarted = true;
           }
         },
       });
@@ -2449,6 +2485,7 @@ export function createTurnRunner(
   }
 
   function effectiveRuntimeAuthRow(row: ImSessionRow): ImSessionRow {
+    if (row.agentKind === 'acp') return row;
     const profile = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
     return { ...row, model: profile.model ?? row.model,
       providerId: profile.providerId === undefined ? row.providerId : profile.providerId };
@@ -2512,7 +2549,7 @@ export function createTurnRunner(
         agentKind,
         workingDir: row.workingDir,
         model: row.model,
-        effort: row.effort,
+        ...(row.effort ? { effort: row.effort } : {}),
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
@@ -2611,7 +2648,7 @@ export function createTurnRunner(
   }
 
   /** Rebind observation without discarding accepted or queued IM messages. */
-  function rebindSessionOutput(state: SessionState, current: BuiltinMakerSession, userId: string): void {
+  function rebindSessionOutput(state: SessionState, current: MakerSession, userId: string): void {
     for (const unsubscribe of state.unsubscribers) {
       try {
         unsubscribe();
@@ -2773,7 +2810,7 @@ export function createTurnRunner(
 
   async function replyMissingAuth(
     userId: string,
-    auth: ImAuthRouteStatus & { agentKind: AgentKind; model: string },
+    auth: ImAuthRouteStatus & { agentKind: EngineKind; model: string },
     scopeKey?: string,
     attached = false,
   ): Promise<void> {
@@ -2858,12 +2895,16 @@ export function createTurnRunner(
     // routingTransform)读它决定走哪个供应商上游/钥匙。进程重启后 IM turn 首次起会话时,
     // 内存 store 是空的;不 hydrate 的话 /model 选过的供应商会丢、回落默认路由。对齐
     // renderer 开会话(register.ts)与 scheduler(runner.ts)的 hydrate 时机。
-    const startOverride = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
-    hydrateSessionProvider(row.id, startOverride.providerId === undefined ? row.providerId : startOverride.providerId);
-    // bridge 会话态(effort / fast)同点 hydrate —— chatgpt/ / xai/ 模型经 IM 触发 turn 时,
-    // compat-proxy 路由决策从这两个 store 读出闭包进订阅 handler(与 register.ts bootstrapSession 对齐)。
-    setSessionEffort(row.id, startOverride.model ? startOverride.effort : row.effort);
-    setSessionFastMode(row.id, startOverride.fastMode ?? row.fastMode ?? false);
+    const startOverride = row.agentKind === 'acp'
+      ? {}
+      : getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
+    if (row.agentKind !== 'acp') {
+      hydrateSessionProvider(row.id, startOverride.providerId === undefined ? row.providerId : startOverride.providerId);
+      // bridge 会话态(effort / fast)同点 hydrate —— chatgpt/ / xai/ 模型经 IM 触发 turn 时,
+      // compat-proxy 路由决策从这两个 store 读出闭包进订阅 handler(与 register.ts bootstrapSession 对齐)。
+      setSessionEffort(row.id, startOverride.model ? startOverride.effort : (row.effort || undefined));
+      setSessionFastMode(row.id, startOverride.fastMode ?? row.fastMode ?? false);
+    }
     // 接管路径: 必须传 resumeSessionId 让 Claude SDK 用 desktop 留下的 sdkSessionId
     // resume, 否则 maker.activeSessions 没该 row.id 时会 spawn 全新空会话——oneshot
     // "总结当前状态" 就变成总结空会话, agent 输出短促/无内容; 用户看到渠道卡片
@@ -2874,7 +2915,7 @@ export function createTurnRunner(
       agentKind: row.agentKind,
       workingDir: row.workingDir,
       model: row.model,
-      effort: row.effort,
+      ...(row.effort ? { effort: row.effort } : {}),
       permissionMode: row.permissionMode,
       fastMode: row.fastMode,
       // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
@@ -4673,16 +4714,14 @@ export function createTurnRunner(
               item.channelToolScope.inputClientId = inputClientId;
             }
             const anchorClientId = persisted?.clientId ?? replyTargetClientId;
-            if (anchorClientId && hasBuiltinAgentKind(state.makerSession)) {
+            if (anchorClientId) {
               await beginTurnChangeSetAtDispatch(state.makerSession, anchorClientId);
               retryTurnChangeSetStarted = true;
             }
           } else if (replyTargetClientId) {
             if (item.channelToolScope) item.channelToolScope.inputClientId = replyTargetClientId;
-            if (hasBuiltinAgentKind(state.makerSession)) {
-              await beginTurnChangeSetAtDispatch(state.makerSession, replyTargetClientId);
-              retryTurnChangeSetStarted = true;
-            }
+            await beginTurnChangeSetAtDispatch(state.makerSession, replyTargetClientId);
+            retryTurnChangeSetStarted = true;
           }
         },
       });
@@ -5392,10 +5431,13 @@ export function createTurnRunner(
     text: string;
     attachments?: readonly IMAttachment[];
     protectedContent?: boolean;
+    requesterIsOwner?: boolean;
     messageOrigin?: ImMessageOrigin;
   }): Promise<{ sessionId: string; clientId: string } | null> {
     // 受保护群的触发消息永不进存档(与 onAccepted 同一条边界)。
     if (args.protectedContent === true) return null;
+    // Persist guest input only after dispatch validates its permission policy and group route.
+    if (isPersonalGuest(args)) return null;
     if (args.text.length === 0 && (args.attachments?.length ?? 0) === 0) return null;
     let target: RouteTarget | null;
     try {
@@ -5650,6 +5692,21 @@ export function createTurnRunner(
     getAuthStatusForRoute: (row) => checkImRouteAuthDetailed(row, undefined, authCheckDeps()),
     prewireAttachedSession,
     detachFromSession,
+    hasActiveWork() {
+      if (wiringInFlight.size > 0 || runtimePreparations.size > 0) return true;
+      for (const state of sessionStates.values()) {
+        if (
+          state.queue.length > 0 ||
+          state.sendQueue.length > 0 ||
+          state.scheduledTranspond !== null ||
+          state.pendingTranspondFinals > 0 ||
+          state.dispatchRetryTimer !== null
+        ) {
+          return true;
+        }
+      }
+      return false;
+    },
     disposeAllSessions,
     detachIdleCompanionGroup(botContextId, chatId) {
       if (bindingStore.get({ channel, botContextId, userId: chatId })) throw new Error('GROUP_HAS_TASK_BINDING');

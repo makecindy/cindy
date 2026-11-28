@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError, providerShareHostPeer, REMOTE_AGENT_CHANNEL } from '@cindy/device-link';
 import { createResponsivenessTracker } from '../../main/device-link/responsivenessTracker';
 import { ensureInvokeLinkReady } from '../../main/device-link/linkRecovery';
-import { canRecoverUndeliveredOrcaReport, probeSharedTask, sharedTaskFailureReason, sharedTaskRecoveryError } from '../sharedTaskRecovery.js';
+import { canRecoverUndeliveredOrcaReport, canSwitchSharedHistoryOnRestoreFailure, probeSharedTask, sharedTaskFailureReason, sharedTaskRecoveryError, sharedTaskRecoveryStage } from '../sharedTaskRecovery.js';
 
 // Unit: the actual probe runner must survive a short outage without repeating
 // allocation/open/send. Earlier coverage did not exercise delayed recovery or
@@ -242,5 +242,34 @@ describe('shared task bounded diagnostic cause', () => {
     expect(error.cause).toEqual({ reason: 'unknown' });
     expect(error.message).toContain('[SHARED_TASK_RECOVERY_unknown]');
     expect(error.message).not.toMatch(/PRIVATE_CODE|private|https/);
+  });
+
+  // Unit, direct-execution §7: historical restore failures on M (not O or
+  // share/model/policy refusals) may ask O for an in-group context-handoff switch.
+  it.each([
+    ['authorization', 'unknown', true],
+    ['capability', 'offline', true],
+    ['executor', 'timeout', true],
+    ['allocation', 'history', true],
+    ['allocation', 'capacity', true],
+    ['authorization', 'authorization', true],
+    ['owner', 'offline', false],
+    ['owner', 'authorization', false],
+    ['allocation', 'denied', false],
+    ['allocation', 'model', false],
+    ['allocation', 'policy', false],
+  ] as const)('classifies %s/%s restore failure for in-group switch: %s', (stage, reason, expected) => {
+    const error = sharedTaskRecoveryError(stage, reason);
+    expect(sharedTaskRecoveryStage(error.message)).toBe(stage);
+    expect(canSwitchSharedHistoryOnRestoreFailure(error)).toBe(expected);
+  });
+
+  it.each([
+    '[REMOTE_AGENT_SHARE_PAUSED] paused',
+    '[REMOTE_AGENT_SHARE_REMOVED] removed',
+    '[REMOTE_AGENT_SHARE_LEGACY_DISABLED] legacy',
+    'plain runtime error',
+  ])('never switches within the group for non-recovery or share-state error: %s', message => {
+    expect(canSwitchSharedHistoryOnRestoreFailure(new Error(message))).toBe(false);
   });
 });

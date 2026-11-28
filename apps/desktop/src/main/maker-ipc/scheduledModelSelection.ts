@@ -1,3 +1,4 @@
+import { ScheduledModelSelectionBusyError } from './modelSelectionBusyError.js';
 import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import { actualSourceIdForModel, connectedProvidersForAgent, effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import { isDisallowedPluginEngineDeviceId } from './pluginEngineSessionAdmission';
@@ -149,7 +150,7 @@ export async function writeScheduledModelBaselineIfProfileCurrent(
   return result.changes === 1;
 }
 
-export class ScheduledModelSelectionBusyError extends Error {}
+export { ScheduledModelSelectionBusyError };
 
 /** Settle a registered route under the caller's send lease before capturing its baseline.
  * Reuses the pending-switch path from PR #9680; unresolved state uses the runner's
@@ -205,15 +206,6 @@ export function assertScheduledHarnessSupported(
     throwIpcError('SSH_HARNESS_SWITCH_UNSUPPORTED', 'SSH automation targets must keep their current Harness');
   }
   if (target.agentKind === 'acp' || agentKind === 'acp') {
-    if (target.source === 'bot') {
-      throwIpcError('UNSUPPORTED_CAPABILITY', 'Teammate routines cannot switch to or from a plugin engine');
-    }
-    if (target.orcaRole || target.orcaRemoteLead) {
-      throwIpcError('UNSUPPORTED_CAPABILITY', 'Collaborative tasks cannot switch to or from a plugin engine');
-    }
-    if (target.source && target.source !== 'desktop' && target.source !== 'scheduler') {
-      throwIpcError('UNSUPPORTED_CAPABILITY', 'This task cannot switch to or from a plugin engine');
-    }
     if (target.agentKind === 'acp' && isDisallowedPluginEngineDeviceId(target.agentDeviceId)) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'This plugin engine task location cannot be used for scheduled tasks');
     }

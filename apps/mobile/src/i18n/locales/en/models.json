@@ -149,9 +149,17 @@
     "picker": {
       "switched": "“{{name}}” switched this task to {{model}}",
       "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
-      "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected."
+      "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected.",
+      "managedBy": "Managed by “{{name}}”",
+      "detach": "Detach",
+      "detached": "Detached from smart routing. Keeping the current model."
     },
-    "anotherDevice": "Another computer"
+    "anotherDevice": "Another computer",
+    "sourceRouteTitle_one": "{{name}} · Smart Route ({{count}} source)",
+    "sourceRouteTitle_other": "{{name}} · Smart Route ({{count}} sources)",
+    "switchOffer": {
+      "button": "Switch to {{model}} & continue"
+    }
   },
   "pluginEngines": {
     "genericName": "Plugin engine",

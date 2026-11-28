@@ -11,7 +11,6 @@ import type { Capabilities, CapabilityStatus, EffortDescriptor, ModelDescriptor,
 import type { Effort, PermissionMode } from '../../types/common.js';
 import type { AcpConfigOption, AcpInitializeResult } from './protocol.js';
 
-const NOT_IMPLEMENTED: CapabilityStatus = { supported: false, reason: 'not-implemented' };
 const SDK_MISSING: CapabilityStatus = { supported: false, reason: 'sdk-missing', upstreamRef: 'Agent Client Protocol v1' };
 const SUPPORTED: CapabilityStatus = { supported: true };
 
@@ -149,7 +148,7 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
     .map((mapped) => ({ id: mapped.effort, displayName: mapped.name }));
   const permissionModes = acpPermissionModes(options);
   const hasPlanMode = permissionModes.some((mode) => mode.id === 'plan');
-  const { promptCapabilities, sessionCapabilities } = init.agentCapabilities;
+  const { promptCapabilities } = init.agentCapabilities;
   return {
     switchModel: modelOption && modelOption.options.length > 0 ? SUPPORTED : SDK_MISSING,
     availableModels: describeAcpModels(options),
@@ -175,8 +174,8 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
     // `_session/steering` extension take input into the running turn.
     sameTurnSteer: init.steering ? SUPPORTED : SDK_MISSING,
     memory: { supported: SDK_MISSING },
-    extraDirs: sessionCapabilities.additionalDirectories ? SUPPORTED : NOT_IMPLEMENTED,
-    writableDirs: NOT_IMPLEMENTED,
+    extraDirs: SUPPORTED,
+    writableDirs: SUPPORTED,
     sessionHtmlExport: SDK_MISSING,
     manualCompact: SDK_MISSING,
     // Host turn policies (IM groups, personal WeChat) need an agent that asks before every tool

@@ -11,7 +11,9 @@ import type { McpAppResourceBinding } from './host.js';
 const id = z.string().min(1).max(256);
 export const mcpAppOperationSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('open'), clientId: id, openId: id.optional(), sdkCacheHashes: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(8).optional(), context: McpUiHostContextSchema.default({}) }),
-  z.object({ op: z.literal('open-resource'), source: z.object({ instanceId: id, viewId: id }), openId: id.optional(), context: McpUiHostContextSchema.default({}) }),
+  z.object({ op: z.literal('open-resource'), source: z.object({ instanceId: id, viewId: id,
+    composerAction: z.object({ id: z.string().uuid(), contributionId: id }).strict().optional(),
+  }), openId: id.optional(), context: McpUiHostContextSchema.default({}) }),
   z.object({ op: z.literal('cancel-open'), openId: id }),
   z.object({ op: z.literal('message'), viewId: id, message: z.unknown() }),
   z.object({ op: z.literal('poll'), viewId: id, after: z.number().int().nonnegative().default(0) }),
@@ -32,7 +34,7 @@ export const mcpAppOperationSchema = z.discriminatedUnion('op', [
 ]);
 interface LocalViewDeps {
   supply(document: McpAppDocument, caller: string, hostContext: Record<string, unknown>): void;
-  resource?(source: { instanceId: string; viewId: string }): Promise<McpAppResourceBinding>;
+  resource?(source: Extract<z.infer<typeof mcpAppOperationSchema>, { op: 'open-resource' }>['source'], openId?: string): Promise<McpAppResourceBinding>;
 }
 /** Called only by the protocol's frame-verified channel, with Host-bound task and View IDs. */
 export async function handleMcpAppFrameOperation(
@@ -92,7 +94,10 @@ export async function handleMcpAppOperation(
     }
     case 'open-resource': {
       if (!local?.resource) throw new Error('MCP_APP_OWNER_ONLY');
-      const binding = await local.resource(input.source);
+      if (input.source.composerAction && !input.openId) throw new Error('MCP_APP_INVALID_REQUEST');
+      const binding = input.source.composerAction
+        ? await local.resource(input.source, input.openId)
+        : await local.resource(input.source);
       const document = await host.openResource(caller, sessionId, binding, input.context, input.openId);
       local.supply(document, caller, input.context as Record<string, unknown>);
       return { viewId: document.viewId, transport: 'sandbox', prefersBorder: document.prefersBorder } satisfies McpAppSandboxView;

@@ -4,8 +4,10 @@ import {
   createIdleReleaseRuntimeClose,
   createOrdinaryIdleReleaseTaskCheck,
   DEFAULT_CODEX_IDLE_RELEASE_MINUTES,
+  DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES,
   ORDINARY_CLAUDE_TASK_SQL,
   ORDINARY_CODEX_TASK_SQL,
+  ORDINARY_PLUGIN_ENGINE_TASK_SQL,
 } from '../../../desktop/src/main/maker-ipc/claudeIdleReleaseWatcher.ts';
 import {
   createPiIdleReleaseCandidateQueries,
@@ -96,6 +98,22 @@ export function createHostIdleRelease(deps: {
     released: (sessionId, idleMs) => log.info('codexIdleWatcher: released idle runtime', { sessionId, idleMs }),
     warn: (message) => log.warn(message),
   });
+  const pluginEngine = createClaudeIdleReleaseWatcher({
+    agentKind: 'acp',
+    listSessions, getSession,
+    readMinutes: () => DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES,
+    isOrdinaryTask: createOrdinaryIdleReleaseTaskCheck(getDbClient, ORDINARY_PLUGIN_ENGINE_TASK_SQL),
+    hasPendingInput,
+    isHostBusy: (id) => deps.isTurnPendingCompletion(id)
+      || deps.hasPendingInteraction(id)
+      || hasIdleReleaseQueuedWork(coordinator, id)
+      || pendingCredentialSwitch(id),
+    withLock: withSendToSessionLock,
+    close,
+    now: monotonic,
+    released: (sessionId, idleMs) => log.info('pluginEngineIdleWatcher: released idle runtime', { sessionId, idleMs }),
+    warn: (message) => log.warn(message),
+  });
   const pi = createPiIdleReleaseWatcher({
     closeSession: createPiIdleReleaseClose(makerPorts, withRehydrateCloseSuppressed),
     readIdleReleaseMinutes: () => DEFAULT_PI_IDLE_RELEASE_MINUTES,
@@ -110,11 +128,11 @@ export function createHostIdleRelease(deps: {
   });
 
   return {
-    /** Starts the three watchers once this owner's agent runtime is ready. */
-    start() { pi.start(); claude.start(); codex.start(); },
+    /** Starts the watchers once this owner's agent runtime is ready. */
+    start() { pi.start(); claude.start(); codex.start(); pluginEngine.start(); },
     /** Stops them before the owner's runtime is disposed (shutdown, sign-out, account switch). */
-    stop() { claude.stop(); codex.stop(); pi.stop(); },
+    stop() { claude.stop(); codex.stop(); pluginEngine.stop(); pi.stop(); },
     /** One scan of each watcher, for tests. */
-    async scanNow() { await claude.scanNow(); await codex.scanNow(); await pi.scanNow(); },
+    async scanNow() { await claude.scanNow(); await codex.scanNow(); await pluginEngine.scanNow(); await pi.scanNow(); },
   };
 }

@@ -7,7 +7,23 @@ import { useTranslation } from 'react-i18next';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useWechatBot } from '@/hooks/useWechatBot';
 import { cn } from '@/lib/utils';
-import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
+import {
+  formatImDefaultRouteSummary,
+  ImChannelSettingsCard,
+  useImChannelSettingsSummary,
+} from './ImChannelSettingsCard';
+import { SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { useBotProfiles } from '@/features/bots/botStore';
+import {
+  ImBotBlockCard,
+  ImBotPersonalWay,
+  ImBotStatusText,
+  ImBotSubPage,
+  useImBotNav,
+  type ImBotStatusTone,
+} from './ImBotPageParts';
+import { ImChannelProjectRows, usePersonalChannelProject } from './ImChannelProjectRows';
+import { ImReplyTargetField, type ImReplyTarget } from './ImReplyTargetField';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
@@ -197,7 +213,7 @@ export function WechatBotSectionView({
       routeSummary={
         companion ? (assigned === companion.id ? companion.name : null)
           : assigned ? t('settings.wechatBot.companion.assigned')
-            : routeSummary ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}` : null
+            : formatImDefaultRouteSummary(routeSummary, t)
       }
       expanded={expanded}
       onToggle={onToggle}
@@ -431,5 +447,174 @@ export function WechatWorkingDirectory({
         </p>
       )}
     </section>
+  );
+}
+
+const STATUS_TONE: Record<WechatBotPhase, ImBotStatusTone> = {
+  disconnected: 'off',
+  authorizing: 'progress',
+  waiting_confirmation: 'progress',
+  connected: 'connected',
+  reconnecting: 'progress',
+  needs_reauth: 'attention',
+  disabled_by_policy: 'error',
+  error: 'error',
+};
+
+export function useWechatListStatus(): { configured: boolean; tone: ImBotStatusTone; labelKey: string; companionBotId: string | null } {
+  const { state, channelSettings } = useWechatBot();
+  return {
+    configured: state.bound || state.phase !== 'disconnected',
+    tone: STATUS_TONE[state.phase],
+    labelKey: STATUS_KEYS[state.phase],
+    companionBotId: channelSettings?.companionBotId ?? null,
+  };
+}
+
+/** 个人微信的「谁来回复」: 微信本来就是单实例 + 伙伴归属(凭证不动), 直接用它的接口。 */
+function useWechatReplyTarget(wechat: ReturnType<typeof useWechatBot>): ImReplyTarget {
+  const bots = useBotProfiles();
+  const { channelSettings, setCompanion, isUpdatingCompanion } = wechat;
+  const companionBotId = channelSettings?.companionBotId ?? null;
+  return {
+    supported: !!channelSettings,
+    companionBotId,
+    companion: companionBotId ? bots.find((bot) => bot.id === companionBotId) ?? null : null,
+    pending: isUpdatingCompanion,
+    change: async (next) => { await setCompanion(next, { allowReassign: true }); },
+  };
+}
+
+/** 设置 → IM 机器人 → 微信。个人微信只有扫码这一种方式。 */
+export function WechatBotSettings() {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const nav = useImBotNav();
+  const wechat = useWechatBot();
+  const { state, channelSettings, isAuthorizing, isUnbinding, isUpdatingWorkingDir, authorize, cancelAuthorization,
+    unbind, chooseWorkingDirectory, resetWorkingDirectory, isUpdatingCompanion } = wechat;
+
+  const authorizationSteps = (
+    <ol className="mt-1 grid gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3 text-12 leading-[1.55] text-[var(--text-secondary)]">
+      {[1, 2, 3, 4].map((step) => (
+        <li key={step} className="flex items-start gap-2.5">
+          <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--bg-primary)] text-10 font-semibold text-[var(--text-primary)]">
+            {step}
+          </span>
+          <span>{t(`settings.wechatBot.authorization.steps.${step}`)}</span>
+        </li>
+      ))}
+    </ol>
+  );
+
+  const handleAuthorize = useCallback(async () => {
+    const accepted = await confirm({
+      title: t(state.bound ? 'settings.wechatBot.authorization.rebindTitle' : 'settings.wechatBot.authorization.title'),
+      description: t(state.bound ? 'settings.wechatBot.authorization.rebindDescription' : 'settings.wechatBot.authorization.description'),
+      content: authorizationSteps,
+      confirmText: t('settings.wechatBot.authorization.confirm'),
+      cancelText: t('settings.wechatBot.authorization.cancel'),
+    });
+    if (!accepted) return;
+    await authorize();
+  }, [authorize, confirm, state.bound, t]);
+
+  const handleUnbind = useCallback(async () => {
+    const accepted = await confirm({
+      title: t('settings.wechatBot.unbind.title'),
+      description: t('settings.wechatBot.unbind.description'),
+      confirmText: t('settings.wechatBot.unbind.confirm'),
+      cancelText: t('settings.wechatBot.unbind.cancel'),
+      confirmVariant: 'destructive',
+    });
+    if (accepted) await unbind();
+  }, [confirm, t, unbind]);
+
+  const replyTarget = useWechatReplyTarget(wechat);
+  const toCompanion = !!replyTarget.companionBotId;
+  // 选了项目时任务放进项目; 「对话」时才看下面这个微信自己的对话目录。
+  const inProject = !!usePersonalChannelProject('wechat').state?.projectDir;
+  const authorizationPending = state.phase === 'authorizing' || state.phase === 'waiting_confirmation';
+  const disabledByPolicy = state.phase === 'disabled_by_policy';
+
+  if (nav.page === 'model') {
+    return (
+      <ImBotSubPage title={t('settings.imBot.rows.model')} description={t('settings.imBot.apps.wechat')}>
+        <ImBotBlockCard><ImDefaultSettingsSection channel="wechat" embedded /></ImBotBlockCard>
+      </ImBotSubPage>
+    );
+  }
+
+  if (authorizationPending) {
+    return (
+      <ImBotPersonalWay id="personal-im-wechat">
+        <ImBotBlockCard>
+          <div className="flex flex-col items-center gap-3 py-2 text-center">
+            <span className="inline-flex animate-spin text-[var(--text-secondary)] motion-reduce:animate-none"><Loader2 size={22} /></span>
+            <div>
+              <h3 className="text-13 font-medium text-[var(--settings-section-title)]">{t('settings.wechatBot.waiting.heading')}</h3>
+              <p className="mt-1 max-w-[460px] text-12 leading-[1.6] text-[var(--settings-section-desc)]">{t('settings.wechatBot.waiting.note')}</p>
+            </div>
+            <Button data-setting-id={imBotSettings.wechat.id} variant="secondary" size="lg" type="button" onClick={() => void cancelAuthorization()}>
+              {t('settings.wechatBot.waiting.cancel')}
+            </Button>
+          </div>
+        </ImBotBlockCard>
+      </ImBotPersonalWay>
+    );
+  }
+
+  if (!state.bound) {
+    return (
+      <ImBotPersonalWay id="personal-im-wechat">
+        <SettingsCard>
+          <SettingsRow
+            wrap
+            title={t('settings.wechatBot.title')}
+            hint={t(disabledByPolicy ? 'settings.wechatBot.disabledNote'
+              : state.phase === 'error' ? 'settings.wechatBot.errorNote' : 'settings.wechatBot.intro')}
+            trailing={<Button data-setting-id={imBotSettings.wechat.id} variant="cta" size="sm" loading={isAuthorizing} type="button"
+              onClick={() => void handleAuthorize()}
+              disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}>
+              {t('settings.wechatBot.actions.connect')}
+            </Button>}
+          />
+        </SettingsCard>
+      </ImBotPersonalWay>
+    );
+  }
+
+  return (
+    <ImBotPersonalWay id="personal-im-wechat">
+      <SettingsCard>
+        <ImReplyTargetField target={replyTarget} setting="wechat" />
+        {toCompanion ? null : <ImChannelProjectRows channel="wechat" appName={t('settings.imBot.apps.wechat')} settingId={imBotSettings.wechat.id} />}
+        {toCompanion || inProject ? null : (
+          <SettingsBlock>
+            <WechatWorkingDirectory
+              settings={channelSettings}
+              pending={isUpdatingWorkingDir}
+              onChoose={() => void chooseWorkingDirectory()}
+              onReset={() => void resetWorkingDirectory()}
+            />
+          </SettingsBlock>
+        )}
+      </SettingsCard>
+      <SettingsCard>
+        <SettingsRow
+          wrap
+          title={t('settings.wechatBot.title')}
+          hint={<ImBotStatusText tone={STATUS_TONE[state.phase]}>{t(`settings.wechatBot.bound.notes.${state.phase}`)}</ImBotStatusText>}
+          trailing={<Button data-setting-id={imBotSettings.wechat.id} variant="secondary" size="sm" loading={isAuthorizing} type="button"
+            onClick={() => void handleAuthorize()}
+            disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}>
+            <RotateCw size={13} />
+            {t('settings.wechatBot.actions.rebind')}
+          </Button>}
+        />
+        <SettingsRow data-setting-id={imBotSettings.wechat.id} danger title={t('settings.imBot.rows.unbind')}
+          disabled={isUnbinding} onClick={() => void handleUnbind()} />
+      </SettingsCard>
+    </ImBotPersonalWay>
   );
 }

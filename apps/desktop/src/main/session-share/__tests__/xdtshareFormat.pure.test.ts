@@ -120,9 +120,57 @@ describe('validateManifest', () => {
     expect(validateManifest({ ...validManifest(), agentKind: 'pi' }).agentKind).toBe('pi');
   });
 
+  it('accepts v3 ACP manifests and Orca ACP workers with optional providerId', () => {
+    const lead = validateManifest({
+      ...validManifest(),
+      formatVersion: 3,
+      minReaderVersion: 3,
+      agentKind: 'acp',
+      providerId: 'acp-plugin:demo:codex',
+      sdkSessionIds: [],
+      activeSdkSessionId: null,
+      exportFidelity: 'db-only',
+      transcripts: [],
+    });
+    expect(lead.agentKind).toBe('acp');
+    expect(lead.providerId).toBe('acp-plugin:demo:codex');
+    expect(lead.minReaderVersion).toBe(3);
+
+    const team = validateManifest({
+      ...validManifest(),
+      formatVersion: 3,
+      minReaderVersion: 3,
+      orca: {
+        teamStatus: 'active',
+        workers: [
+          {
+            index: 0,
+            agentKind: 'acp',
+            providerId: 'acp-plugin:demo:helper',
+            title: 'ACP Worker',
+            role: 'developer',
+            label: 'acp-1',
+            status: 'idle',
+            focused: false,
+            sdkSessionIds: [],
+            activeSdkSessionId: null,
+            counts: { messages: 2 },
+            transcripts: [],
+          },
+        ],
+      },
+    });
+    expect(team.orca!.workers[0]).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:demo:helper',
+    });
+    // Non-ACP manifest without providerId leaves providerId absent.
+    expect('providerId' in validateManifest(validManifest())).toBe(false);
+  });
+
   it('rejects minReaderVersion above this reader', () => {
     try {
-      validateManifest({ ...validManifest(), minReaderVersion: 999 });
+      validateManifest({ ...validManifest(), minReaderVersion: 4 });
       expect.unreachable();
     } catch (err) {
       expect((err as XdtshareError).code).toBe('SHARE_VERSION_UNSUPPORTED');
@@ -132,6 +180,7 @@ describe('validateManifest', () => {
   it.each([
     ['missing agentKind', { agentKind: undefined }],
     ['unknown agentKind', { agentKind: 'gemini' }],
+    ['invalid providerId type', { providerId: 123 }],
     ['unknown fidelity', { exportFidelity: 'lossy' }],
     ['bad entries', { entries: [{ path: 1 }] }],
     ['bad transcripts', { transcripts: [{}] }],

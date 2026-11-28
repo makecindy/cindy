@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "驗證 Google 帳戶",
+    "note": "請掃描 QR 碼或開啟 Google 頁面完成驗證。Antigravity 確認可存取帳戶後，任務會自動繼續。",
+    "refresh": "重新整理驗證 QR 碼"
+  },
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
@@ -10,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "無法在原電腦上恢復任務",
-    "description": "可以選擇其他電腦或供應商，透過上下文交接繼續。原訊息保留，但切換不會移轉原電腦上的完整執行狀態。",
-    "choose": "選擇其他電腦",
+    "description": "可開啟模型選擇器改用其他電腦、供應商或模型，透過上下文交接繼續。原訊息保留，但切換不會移轉原電腦上的完整執行狀態。",
+    "choose": "切換模型或供應商",
     "cancel": "留在這裡",
     "stage": {
       "owner": "失敗環節：聯絡分享所在電腦。",
@@ -1821,8 +1826,7 @@
       "ariaLabel": "搜尋設定",
       "placeholder": "搜尋設定",
       "resultsLabel": "設定搜尋結果",
-      "noResults": "找不到設定，試試其他關鍵字",
-      "clear": "清除搜尋"
+      "noResults": "找不到設定，試試其他關鍵字"
     },
     "back": "返回",
     "defaults": {
@@ -4256,6 +4260,7 @@
           "supported": "支援",
           "unsupported": "不支援",
           "undeclared": "未宣告",
+          "ultrafastDeclaredUnavailable": "供應商已宣告，目前的 Codex 連線無法使用",
           "pricing": "報價",
           "pricingLabel": "報價",
           "noPricing": "此路由沒有報價資料",
@@ -4860,68 +4865,7 @@
         "hint": "透過已繫結的飛書或 Lark 機器人私訊你一則訊息；僅在視窗失焦時傳送。",
         "disabledHint": "需要先設定 Bot 並傳送一則訊息給它，以完成繫結。"
       },
-      "bind": "繫結",
-      "groups": {
-        "title": "群組",
-        "description": "為機器人所在的某個群組單獨指定專案、模型與權限。",
-        "rules": "沒有單獨設定的項目：已選擇專案的群組跟隨「專案與模型」裡那個專案的設定，未選擇專案的群組跟隨上方的「新對話配置」與「群組新任務的權限模式」。群組主線與群組裡的話題共用同一個群組的設定。",
-        "expand": "展開",
-        "collapse": "收起",
-        "groupCount_one": "{{count}} 個群組",
-        "groupCount_other": "{{count}} 個群組",
-        "customCount_one": "{{count}} 個單獨設定",
-        "customCount_other": "{{count}} 個單獨設定",
-        "refresh": "重新整理",
-        "loading": "正在讀取群組列表…",
-        "loadFailed": "讀取群組列表失敗，請稍後點「重新整理」重試。",
-        "saveFailed": "儲存群組設定失敗",
-        "notConnected": "機器人連上後才能列出它所在的群組。下方只列出已單獨設定過的群組。",
-        "empty": "機器人還沒有加入任何群組。把機器人拉進群組後，再來這裡設定。",
-        "listPermission": "讀不到機器人所在的群組：請在飛書開放平台為這個應用開通「獲取群組資訊」權限。下方先列出機器人用過的群組。",
-        "listUnavailable": "暫時讀不到機器人所在的群組，下方先列出機器人用過的群組。",
-        "unnamed": "未命名的群組（{{id}}）",
-        "summaryModel": "單獨設定了模型",
-        "summaryPermission": "單獨設定了權限",
-        "expandAria": "設定「{{name}}」",
-        "searchLabel": "搜尋群組",
-        "searchPlaceholder": "依群組名稱搜尋",
-        "customHeading": "單獨設定",
-        "followHeading": "跟隨頻道設定",
-        "showMore": "再顯示 {{count}} 個",
-        "showLess": "收起",
-        "noMatch": "找不到名稱包含「{{query}}」的群組",
-        "project": {
-          "label": "專案",
-          "follow": "對話",
-          "missing": "{{name}}（已不在側欄）",
-          "hint": "在群組裡第一次 @ 機器人、開新話題或傳送 /new 時生效，進行中的任務不會被移走。選專案時，模型與權限預設跟隨這個專案在「專案與模型」裡的設定；選「對話」時任務放在機器人的對話目錄裡，跟隨上方的「新對話配置」。只能選擇側欄裡的本機專案。"
-        },
-        "model": {
-          "label": "模型和推理強度",
-          "hintFollow": "跟隨「新對話配置」。在這裡更換模型或推理強度，就只對這個群組生效。",
-          "hintFollowProject": "跟隨專案「{{project}}」在「專案與模型」裡的設定。在這裡更換模型或推理強度，就只對這個群組生效。",
-          "hintProjectUnavailable": "專案「{{project}}」在「專案與模型」裡設定的模型目前無法使用。可以到那裡重新選擇，或在這裡為這個群組單獨選一個。",
-          "hintFixed": "這個群組單獨設定了模型。群組裡沒有單獨改過模型的任務，收到下一則訊息時會切換過去；新任務直接使用它。"
-        },
-        "permission": {
-          "label": "權限",
-          "hintFollow": "目前跟隨「群組新任務的權限模式」。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
-          "hintFollowProject": "目前跟隨專案「{{project}}」在「專案與模型」裡的權限。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
-          "hintFixed": "這個群組單獨設定了權限。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。"
-        },
-        "fullAccessConfirm": {
-          "title": "讓「{{name}}」以完全存取執行？",
-          "description": "之後在這個群組新建的任務都會直接執行、不再逐項確認，群組裡任何人 @ 機器人都一樣。群組內容由成員控制，請確認群組成員都可信。",
-          "confirm": "改為完全存取",
-          "cancel": "取消"
-        },
-        "widerConfirm": {
-          "title": "放寬「{{name}}」的權限？",
-          "description": "之後在這個群組新建的任務會從「{{current}}」變成「{{next}}」，群組裡任何人 @ 機器人都一樣。群組內容由成員控制，請確認群組成員都可信。",
-          "confirm": "仍然變更",
-          "cancel": "取消"
-        }
-      }
+      "bind": "繫結"
     },
     "wechatBot": {
       "title": "個人微信",
@@ -5480,6 +5424,27 @@
           "description": "將永久刪除 {{label}} 在所有專案中累積的全部記憶。此操作不可撤銷。",
           "confirm": "重置",
           "cancel": "取消"
+        }
+      },
+      "tidy": {
+        "label": "記憶與技能整理",
+        "description": "定期於背景輕量整理各夥伴的記憶與技能（去重、精簡、對照全域技能）。僅在有足夠累積時才觸發，無變動不消耗額度，也不會在側欄留下多餘任務。",
+        "cadenceLabel": "整理頻率",
+        "cadences": {
+          "weekly": "每週",
+          "biweekly": "每兩週",
+          "monthly": "每月",
+          "off": "關閉（僅手動）"
+        },
+        "runNow": "立即整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理頻率已更新",
+          "cadenceFailed": "更新整理頻率失敗",
+          "updated": "整理完成（已更新 {{count}} 位夥伴）",
+          "idle": "目前記憶與技能皆很整潔，無需更動",
+          "skipped": "暫無需要整理的夥伴",
+          "failed": "記憶整理失敗"
         }
       }
     },
@@ -7097,6 +7062,8 @@
           "controlling": "正在控制這台電腦",
           "protocol": "連線方式",
           "rttNote": "最近測得",
+          "relayLegSelf": "本機 {{transport}}",
+          "relayLegPeer": "對方 {{transport}}",
           "manage": "管理裝置…",
           "linkStatus": "與「{{name}}」",
           "version": "Cindy {{version}}",
@@ -7146,6 +7113,7 @@
         },
         "onlyEncrypted": "僅使用 Agent-Net",
         "onlyEncryptedHint": "開啟後，舊版裝置及仍使用舊連線的分享將無法使用。預設關閉。",
+        "removedOff": "這台電腦已從帳號中移除，Agent-Net 已自動關閉。重新開啟即可重新加入。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "正在切到 Agent-Net…",
@@ -7366,7 +7334,7 @@
     "tina": {
       "chat": {
         "title": "對話",
-        "description": "不落任何倉庫的純對話；在 Slack、Telegram、X 或飛書 / Lark 裡選擇 chat 即可使用，每條對話 lane 獨立對應一個任務。"
+        "description": "不關聯具體專案資料夾的純對話；各訊息應用未指定專案時預設使用這裡的模型和權限。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7497,7 +7465,8 @@
       "groups": {
         "cindy": "官方",
         "personal": "個人",
-        "plugins": "插件"
+        "plugins": "插件",
+        "shared": "通用設定"
       },
       "tips": {
         "cindy": "由 Cindy 提供並維護。無需自行建立機器人或準備憑證，按引導連線後即可使用。",
@@ -7538,6 +7507,190 @@
       "plugins": {
         "rowHint": "登入、繫結和每個群組、私訊的單獨設定都在插件頁面裡。",
         "open": "打開插件"
+      },
+      "replyTarget": {
+        "label": "誰來回覆",
+        "cindy": "普通任務",
+        "cindyHint": "在側欄任務列表裡處理，使用下方的專案和模型。也可以交給夥伴，按夥伴的記憶與設定回覆。",
+        "companionHint": "私訊進 {{name}} 的對話，群組由 {{name}} 獨立跟進。模型、權限和記憶均跟隨 {{name}}。",
+        "openCompanion": "{{name}} 的設定",
+        "summary": "由 {{name}} 回覆",
+        "missingCompanion": "已無法使用的夥伴",
+        "busy": "這個機器人還有訊息在排隊或任務在執行，結束後再切換。",
+        "updateFailed": "無法切換。請確認夥伴仍可使用後再試一次。",
+        "companionSettingsHint": "模型、權限和記憶"
+      },
+      "nav": {
+        "back": "返回",
+        "backTo": "返回 {{page}}"
+      },
+      "pageDescription": "在微信、飛書、Telegram 這些訊息應用裡，傳訊息給 Cindy 或你的夥伴。",
+      "list": {
+        "connected": "已連線",
+        "available": "還可以連線",
+        "choose": "選一個訊息應用",
+        "cindyReplies": "普通任務",
+        "official": "官方機器人：{{status}}",
+        "projects": "專案與模型",
+        "projectsHint": "訊息應用或插件在專案裡開新任務時，每個專案使用的模型與權限",
+        "hint": {
+          "both": "官方機器人，或你自己建立的機器人",
+          "slack": "用 Cindy 官方機器人，登入 Slack 就能用",
+          "x": "用 Cindy 官方帳號，授權後在 X 上回覆你",
+          "wechat": "掃碼連線你的個人微信",
+          "personal": "用你自己建立的機器人"
+        },
+        "companionDedicated": "夥伴專屬：{{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "微信",
+        "feishu": "飛書 / Lark",
+        "wecom": "企業微信",
+        "dingtalk": "釘釘"
+      },
+      "ways": {
+        "official": "Cindy 官方機器人",
+        "personal": "你自己的機器人",
+        "personalHint": "用你在平台上建立的機器人，名字和頭像由你決定。",
+        "personalSetupTitle": "用你自己的機器人",
+        "setUp": "設定",
+        "personalSetupHint": {
+          "telegram": "在 BotFather 建立機器人，填入權杖和你的使用者 ID。",
+          "discord": "在 Discord 開發者後台建立機器人，填入權杖。",
+          "feishu": "在飛書或 Lark 開放平台建立應用，填入 App ID 和 App Secret。"
+        },
+        "officialHint": "無需自建應用，直接連接你的 Cindy 帳號。"
+      },
+      "rows": {
+        "model": "模型",
+        "groupReply": "群組裡什麼時候回覆",
+        "persona": "名字和個性",
+        "behavior": "表情回應和引用",
+        "receiveHere": "在這台電腦上接收訊息",
+        "receiveHereHint": "關掉後機器人在這台電腦上離線，憑證保留，隨時可以再開啟。",
+        "unbind": "解除繫結這個機器人",
+        "ownerId": "我的使用者 ID {{id}}",
+        "discordChannels": "伺服器頻道",
+        "discordChannelsHint": "機器人可以在哪些伺服器頻道裡工作",
+        "notifications": "通知",
+        "on": "已開啟",
+        "off": "未開啟",
+        "project": "專案",
+        "projectDialogue": "對話（不選專案）",
+        "projectMissing": "已不在側欄的專案",
+        "projectHint": "新任務放進這個專案，模型和權限跟隨它在「專案與模型」裡的設定。",
+        "projectDialogueHint": "新任務放在機器人自己的對話目錄，用下方的模型。",
+        "officialProjectHint": "新任務放進這個專案，模型與權限跟隨它在「專案與模型」裡的設定。所有 Cindy 官方機器人共用這一項。",
+        "officialProjectDialogueHint": "新任務放在對話目錄，模型與權限跟隨「專案與模型」裡「對話」那一行。所有 Cindy 官方機器人共用這一項。",
+        "projectFullAccessTitle": "改用「{{name}}」的權限？",
+        "projectFullAccessDescription": "「{{name}}」在「專案與模型」裡是完全存取：之後在{{app}}裡新建的任務會直接執行，不再逐條確認。可以先到「專案與模型」把它改成 Auto 或 Ask。",
+        "projectFullAccessConfirm": "仍然使用",
+        "projectFullAccessCancel": "取消",
+        "projectUpdateFailed": "無法切換專案，請確認它還在側欄裡後再試一次。",
+        "chats": "群組",
+        "channels": "頻道",
+        "projectModel": "模型與權限",
+        "projectModelHint": "在「專案與模型」裡統一修改",
+        "projectModelFollow": "跟隨「{{name}}」",
+        "groupReplyHint": "控制機器人在群組裡僅 @ 時回覆或全部回應"
+      },
+      "chats": {
+        "title": "群組",
+        "description": "為機器人所在的某個群組單獨指定專案、模型與權限，以及群組裡其他成員能不能提問。",
+        "rules": "沒有單獨設定的項目：已選擇專案的群組跟隨「專案與模型」裡那個專案的設定，未選擇專案的群組跟隨機器人的「專案」，機器人也沒選專案時跟隨機器人的「模型」設定。群組主線與群組裡的話題共用同一個群組的設定。",
+        "expand": "展開",
+        "collapse": "收起",
+        "groupCount_one": "{{count}} 個群組",
+        "groupCount_other": "{{count}} 個群組",
+        "customCount_one": "{{count}} 個單獨設定",
+        "customCount_other": "{{count}} 個單獨設定",
+        "refresh": "重新整理",
+        "loading": "正在讀取群組列表…",
+        "loadFailed": "讀取群組列表失敗，請稍後點「重新整理」重試。",
+        "saveFailed": "儲存群組設定失敗",
+        "notConnected": "機器人連上後才能列出它所在的群組。下方只列出已單獨設定過的群組。",
+        "empty": "機器人還沒有加入任何群組。把機器人拉進群組後，再來這裡設定。",
+        "listPermission": "讀不到機器人所在的群組：請在飛書開放平台為這個應用開通「獲取群組資訊」權限。下方先列出機器人用過的群組。",
+        "listUnavailable": "暫時讀不到機器人所在的群組，下方先列出機器人用過的群組。",
+        "unnamed": "未命名的群組（{{id}}）",
+        "summaryModel": "單獨設定了模型",
+        "summaryPermission": "單獨設定了權限",
+        "expandAria": "設定「{{name}}」",
+        "searchLabel": "搜尋群組",
+        "searchPlaceholder": "依群組名稱搜尋",
+        "customHeading": "單獨設定",
+        "followHeading": "跟隨頻道設定",
+        "showMore": "再顯示 {{count}} 個",
+        "showLess": "收起",
+        "noMatch": "找不到名稱包含「{{query}}」的群組",
+        "project": {
+          "label": "專案",
+          "follow": "跟隨機器人",
+          "missing": "{{name}}（已不在側欄）",
+          "hint": "在群組裡第一次 @ 機器人、開新話題或傳送 /new 時生效，進行中的任務不會被移走。選專案時，模型與權限預設跟隨這個專案在「專案與模型」裡的設定；選「跟隨機器人」時用這個機器人的「專案」設定，機器人沒選專案就放在對話目錄、用機器人的「模型」設定。只能選擇側欄裡的本機專案。",
+          "followWith": "跟隨機器人（{{project}}）"
+        },
+        "model": {
+          "label": "模型和推理強度",
+          "hintFollow": "跟隨「新對話配置」。在這裡更換模型或推理強度，就只對這個群組生效。",
+          "hintFollowProject": "跟隨專案「{{project}}」在「專案與模型」裡的設定。在這裡更換模型或推理強度，就只對這個群組生效。",
+          "hintProjectUnavailable": "專案「{{project}}」在「專案與模型」裡設定的模型目前無法使用。可以到那裡重新選擇，或在這裡為這個群組單獨選一個。",
+          "hintFixed": "這個群組單獨設定了模型。群組裡沒有單獨改過模型的任務，收到下一則訊息時會切換過去；新任務直接使用它。",
+          "reset": "模型改回跟隨"
+        },
+        "permission": {
+          "label": "權限",
+          "hintFollow": "目前跟隨「群組新任務的權限模式」。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
+          "hintFollowProject": "目前跟隨專案「{{project}}」在「專案與模型」裡的權限。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
+          "hintFixed": "這個群組單獨設定了權限。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
+          "hintFollowBot": "目前跟隨機器人自己的權限。只影響之後在這個群組新建的任務，既有任務請在群組裡用 /permission 切換。",
+          "followWith": "跟隨 · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "讓「{{name}}」以完全存取執行？",
+          "description": "之後在這個群組新建的任務都會直接執行、不再逐項確認，群組裡任何人 @ 機器人都一樣。群組內容由成員控制，請確認群組成員都可信。",
+          "confirm": "改為完全存取",
+          "cancel": "取消"
+        },
+        "widerConfirm": {
+          "title": "放寬「{{name}}」的權限？",
+          "description": "之後在這個群組新建的任務會從「{{current}}」變成「{{next}}」，群組裡任何人 @ 機器人都一樣。群組內容由成員控制，請確認群組成員都可信。",
+          "confirm": "仍然變更",
+          "cancel": "取消"
+        },
+        "descriptionChannels": "為機器人工作的某個頻道單獨指定專案、模型與權限，以及頻道裡其他成員能不能提問。",
+        "kindGroup": "群組",
+        "kindChannel": "頻道",
+        "channelCount_one": "{{count}} 個頻道",
+        "channelCount_other": "{{count}} 個頻道",
+        "membersCount_one": "{{count}} 個群組開放成員提問",
+        "membersCount_other": "{{count}} 個群組開放成員提問",
+        "unnamedChannel": "未命名的頻道（{{id}}）",
+        "searchPlaceholderChannels": "依頻道名稱搜尋",
+        "emptyLocal": "還沒有記錄到機器人所在的群組。在群組裡 @ 機器人說一句話後，這裡就會列出這個群組。",
+        "emptyChannels": "還沒有開放的頻道。請先在「伺服器頻道」裡開啟機器人要工作的頻道。",
+        "members": {
+          "label": "群組成員也能提問",
+          "hint": "開啟後，群組裡其他成員 @ 機器人也會得到回答，使用這個群組的專案與模型。他們的提問最高以「自動審批」執行，需要動手的操作仍要你確認；你自己的提問照這個群組的權限。",
+          "guard": "你沒在群組裡說話時，成員連續問滿 {{limit}} 次就先暫停，等你在群組裡 @ 機器人說句話或點「恢復」。指令只聽你的。",
+          "paused": "已暫停回答群組成員：他們連續問了 {{limit}} 次，你都沒在群組裡說話。",
+          "resume": "恢復",
+          "chip": "成員可提問",
+          "pausedChip": "成員已暫停",
+          "resumeFailed": "恢復失敗，請稍後再試"
+        },
+        "statusCustom": "已單獨設定",
+        "shownHint": "已顯示前 {{shown}} / {{total}} 個，輸入名稱可篩選。",
+        "fieldsNote": "更換專案、模型或權限後，群組裡下一次新建任務時生效，進行中的任務不會被移走。"
+      },
+      "companionBots": {
+        "title": "夥伴專屬機器人",
+        "description": "這些機器人在夥伴設定裡單獨配置，升級前已配好的會繼續正常運作。",
+        "manage": "去管理"
       }
     },
     "shortcuts": {
@@ -8773,6 +8926,8 @@
         "nodeRuntime": "可在本機執行隨插件附帶的 Node 程式",
         "nodeMcp": "可在本機執行隨插件附帶的 stdio MCP",
         "nodeRuntimeDetail": "高風險：它和你本人一樣，可以讀取或修改你帳號能存取的本機檔案、存取網路並啟動其它程式。Cindy 不能用瀏覽器沙箱限制它。",
+        "nodeInheritEnv": "繼承本機執行環境",
+        "nodeInheritEnvDetail": "高風險：插件的 Node 程式及其子處理程序會取得 Cindy 目前全部環境變數，包括 Proxy、憑證設定，以及其中可能儲存的 API Key、Token 等敏感資訊。",
         "nodeSecret": "可將已儲存憑證「{{name}}」提供給本機 Node 程式",
         "nodeSecretDetail": "Cindy 加密保管，僅在下列已宣告 Worker 方法執行時臨時注入。Node 程式會收到明文，也可以將其回傳、記錄、儲存或暴露給瀏覽器側插件程式碼及 Agent 參數；請只安裝可信插件。",
         "nodeResident": "Node 程式可在背景常駐",
@@ -8979,7 +9134,10 @@
             "user": "使用者",
             "assistant": "助手"
           }
-        }
+        },
+        "agentChecks": "可以檢查來源是否有新內容",
+        "agentChecksDetail": "與其他已獲授權的插件交換有變化、無變化或無法確認的狀態。各來源插件使用自己的已連接帳號，不分享訊息正文或憑證。檢查不呼叫模型。 也可檢查本機 Cindy 對話有無新增，不回傳對話內容。",
+        "agentChecksRequest": "確認增量檢查權限"
       },
       "connections": {
         "confirmTitle": "新增連線位址",
@@ -9867,6 +10025,49 @@
         "identity": "目錄身分需要檢查",
         "failed": "回收未能完成",
         "pending": "已排入佇列"
+      },
+      "remote": {
+        "title": "遠端待回收 worktree",
+        "description": "未完成回收的遠端 worktree 會阻止在同一台裝置上繼續建立新的 worktree，直到回收成功或手動選擇保留目錄以解除封鎖。",
+        "storageUnreadable": "無法讀取遠端 worktree 回收記錄，已暫停建立新的遠端 worktree。",
+        "sessionLabel": "任務 {{id}}",
+        "keepUnblock": "保留目錄並解除封鎖",
+        "confirmKeepTitle": "保留遠端 worktree 目錄並解除封鎖？",
+        "confirmKeepDescription": "這會清除本機的待回收記錄，恢復在 {{device}} 上建立新的 worktree；遠端裝置上的目錄不會被刪除，你可以稍後手動清理。",
+        "confirmKeepConfirm": "保留並解除封鎖",
+        "retrySuccess": "已回收遠端 worktree。",
+        "keepSuccess": "已解除封鎖，現在可以繼續建立遠端 worktree。",
+        "keepFailed": "未能清除回收記錄，請重新整理後重試。",
+        "phase": {
+          "reserved": "建立未確認",
+          "precreated": "等待回收",
+          "session-create-started": "任務建立未確認"
+        },
+        "failure": {
+          "offline": "裝置離線或回應逾時",
+          "in-progress": "遠端仍在建立或檢出中",
+          "preserved": "被遠端裝置保留",
+          "mismatch": "回收憑證不符",
+          "unsupported": "遠端裝置版本不支援自動回收",
+          "create-started": "等待確認任務歸屬",
+          "storage": "本機記錄不可讀寫",
+          "unknown": "回收未能完成"
+        },
+        "preserveReason": {
+          "claimed": "已被任務認領",
+          "in-progress": "仍在建立或檢出中",
+          "dirty": "有未提交變更",
+          "keep-sentinel": "存在保留標記（.worktree-keep）",
+          "live-reference": "仍被其他任務或程序佔用",
+          "branch-mismatch": "分支或目錄狀態異常",
+          "include-files-changed": "本機設定檔已變更",
+          "ignored-files": "包含無法重現的忽略檔案",
+          "ephemeral": "受管池目錄",
+          "pending-transfer": "正在移轉中",
+          "invalid-quarantine": "隔離狀態異常",
+          "quarantine-failed": "隔離移動失敗",
+          "remove-failed": "刪除目錄失敗"
+        }
       }
     },
     "awayFromComputer": {
@@ -10142,7 +10343,8 @@
       "INVALID_AUTH_CODE": "授權已過期，請重新登入",
       "INVALID_LOGIN_TICKET": "登入會話已過期，請重新登入",
       "INVALID_BIND_TICKET": "繫結會話已過期，請重新登入",
-      "REGION_MISMATCH": "登入服務區域與當前客戶端不匹配"
+      "REGION_MISMATCH": "登入服務區域與當前客戶端不匹配",
+      "INVALID_SIGNUP_TICKET": "註冊確認已過期，請重新登入"
     },
     "rateLimit": {
       "retryAt": "請在 {{time}}（本機時間）之後重試。",
@@ -10150,6 +10352,15 @@
       "intro": "登入服務暫時限制了請求次數。這與本機憑證儲存異常是不同的問題。",
       "guidance": "請等待後再取得驗證碼。重新啟動、重新安裝或切換網路不保證解除限制。",
       "support": "等待後仍無法登入，請將記錄私下寄給 feedback@cindy.app，並提供作業系統、Cindy 版本、出錯時間和下方錯誤碼。請勿公開發布記錄。"
+    },
+    "signup": {
+      "title": "還沒有 Cindy 帳號",
+      "subtitle": "{{target}} 還沒有註冊 Cindy。之前用其他方式登入過？請返回選擇。",
+      "subtitleSocial": "這個 {{provider}} 帳號還沒有註冊 Cindy。之前用其他方式登入過？請返回選擇。",
+      "create": "建立新帳號",
+      "createDescEmail": "用這個電子郵件註冊 Cindy",
+      "createDescPhone": "用這個手機號碼註冊 Cindy",
+      "createDescSocial": "用這個 {{provider}} 帳號註冊"
     }
   },
   "legalTermsUpdate": {
@@ -10268,6 +10479,7 @@
     "sessionCostLabel": "本任務 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "暫無用量",
       "noUsageDetail": "本任務尚未產生用量。",
       "unavailableLabel": "用量暫不可用",
@@ -10703,7 +10915,6 @@
     "fileBrowser": {
       "noWorkdir": "當前任務未關聯本地工作目錄，檔案瀏覽器不可用",
       "filterPlaceholder": "篩選檔案…",
-      "filterClear": "清除篩選",
       "filterIndexing": "正在索引專案檔案…",
       "filterNoMatch": "未匹配到檔案",
       "filterRgUnavailable": "遠端機器未安裝 ripgrep，檔名篩選不可用",
@@ -11467,7 +11678,17 @@
         "enable": "去開啟",
         "enabled": "已開啟"
       },
-      "close": "關閉"
+      "close": "關閉",
+      "scanToLogin": "用 Cindy App 掃碼，直接登入這個帳號",
+      "approveTitle": "允許手機登入你的帳號？",
+      "approveBody": "「{{device}}」正在掃碼登入。不是你本人操作，請點「拒絕」。",
+      "approveBodyUnknown": "一台手機正在掃碼登入。不是你本人操作，請點「拒絕」。",
+      "approve": "允許",
+      "deny": "拒絕",
+      "loginApproved": "手機已登入",
+      "loginDenied": "已拒絕這次登入",
+      "qrExpired": "QR 碼已過期",
+      "qrRefresh": "重新整理"
     },
     "localNetwork": {
       "title": "開啟區域網路權限",
@@ -11893,6 +12114,7 @@
           "title": "@ 我的訊息",
           "me": "我",
           "markAll": "全部標為已讀",
+          "markReadFailed": "未能將提及標為已讀。",
           "empty": "沒有未讀的 @ 訊息",
           "thread": "話題",
           "main": "群聊",
@@ -11989,6 +12211,17 @@
       "memberCount_other": "{{count}} 位成員",
       "nameLabel": "群聊名稱",
       "waitingConfirm": "{{name}}在等你確認",
+      "assistantDevice": {
+        "title": "群裡的 Cindy 在等你選電腦",
+        "onlyYou": "只有你看得到",
+        "request": "「{{request}}」選好電腦後就開始做。",
+        "requestUnknown": "選好電腦後就開始做這項請求。",
+        "requests_one": "你有 {{count}} 項請求在等，選好電腦後就開始做。",
+        "requests_other": "你有 {{count}} 項請求在等，選好電腦後就開始做。",
+        "remember": "之後你在本群組的請求都用這台電腦，可在群聊設定中更換。",
+        "cancel": "取消請求",
+        "continue": "繼續"
+      },
       "loadFailedTitle": "無法載入這個群聊",
       "loadFailedDescription": "Cindy 暫時讀不到這個群聊的訊息。你可以重試，或返回夥伴頁。",
       "unavailableTitle": "這個群聊已無法使用",
@@ -12100,6 +12333,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}加入了群聊",
+        "memberJoinedList": "{{names}}加入了群聊",
+        "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
         "memberFailed": "{{name}}這次沒能回覆",
         "memberTimeout": "{{name}}太久沒有回覆，這次先跳過",
         "memberUnavailable": "{{name}}現在無法使用，這次沒有發言",
@@ -12129,6 +12364,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "部分附件下載失敗，未能交給 {{name}}。請重新傳送需要的附件。",
+          "ATTACHMENTS_LIMIT_REACHED": "本輪附件數量超過上限，部分附件未能交給 {{name}}。請分批傳送需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "部分附件下載失敗，另一些超出本輪數量上限，未能交給 {{name}}。請分批重新傳送需要的附件。",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，請先選擇本群組的執行電腦，選好後會繼續這項請求。",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群組選擇的執行電腦已離線。"
@@ -12171,9 +12409,12 @@
         "projectDirClear": "清除",
         "projectDirNote": "可選擇這台電腦上現有的專案。留空時，優先使用儲存庫對應的專案，其次使用執行夥伴自己的專案。Git 專案分工使用獨立 worktree。",
         "autoContinueSaveFailed": "分工交接沒能儲存，請再試一次",
+        "projectDirNotRegistered": "先在 Cindy 中將這個資料夾新增為專案，再重新選取。",
         "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試",
         "allowMemberInvites": "允許所有成員邀請朋友",
         "allowMemberInvitesHint": "開啟後，已加入的所有成員都可邀請朋友。僅群主和管理員可變更。",
+        "allowMemberMentionAll": "允許所有成員 @所有人",
+        "allowMemberMentionAllHint": "開啟後，所有成員都可 @所有人；關閉時僅群主和管理員可用。僅群主和管理員可變更。",
         "allowMentionAllBots": "允許 @所有夥伴",
         "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
       },
@@ -12205,6 +12446,7 @@
         "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
         "lastOwner": "請先轉讓群主或解散群聊，再退出。",
         "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。",
+        "allHumansMentionForbidden": "僅群主和管理員可以 @所有人。",
         "turnAlreadyStarted": "這位夥伴已開始執行，不能略過"
       },
       "organizer": "負責人",
@@ -12280,6 +12522,8 @@
         "threadNew": "話題裡的新訊息",
         "replyingTo": "回覆「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
+        "modelFallback": "這台電腦上沒有選定的模型，這次改用 {{model}} 回覆。",
+        "modelFallbackUnnamed": "這台電腦上沒有選定的模型，這次改用本機可用的模型回覆。",
         "earlierOmitted": "（更早的訊息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
@@ -12360,13 +12604,40 @@
           "unfollowTip": "取消關注後，只在有人提到你時提示",
           "listLabel": "這個群聊裡的話題",
           "listNews": "有新回覆",
-          "listOthers": "其他話題",
-          "newSeparator": "新回覆"
+          "newSeparator": "新回覆",
+          "openIndex": "話題",
+          "indexTitle": "話題",
+          "backToList": "返回話題列表",
+          "filterAria": "篩選話題",
+          "filterMine": "與我相關",
+          "filterAll": "全部",
+          "searchPlaceholder": "搜尋話題、回覆或成員",
+          "clearSearch": "清除搜尋",
+          "listRecent": "最近",
+          "indexParticipatedTag": "參與過",
+          "indexMentionedTag": "@過我",
+          "locateInGroup": "在群聊中定位",
+          "indexEmptyMine": "還沒有你參與或提到你的話題",
+          "indexEmptyAll": "這個群聊還沒有話題",
+          "indexEmptySearch": "沒有符合的話題",
+          "viewAllThreads": "查看全部話題",
+          "syncingHistory": "正在追溯更早話題…",
+          "rootKind": {
+            "task": "任務",
+            "image": "圖片",
+            "video": "影片",
+            "audio": "語音",
+            "file": "檔案",
+            "share": "轉發回覆",
+            "card": "卡片"
+          }
         },
         "replyPlaceholder": "回覆這則訊息，可用 @ 點名夥伴…",
         "sendReply": "傳送回覆",
+        "moreReactions": "更多表情",
         "addReaction": "新增表情回應",
         "reactionCount": "{{emoji}} · {{count}} 人回應",
+        "reactionTotal": "{{emoji}} · {{count}} 次回應",
         "reactionWho": "{{emoji}} · {{count}} 人回應：{{names}}",
         "reactorSelf": "你",
         "reactorFormer": "{{name}}（已不在群組中）",
@@ -12503,6 +12774,7 @@
           "accessNone": "僅主人可用",
           "accessChat": "僅群內交流",
           "accessTools": "可用工具與資料",
+          "memberPermissions": "成員權限",
           "replies": "夥伴怎麼接話",
           "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
           "assistant": "群裡的 Cindy",
@@ -12573,7 +12845,19 @@
         "failed": "操作未完成，請重試。",
         "lastOwner": "請先轉讓群主或解散群聊，再退出。"
       },
-      "externalBadge": "外部"
+      "externalBadge": "外部",
+      "links": {
+        "kind": {
+          "pull": "PR",
+          "issue": "Issue",
+          "discussion": "討論",
+          "commit": "提交",
+          "file": "檔案",
+          "folder": "資料夾",
+          "release": "發行版",
+          "repo": "儲存庫"
+        }
+      }
     },
     "joined": {
       "today": "今天加入",
@@ -13120,7 +13404,11 @@
         "save": "儲存並重新連線",
         "loadFailed": "讀取連線設定失敗，請重試。",
         "failed": "儲存連線失敗，請檢查參數後重試。"
-      }
+      },
+      "handedOver": "{{apps}} 在設定裡交給了 {{name}} 回覆。",
+      "handedOverSeparator": "、",
+      "manageInSettings": "前往設定管理",
+      "handedOverHint": "下方新增的是 {{name}} 單獨使用的機器人，與設定裡的機器人互不衝突。"
     },
     "voiceMode": {
       "realtime": {
@@ -13299,6 +13587,7 @@
   },
   "commonUi": {
     "retry": "重試",
+    "clearSearch": "清除搜尋",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
@@ -13813,7 +14102,8 @@
         },
         "companion": {
           "retryLater": "請稍後再試"
-        }
+        },
+        "membersPaused": "群組成員的提問先暫停囉，等主人回來再繼續 🙈"
       },
       "hook": {
         "interaction": {
@@ -14811,6 +15101,12 @@
       "discoveredCopy": {
         "unavailableHere": "這台電腦上的 {{provider}} 現在無法使用。",
         "unavailableOn": "「{{device}}」上的 {{provider}} 現在無法使用。"
+      },
+      "preparation": {
+        "pending": "下則訊息",
+        "preparing": "準備中…",
+        "failed": "切換失敗",
+        "usingPrevious": "本次使用 {{actual}}，{{target}} 尚未就緒"
       }
     },
     "permissionSelector": {
@@ -15100,6 +15396,7 @@
       },
       "credentialSwitchDeferred": "模型來源已切換，將在當前任務結束後生效。",
       "effortRuntimeDirty": "推理強度還在更新，稍等一下再傳送",
+      "tooManyTaskReferences": "一則訊息最多可包含 {{max}} 個任務引用，請移除多餘的任務連結",
       "steerNotSent": "未傳送，暫時無法插話，草稿已保留",
       "credentialSwitchApplied": "模型來源切換已生效。",
       "credentialSwitchFailed": "模型來源切換失敗，請重新選擇。",
@@ -15303,6 +15600,7 @@
         "diverged": "本機和遠端分支各有不同的更新，請先處理這些差異再切換",
         "missing": "所選分支已不存在，請重新整理列表",
         "git": "操作未能完成，請檢查目前分支和儲存的變更後重試",
+        "timeout": "讀取 Git 狀態逾時。儲存庫較大或未提交變更過多時會耗時過長，可先整理變更，或改用 worktree",
         "savedMissing": "這份保存的變更已經不在了",
         "undoUnavailable": "已無法復原這次切換"
       },
@@ -15621,7 +15919,8 @@
       "runningFor": "已執行 {{duration}}",
       "startedAt": "開始於 {{time}}",
       "recentOutput": "最近輸出 · {{time}} 前更新",
-      "noOutputYet": "尚無輸出"
+      "noOutputYet": "尚無輸出",
+      "recentActivity": "最近活動"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",
@@ -16147,7 +16446,30 @@
       },
       "status": {
         "running": "執行中",
-        "done": "已完成"
+        "done": "已完成",
+        "failed": "失敗"
+      },
+      "collab": {
+        "wait": "等待 Subagent",
+        "waitCount_one": "等待 {{count}} 個 Subagent",
+        "waitCount_other": "等待 {{count}} 個 Subagent",
+        "sendInput": "向 Subagent 傳送指令",
+        "sendInputCount_one": "向 {{count}} 個 Subagent 傳送指令",
+        "sendInputCount_other": "向 {{count}} 個 Subagent 傳送指令",
+        "resume": "恢復 Subagent",
+        "resumeCount_one": "恢復 {{count}} 個 Subagent",
+        "resumeCount_other": "恢復 {{count}} 個 Subagent",
+        "close": "關閉 Subagent",
+        "closeCount_one": "關閉 {{count}} 個 Subagent",
+        "closeCount_other": "關閉 {{count}} 個 Subagent",
+        "spawn": "啟動 Subagent",
+        "spawnCount_one": "啟動 {{count}} 個 Subagent",
+        "spawnCount_other": "啟動 {{count}} 個 Subagent",
+        "targets": "目標：{{targets}}",
+        "targetCount_one": "目標：{{count}} 個 Subagent",
+        "targetCount_other": "目標：{{count}} 個 Subagent",
+        "prompt": "指令：{{prompt}}",
+        "model": "模型：{{model}}"
       }
     },
     "systemCard": {
@@ -17037,6 +17359,22 @@
       "piRemoteUnsupported": "Pi 僅在本地執行，無法使用 SSH 遠端主機。請切換到 Claude 或 Codex 來使用該主機。",
       "localWorktreeCleanupPending": "上一次本地 worktree 任務仍待回收，請等待清理完成後再試。",
       "remoteWorktreeCleanupPending": "上一次遠端 worktree 仍待回收，請重新連線裝置後再試。",
+      "remoteWorktreeCleanupOpenSettings": "前往回收設定",
+      "remoteWorktreeCleanup": {
+        "inProgress": "上一次遠端 worktree 仍在建立或檢出中，請稍後再試，或在「設定 → 儲存空間」中處理。",
+        "preserved": "遠端裝置保留了上一次 worktree（可能有未提交變更或仍被佔用），請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedDirty": "遠端裝置偵測到上一次 worktree 有未提交變更，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedKeepSentinel": "遠端裝置偵測到上一次 worktree 存在保留標記（.worktree-keep），拒絕自動回收。請到「設定 → 儲存空間」處理。",
+        "preservedLiveReference": "遠端裝置偵測到上一次 worktree 仍被其他任務或程序佔用，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedBranchMismatch": "遠端裝置上的上一次 worktree 分支或目錄狀態異常，無法自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedIncludeFilesChanged": "遠端裝置偵測到上一次 worktree 的本機設定檔已變更，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedIgnoredFiles": "遠端裝置偵測到上一次 worktree 包含無法重現的忽略檔案，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedRemoveFailed": "遠端裝置刪除上一次 worktree 目錄失敗。請檢查該裝置的權限或佔用狀況，或在「設定 → 儲存空間」保留目錄以解除封鎖。",
+        "mismatch": "遠端裝置拒絕了上一次 worktree 的回收憑證，請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "unsupported": "遠端裝置的 Cindy 版本不支援自動回收預先建立的 worktree，請更新該裝置的 Cindy，或在「設定 → 儲存空間」保留目錄以解除封鎖。",
+        "createStarted": "上一次遠端任務建立未收到確認，為防誤刪已暫停自動清理。請確認任務狀態後重試，或在「設定 → 儲存空間」保留目錄以解除封鎖。",
+        "storage": "無法讀寫本機的遠端 worktree 回收記錄，請到「設定 → 儲存空間」查看。"
+      },
       "remoteProviderUpdating": "供應商憑證正在更新，請稍後重試",
       "remoteProviderUnsupported": "該供應商不支援 SSH 遠端會話，請更換來源",
       "remoteNativeOauthUnavailable": "遠端任務不能使用 Claude 訂閱，請選擇閘道器或 API Key 模型",
@@ -17067,9 +17405,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "新增雲端主機",
-        "preparingCloud": "雲端主機 · 準備中",
-        "manageCloud": "管理雲端主機",
         "allMachines": "全部",
         "localMachine": "本機",
         "connecting": "連線中…",
@@ -17127,6 +17462,8 @@
       "organizeSidebar": "側邊欄顯示設定",
       "filterAllText": "全部",
       "filterSelectedProjects": "已選 {{count}} 個",
+      "filterSelectedHarnesses": "已選 {{count}} 個",
+      "filterVendorPluginHeading": "來自插件",
       "filterStatus": {
         "active": "活躍",
         "archived": "已歸檔",
@@ -17136,7 +17473,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterGroupBy": {
         "project": "專案",
@@ -17144,6 +17482,11 @@
         "device": "裝置",
         "dialogue": "對話",
         "automation": "自動化"
+      },
+      "filterGroupByHint": {
+        "device": "最外層",
+        "dialogue": "沒有專案的任務",
+        "automation": "自動化執行的任務"
       },
       "filterGroupByDeviceManualTip": "手動排序時按裝置分組暫不可用",
       "deviceGroup": {
@@ -17175,6 +17518,11 @@
       "filterSortByTip": {
         "priority": "等你處理的排在最前，然後是未讀、執行中，其餘按時間"
       },
+      "filterSortByHint": {
+        "priority": "等你處理的在前",
+        "activity": "剛動過的在前",
+        "created": "新建的在前"
+      },
       "filterStatusHeading": "狀態",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活躍",
@@ -17189,9 +17537,17 @@
       "filterProjectOrderTip": {
         "custom": "用滑鼠拖曳專案列調整順序，組內任務仍按上面的排序"
       },
+      "filterProjectOrderHint": {
+        "custom": "拖曳專案列"
+      },
       "filterCreatorsHeading": "夥伴",
       "filterCreatorsAny": "全部",
-      "filterHideAutomations": "隱藏自動化任務",
+      "hideHeading": "隱藏",
+      "hideOptions": {
+        "automations": "自動化任務",
+        "taskCreated": "由其他任務建立的任務",
+        "teammates": "夥伴的任務"
+      },
       "filterCreatorsNone": "都不顯示",
       "filterSelectedCreators": "已選 {{count}} 位",
       "filterProjectsHeading": "專案",
@@ -17214,6 +17570,10 @@
         "openWorktree": "開啟 worktree 資料夾",
         "tokens": "Token",
         "cost": "費用"
+      },
+      "taskInfoSection": {
+        "identity": "任務標識",
+        "meta": "右側資訊 · 按勾選順序顯示"
       },
       "taskInfoTip": {
         "tokens": "累計 Token",
@@ -17295,7 +17655,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "確認",
-        "cancel": "取消"
+        "cancel": "取消",
+        "deleteSchedules_one": "刪除關聯的自動化",
+        "deleteSchedules_other": "刪除關聯的自動化",
+        "deleteScheduleWarning_one": "關聯的自動化{{names}}將被刪除，無法復原。",
+        "deleteScheduleWarning_other": "關聯的自動化{{names}}將被刪除，無法復原。",
+        "deleteSchedulesAndArchive": "刪除並歸檔",
+        "discardDeleteAndArchive": "捨棄、刪除並歸檔",
+        "deleteScheduleFailed_one": "任務已歸檔，但未能刪除關聯的自動化，請前往自動化頁面手動刪除。",
+        "deleteScheduleFailed_other": "任務已歸檔，但未能刪除 {{count}} 個關聯的自動化，請前往自動化頁面手動刪除。"
       },
       "dialogueAction": {
         "search": "在對話中搜尋",
@@ -17429,6 +17797,8 @@
         "moveToProjectRemoteUnsupported": "暫不支援移動遠端任務",
         "moveToProjectWorktreeBlocked": "此任務的工作目錄是 worktree，暫不支援移動到其他專案",
         "openInNewWindow": "在新視窗開啟",
+        "openInNewWindowShortcutMac": "⌘+點擊",
+        "openInNewWindowShortcutOther": "Ctrl+點擊",
         "exportShare": "匯出任務…",
         "exportHtml": "匯出為 HTML…",
         "exportHtmlSuccess": "對話已匯出為 HTML",
@@ -17559,7 +17929,14 @@
         "tasks": "任務列表",
         "inbox": "收件匣",
         "enterInbox": "切換到收件匣模式",
-        "leaveInbox": "切換到任務列表模式"
+        "leaveInbox": "切換到任務列表模式",
+        "inboxTips": "收件匣使用技巧"
+      },
+      "origin": {
+        "createdByTask": "由其他任務建立",
+        "createdByTaskNamed": "由任務「{{title}}」建立",
+        "createdByRemoteTask": "由 {{device}} 上的任務建立",
+        "createdByRemoteTaskNamed": "由 {{device}} 上的任務「{{title}}」建立"
       }
     },
     "rename": {
@@ -17580,7 +17957,9 @@
       "orcaRemoteLead": "來自 {{device}} 的協同",
       "orcaRemoteLeadReleased": "協同已結束 · 來自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "另一臺電腦",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。",
+      "createdByTask": "來自其他任務",
+      "createdByTaskNamed": "來自「{{title}}」"
     },
     "gitContext": {
       "detached": "分離 HEAD",
@@ -18032,6 +18411,7 @@
     "ultra": "極致"
   },
   "scheduler": {
+    "billingWait": "正在等待點數或訂閱恢復。恢復後，使用此連線成功傳送一則訊息，即可繼續執行排程任務。",
     "prTrigger": {
       "fallback": "尚未接通 GitHub App 通知，仍會依排程檢查。",
       "label": "PR / MR",
@@ -18235,7 +18615,11 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化未執行。繫結到插件引擎任務的自動化會沿用任務自己的模型，並在這台電腦上執行。如果自動化裡指定了模型，請先移除，再重新執行。",
+      "boundPluginEngineRecovery": "自動化未能使用插件引擎執行。展開錯誤詳情查看原因。",
+      "boundPluginEngineSshRecovery": "SSH 任務必須沿用目前的引擎。若要使用插件引擎，請將自動化繫結到相容的非 SSH 任務。",
+      "boundPluginEngineSelectionLocationRecovery": "所選插件引擎的位置不支援執行此自動化。請在自動化的模型設定中選擇受支援電腦上的引擎。",
+      "boundPluginEngineTaskLocationRecovery": "繫結任務的插件引擎所在位置不支援執行此自動化。請將任務的引擎切換到受支援的電腦，或繫結相容的任務。",
+      "boundPluginEngineModelRecovery": "自動化的模型設定與繫結任務的插件引擎不符。請將自動化設為沿用任務的模型。",
       "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
@@ -18969,6 +19353,24 @@
         "reconnectFailed": "暫時無法重新連線，請檢查剩餘名額後再試。"
       },
       "pluginTitle": "插件事件觸發"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} 條已暫停的 PR 跟進",
+      "viewPaused": "檢視",
+      "resumeAll": "全部恢復",
+      "cleanMerged": "清理已合併",
+      "checking": "檢查中…",
+      "resumeAllConfirmTitle": "恢復 {{count}} 條已暫停的 PR 跟進？",
+      "resumeAllConfirmDescription": "將恢復目前檢視下全部已暫停的 PR 自動化，並重新計算下次排程檢查時間。",
+      "resumeAllConfirmAction": "全部恢復",
+      "resumeAllDone": "已恢復 {{count}} 條 PR 跟進",
+      "resumeAllPartial": "已恢復 {{resumed}} 條 PR 跟進（{{failed}} 條失敗）",
+      "noMergedFound": "已暫停的 PR 自動化中未發現已合併或已關閉的 PR",
+      "cleanMergedConfirmTitle": "刪除 {{count}} 條已結束的 PR 自動化？",
+      "cleanMergedConfirmDescription": "以下已暫停自動化對應的 PR 已合併或關閉：{{names}}",
+      "cleanMergedConfirmAction": "刪除",
+      "cleanMergedDone": "已刪除 {{count}} 條已結束的 PR 自動化",
+      "checkFailed": "暫時無法檢查 PR 狀態"
     }
   },
   "issueTracker": {
@@ -22317,6 +22719,9 @@
     "send": "傳送訊息",
     "sending": "正在傳送…",
     "sent": "已提交",
+    "sendTooManyArguments": "這則訊息一次處理的內容超過 {{limit}} 項。請讓助理分組處理後重新產生。",
+    "sendValueUnavailable": "這則訊息需要的值無法讀取。請讓助理檢查表單欄位。",
+    "sendTextUnavailable": "無法產生要傳送的訊息。",
     "sendFailed": "訊息未提交，已保留填寫內容",
     "playVideo": "播放影片",
     "openVideoSource": "開啟原影片",
@@ -22930,6 +23335,30 @@
     "loginMayHaveExpired": "登入可能已到期",
     "loginExpiryUnknown": "登入到期時間未知",
     "loginExpiryDetail": "預計到期：{{date}}。這是 Claude 提供的估計時間，登入可能提早失效。",
+    "longLivedToken": {
+      "tag": "長期權杖",
+      "use": "改用長期權杖（約一年）",
+      "renew": "重新產生長期權杖",
+      "remove": "停用長期權杖",
+      "confirmTitle": "讓 {{name}} 改用長期權杖？",
+      "confirmDescription": "瀏覽器會開啟 Claude 的授權頁，請在那裡選擇同一個帳號。權杖有效期約一年，儲存在這台電腦上，一般登入到期後任務仍可繼續執行。",
+      "confirmAction": "前往瀏覽器授權",
+      "removeTitle": "停用 {{name}} 的長期權杖？",
+      "removeDescription": "權杖會從這台電腦刪除，帳號回到一般登入。權杖在 Anthropic 那邊仍然有效，直到到期。",
+      "removeAction": "停用",
+      "expiresInDays": "權杖約 {{days}} 天後到期",
+      "mayHaveExpired": "權杖可能已到期",
+      "active": "正在使用長期權杖",
+      "detailExpiry": "預計到期：{{date}}。",
+      "detailLoginActive": "一般登入仍然有效，帳號資訊和用量可以即時讀取。",
+      "detailLoginEnded": "一般登入已結束。用量在任務執行時更新；重新登入後可隨時重新整理。",
+      "detailPending": "尚未核對權杖是否屬於這個帳號，第一個任務執行時會核對。",
+      "detailSettingsOnly": "在這台電腦上，一般登入結束後，權杖無法用於替其他電腦執行的任務和隔離模式的夥伴。",
+      "mismatchStatus": "權杖屬於另一個帳號",
+      "needsLogin": "請先登入這個帳號，再產生長期權杖。",
+      "notPermitted": "你的組織不允許使用長期權杖。",
+      "unsupported": "這個帳號在這台電腦上無法使用長期權杖。"
+    },
     "loginAccountAria": "重新登入 {{name}}",
     "loginIdentityMismatchStatus": "登入帳號不符",
     "loginIdentityMismatch": "登入的帳號與所選帳號不一致。請重新登入，選擇列表中的這個帳號。",
@@ -23064,7 +23493,10 @@
       "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。",
       "mergedLabel_other": "{{name}} · 路由（{{count}} 個來源）",
       "routeDecides": "這次用哪個來源由路由「{{name}}」決定",
-      "quotaOf": "配額：{{name}}"
+      "quotaOf": "配額：{{name}}",
+      "managedBy": "目前由「{{name}}」持續託管",
+      "detach": "解除託管",
+      "detached": "已解除智慧路由託管，保留目前模型"
     },
     "why": {
       "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",
@@ -23102,11 +23534,17 @@
       "newRoute": "新增路由",
       "newRouteName": "新路由",
       "routesEmpty": "還沒有路由。新增一個，把幾個來源放進去。",
-      "scopeNote": "智慧路由用於這台電腦上的任務：開新任務時選定一個來源；在進行中的任務裡選它，會當場換一次，之後不會自己換。",
+      "scopeNote": "智慧路由適用於這台電腦及已接入入口的任務：開新任務或在任務中途選定路由後，將持續託管該任務——每輪傳送前檢查可用性與配額、帶圖自動切換視覺來源、保護提示快取並在故障時自動接替，直到你解除託管或手動改選具體模型。",
       "back": "返回智慧路由",
       "name": "名字",
       "nameHint": "選模型時顯示這個名字。",
-      "routeShownAs": "選模型時在「智慧路由」裡顯示。",
+      "routeType": "路由類型",
+      "routeTypeModel": "模型路由",
+      "routeTypeProvider": "供應商路由",
+      "switchTypeConfirmTitle": "切換路由類型？",
+      "switchTypeConfirmDescription": "已經加入的來源會被移除。名稱、選法與例外會保留。",
+      "switchTypeConfirmTargetWarning": "其他路由中指向這條路由的時段例外也會移除。",
+      "switchTypeConfirmAction": "切換",
       "pick": "這次用哪個",
       "moreStrategies": "更多選法",
       "effort": "推理強度",
@@ -23116,11 +23554,10 @@
       "weightAria": "「{{name}}」的權重",
       "weightHint": "按權重分配時，權重越大分到的新任務越多，1–1000。",
       "sources": "可以用的來源",
-      "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
-      "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
+      "sourcesEmpty": "可以放不同的模型 · 實際呼叫了哪個會顯示在任務裡 · 從下面加入已經連線的模型",
       "sourcesEmptyMerged": "還沒有來源。從下面加入已經連線的供應商。",
       "sourcesFull": "一個路由最多 {{count}} 個來源。",
-      "addSource": "新增來源",
+      "addSource": "新增模型路由",
       "chooseModel": "選一個模型",
       "notConnected": "沒有連線",
       "moveUp": "上移",
@@ -23200,10 +23637,9 @@
       "removeAria": "把 {{name}} 從這條路由中移除",
       "note": "自動合成的路由會跟著供應商的連接增減：不能新增或移出成員，但可以調先後、填權重、停用某個成員，也可以改選法或隱藏。",
       "providers_other": "{{count}} 個供應商",
-      "addWhole": "新增整個供應商",
+      "addWhole": "新增供應商路由",
       "addWholeHint": "它的全部模型都進這條路由：選模型時這條路由像一個供應商，照常選模型，由路由決定這次用哪個成員。",
-      "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。",
-      "detailHint": "這條路由合併的是整個供應商：選模型時它像一個供應商，照常選模型、推理強度，由路由決定這次用哪個成員。"
+      "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。"
     },
     "kinds": {
       "byModel": "按模型",
@@ -23226,6 +23662,11 @@
       "deviceDefaultReadOnly": "那台電腦更新到新版本後，才能在這裡改它的預設模型。",
       "deviceUnavailable": "現在讀不到那台電腦的夥伴設定。確認它在線上後再開啟。",
       "deviceLoading": "正在讀取那台電腦的設定…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "目前來源暫不可用或配額已滿，傳送前自動切換",
+      "imageInput": "本輪包含圖片，自動切換至支援視覺的來源",
+      "cacheExpired": "快取視窗已過，依路由策略重新挑選來源"
     }
   },
   "projectSettings": {

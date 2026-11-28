@@ -54,6 +54,9 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   [REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON]: 'chat.errorBanner.remoteCompactEncryptedContent',
   [UPSTREAM_OVERLOAD_REASON]: 'chat.errorBanner.overloadBusyNoRetry',
   'UPSTREAM_OVERLOADED': 'chat.errorBanner.overloadBusyNoRetry',
+  'acp-usage-limit': 'chat.errorBanner.usageLimitReached',
+  'acp-overloaded': 'chat.errorBanner.overloadBusyNoRetry',
+  'acp-auth-required': 'chat.subscriptionAccountError.loginRequired',
   [UPSTREAM_STREAM_INTERRUPTED_REASON]: 'chat.errorBanner.streamInterruptedNoRetry',
   [CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON]: 'chat.errorBanner.claudeGatewayOpusPlanMismatch',
   [CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON]:
