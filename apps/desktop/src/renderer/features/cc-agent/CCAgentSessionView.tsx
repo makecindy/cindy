@@ -4,7 +4,7 @@ import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
 import { getLiveErrorMessageClientId, type ChatMessage } from '@/lib/makerChatStore';
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
-import { findErrorTailMessage } from '@/lib/errorTailMessage';
+import { findErrorTailMessage, hasSavedPiInterruptedReply, isLocalPiExecution } from '@/lib/errorTailMessage';
 import { PendingQueueBubble } from '@/components/chat/PendingQueueBubble';
 import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
@@ -6394,6 +6394,9 @@ function CCAgentSessionContent({
   const bannerErrorClientId = showLiveErrorBanner
     ? getLiveErrorMessageClientId({ error, errorPersistId, historyLoaded, messages, disposedErrorPersistId })
     : showErrorTailBanner ? errorTailMsg!.clientId : null;
+  const showSavedPiInterruptedReplies = isLocalPiExecution(session ?? undefined, rightSidebarDeviceLinkDeviceId);
+  const savedInterruptedReply = showSavedPiInterruptedReplies && bannerErrorClientId !== null
+    && hasSavedPiInterruptedReply(messages, messages.find(message => message.clientId === bannerErrorClientId));
   const queueNotices = <>
             {/* Error display.
               - agentKind 传到 ErrorBanner 让 codex 401 / Missing bearer 不仅在远端
@@ -6436,6 +6439,7 @@ function CCAgentSessionContent({
                 <ErrorTailErrorBanner
                   onChooseComputer={sharedTaskRecovery.askAgain}
                   errorText={errorTailText}
+                  savedInterruptedReply={savedInterruptedReply}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
                   errorCreatedAt={errorTailMsg?.createdAt}
@@ -6513,6 +6517,7 @@ function CCAgentSessionContent({
               <ErrorBanner
                 onChooseComputer={sharedTaskRecovery.askAgain}
                 error={error}
+                savedInterruptedReply={savedInterruptedReply}
                 dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                 errorReason={errorReason}
                 reconnectHandoff={reconnectHandoff}
@@ -6600,6 +6605,7 @@ function CCAgentSessionContent({
       onBotReadThrough={viewVisible ? onBotReadThrough : undefined}
       messages={timelineMessages}
       activeErrorClientId={bannerErrorClientId}
+      showSavedPiInterruptedReplies={showSavedPiInterruptedReplies}
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={sideChatCreatedAt ? new Date(sideChatCreatedAt).getTime() : undefined}
       onAskInSideChat={!readOnly && sessionId && !sideChatBlockedKey

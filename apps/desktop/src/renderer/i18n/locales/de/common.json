@@ -16247,6 +16247,7 @@
       "overloadBusy": "Der Modellanbieter ist vorübergehend ausgelastet und hat keine freie Kapazität. Klicke auf „Erneut versuchen“ oder wechsle das Modell.",
       "overloadBusyNoRetry": "Der Modellanbieter ist vorübergehend ausgelastet und hat keine freie Kapazität. Versuche es später erneut oder wechsle das Modell.",
       "streamInterrupted": "Die Antwortübertragung des Modellanbieters wurde unterbrochen. Klicke auf „Erneut versuchen“.",
+      "streamInterruptedSavedReply": "Die Antwort wurde unterbrochen. Der bisher empfangene Text wurde gespeichert.",
       "streamInterruptedNoRetry": "Die Antwortübertragung des Modellanbieters wurde unterbrochen. Bitte versuche es später erneut.",
       "networkShowRaw": "Fehlerdetails",
       "networkHideRaw": "Details ausblenden",

@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as ReactI18next from 'react-i18next';
-import { findErrorTailMessage } from '@/lib/errorTailMessage';
+import { findErrorTailMessage, hasSavedPiInterruptedReply, isLocalPiExecution } from '@/lib/errorTailMessage';
 import { makerChatStore, remoteErrorMessageForBanner, type ChatMessage } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
@@ -79,4 +79,50 @@ describe('terminal error tail across noninteractive boundaries', () => {
     expect(findErrorTailMessage([earlier, ...dismissed])).toBeNull();
     expect(findErrorTailMessage([earlier, ...messages], 'timeout')).toBeNull();
   });
+});
+
+// #9861, unit/jsdom: the existing retry UI tests do not tie saved text to the
+// failed input or check the execution location. Exercise persisted message
+// projection and the reopened banner with an interrupted or completed reply.
+it.each([
+  { name: 'local Pi interrupted', showsSavedReply: true },
+  { name: 'different request', replyToClientId: 'previous-request' },
+  { name: 'normally completed reply', turnCompleted: true },
+  { name: 'SSH Pi', remoteHostId: 'ssh-host' },
+  { name: 'device-link Pi', deviceLinkDeviceId: 'task-device' },
+  { name: 'remote agent Pi', agentDeviceId: 'agent-device' },
+  { name: 'local Codex', isCodex: true },
+])('shows saved text only for the interrupted local Pi reply ($name)', ({
+  replyToClientId = 'request', turnCompleted = false, deviceLinkDeviceId = null,
+  remoteHostId, agentDeviceId, isCodex = false, showsSavedReply = false,
+}) => {
+  const agentKind = isCodex ? 'codex' : 'pi';
+  const messages = makerChatStore.__mapServerMessagesForTest([
+    {
+      id: 'partial', clientId: 'partial', sessionId: 'pi-tail', role: 'assistant',
+      content: 'Received text', createdAt: new Date(1000).toISOString(),
+      agentMeta: { replyToClientId, turnCompleted },
+    },
+    {
+      id: 'failure', clientId: 'failure', sessionId: 'pi-tail', role: 'error',
+      content: { message: 'Stream ended without finish_reason' }, createdAt: new Date(2000).toISOString(),
+      agentMeta: { replyToClientId: 'request' },
+    },
+  ] as Message[]);
+  expect(messages[0]).toMatchObject({ role: 'assistant', content: 'Received text', turnCompleted });
+  const error = findErrorTailMessage(messages);
+  const resume = vi.fn();
+  render(<ErrorTailErrorBanner
+    errorText={error!.content}
+    savedInterruptedReply={isLocalPiExecution({ agentKind, remoteHostId, agentDeviceId }, deviceLinkDeviceId)
+      && hasSavedPiInterruptedReply(messages, error ?? undefined)}
+    agentKind={agentKind}
+    onContinue={resume}
+    onDismiss={() => {}}
+  />);
+  expect(Boolean(screen.queryByText('chat.errorBanner.streamInterruptedSavedReply'))).toBe(showsSavedReply);
+  fireEvent.click(screen.getByRole('button', {
+    name: showsSavedReply ? 'chat.interruptedBanner.continueAction' : 'chat.errorBanner.retry',
+  }));
+  expect(resume).toHaveBeenCalledOnce();
 });

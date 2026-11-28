@@ -88,6 +88,7 @@ import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 interface ErrorBannerProps {
   onChooseComputer?: () => void;
   error: string;
+  savedInterruptedReply?: boolean;
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
@@ -177,6 +178,7 @@ function OpenAiConnectionSettingsAction({ providerId }: { providerId: string }) 
 export function ErrorBanner({
   onChooseComputer,
   error,
+  savedInterruptedReply,
   errorReason,
   reconnectHandoff,
   toolLoop,
@@ -434,6 +436,7 @@ export function ErrorBanner({
     !isProviderSafetyRefusal && isOverloadErrorMessage(error, undefined, errorReason);
   const isStreamInterrupted =
     !isProviderSafetyRefusal && isStreamInterruptedErrorMessage(error, errorReason);
+  const showSavedInterruptedReply = savedInterruptedReply && !isRecoverable && !isProviderSafetyRefusal;
   // 上游 5xx 但没带错误正文:兜底文案只会说「回复未完成」,看不出是上游拒了。
   const upstreamStatusError = !isProviderSafetyRefusal ? parseUpstreamStatusError(error) : null;
   const overloadRetryProgress = parseOverloadRetryProgress(error);
@@ -503,8 +506,14 @@ export function ErrorBanner({
   const isAccountUsageLimit =
     !isProviderSafetyRefusal &&
     (errorReason === 'acp-usage-limit' || isAccountUsageLimitReachedText(error));
-  // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
   const isReconnectStalled = errorReason === 'codex_reconnect_stalled';
+  const continueAfterInterruption = isReconnectStalled || showSavedInterruptedReply;
+  const retryActionLabel = isReconnectStalled
+    ? 'chat.errorBanner.silentStopContinueTitle'
+    : showSavedInterruptedReply
+      ? 'chat.interruptedBanner.continueAction'
+      : 'chat.errorBanner.retry';
+  // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
   const isClaudeSubscriptionOpusPlanMismatch =
@@ -780,6 +789,8 @@ export function ErrorBanner({
           )
         : t(retryAction ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
     explain = buildChatErrorExplain('overload', t, { providerName: externalProviderName });
+  } else if (showSavedInterruptedReply) {
+    displayError = t('chat.errorBanner.streamInterruptedSavedReply');
   } else if (isStreamInterrupted) {
     // LiteLLM / Responses 流中途空壳 500。协议客户端会写成 OpenAI API error,
     // 对非 OpenAI 模型是误导。只改展示,不自动续跑。
@@ -867,6 +878,7 @@ export function ErrorBanner({
     isNetworkishError ||
     isOverloadError ||
     isStreamInterrupted ||
+    showSavedInterruptedReply ||
     showUnwrappedRaw ||
     isCodexUsageLimitError ||
     Boolean(usageLimitResumeAt) ||
@@ -1209,10 +1221,10 @@ export function ErrorBanner({
               disabled={forkStripEncryptedRunning}
               loading={retrying}
               onClick={() => void handleRetry()}
-              title={t(isReconnectStalled ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retryTitle')}
+              title={t(continueAfterInterruption ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retryTitle')}
             >
-              {isReconnectStalled ? <Play size={12} /> : <RotateCcw size={12} />}
-              {t(isReconnectStalled ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retry')}
+              {continueAfterInterruption ? <Play size={12} /> : <RotateCcw size={12} />}
+              {t(retryActionLabel)}
             </Button>
           )}
           {(showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted && (

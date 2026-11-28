@@ -16211,6 +16211,7 @@
       "overloadBusy": "模型供应商暂时繁忙，当前没有可用容量。可点击「重试」，或换一个模型。",
       "overloadBusyNoRetry": "模型供应商暂时繁忙，当前没有可用容量。可稍后重试，或换一个模型。",
       "streamInterrupted": "模型供应商返回回复时中途中断，可点击「重试」。",
+      "streamInterruptedSavedReply": "回复中断。已收到的正文已保留。",
       "streamInterruptedNoRetry": "模型供应商返回回复时中途中断，请稍后重试。",
       "networkShowRaw": "错误详情",
       "networkHideRaw": "收起详情",

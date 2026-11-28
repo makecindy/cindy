@@ -16393,6 +16393,7 @@
       "overloadBusy": "Le fournisseur de modèles est temporairement saturé et sans capacité disponible. Cliquez sur « Réessayer » ou changez de modèle.",
       "overloadBusyNoRetry": "Le fournisseur de modèles est temporairement saturé et sans capacité disponible. Réessayez plus tard ou changez de modèle.",
       "streamInterrupted": "Le flux de réponse du fournisseur de modèles a été interrompu en cours de route. Cliquez sur « Réessayer ».",
+      "streamInterruptedSavedReply": "La réponse a été interrompue. Le texte reçu a été enregistré.",
       "streamInterruptedNoRetry": "Le flux de réponse du fournisseur de modèles a été interrompu en cours de route. Réessayez plus tard.",
       "networkShowRaw": "Détails de l'erreur",
       "networkHideRaw": "Masquer les détails",

@@ -16393,6 +16393,7 @@
       "overloadBusy": "El proveedor de modelos está ocupado temporalmente y sin capacidad disponible. Pulsa «Reintentar» o cambia de modelo.",
       "overloadBusyNoRetry": "El proveedor de modelos está ocupado temporalmente y sin capacidad disponible. Vuelve a intentarlo más tarde o cambia de modelo.",
       "streamInterrupted": "La respuesta del proveedor de modelos se interrumpió a mitad de transmisión. Pulsa «Reintentar».",
+      "streamInterruptedSavedReply": "La respuesta se interrumpió. Se ha guardado el texto recibido hasta ahora.",
       "streamInterruptedNoRetry": "La respuesta del proveedor de modelos se interrumpió a mitad de transmisión. Inténtalo de nuevo más tarde.",
       "networkShowRaw": "Detalles del error",
       "networkHideRaw": "Ocultar detalles",

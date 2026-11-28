@@ -1,4 +1,14 @@
+import { UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError';
+import type { Session } from './ccAgent.types';
 import type { ChatMessage } from './makerChatStore';
+
+export function isLocalPiExecution(
+  session: Pick<Session, 'agentKind' | 'remoteHostId' | 'agentDeviceId'> | undefined,
+  deviceLinkDeviceId: string | null | undefined,
+): boolean {
+  return session?.agentKind === 'pi'
+    && deviceLinkDeviceId === null && !session.remoteHostId && !session.agentDeviceId;
+}
 
 /** Location/model/history boundaries record a change, not progress on the failed input. */
 export function findErrorTailMessage(
@@ -25,4 +35,25 @@ export function findErrorTailMessage(
       : null;
   }
   return null;
+}
+
+/** Only advertise saved text when the persisted failure identifies its failed reply. */
+export function hasSavedPiInterruptedReply(
+  messages: readonly ChatMessage[],
+  error: ChatMessage | undefined,
+): boolean {
+  if (!error?.id || error.role !== 'error' || !error.replyToClientId) return false;
+  const interrupted = error.errorReason === UPSTREAM_STREAM_INTERRUPTED_REASON
+    || (!error.errorReason && error.content.trim() === 'Stream ended without finish_reason');
+  if (!interrupted) return false;
+
+  return messages.some(message =>
+    message.role === 'assistant'
+    && message.replyToClientId === error.replyToClientId
+    && Boolean(message.id)
+    && (message.rowid === undefined || error.rowid === undefined || message.rowid < error.rowid)
+    && message.turnCompleted === false
+    && !message.systemCardType
+    && message.content.trim().length > 0,
+  );
 }

@@ -1,3 +1,4 @@
+import { hasSavedPiInterruptedReply } from '@/lib/errorTailMessage';
 import { appendPendingQueueItems } from './pendingQueueItems';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -516,6 +517,8 @@ interface MessageStreamProps {
   messages: ChatMessage[];
   /** Exact row owned by a rendered replacement error banner; otherwise keep its history card. */
   activeErrorClientId?: string | null;
+  /** The session view confirmed that Pi runs on this computer. */
+  showSavedPiInterruptedReplies?: boolean;
   /** The ongoing call appears only in its transcript popover, including history replays. */
   activeVoiceCallId?: string | null;
   /** This task's preparation card is shown in the composer, including after history reload. */
@@ -3300,6 +3303,7 @@ export function MessageStream({
   onBotReadThrough,
   messages,
   activeErrorClientId = null,
+  showSavedPiInterruptedReplies = false,
   activeVoiceCallId = null,
   cindyMakeSessionId,
   cindyMakeCompletionInComposer,
@@ -7241,6 +7245,8 @@ export function MessageStream({
                           continuationInFlightProjectionCapability
                         }
                         isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
+                        savedInterruptedReply={showSavedPiInterruptedReplies && msg.role === 'error'
+                          && hasSavedPiInterruptedReply(messages, msg)}
                         localFileRefs={localFileRefs}
                         assistantAvatar={botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
@@ -7436,6 +7442,7 @@ const MessageItem = memo(function MessageItem({
   isContinuationTurnOwner,
   continuationInFlightProjectionCapability,
   isActiveError,
+  savedInterruptedReply,
   localFileRefs,
   assistantAvatar,
   simplifiedBotConversation,
@@ -7489,6 +7496,7 @@ const MessageItem = memo(function MessageItem({
   continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
   /** The parent actually renders this exact error in a replacement banner. */
   isActiveError?: boolean;
+  savedInterruptedReply?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
   /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
   assistantAvatar?: ReactNode;
@@ -7687,6 +7695,7 @@ const MessageItem = memo(function MessageItem({
       return (
         <ErrorMessageCard
           message={message.content}
+          savedInterruptedReply={savedInterruptedReply}
           reason={message.errorReason}
           providerId={message.errorProviderId}
           providers={errorProviderDirectory}

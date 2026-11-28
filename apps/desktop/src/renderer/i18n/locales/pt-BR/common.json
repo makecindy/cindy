@@ -16393,6 +16393,7 @@
       "overloadBusy": "O provedor de modelos está temporariamente sobrecarregado e sem capacidade disponível. Clique em «Tentar novamente» ou troque de modelo.",
       "overloadBusyNoRetry": "O provedor de modelos está temporariamente sobrecarregado e sem capacidade disponível. Tente mais tarde ou troque de modelo.",
       "streamInterrupted": "A resposta do provedor de modelos foi interrompida no meio da transmissão. Clique em «Tentar novamente».",
+      "streamInterruptedSavedReply": "A resposta foi interrompida. O texto recebido até agora foi salvo.",
       "streamInterruptedNoRetry": "A resposta do provedor de modelos foi interrompida no meio da transmissão. Tente novamente mais tarde.",
       "networkShowRaw": "Detalhes do erro",
       "networkHideRaw": "Ocultar detalhes",

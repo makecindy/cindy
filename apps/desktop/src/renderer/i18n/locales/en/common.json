@@ -16284,6 +16284,7 @@
       "overloadBusy": "The model provider is temporarily busy and has no available capacity. Click Retry or switch to another model.",
       "overloadBusyNoRetry": "The model provider is temporarily busy and has no available capacity. Try again later or switch to another model.",
       "streamInterrupted": "The reply stream from the model provider was interrupted mid-response. Click Retry to try again.",
+      "streamInterruptedSavedReply": "The reply was interrupted. The text received so far has been saved.",
       "streamInterruptedNoRetry": "The reply stream from the model provider was interrupted mid-response. Try again later.",
       "networkShowRaw": "Error Details",
       "networkHideRaw": "Hide Details",

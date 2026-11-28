@@ -49,6 +49,7 @@ import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export function ErrorMessageCard({
   message,
+  savedInterruptedReply,
   reason,
   providerId,
   providerName,
@@ -62,6 +63,7 @@ export function ErrorMessageCard({
   onDiagnose,
 }: {
   message: string;
+  savedInterruptedReply?: boolean;
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
   /** Blocked input has not reached the agent; its explanation is already user-facing. */
   kind?: 'reply-error' | 'blocked-input';
@@ -139,6 +141,8 @@ export function ErrorMessageCard({
     explain = buildChatErrorExplain('providerSafetyRefusal', t, { providerName: externalProviderName });
   } else if (isResponsesLiteParallelToolCallsError(decoded)) {
     fallbackText = t('chat.errorBanner.requestFormatError');
+  } else if (savedInterruptedReply) {
+    fallbackText = t('chat.errorBanner.streamInterruptedSavedReply');
   } else if (isStreamInterrupted) {
     fallbackText = externalProviderName
       ? t('chat.errorBanner.streamInterruptedNoRetryWithProvider', { provider: externalProviderName })

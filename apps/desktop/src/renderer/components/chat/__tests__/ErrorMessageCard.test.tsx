@@ -82,15 +82,21 @@ describe('ErrorMessageCard', () => {
     expect(screen.getByText('chat.errorBanner.modelAccessDenied')).toBeTruthy();
     expect(screen.queryByText(/Failed to authenticate/)).toBeNull();
   });
-  it('shows friendly stream-interrupt copy plus a raw-error expander', () => {
+  // #9861, unit/jsdom: the history card must retain raw details even when the
+  // reopened task already confirmed that this failed reply has saved text.
+  it.each([
+    [false, 'chat.errorBanner.streamInterruptedNoRetry'],
+    [true, 'chat.errorBanner.streamInterruptedSavedReply'],
+  ] as const)('shows stream-interrupt copy plus a raw-error expander (saved text: %s)', (savedInterruptedReply, copy) => {
     render(
       createElement(ErrorMessageCard, {
         message: STREAM_RAW,
         reason: UPSTREAM_STREAM_INTERRUPTED_REASON,
+        savedInterruptedReply,
       }),
     );
 
-    expect(screen.getByText('chat.errorBanner.streamInterruptedNoRetry')).toBeTruthy();
+    expect(screen.getByText(copy)).toBeTruthy();
     expect(screen.queryByText(STREAM_RAW)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(STREAM_RAW)).toBeTruthy();
